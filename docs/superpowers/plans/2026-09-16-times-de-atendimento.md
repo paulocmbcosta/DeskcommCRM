@@ -403,7 +403,29 @@ describe("elegibilidade restrita por time", () => {
     expect(filters.some(([t]) => t === "attendance_teams" || t === "attendance_team_members")).toBe(false);
   });
 });
+  it("canal e time SOMAM: só quem está nos dois sobra", async () => {
+    // Sem esta prova, a interseção pode ser trocada pela política do canal
+    // sozinha e a suíte inteira segue verde — medido por sabotagem.
+    const { db } = fixture({
+      channel_routing_policies: { id: "policy" },
+      channel_routing_responsibles: [{ user_id: "ana" }, { user_id: "bia" }],
+      attendance_team_members: [{ user_id: "bia" }, { user_id: "carla" }],
+      user_organizations: [{ user_id: "ana" }, { user_id: "bia" }, { user_id: "carla" }],
+      attendant_availability: [
+        { user_id: "ana", capacity: 2, schedule: {} },
+        { user_id: "bia", capacity: 2, schedule: {} },
+        { user_id: "carla", capacity: 2, schedule: {} },
+      ],
+    });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toMatchObject([{ userId: "bia" }]);
+  });
+});
 ```
+
+⚠️ **Este sétimo caso faltava na primeira versão do plano.** Os seis anteriores usam o fixture com
+`channel_routing_policies: null`, então só o ramo `allowed === null` era exercido — trocar a
+interseção por `allowed` (isto é, desligar a restrição de time sempre que o canal tem política)
+deixava a suíte inteira verde.
 
 - [ ] **Passo 2: rodar e ver falhar**
 
@@ -411,8 +433,14 @@ describe("elegibilidade restrita por time", () => {
 pnpm vitest run lib/routing/eligibles.test.ts
 ```
 
-Esperado: FAIL nos casos novos (hoje `teamId` nem existe no tipo — o `as const` do escopo já
-reprova no typecheck, e os casos que rodam devolvem `ana` quando deveriam devolver `[]`).
+Esperado: FAIL em 4 casos — eles devolvem `ana` onde deveriam devolver `[]`.
+
+⚠️ **Uma versão anterior desta linha dizia que o `as const` do escopo "já reprova no typecheck".
+É falso, e foi medido:** `pnpm typecheck` sai `exit=0` mesmo antes da mudança. O excess property
+check do TypeScript só dispara em objeto literal **fresco** passado inline; `scopeComTime` é uma
+const nomeada, então a propriedade extra é ignorada estruturalmente. O vermelho do TDD aqui é de
+runtime, que é o que importa — mas quem esperasse o typecheck reprovar concluiria que o passo 1
+não foi aplicado.
 
 - [ ] **Passo 3: implementar**
 
