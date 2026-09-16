@@ -86,6 +86,23 @@ describe("nenhuma contagem é montada por fora da fábrica", () => {
     expect(fabrica, "o filtro de não lidas não entra na fábrica").toContain("soNaoLidas");
   });
 
+  it("a fábrica aplica o filtro de TIME, e pela mesma régua da lista", () => {
+    // O time não cabe num par coluna/valor (`none` é `is null`, `mine` é uma
+    // lista que sai do banco), então ele não entra por `filtrosAuxiliares` — e é
+    // exatamente esse desvio que o deixaria de fora da contagem sem ninguém
+    // notar. Com a lista filtrada por setor e o badge contando a organização
+    // inteira, a aba volta a anunciar trabalho que a lista não mostra.
+    const fabrica = fonte.slice(
+      fonte.indexOf("const countExact = () =>"),
+      fonte.indexOf("await Promise.all(["),
+    );
+    expect(fabrica, "o filtro de time não entra na fábrica").toContain(
+      "aplicarPredicadoDeTime",
+    );
+    // A régua é a MESMA da lista — importada, nunca reescrita aqui.
+    expect(fonte).toContain('from "../_filtro-de-time"');
+  });
+
   it("a aba Fechadas TEM contagem — o concorrente mostra 8067 e nós mostrávamos nada", () => {
     expect(fonte).toContain("closed: closed.count");
   });

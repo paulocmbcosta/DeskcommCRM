@@ -242,6 +242,11 @@ export const AUDIT_ACTIONS = [
   // "por que esta conversa foi parar no financeiro?" não teria resposta.
   "routing.team_saved",
   "routing.team_archived",
+  // A conversa mudando de setor. É a MUTAÇÃO da feature, e não a configuração
+  // dela: sem esta linha, "quem mandou esta conversa para o financeiro, e
+  // quando?" não teria resposta nenhuma — `conversation_assignment_events`
+  // registra que o dono foi solto, não quem escolheu o destino.
+  "routing.team_changed",
   // Mudar a régua do abandono (spec 16 §5.2) muda como TODO período passa a ser
   // lido — é mutação relevante, não preferência de exibição.
   "metrics.atrito_regua_changed",

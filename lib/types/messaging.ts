@@ -49,6 +49,15 @@ export interface Conversation {
    */
   comando_da_conversa?: string | null;
   last_handoff_at: string | null;
+  /**
+   * O TIME que espera pela conversa (migration 0263) — o setor, não a pessoa.
+   *
+   * `null` é a fila geral, e é um estado legítimo: a maioria das conversas de
+   * uma instalação que não usa setores morre aqui. Opcional porque a resposta de
+   * uma versão anterior, ainda em cache do react-query, não o tem — a mesma
+   * razão de `comando_da_conversa`.
+   */
+  team_id?: string | null;
   created_at: string;
   updated_at: string;
 }

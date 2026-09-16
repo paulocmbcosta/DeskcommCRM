@@ -43,6 +43,14 @@ vi.mock("@/hooks/inbox/useConversationCounts", () => ({
   useConversationCounts: () => ({ data: { unassigned: 3, mine: 2, all: 5 } }),
 }));
 
+// O seletor de fila por TIME (migration 0263) lê o catálogo por react-query, e
+// este arquivo renderiza `InboxFilters` sem QueryClientProvider. Sem o dublê, o
+// hook levanta "No QueryClient set" e o teste morre por um motivo que não é o
+// dele. Org sem time nenhum: o seletor nem chega a ser desenhado.
+vi.mock("@/hooks/inbox/useTimesDoInbox", () => ({
+  useTimesDoInbox: () => ({ data: [] }),
+}));
+
 const VALUE: InboxFiltersValue = { tab: "unassigned", search: "", onlyUnread: false };
 
 function setOrg(role: ActiveOrg["role"], visibility_mode: ActiveOrg["visibility_mode"]) {

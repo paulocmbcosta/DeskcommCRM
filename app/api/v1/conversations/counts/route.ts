@@ -13,10 +13,12 @@ import type { NextRequest } from "next/server";
 import { fail, ok } from "@/lib/api/wrappers";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
 import { traduzir } from "@/lib/i18n/dicionario";
-import { CONVERSATION_TERMINAL_STATUSES } from "@/lib/schemas";
+import { CONVERSATION_TERMINAL_STATUSES, filtroDeTimeSchema } from "@/lib/schemas";
 import { orgTemAutomatico } from "@/lib/ai/agents/org-tem-automatico";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
 import { createClient } from "@/lib/supabase/server";
+
+import { aplicarPredicadoDeTime, predicadoDeTime } from "../_filtro-de-time";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +45,13 @@ export type FiltroDeContagem = readonly [coluna: string, valor: string | boolean
  * `contacts`, e repetir aquela lógica aqui criaria uma SEGUNDA régua de busca —
  * e a segunda régua sempre diverge. Enquanto isso, o badge sob busca fica maior
  * que a lista, e isso está declarado, não esquecido.
+ *
+ * O TIME também não entra aqui, e pela razão OPOSTA: ele não é igualdade (`none`
+ * é `is null` e `mine` é uma lista que sai do banco), então não cabe num par
+ * coluna/valor. Ele é aplicado dentro da mesma fábrica, logo abaixo, pela régua
+ * ÚNICA de `_filtro-de-time.ts` — a mesma que a lista usa. O que não pode
+ * acontecer é ele ficar de fora da contagem: a lista filtrada por setor com o
+ * badge contando a organização inteira é o defeito do `unread` de novo.
  */
 export function filtrosAuxiliaresDaContagem(
   sp: URLSearchParams,
@@ -87,6 +96,18 @@ export async function GET(req: NextRequest): Promise<Response> {
   const sp = req.nextUrl.searchParams;
   const auxiliares = filtrosAuxiliaresDaContagem(sp);
   const soNaoLidas = contagemSoNaoLidas(sp);
+  // A MESMA régua da lista, e não um `get` cru: sem ela, o badge aceitaria um
+  // `team_id` que a lista recusa — e um valor fora de forma chegaria ao Postgres
+  // como `22P02`, virando 500 numa contagem.
+  const filtroDeTime = filtroDeTimeSchema.safeParse(sp.get("team_id") ?? undefined);
+  if (!filtroDeTime.success) {
+    return fail("validation_failed", traduzir("Query inválida.", authUser?.idioma ?? "pt-BR"), 422, {
+      requestId,
+    });
+  }
+  // Resolvido ANTES da fábrica porque `mine` custa uma leitura: dentro dela,
+  // seriam cinco idas ao banco para responder sempre a mesma coisa.
+  const time = await predicadoDeTime(supabase, org, user.id, filtroDeTime.data);
 
   // ⚠️ TODA contagem nasce daqui, e daqui já sai com `organization_id` E com os
   // filtros auxiliares. Herdar tira a opção de esquecer: não existe o caminho
@@ -98,7 +119,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       .eq("organization_id", org);
     for (const [coluna, valor] of auxiliares) q = q.eq(coluna, valor);
     if (soNaoLidas) q = q.gt("unread_count_for_assignee", 0);
-    return q;
+    return aplicarPredicadoDeTime(q, time);
   };
 
   // Espelha tabToFilter (InboxLayout): unassigned = fila aberta sem dono;

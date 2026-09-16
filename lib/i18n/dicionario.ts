@@ -4596,6 +4596,55 @@ export const DICIONARIO: Traducoes = {
   "Ex.: cliente pediu falar com o financeiro": { es: "Ej.: el cliente pidió hablar con finanzas" },
   "Transferindo…": { es: "Transfiriendo…" },
   Gestor: { es: "Gestor" },
+
+  // ─── Inbox: times de atendimento (migration 0263) ───
+  // "time" é "equipo" em espanhol, como já traduz a porta da navegação
+  // ("Times de atendimento" → "Equipos de atención"). Manter duas palavras para
+  // a mesma coisa faria o seletor do inbox e o menu nomearem coisas diferentes.
+  "Sem time": { es: "Sin equipo" },
+  "Encaminhar esta conversa para outro time.": {
+    es: "Derivar esta conversación a otro equipo.",
+  },
+  "Encaminhar para um time": { es: "Derivar a un equipo" },
+  "A conversa entra na fila do setor escolhido: quem atendia até agora deixa de ser o responsável, e o próximo atendente livre daquele time a recebe.": {
+    es: "La conversación entra en la fila del sector elegido: quien atendía hasta ahora deja de ser el responsable, y el próximo agente libre de ese equipo la recibe.",
+  },
+  "Time de destino": { es: "Equipo de destino" },
+  "Carregando times…": { es: "Cargando equipos…" },
+  "Escolha o time": { es: "Elige el equipo" },
+  "Fila geral (sem time)": { es: "Fila general (sin equipo)" },
+  "Nenhum time cadastrado nesta organização.": {
+    es: "Ningún equipo registrado en esta organización.",
+  },
+  "Este time está fechado agora. A conversa fica na fila dele até o próximo horário de atendimento.": {
+    es: "Este equipo está cerrado ahora. La conversación queda en su fila hasta el próximo horario de atención.",
+  },
+  "O horário deste time está inválido e ninguém está recebendo por ele. A conversa fica parada até um gestor reconfigurar o horário.": {
+    es: "El horario de este equipo no es válido y nadie está recibiendo por él. La conversación queda detenida hasta que un gestor reconfigure el horario.",
+  },
+  Encaminhar: { es: "Derivar" },
+  "Encaminhando…": { es: "Derivando…" },
+  // Minúsculas porque saem como SUFIXO ("Financeiro · fechado agora"), nunca
+  // como frase própria.
+  "aberto agora": { es: "abierto ahora" },
+  "fechado agora": { es: "cerrado ahora" },
+  "horário inválido": { es: "horario no válido" },
+  "Filtrar por time": { es: "Filtrar por equipo" },
+  "Todas as filas": { es: "Todas las filas" },
+  "Meus times": { es: "Mis equipos" },
+  "Time arquivado": { es: "Equipo archivado" },
+  "Conversa encaminhada ao time.": { es: "Conversación derivada al equipo." },
+  "Conversa devolvida à fila geral.": { es: "Conversación devuelta a la fila general." },
+  "Não foi possível carregar os times.": { es: "No se pudieron cargar los equipos." },
+  "Conversa inválida.": { es: "Conversación no válida." },
+  "Informe o time de destino.": { es: "Indica el equipo de destino." },
+  "Conversa ou time não encontrado.": { es: "Conversación o equipo no encontrado." },
+  "Esta sessão não pode mudar o time da conversa.": {
+    es: "Esta sesión no puede cambiar el equipo de la conversación.",
+  },
+  "Não foi possível transferir. Tente novamente.": {
+    es: "No se pudo transferir. Inténtalo de nuevo.",
+  },
   "Atalhos de teclado": { es: "Atajos de teclado" },
   "Próxima conversa": { es: "Siguiente conversación" },
   "Conversa anterior": { es: "Conversación anterior" },

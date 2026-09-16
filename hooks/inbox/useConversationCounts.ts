@@ -24,6 +24,8 @@ export interface FiltrosDaContagem {
   unread?: boolean;
   tag?: string;
   channel_session_id?: string;
+  /** A fila por setor: `mine`, `none` ou o id de um time (migration 0263). */
+  team_id?: string;
 }
 
 /**
@@ -38,6 +40,7 @@ export function useConversationCounts(
   if (filtros.unread) qs.set("unread", "true");
   if (filtros.tag) qs.set("tag", filtros.tag);
   if (filtros.channel_session_id) qs.set("channel_session_id", filtros.channel_session_id);
+  if (filtros.team_id) qs.set("team_id", filtros.team_id);
   const sufixo = qs.toString();
 
   return useQuery({
