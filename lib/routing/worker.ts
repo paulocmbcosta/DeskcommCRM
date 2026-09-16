@@ -143,7 +143,7 @@ async function processEvent(event: EventRow, now: Date): Promise<RoutingOutcome>
 
   const { data: conv, error: convError } = await admin
     .from("conversations")
-    .select("id, organization_id, contact_id, channel_session_id, assigned_to_user_id, status")
+    .select("id, organization_id, contact_id, channel_session_id, assigned_to_user_id, status, team_id")
     .eq("id", conversationId)
     .eq("organization_id", orgId)
     .maybeSingle();
@@ -170,7 +170,12 @@ async function processEvent(event: EventRow, now: Date): Promise<RoutingOutcome>
   if (!alreadyAssigned && config.mode === "round_robin") {
     try {
       eligibles = await loadEligibleAttendants(admin, orgId, now, {
-        kind: "conversation_channel", channelSessionId: conv.channel_session_id,
+        kind: "conversation_channel",
+        channelSessionId: conv.channel_session_id,
+        // Sem esta linha o cron desfaz a promessa da feature em até 60 segundos:
+        // a conversa que o handoff pôs na fila de Cancelamentos é atribuída a
+        // qualquer elegível da organização — o comercial inclusive.
+        teamId: conv.team_id,
       });
     } catch (error) {
       if (!(error instanceof InvalidRoutingChannel)) throw error;
