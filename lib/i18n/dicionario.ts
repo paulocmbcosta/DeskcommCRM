@@ -179,7 +179,7 @@ export const DICIONARIO: Traducoes = {
   "Detalhes para suporte": { es: "Detalles para soporte" },
   "Copiar detalhes": { es: "Copiar detalles" },
   "Conversa aguardando responsável": { es: "Conversación esperando responsable" },
-  "Confira os responsáveis em Configurações → Atendimento.": { es: "Revisa los responsables en Configuración → Atención." },
+  "Confira quem pode assumir: o time citado no aviso, em Times de atendimento, ou os responsáveis do canal, em Configurações → Atendimento.": { es: "Revisa quién puede asumir: el equipo citado en el aviso, en Equipos de atención, o los responsables del canal, en Configuración → Atención." },
 
   "Suas agendas Google": { es: "Tus calendarios de Google" },
   "Escolha quais agendas ocupam seus horários e onde publicar novos compromissos. Os já publicados permanecem na agenda original.": { es: "Elige qué calendarios ocupan tus horarios y dónde publicar nuevas citas. Las ya publicadas permanecen en el calendario original." },
