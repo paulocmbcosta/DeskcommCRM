@@ -31,18 +31,33 @@ import { beforeAll, describe, expect, it } from "vitest";
  *    ele não é gestor, e o teste passaria mesmo que `fn_role_at_least`
  *    ignorasse a organização por completo — verde por acerto, que é o modo de
  *    falha que este repo já pagou caro.
- * 5. A FK COMPOSTA `(organization_id, user_id)` → `user_organizations` é a
- *    afirmação central do desenho ("torna IMPOSSÍVEL, e não só improvável,
- *    alocar num time alguém de outra organização"). Afirmação de segurança sem
- *    gate é prosa, então ela tem caso próprio.
+ * 5. As DUAS FKs compostas de `attendance_team_members` — `(organization_id,
+ *    user_id)` → `user_organizations` e `(organization_id, team_id)` →
+ *    `attendance_teams` — recusam o vínculo cross-org por ESCRITA DIRETA, com
+ *    a RPC fora do caminho. É a afirmação central do desenho ("torna
+ *    IMPOSSÍVEL, e não só improvável"), e ela só está medida assim.
  *
- * Conectar como `postgres` mediria NADA (`rolbypassrls = t`). Aqui é
- * `set role authenticated` + `request.jwt.claims`, o mesmo caminho da produção.
+ *    ⚠️ ISTO JÁ ESTEVE ESCRITO AQUI SENDO FALSO. Havia um caso chamado "(FK
+ *    composta)" que passava pela RPC, e uma sabotagem mostrou que apagar
+ *    qualquer uma das duas FKs o deixava VERDE: a validação de membros da RPC
+ *    levanta antes de a linha chegar à tabela, então a constraint nunca era
+ *    alcançada. O caso media a catraca de cima e a prosa creditava a de baixo
+ *    — falha em verde, com um docblock afirmando a proteção que faltava.
  *
- * Os casos que passam pela RPC rodam dentro de `begin … rollback`, de propósito:
- * sem isso o time que a RPC cria entraria na contagem do controle positivo e as
- * asserções deste arquivo passariam a depender da ORDEM em que o vitest resolveu
- * rodá-las.
+ * ═══ Qual papel mede o quê ═══
+ *
+ * Os casos de LEITURA e os de RLS/GRANT usam `set role authenticated` +
+ * `request.jwt.claims`, o mesmo caminho da produção: medi-los como `postgres`
+ * não mediria nada, porque o superusuário tem `rolbypassrls = t`.
+ *
+ * Os dois casos de FK fazem o CONTRÁRIO, e de propósito: escrevem como
+ * `postgres` justamente para que GRANT e RLS saiam da frente e a constraint
+ * fique sendo o único obstáculo no caminho. Papel errado para a pergunta errada
+ * é como uma catraca acaba respondendo pela outra.
+ *
+ * Todo caso que escreve roda dentro de `begin … rollback`. Sem isso, o time que
+ * a RPC cria entraria na contagem do controle positivo, e as asserções deste
+ * arquivo passariam a depender da ORDEM em que o vitest resolveu rodá-las.
  */
 
 const container = process.env.TEST_DB_CONTAINER;
@@ -53,6 +68,28 @@ if (!container) {
 }
 const containerName: string = container;
 
+/**
+ * ⚠️ `-q` É OBRIGATÓRIO, e a razão não é cosmética.
+ *
+ * `-tA` tira cabeçalho e rodapé do RESULTSET, mas não tira o COMMAND TAG: sem
+ * `-q`, um script com transação imprime `BEGIN` e `ROLLBACK` no stdout, em
+ * volta das linhas que interessam. Medido contra o Postgres real:
+ *
+ *     $ printf 'begin;\nselect 1;\nrollback;\n' | psql … -tA -f -
+ *     BEGIN
+ *     1
+ *     ROLLBACK      ← é esta que uma leitura pela ÚLTIMA linha devolve
+ *
+ *     $ printf 'begin;\nselect 1;\nrollback;\n' | psql … -tA -q -f -
+ *     1
+ *
+ * Sem a flag, o controle positivo da RPC — o ÚNICO caso que exercita o caminho
+ * feliz de `fn_save_attendance_team` — compara `"ROLLBACK"` com `"1"` e fica
+ * vermelho com o produto certo. Quem triasse o CI leria "a RPC de escrita está
+ * quebrada" sobre uma RPC que funciona.
+ *
+ * O `stderr` não é tocado por `-q`, então `erroAoRodar` segue medindo o mesmo.
+ */
 function sql(script: string): string {
   return execFileSync(
     "docker",
@@ -68,11 +105,32 @@ function sql(script: string): string {
       "-v",
       "ON_ERROR_STOP=1",
       "-tA",
+      "-q",
       "-f",
       "-",
     ],
     { input: script, encoding: "utf8" },
   ).trim();
+}
+
+/**
+ * Marcador das linhas que interessam, no molde de `sondasDesfeitas` em
+ * `tests/invariants/audit-log-sob-o-default-acl-do-supabase.test.ts`.
+ *
+ * `-q` já limpa o command tag, e só com ele a leitura pela última linha
+ * funcionaria. A MARCA é a segunda catraca, e ela guarda coisa diferente: um
+ * `select` acrescentado no fim do script — um diagnóstico a mais, o movimento
+ * mais natural do mundo — moveria a "última linha" sem que nada avisasse. Quem
+ * depende de POSIÇÃO depende de o script não crescer; quem depende de NOME não.
+ */
+const MARCA = "SONDA|";
+
+/** As linhas marcadas de um script, sem a marca, na ordem em que saíram. */
+function sondas(script: string): string[] {
+  return sql(script)
+    .split("\n")
+    .filter((linha) => linha.startsWith(MARCA))
+    .map((linha) => linha.slice(MARCA.length));
 }
 
 function ultimaLinha(out: string): string {
@@ -230,16 +288,16 @@ describe("fn_save_attendance_team — a RPC é a única porta, e ela confere a o
     // qualquer jeito — inclusive recusando TODA chamada. E é aqui que a FK
     // composta e a validação de membros (`for share` + `get diagnostics`) são
     // exercitadas pela primeira vez.
-    const out = sql(`
+    const lidas = sondas(`
       begin;
       set local role authenticated;
       select set_config('request.jwt.claims', '{"sub":"${MANAGER_A}"}', true);
-      select public.fn_save_attendance_team(
+      select '${MARCA}' || (public.fn_save_attendance_team(
         '${ORG_A}', null, 'Cobrança', 'cobranca',
         'Quando é sobre boleto, fatura ou pagamento',
         '{}'::jsonb, array['${AGENT_A}']::uuid[]
-      ) ->> 'id' is not null;
-      select count(*)
+      ) ->> 'id' is not null)::text;
+      select '${MARCA}' || count(*)::text
         from public.attendance_team_members m
         join public.attendance_teams t on t.id = m.team_id
        where t.organization_id = '${ORG_A}'
@@ -247,7 +305,8 @@ describe("fn_save_attendance_team — a RPC é a única porta, e ela confere a o
          and m.user_id = '${AGENT_A}';
       rollback;
     `);
-    expect(ultimaLinha(out)).toBe("1");
+    // A RPC devolveu um id, E o membro pedido está no time que ela criou.
+    expect(lidas).toEqual(["true", "1"]);
   });
 
   it("o manager da org A NÃO cria time na org B (team_forbidden)", () => {
@@ -263,11 +322,18 @@ describe("fn_save_attendance_team — a RPC é a única porta, e ela confere a o
     expect(stderr).toMatch(/team_forbidden/);
   });
 
-  it("o manager da org A NÃO aloca no time dele alguém da org B (FK composta)", () => {
-    // A afirmação central do desenho, medida: a capacidade é do atendente e o
-    // atendente é de UMA organização. Quem recusa aqui é a validação de membros
-    // da RPC; a FK composta é a segunda catraca, para o caso de alguém um dia
-    // escrever na tabela por outro caminho.
+  it("a RPC recusa membro de outra organização (validação de membros)", () => {
+    // ⚠️ O NOME DESTE CASO JÁ FOI "(FK composta)", E ERA MENTIRA — falha em
+    // verde, medida por sabotagem: apagar QUALQUER uma das duas FKs compostas
+    // deixava este caso passando. A razão está na ORDEM dentro da RPC: com um
+    // usuário de outra organização, o `perform … from user_organizations where
+    // organization_id = p_org` acha 0 linhas e levanta `team_invalid_members`
+    // ANTES de qualquer linha chegar a `attendance_team_members`. A FK nunca é
+    // alcançada.
+    //
+    // O caso continua valendo — a validação da RPC é uma catraca de verdade e
+    // merece gate. Ele só não é a catraca que o desenho chama de "impossível":
+    // essa é a FK, e quem a mede é o describe abaixo.
     const stderr = erroAoRodar(`
       begin;
       set local role authenticated;
@@ -279,5 +345,48 @@ describe("fn_save_attendance_team — a RPC é a única porta, e ela confere a o
       rollback;
     `);
     expect(stderr).toMatch(/team_invalid_members/);
+  });
+});
+
+/**
+ * A FK COMPOSTA, MEDIDA ONDE ELA É A ÚNICA COISA QUE SOBRA.
+ *
+ * O desenho afirma que a FK `(organization_id, user_id)` → `user_organizations`
+ * torna "IMPOSSÍVEL, e não só improvável" alocar num time alguém de outra
+ * organização. "Improvável" é o que uma validação de aplicação entrega — e um
+ * refactor a remove sem que nada acuse. "Impossível" é o que uma constraint
+ * entrega, e afirmação dessa força precisa de um caso que só ela possa passar.
+ *
+ * Por isso estes dois escrevem DIRETO na tabela, como `postgres`: superusuário
+ * ignora GRANT e ignora RLS (`rolbypassrls = t`), então o único obstáculo que
+ * resta no caminho é a constraint. É a forma de medir a catraca de baixo sem
+ * que as de cima respondam por ela.
+ */
+describe("attendance_team_members — as FKs compostas, sem a RPC na frente", () => {
+  it("recusa membro de outra organização mesmo por escrita direta", () => {
+    // TEAM_A é da ORG_A, então a FK de time está satisfeita e sobra uma só
+    // suspeita: (ORG_A, AGENT_B) não existe em user_organizations.
+    const stderr = erroAoRodar(`
+      begin;
+      insert into public.attendance_team_members (organization_id, team_id, user_id)
+        values ('${ORG_A}', '${TEAM_A}', '${AGENT_B}');
+      rollback;
+    `);
+    expect(stderr).toMatch(/violates foreign key constraint/i);
+    expect(stderr).toMatch(/attendance_team_members_organization_id_user_id_fkey/);
+  });
+
+  it("recusa time de outra organização mesmo por escrita direta", () => {
+    // O espelho: AGENT_A é da ORG_A, mas TEAM_B é da ORG_B. Sem este caso, a
+    // outra metade da tenancy composta fica sem gate — e a sabotagem que
+    // apagava a FK `(organization_id, team_id)` também passava em verde.
+    const stderr = erroAoRodar(`
+      begin;
+      insert into public.attendance_team_members (organization_id, team_id, user_id)
+        values ('${ORG_A}', '${TEAM_B}', '${AGENT_A}');
+      rollback;
+    `);
+    expect(stderr).toMatch(/violates foreign key constraint/i);
+    expect(stderr).toMatch(/attendance_team_members_organization_id_team_id_fkey/);
   });
 });

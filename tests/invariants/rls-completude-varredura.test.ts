@@ -156,9 +156,11 @@ const PROVA_PROPRIA: readonly Excecao[] = [
     tabela: "attendance_team_members",
     razao:
       "tests/invariants/times-nao-vazam-entre-organizacoes.test.ts — mesmo " +
-      "`it.each` de TABELAS_DE_TIME, e o caso da FK COMPOSTA " +
-      "`(organization_id,user_id)`: o manager da org A não aloca no time dele " +
-      "alguém da org B.",
+      "`it.each` de TABELAS_DE_TIME (controle positivo e ZERO cross-org nos " +
+      "dois sentidos), `permission denied` no INSERT como `authenticated`, e " +
+      "as DUAS FKs compostas medidas por escrita direta como `postgres`, com " +
+      "GRANT e RLS fora do caminho: `(organization_id,user_id)` recusa membro " +
+      "de outra org e `(organization_id,team_id)` recusa time de outra org.",
   },
   {
     tabela: "followup_flow_versions",
