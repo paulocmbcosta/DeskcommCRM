@@ -146,18 +146,21 @@ const PROVA_PROPRIA: readonly Excecao[] = [
     tabela: "attendance_teams",
     razao:
       "tests/invariants/times-nao-vazam-entre-organizacoes.test.ts — " +
-      "`TABELAS_DE_TIME`, com controle positivo (1 linha própria) e ZERO " +
-      "cross-org nos dois sentidos por `countAs`; mais o GRANT só de SELECT " +
-      "provado por `permission denied` no INSERT como `authenticated`, e a RPC " +
-      "de escrita recusando organização alheia com o JWT do MANAGER (não do " +
-      "agent, que passaria por acerto).",
+      "`TABELAS_DE_TIME`, com controle positivo (1 linha própria) nos DOIS " +
+      "lados e ZERO cross-org nos dois sentidos por `countAs`; mais o GRANT só " +
+      "de SELECT provado por `permission denied` no INSERT nos TRÊS papéis do " +
+      "PostgREST (anon, authenticated, service_role — e `service_role` é o que " +
+      "mais importa, porque ignora RLS e ali o grant é a única catraca), e a " +
+      "RPC de escrita recusando organização alheia com o JWT do MANAGER (não " +
+      "do agent, que passaria por acerto).",
   },
   {
     tabela: "attendance_team_members",
     razao:
       "tests/invariants/times-nao-vazam-entre-organizacoes.test.ts — mesmo " +
       "`it.each` de TABELAS_DE_TIME (controle positivo e ZERO cross-org nos " +
-      "dois sentidos), `permission denied` no INSERT como `authenticated`, e " +
+      "dois sentidos, com controle positivo nos DOIS lados), `permission denied` " +
+      "no INSERT nos três papéis do PostgREST, e " +
       "as DUAS FKs compostas medidas por escrita direta como `postgres`, com " +
       "GRANT e RLS fora do caminho: `(organization_id,user_id)` recusa membro " +
       "de outra org e `(organization_id,team_id)` recusa time de outra org.",

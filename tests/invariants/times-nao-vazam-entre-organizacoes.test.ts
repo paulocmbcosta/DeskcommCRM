@@ -8,13 +8,34 @@ import { beforeAll, describe, expect, it } from "vitest";
  *
  * ═══ Por que um arquivo próprio, e não uma linha em rls-isolation.test.ts ═══
  *
- * Mecânica: `tests/invariants/**` é congelado por `loop/hooks/freeze-invariants.sh`
- * — arquivo NOVO (status `A`) passa, arquivo MODIFICADO (`M`) é bloqueado.
- * Acrescentar as duas tabelas na lista fixa daquele arquivo exigiria a env de
- * escape, e a autorização para usá-la não é minha para tomar. As duas tabelas
- * são declaradas em `PROVA_PROPRIA` de `rls-completude-varredura.test.ts`
- * citando ESTE arquivo — que é a porta que aquela varredura abre, com todas as
- * letras, para prova comportamental que vive fora de `TABLES`.
+ * Porque o molde de `TABLES` mede UMA propriedade com UMA fixture, e a garantia
+ * destas tabelas é uma PILHA de quatro catracas.
+ *
+ * Aquele arquivo semeia um `agent` por organização e prova, por tabela, duas
+ * coisas: que o vizinho lê zero e que o próprio lê mais que zero. É a régua
+ * certa para isolamento de LEITURA, e as duas tabelas passariam nela. Mas o que
+ * o desenho promete não é só leitura isolada — é que a escrita só entra por
+ * RPC. Isso são quatro catracas empilhadas: a RLS, o GRANT (que só tem SELECT),
+ * a conferência de organização DENTRO da RPC, e as duas FKs compostas. Três
+ * delas precisam de papéis e fixtures que o molde não tem: um `manager` para
+ * chamar a RPC, escrita direta como `postgres` para tirar GRANT e RLS da frente,
+ * e os três papéis que o PostgREST assume para medir o GRANT.
+ *
+ * Registrar as tabelas em `TABLES` faria a metade de leitura CREDITAR a pilha
+ * inteira: verde ali passaria a ler como "os times estão protegidos", quando o
+ * que estaria medido é a catraca mais externa. Por isso elas entram em
+ * `PROVA_PROPRIA` de `rls-completude-varredura.test.ts` citando ESTE arquivo —
+ * que é a porta que aquela varredura abre, com todas as letras, para prova
+ * comportamental que vive fora de `TABLES`.
+ *
+ * ⚠️ Esta seção já deu OUTRO motivo, e ele era falso: dizia que
+ * `tests/invariants/**` é congelado por `loop/hooks/freeze-invariants.sh`.
+ * Medido: `git config core.hooksPath` aponta para
+ * `.agents/skills/deskcomm-contribuir/scripts/hooks`, que NÃO contém aquele
+ * hook — ele é do gov-loop. A prova de que a mecânica não estava em vigor é
+ * este próprio par de commits, que modificou `rls-completude-varredura.test.ts`
+ * duas vezes sem nada bloquear. A conclusão (arquivo próprio) continua de pé,
+ * pelo motivo acima; o mecanismo citado é que não existia.
  *
  * ═══ O que este arquivo prova ═══
  *
@@ -22,10 +43,12 @@ import { beforeAll, describe, expect, it } from "vitest";
  *    jeito trivial de deixar o arquivo verde é quebrar a feature inteira — e
  *    toda asserção de isolamento passa por ausência de dado.
  * 2. Isolamento: ZERO linhas do vizinho, nas duas tabelas, nos dois sentidos.
- * 3. O GRANT é o portão estreito. A policy é `for all` (doutrina do CLAUDE.md),
- *    mas `authenticated` só tem SELECT — então a REST não escreve, mesmo com a
- *    policy permitindo a linha. Policy e grant são catracas diferentes e a
- *    segunda é a que fecha a porta; medi-la é medir a que está na frente.
+ * 3. O GRANT é o portão estreito, e ele é medido nos TRÊS papéis que o PostgREST
+ *    assume — `anon`, `authenticated` e `service_role` —, não só no do meio. A
+ *    policy é `for all` (doutrina do CLAUDE.md) e DEIXARIA a linha passar, já
+ *    que ela é da organização do usuário; quem recusa é o grant, que só tem
+ *    SELECT. Para `service_role` isso é o que mais importa: ele ignora RLS
+ *    (`rolbypassrls`), então ali o grant não é a primeira catraca — é a única.
  * 4. A RPC de escrita recusa organização alheia. E recusa com o JWT do
  *    MANAGER de A, não do agent: com o agent, `team_forbidden` sairia porque
  *    ele não é gestor, e o teste passaria mesmo que `fn_role_at_least`
@@ -241,6 +264,21 @@ describe("times de atendimento — isolamento entre organizações", () => {
     expect(vizinha).toBe(0);
   });
 
+  // O MESMO controle positivo do outro lado, e não é simetria decorativa: sem
+  // ele, "o agent da org B lê ZERO da org A" fica verde também quando AGENT_B
+  // não enxerga NADA — semente engolida por um `on conflict do nothing`, que é
+  // a classe de falha que `tests/db/banco-limpo-por-arquivo.ts` documenta como
+  // já medida neste repo. Hoje não pode acontecer (UUIDs exclusivos deste
+  // arquivo + banco novo por arquivo), e é justamente por depender dessas duas
+  // condições que a asserção não devia depender delas.
+  it.each(TABELAS_DE_TIME)("o agent da org B lê a PRÓPRIA org em %s (controle positivo)", (tabela) => {
+    const proprias = countAs(
+      AGENT_B,
+      `select count(*) from public.${tabela} where organization_id = '${ORG_B}';`,
+    );
+    expect(proprias).toBe(1);
+  });
+
   it.each(TABELAS_DE_TIME)("o agent da org B lê ZERO linhas da org A em %s", (tabela) => {
     const vizinha = countAs(
       AGENT_B,
@@ -250,36 +288,71 @@ describe("times de atendimento — isolamento entre organizações", () => {
   });
 });
 
-describe("times de atendimento — a escrita não passa pela REST", () => {
-  it("`authenticated` não tem INSERT em attendance_teams, nem na própria org", () => {
-    // A policy `for all` DEIXARIA esta linha passar — ela é da organização do
-    // usuário. Quem recusa é o GRANT, que só tem SELECT. É por isso que a
-    // mensagem esperada é `permission denied` e não uma violação de policy:
-    // são catracas diferentes, e esta mede a que está na frente.
-    const stderr = erroAoRodar(`
-      begin;
-      set local role authenticated;
-      select set_config('request.jwt.claims', '{"sub":"${AGENT_A}"}', true);
-      insert into public.attendance_teams (organization_id, name, slug)
-        values ('${ORG_A}', 'Time pela REST', 'time-pela-rest');
-      rollback;
-    `);
-    expect(stderr).toMatch(/permission denied/i);
-    expect(stderr).toMatch(/attendance_teams/);
-  });
+/** A linha que cada tabela tentaria inserir — toda ela da PRÓPRIA organização. */
+const INSERCAO_LEGITIMA: Record<(typeof TABELAS_DE_TIME)[number], string> = {
+  attendance_teams: `insert into public.attendance_teams (organization_id, name, slug)
+        values ('${ORG_A}', 'Time pela REST', 'time-pela-rest');`,
+  attendance_team_members: `insert into public.attendance_team_members (organization_id, team_id, user_id)
+        values ('${ORG_A}', '${TEAM_A}', '${MANAGER_A}');`,
+};
 
-  it("`authenticated` não tem INSERT em attendance_team_members, nem na própria org", () => {
-    const stderr = erroAoRodar(`
+/**
+ * OS TRÊS PAPÉIS QUE O POSTGREST ASSUME — a mesma lista de `PAPEIS` em
+ * `tests/invariants/audit-log-sob-o-default-acl-do-supabase.test.ts`.
+ *
+ * Medir só `authenticated` deixava o título deste describe prometendo mais do
+ * que a medição cobria, e o buraco não era teórico: `service_role` é o papel
+ * que IGNORA RLS (`rolbypassrls`). Para ele, o GRANT não é a primeira catraca —
+ * é a ÚNICA. No dia em que alguém lhe conceder `insert` (o movimento natural
+ * quando um worker precisar escrever), o "escrita só por RPC" da spec se desfaz
+ * e nada fica vermelho.
+ *
+ * `anon` entra pelo mesmo raciocínio, um degrau acima: ele não tem nem SELECT, e
+ * é o papel que a anon key carrega para dentro do browser.
+ */
+const PAPEIS_DA_REST = [
+  {
+    papel: "anon",
+    // Sem JWT: é exatamente o que a anon key manda quando ninguém logou.
+    claims: "",
+  },
+  {
+    papel: "authenticated",
+    claims: `select set_config('request.jwt.claims', '{"sub":"${AGENT_A}"}', true);`,
+  },
+  {
+    papel: "service_role",
+    // O JWT de service role não carrega `sub`, e é assim que a RLS é ignorada.
+    claims: "",
+  },
+] as const;
+
+describe("times de atendimento — a escrita não passa pela REST", () => {
+  // A policy `for all` DEIXARIA a linha de `authenticated` passar — ela é da
+  // organização do usuário. Quem recusa é o GRANT, que só tem SELECT. É por
+  // isso que a mensagem esperada é `permission denied` e não uma violação de
+  // policy: são catracas diferentes, e esta mede a que está na frente.
+  //
+  // E o `permission denied` VIGIA o `revoke all` de verdade, em vez de medir uma
+  // tabela que já nasceria fechada: o `ALTER DEFAULT PRIVILEGES … GRANT ALL ON
+  // TABLES` do corpo do `baseline.sql` roda ANTES do apêndice, então estas
+  // tabelas nascem com ALL concedido aos três papéis e é o `revoke` da migration
+  // que as fecha. Tirar o `revoke` deixa este describe vermelho.
+  for (const { papel, claims } of PAPEIS_DA_REST) {
+    for (const tabela of TABELAS_DE_TIME) {
+      it(`\`${papel}\` não tem INSERT em ${tabela}, nem na própria org`, () => {
+        const stderr = erroAoRodar(`
       begin;
-      set local role authenticated;
-      select set_config('request.jwt.claims', '{"sub":"${AGENT_A}"}', true);
-      insert into public.attendance_team_members (organization_id, team_id, user_id)
-        values ('${ORG_A}', '${TEAM_A}', '${MANAGER_A}');
+      set local role ${papel};
+      ${claims}
+      ${INSERCAO_LEGITIMA[tabela]}
       rollback;
     `);
-    expect(stderr).toMatch(/permission denied/i);
-    expect(stderr).toMatch(/attendance_team_members/);
-  });
+        expect(stderr).toMatch(/permission denied/i);
+        expect(stderr).toMatch(new RegExp(tabela));
+      });
+    }
+  }
 });
 
 describe("fn_save_attendance_team — a RPC é a única porta, e ela confere a organização", () => {
