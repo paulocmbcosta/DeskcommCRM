@@ -8,7 +8,10 @@ function fixture(over: Record<string, unknown> = {}) {
     channel_sessions: { id: "channel" }, channel_routing_policies: null,
     channel_routing_responsibles: [], user_organizations: [{ user_id: "ana" }],
     attendant_availability: [{ user_id: "ana", capacity: 2, schedule: {} }],
-    conversations: [], conversation_assignment_events: [], ...over,
+    conversations: [], conversation_assignment_events: [],
+    attendance_teams: { id: "time", schedule: {}, archived_at: null },
+    attendance_team_members: [{ user_id: "ana" }],
+    ...over,
   };
   const db = { from(table: string) {
     const q = {
@@ -56,5 +59,51 @@ describe("elegibilidade com origem explícita", () => {
   it("erro de banco não vira sem elegível", async () => {
     const { db } = fixture({ attendant_availability: new Error("offline") });
     await expect(loadEligibleAttendants(db, "org", now, scope)).rejects.toThrow("offline");
+  });
+});
+
+const scopeComTime = { kind: "conversation_channel", channelSessionId: "channel", teamId: "time" } as const;
+
+describe("elegibilidade restrita por time", () => {
+  it("atendente fora do time não entra", async () => {
+    const { db } = fixture({ attendance_team_members: [{ user_id: "bia" }] });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toEqual([]);
+  });
+
+  it("time sem membro é restrição explícita, não ausência de configuração", async () => {
+    const { db } = fixture({ attendance_team_members: [] });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toEqual([]);
+  });
+
+  it("time fechado agora não tem elegível, mesmo com atendente disponível e no horário dele", async () => {
+    // Janela só de segunda a sexta; `now` é domingo. É o caso Cancelamentos.
+    const { db } = fixture({
+      attendance_teams: {
+        id: "time", archived_at: null,
+        schedule: { timezone: "America/Sao_Paulo", windows: [{ dow: 1, start: "08:00", end: "18:00" }] },
+      },
+    });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toEqual([]);
+  });
+
+  it("time aberto agora devolve quem está nele", async () => {
+    const { db } = fixture({
+      attendance_teams: {
+        id: "time", archived_at: null,
+        schedule: { timezone: "America/Sao_Paulo", windows: [{ dow: 0, start: "08:00", end: "18:00" }] },
+      },
+    });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toMatchObject([{ userId: "ana" }]);
+  });
+
+  it("time arquivado não devolve ninguém", async () => {
+    const { db } = fixture({ attendance_teams: { id: "time", schedule: {}, archived_at: "2026-01-01T00:00:00Z" } });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toEqual([]);
+  });
+
+  it("sem time no escopo, nada muda — nenhuma consulta às tabelas de time", async () => {
+    const { db, filters } = fixture();
+    expect(await loadEligibleAttendants(db, "org", now, scope)).toMatchObject([{ userId: "ana" }]);
+    expect(filters.some(([t]) => t === "attendance_teams" || t === "attendance_team_members")).toBe(false);
   });
 });
