@@ -93,6 +93,16 @@ describe("GET /api/v1/settings/teams", () => {
     expect(body.data.membros).toEqual([{ id: atendente, name: "Atendente sem nome" }]);
   });
 
+  it("lista de alocáveis que não pôde ser lida é 500, nunca lista vazia", async () => {
+    // O modo de falha que este caso guarda não é o erro: é a MENTIRA. O
+    // supabase-js devolve `{ data: null, error }` sem lançar, e um `[]` aqui é
+    // lido pelo gestor como "não há ninguém nesta organização".
+    membros.mockResolvedValue({ data: null, error: { message: "permission denied" } });
+    const res = await GET();
+    expect(res.status).toBe(500);
+    expect((await res.json()).error.code).toBe("internal_error");
+  });
+
   it("falha de leitura é 500 declarado, não exceção vazando", async () => {
     vi.mocked(carregarTimes).mockRejectedValue(new Error("db fora do ar"));
     const res = await GET();

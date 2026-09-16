@@ -48,9 +48,15 @@ export async function GET(): Promise<Response> {
   try {
     const db = await createClient();
     const times = await carregarTimes(db, auth.org.orgId, new Date(), { incluirArquivados: true });
-    const { data: membros } = await db.from("user_organizations")
+    const { data: membros, error: erroMembros } = await db.from("user_organizations")
       .select("user_id").eq("organization_id", auth.org.orgId).is("revoked_at", null)
       .in("role", ["agent", "manager", "admin"]);
+    // O supabase-js NÃO lança aqui — devolve `{ data: null, error }` —, então o
+    // `catch` abaixo não pega este caso. Sem esta linha, uma falha de leitura
+    // vira `membros: []` e a tela diz "esta organização não tem ninguém para
+    // alocar", que é uma frase FALSA indistinguível da verdadeira. Falhar alto
+    // é a única forma de o gestor descobrir que a lista está incompleta.
+    if (erroMembros) throw new Error(erroMembros.message);
     const ids = (membros ?? []).map((m: { user_id: string }) => String(m.user_id));
     // `nomesDosAtendentes` devolve mapa VAZIO num self-host sem service role —
     // por decisão, com log. O rótulo genérico mantém a tela utilizável (o id é a
