@@ -143,6 +143,24 @@ const PROVA_PROPRIA: readonly Excecao[] = [
     razao: "tests/invariants/agenda-rls.test.ts — mesmo `it.each` de TABELAS_DA_AGENDA.",
   },
   {
+    tabela: "attendance_teams",
+    razao:
+      "tests/invariants/times-nao-vazam-entre-organizacoes.test.ts — " +
+      "`TABELAS_DE_TIME`, com controle positivo (1 linha própria) e ZERO " +
+      "cross-org nos dois sentidos por `countAs`; mais o GRANT só de SELECT " +
+      "provado por `permission denied` no INSERT como `authenticated`, e a RPC " +
+      "de escrita recusando organização alheia com o JWT do MANAGER (não do " +
+      "agent, que passaria por acerto).",
+  },
+  {
+    tabela: "attendance_team_members",
+    razao:
+      "tests/invariants/times-nao-vazam-entre-organizacoes.test.ts — mesmo " +
+      "`it.each` de TABELAS_DE_TIME, e o caso da FK COMPOSTA " +
+      "`(organization_id,user_id)`: o manager da org A não aloca no time dele " +
+      "alguém da org B.",
+  },
+  {
     tabela: "followup_flow_versions",
     razao:
       "tests/invariants/followup-schema.test.ts — `FOLLOWUP_TABLES`, com " +
