@@ -603,6 +603,102 @@ git commit -m "fix(times): a posição na fila conta o time, não a organizaçã
 
 ---
 
+## Task 3.5: o cron respeita o time — LACUNA descoberta durante a execução
+
+> **Por que esta tarefa tem número quebrado.** Ela não estava no plano original, e a numeração das
+> demais não foi mexida de propósito: as Tasks 4–11 já foram citadas em commits e em briefings de
+> agentes, e renumerar faria toda referência anterior apontar para outra coisa.
+
+**A lacuna, e o tamanho dela.** Nenhuma tarefa do plano tocava `lib/routing/worker.ts` — medido:
+`grep -c "worker.ts"` no plano devolvia `0`. E o worker monta o escopo assim (`worker.ts:172`):
+
+```ts
+      eligibles = await loadEligibleAttendants(admin, orgId, now, {
+        kind: "conversation_channel", channelSessionId: conv.channel_session_id,
+      });
+```
+
+Sem `teamId`. E a conversa é lida sem a coluna (`worker.ts:146`):
+
+```ts
+    .select("id, organization_id, contact_id, channel_session_id, assigned_to_user_id, status")
+```
+
+Consequência: no instante em que a Task 6 gravar `conversations.team_id` e a conversa cair na fila,
+o cron a pega em até 60 segundos e a atribui a **qualquer** elegível da organização — o comercial
+recebendo um pedido de cancelamento. É a decisão 2 desfeita por dentro, em silêncio, com a suíte
+inteira verde, porque nenhum teste cobre a montagem do escopo no worker.
+
+**Esta tarefa é PRÉ-CONDIÇÃO da Task 6.** Ligar a escrita de `team_id` antes dela entrega a feature
+com o defeito que ela existe para evitar.
+
+**Arquivos:**
+- Modificar: `lib/routing/worker.ts`
+- Criar: `lib/routing/worker-respeita-o-time.test.ts`
+
+- [ ] **Passo 1: escrever o teste que fica vermelho**
+
+O worker não expõe `processEvent` (é interna) e `runRoutingWorker` cria o próprio client por
+`createAdminClient()`. Dois caminhos, e o implementador escolhe — mas o teste **tem de ficar
+vermelho sem a mudança**, e isso é medido, não afirmado:
+
+- **Comportamental (preferido):** `vi.mock("@/lib/supabase/admin")` devolvendo um fake que registra
+  as chamadas, e `vi.mock("@/lib/routing/eligibles")` capturando o `scope` recebido. Chame
+  `runRoutingWorker` com um evento semeado e afirme que o escopo passado contém
+  `teamId: "<o time da conversa>"`. É o único caminho que prova COMPORTAMENTO.
+- **Estrutural (aceitável se o comportamental se mostrar caro demais):** ler `lib/routing/worker.ts`
+  e afirmar que o `select` da conversa inclui `team_id` e que o objeto de escopo inclui `teamId`.
+  O repo tem precedente para gate estrutural de invariante transversal
+  (`tests/unit/cron-audita-so-quando-ha-efeito.test.ts` varre o AST de toda rota de cron). É mais
+  fraco: pega remoção, não pega o valor errado. Se escolher este, **diga no relatório que escolheu
+  a catraca mais fraca e por quê**.
+
+- [ ] **Passo 2: rodar e ver falhar**
+
+```bash
+pnpm vitest run lib/routing/worker-respeita-o-time.test.ts
+```
+
+- [ ] **Passo 3: implementar — duas linhas**
+
+Em `lib/routing/worker.ts:146`, acrescente a coluna:
+
+```ts
+    .select("id, organization_id, contact_id, channel_session_id, assigned_to_user_id, status, team_id")
+```
+
+Em `lib/routing/worker.ts:172`, passe o time:
+
+```ts
+      eligibles = await loadEligibleAttendants(admin, orgId, now, {
+        kind: "conversation_channel",
+        channelSessionId: conv.channel_session_id,
+        // Sem esta linha o cron desfaz a decisão 2 em até 60 segundos: a conversa
+        // que o handoff pôs na fila de Cancelamentos é atribuída a qualquer
+        // elegível da organização — o comercial inclusive.
+        teamId: conv.team_id,
+      });
+```
+
+- [ ] **Passo 4: rodar e ver passar**
+
+```bash
+pnpm vitest run lib/routing/ && pnpm typecheck && pnpm lint
+```
+
+- [ ] **Passo 5: sabotar**
+
+Tire o `teamId:` do escopo e confirme o vermelho. Cole a saída real no relatório.
+
+- [ ] **Passo 6: commit**
+
+```bash
+git add lib/routing/worker.ts lib/routing/worker-respeita-o-time.test.ts
+git commit -m "fix(times): o cron de roteamento respeita o time da conversa"
+```
+
+---
+
 ## Task 4: o catálogo de times (carregador único)
 
 **Arquivos:**
