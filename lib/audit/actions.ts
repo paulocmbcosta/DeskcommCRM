@@ -236,6 +236,12 @@ export const AUDIT_ACTIONS = [
   "leads.bulk_assigned",
   "attendant.availability_changed",
   "routing.config_changed",
+  // Times de atendimento (migration 0263). Um time é DESTINO de conversa: quem
+  // entra e quem sai dele muda para quem o roteamento entrega. Sem estas duas
+  // linhas, a única mutação de roteamento com rastro seria a de canal, e
+  // "por que esta conversa foi parar no financeiro?" não teria resposta.
+  "routing.team_saved",
+  "routing.team_archived",
   // Mudar a régua do abandono (spec 16 §5.2) muda como TODO período passa a ser
   // lido — é mutação relevante, não preferência de exibição.
   "metrics.atrito_regua_changed",
