@@ -2,7 +2,6 @@
 
 import { useT } from "@/hooks/i18n/useT";
 import { useMemo, useState } from "react";
-import { FUSOS_OFERECIDOS } from "@/lib/tempo/fusos";
 
 import {
   useAttendants,
@@ -17,6 +16,7 @@ import {
   type RoutingConfig,
   type ScheduleWindow,
 } from "@/lib/schemas/routing";
+import { EditorDeJanelas, resumoDeJanelas } from "@/components/times/EditorDeJanelas";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,9 +53,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Clock, Plus, Trash } from "@/lib/ui/icons";
-
-const DOW_LABELS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+import { Clock } from "@/lib/ui/icons";
 
 const MODE_LABELS: Record<(typeof ROUTING_MODES)[number], string> = {
   manual: "Manual (atendente puxa da fila)",
@@ -87,7 +85,7 @@ interface Attendant {
  */
 function summarizeSchedule(windows: ScheduleWindow[], t: (texto: string) => string): string {
   if (windows.length === 0) return t("Não publicado");
-  return windows.map((w) => `${t(DOW_LABELS[w.dow] ?? "")} ${w.start}–${w.end}`).join(", ");
+  return resumoDeJanelas(windows, t);
 }
 
 function StatusBadge({ attendant, now }: { attendant: Attendant; now: Date }) {
@@ -133,96 +131,14 @@ function ScheduleDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="tz">{t("Fuso horário")}</Label>
-            {/* Mesma razão do painel anti-banimento, e aqui o custo é maior:
-                este fuso é lido por `localMoment`, que LANÇA num fuso inexistente
-                — e o atendente com agenda quebrada nunca fica elegível, sem que
-                nada na tela diga por quê. */}
-            <select
-              id="tz"
-              value={timezone}
-              onChange={(e) => setTimezone(e.target.value)}
-              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              {FUSOS_OFERECIDOS.map((f) => (
-                <option key={f.codigo} value={f.codigo}>
-                  {f.rotulo} — {f.codigo}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-2">
-            {windows.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t("Nenhuma janela publicada — ninguém consegue marcar com esta pessoa.")}
-              </p>
-            ) : null}
-            {windows.map((w, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Select
-                  value={String(w.dow)}
-                  onValueChange={(v) =>
-                    setWindows((ws) =>
-                      ws.map((x, j) => (j === i ? { ...x, dow: Number(v) } : x)),
-                    )
-                  }
-                >
-                  <SelectTrigger className="w-[90px]" aria-label="Dia da semana">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DOW_LABELS.map((d, idx) => (
-                      <SelectItem key={idx} value={String(idx)}>
-                        {d}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  type="time"
-                  value={w.start}
-                  aria-label={t("Início")}
-                  onChange={(e) =>
-                    setWindows((ws) =>
-                      ws.map((x, j) => (j === i ? { ...x, start: e.target.value } : x)),
-                    )
-                  }
-                />
-                <span className="text-muted-foreground">–</span>
-                <Input
-                  type="time"
-                  value={w.end}
-                  aria-label="Fim"
-                  onChange={(e) =>
-                    setWindows((ws) =>
-                      ws.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)),
-                    )
-                  }
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Remover janela"
-                  onClick={() => setWindows((ws) => ws.filter((_, j) => j !== i))}
-                >
-                  <Trash size={18} />
-                </Button>
-              </div>
-            ))}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                setWindows((ws) => [...ws, { dow: 1, start: "08:00", end: "18:00" }])
-              }
-            >
-              <Plus size={16} className="mr-1" /> Adicionar janela
-            </Button>
-          </div>
-        </div>
+        <EditorDeJanelas
+          timezone={timezone}
+          windows={windows}
+          onTimezone={setTimezone}
+          onWindows={setWindows}
+          idFuso="tz"
+          vazioDiz={t("Nenhuma janela publicada — ninguém consegue marcar com esta pessoa.")}
+        />
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

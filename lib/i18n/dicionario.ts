@@ -8736,6 +8736,72 @@ export const DICIONARIO: Traducoes = {
   "Erro ao reativar tenant": { es: "Error al reactivar el tenant" },
   "Incidente resolvido com sucesso": { es: "Incidente resuelto con éxito" },
   "Erro ao resolver incidente": { es: "Error al resolver el incidente" },
+
+  // ─── Configurações: Times de atendimento (tela + navegação) ───
+  // "time" é "equipo", a mesma palavra que o seletor do inbox usa; "janela" é
+  // "ventana", como já traduzem as janelas de envio.
+  "Times de atendimento": { es: "Equipos de atención" },
+  "Os setores que recebem conversa: quem está em cada um e a que horas atendem.": {
+    es: "Los sectores que reciben conversación: quién está en cada uno y a qué horas atienden.",
+  },
+  "Os setores que recebem conversa — Financeiro, Suporte, Vendas. Cada time tem as pessoas que atendem por ele e o horário em que atende; fora desse horário a conversa espera na fila dele em vez de morrer sem resposta.": {
+    es: "Los sectores que reciben conversación — Finanzas, Soporte, Ventas. Cada equipo tiene las personas que atienden por él y el horario en que atiende; fuera de ese horario la conversación espera en su fila en vez de morir sin respuesta.",
+  },
+  // A frase do cartão que explica por que o time parou de receber. É a única
+  // tela que pode dizer o porquê — ver `AvisoDeHorarioInvalido`.
+  "O horário deste time está inválido e ninguém está recebendo por ele. Reconfigure o horário abaixo.": {
+    es: "El horario de este equipo no es válido y nadie está recibiendo por él. Reconfigura el horario abajo.",
+  },
+  // Maiúsculas porque são SELOS que ficam sozinhos no cartão, nunca sufixo de frase.
+  "Horário inválido": { es: "Horario no válido" },
+  "Aberto agora": { es: "Abierto ahora" },
+  "Fechado agora": { es: "Cerrado ahora" },
+  "Novo time": { es: "Nuevo equipo" },
+  "1 pessoa neste time": { es: "1 persona en este equipo" },
+  "pessoas neste time": { es: "personas en este equipo" },
+  "atende a qualquer hora": { es: "atiende a cualquier hora" },
+  "Nome do time": { es: "Nombre del equipo" },
+  "Ex.: Financeiro": { es: "Ej.: Finanzas" },
+  Identificador: { es: "Identificador" },
+  "Use apenas letras minúsculas, números e hífen.": {
+    es: "Usa solo letras minúsculas, números y guion.",
+  },
+  "É por este nome curto que o agente de IA chama o time.": {
+    es: "Es por este nombre corto que el agente de IA llama al equipo.",
+  },
+  "Quando usar": { es: "Cuándo usar" },
+  "O agente de IA lê isto para escolher o time. Escreva os assuntos: fatura, boleto, negociação de dívida.": {
+    es: "El agente de IA lee esto para elegir el equipo. Escribe los asuntos: factura, recibo, negociación de deuda.",
+  },
+  "Horário de atendimento": { es: "Horario de atención" },
+  "Fora do horário, a conversa espera na fila do time até o próximo turno. Sem nenhuma janela, o time atende a qualquer hora.": {
+    es: "Fuera del horario, la conversación espera en la fila del equipo hasta el próximo turno. Sin ninguna ventana, el equipo atiende a cualquier hora.",
+  },
+  "Nenhuma janela — este time atende a qualquer hora.": {
+    es: "Ninguna ventana — este equipo atiende a cualquier hora.",
+  },
+  "Quem atende por este time": { es: "Quién atiende por este equipo" },
+  "Ninguém para alocar ainda. Convide atendentes em Equipe e volte aqui para distribuí-los.": {
+    es: "Nadie para asignar todavía. Invita agentes en Equipo y vuelve aquí para distribuirlos.",
+  },
+  "Time salvo.": { es: "Equipo guardado." },
+  "Time arquivado — ele deixa de receber conversa nova.": {
+    es: "Equipo archivado — deja de recibir conversaciones nuevas.",
+  },
+  "Time reativado — ele volta a receber conversa.": {
+    es: "Equipo reactivado — vuelve a recibir conversaciones.",
+  },
+  "Não foi possível carregar os times. Recarregue a página.": {
+    es: "No se pudieron cargar los equipos. Recarga la página.",
+  },
+  "Nenhum time ainda": { es: "Ningún equipo todavía" },
+  "Um time é um setor que recebe conversa: Financeiro, Suporte, Vendas. Com times, o agente de IA encaminha cada cliente para quem sabe responder, e o atendente vê só a fila dele.": {
+    es: "Un equipo es un sector que recibe conversación: Finanzas, Soporte, Ventas. Con equipos, el agente de IA deriva cada cliente a quien sabe responder, y el agente ve solo su fila.",
+  },
+  Arquivados: { es: "Archivados" },
+  "Time arquivado não recebe conversa nova, mas continua nomeando as conversas que já passaram por ele.": {
+    es: "Un equipo archivado no recibe conversaciones nuevas, pero sigue nombrando las conversaciones que ya pasaron por él.",
+  },
 };
 
 /**

@@ -102,7 +102,16 @@ describe("as telas OFERECEM em vez de pedir para digitar", () => {
   });
 
   it("e a agenda do atendente", () => {
-    const fonte = readFileSync("app/app/team/_components/AttendantsClient.tsx", "utf8");
-    expect(fonte).toMatch(/FUSOS_OFERECIDOS\.map/);
+    // A lista saiu deste arquivo quando a tela de Times passou a usar o MESMO
+    // editor de janelas — duas cópias divergiriam na primeira correção de fuso.
+    // A garantia não afrouxou: a tela continua oferecendo a LISTA e não um campo
+    // de texto; só mudou de arquivo. Por isso são DUAS asserções, e a negativa
+    // (que o campo de texto não voltou) é nova — antes só o painel anti-banimento
+    // a tinha.
+    const tela = readFileSync("app/app/team/_components/AttendantsClient.tsx", "utf8");
+    expect(tela, "a tela deixou de usar o editor compartilhado").toMatch(/EditorDeJanelas/);
+    const editor = readFileSync("components/times/EditorDeJanelas.tsx", "utf8");
+    expect(editor).toMatch(/FUSOS_OFERECIDOS\.map/);
+    expect(editor, "voltou a ser campo de texto").not.toMatch(/aria-label="Fuso horário IANA"\s*\n\s*\/>/);
   });
 });
