@@ -901,6 +901,145 @@ git commit -m "feat(times): o catálogo de times, com aberto_agora saindo da mes
 
 ---
 
+## Task 4.5: agenda ilegível não derruba nada — decisão do dono, 2026-09-16
+
+> Número quebrado pelo mesmo motivo da 3.5: as Tasks 5–11 já foram citadas, e renumerar faria toda
+> referência anterior apontar para outra coisa.
+
+**O defeito, medido.** `availabilityScheduleSchema.parse` lança num `schedule` que o banco aceita
+(coluna `jsonb` sem CHECK; `America/Asunción` com acento passa na escrita e explode na leitura). O
+mesmo `parse` está em três pontos, e um único registro ruim derruba os três de uma vez — incluindo
+**o roteamento da organização inteira**, porque `loadEligibleAttendants` lança antes de decidir.
+
+**A decisão (spec §4):** agenda ilegível = **fechado, e visível**. Nunca 24/7, nunca exceção.
+
+**Arquivos:**
+- Criar: `lib/times/agenda.ts` + `lib/times/agenda.test.ts`
+- Modificar: `lib/times/catalogo.ts`, `lib/times/catalogo.test.ts`, `lib/routing/eligibles.ts`, `lib/routing/eligibles.test.ts`
+
+- [ ] **Passo 1: o helper, com teste primeiro**
+
+`lib/times/agenda.ts`:
+
+```ts
+/**
+ * Lê uma agenda `{timezone, windows}` sem NUNCA lançar.
+ *
+ * A coluna é `jsonb` sem CHECK e a escrita não valida conteúdo, então o banco
+ * aceita o que o parser recusa — `America/Asunción`, com o acento que um
+ * hispanofalante escreve natural, é o caso real que já custou um bug a esta base.
+ *
+ * Três pontos liam isso com `.parse()`: o catálogo de times, a elegibilidade do
+ * TIME e a elegibilidade do ATENDENTE. Um registro ruim derrubava os três — e o
+ * terceiro leva junto o roteamento da organização inteira.
+ *
+ * `valida: false` é tratado como FECHADO por quem chama, nunca como 24/7:
+ * fechado é visível (a conversa espera na fila e a Central avisa), "sem
+ * restrição" é uma mentira sem sintoma. Mesmo formato do "Resolvedor NUNCA
+ * lança" do branding.
+ */
+import { availabilityScheduleSchema, type AvailabilitySchedule } from "@/lib/schemas/routing";
+
+export interface AgendaLida {
+  agenda: AvailabilitySchedule;
+  /** false = o banco tem algo que o parser não lê. Quem chama trata como FECHADO. */
+  valida: boolean;
+}
+
+export function lerAgenda(bruto: unknown): AgendaLida {
+  const r = availabilityScheduleSchema.safeParse(bruto ?? {});
+  if (r.success) return { agenda: r.data, valida: true };
+  return { agenda: { timezone: "America/Sao_Paulo", windows: [] }, valida: false };
+}
+```
+
+`lib/times/agenda.test.ts` — quatro casos, e o terceiro é o que importa:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { lerAgenda } from "./agenda";
+
+describe("ler agenda sem lançar", () => {
+  it("agenda boa volta íntegra e válida", () => {
+    const r = lerAgenda({ timezone: "America/Sao_Paulo", windows: [{ dow: 1, start: "08:00", end: "18:00" }] });
+    expect(r.valida).toBe(true);
+    expect(r.agenda.windows).toHaveLength(1);
+  });
+  it("vazio é válido e sem restrição — janela existe para RESTRINGIR", () => {
+    expect(lerAgenda({})).toMatchObject({ valida: true });
+    expect(lerAgenda(null)).toMatchObject({ valida: true });
+  });
+  it("fuso que não existe NÃO lança, e vem marcado inválido", () => {
+    expect(() => lerAgenda({ timezone: "America/Asunción", windows: [] })).not.toThrow();
+    expect(lerAgenda({ timezone: "America/Asunción", windows: [] }).valida).toBe(false);
+  });
+  it("janela malformada também vem marcada, sem lançar", () => {
+    expect(lerAgenda({ timezone: "America/Sao_Paulo", windows: [{ dow: 9, start: "25:00", end: "x" }] }).valida).toBe(false);
+  });
+});
+```
+
+- [ ] **Passo 2: rodar e ver falhar** (`pnpm vitest run lib/times/agenda.test.ts`), depois verde.
+
+- [ ] **Passo 3: os três pontos de leitura**
+
+Em `lib/times/catalogo.ts`, `TimeDoCatalogo` ganha `horario_invalido: boolean`, e o `map` vira:
+
+```ts
+  return ((times ?? []) as Array<Omit<TimeDoCatalogo, "aberto_agora" | "user_ids" | "horario_invalido">>).map((t) => {
+    const { agenda, valida } = lerAgenda(t.schedule);
+    return {
+      ...t,
+      // Agenda ilegível = FECHADO, nunca 24/7: a tela mostra o aviso e o gestor
+      // conserta. "Aberto" sob um horário que ninguém lê é mentira sem sintoma.
+      aberto_agora: valida && isWithinSchedule(agenda, now),
+      horario_invalido: !valida,
+      user_ids: porTime.get(t.id) ?? [],
+    };
+  });
+```
+
+Em `lib/routing/eligibles.ts`, a agenda do TIME:
+
+```ts
+    const { agenda: agendaDoTime, valida: agendaDoTimeValida } = lerAgenda(team.schedule);
+    if (!agendaDoTimeValida || !isWithinSchedule(agendaDoTime, now)) return [];
+```
+
+E a agenda do ATENDENTE (o ponto pré-existente e mais exposto — `attendant_availability` aceita
+INSERT/UPDATE dos três papéis do PostgREST, medido):
+
+```ts
+    const { agenda: schedule, valida: agendaValida } = lerAgenda(r.schedule);
+    const eligible = agendaValida && isAttendantEligible(
+      { isAvailable: true, capacity: r.capacity, currentLoad, schedule },
+      now,
+    );
+```
+
+- [ ] **Passo 4: os testes dos consumidores**
+
+Em `lib/times/catalogo.test.ts`, um caso: time com `schedule: { timezone: "America/Asunción" }` →
+`{ aberto_agora: false, horario_invalido: true }`, e a chamada **não lança**.
+
+Em `lib/routing/eligibles.test.ts`, dois: (a) time com fuso inválido ⇒ `[]` sem lançar;
+(b) **atendente** com fuso inválido ⇒ ele não entra, e os demais continuam entrando — este é o que
+prova que um atendente ruim não derruba a organização.
+
+- [ ] **Passo 5: sabotar**
+
+Troque `lerAgenda` de volta por `.parse()` em cada ponto e confirme que o caso correspondente vira
+**erro lançado**, não asserção falsa. Cole a saída real.
+
+- [ ] **Passo 6: commit**
+
+```bash
+git add lib/times/ lib/routing/eligibles.ts lib/routing/eligibles.test.ts
+git commit -m "fix(times): agenda ilegivel fecha o time em vez de derrubar o roteamento"
+```
+
+---
+
 ## Task 5: a tool `crm_list_teams`
 
 **Arquivos:**

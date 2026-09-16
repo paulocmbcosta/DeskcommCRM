@@ -145,6 +145,37 @@ pura que já existe.
 
 **Não-regressão:** todo chamador que não passar `teamId` se comporta exatamente como hoje.
 
+### Agenda ilegível: o resolvedor NÃO lança (decisão de 2026-09-16)
+
+`availabilityScheduleSchema.parse` **lança** num `schedule` que o banco aceita — a coluna é `jsonb`
+sem CHECK, e um fuso como `America/Asunción` (com o acento que um hispanofalante escreve natural)
+passa na escrita e explode na leitura. O mesmo `parse` está em **três** pontos: `lib/times/catalogo.ts`,
+`lib/routing/eligibles.ts` na agenda do TIME, e `lib/routing/eligibles.ts` na agenda do ATENDENTE.
+
+Medido: um único registro ilegível derrubaria a tela de Times, a tool `crm_list_teams` **e o
+roteamento da organização inteira** — porque o código lança antes de decidir qualquer coisa.
+
+**Decisão: agenda ilegível = fechado, e visível.** `safeParse` nos três pontos; quem não puder ser
+lido é tratado como fora do horário (time inelegível, atendente inelegível) e marcado como
+`horario_invalido` para a tela.
+
+Por que fechado e não 24/7: fechado parece mais severo, mas é **visível** — a conversa espera na
+fila do time e o aviso que já existe na Central dispara quando as tentativas esgotam, nomeando o
+time (§7). Já "sem restrição" faria Cancelamentos receber cliente às 3h da manhã com a tela
+mostrando "aberto agora", que é uma mentira sem sintoma.
+
+É o mesmo formato do precedente **"Resolvedor NUNCA lança"** do branding (`CLAUDE.md`): peça lida em
+toda tela degrada para o padrão e segue, nunca derruba.
+
+**O ponto da agenda do ATENDENTE entra junto, e não é escopo que vazou.** Ele é pré-existente e mais
+exposto (`attendant_availability` aceita INSERT/UPDATE de `anon`, `authenticated` e `service_role`,
+medido; `attendance_teams` não aceita de nenhum), fica a duas linhas do que estamos consertando, e
+usa o mesmo helper. Deixá-lo lançando seria conhecer o defeito e passar ao lado.
+
+**NÃO entra:** validar o jsonb na origem (dentro da RPC). Fecharia o lado dos times e não o do
+atendente, que é o mais largo, e exigiria uma 0264 de forward-fix porque a 0263 já está aplicada.
+Fica como melhoria posterior.
+
 ### A correção que isso arrasta
 
 `getQueuePosition` (`lib/routing/queue.ts`) precisa receber o time e filtrar por ele. Sem isso o
