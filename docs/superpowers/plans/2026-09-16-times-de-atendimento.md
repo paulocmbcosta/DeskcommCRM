@@ -1242,8 +1242,9 @@ git commit -m "feat(times): o handoff aceita um time, validado antes de qualquer
 
 **A lacuna, medida.** `crm_request_human_handoff` — a tool em que a Task 6 investiu — **não alcança
 o agente publicado**: `lib/agent-engine/edge/crm/mcp-tools.ts:38` a tem em `BLOCKED_TOOL_IDS`, e o
-harness usa a tool NATIVA `request_human_handoff` (`inbound-turn.ts:291`), cujo schema aceita só
-`reason`. `crm_list_teams` NÃO é bloqueada — então o agente descobre os setores, lê o "quando usar"
+harness usa a tool NATIVA `request_human_handoff` (`inbound-turn.ts:291`), cujo schema aceitava só
+`reason` **até esta task** — hoje aceita `team`, e esta frase descreve o defeito que ela consertou,
+não o estado atual. `crm_list_teams` NÃO é bloqueada — então o agente descobre os setores, lê o "quando usar"
 de cada um, e não tem como escolher. **A feature funcionava em teste e não funcionava no produto.**
 
 **Por que o conserto é pequeno.** Medido: `applyRequestHumanHandoff` → `performHumanHandoff` não
@@ -1260,6 +1261,24 @@ vira erro de ENSINO com os slugs válidos listados, no idioma que o módulo já 
 
 **O teste que pega isso** não é sobre a resposta — é sobre o efeito: `performHumanHandoff`
 **não foi chamado** (`not.toHaveBeenCalled()`). A asserção sobre a resposta passa com a ordem errada.
+
+---
+
+### Dois buracos vizinhos que a 6.5 mediu e NÃO fechou — decisão do dono
+
+1. **`inbound-turn.ts:2077` — o handoff por regex determinístico não escolhe setor.** O lead que
+   digita "quero falar com um atendente" casa um regex que roda **antes do modelo**, de propósito,
+   para não gastar LLM. Não há agente para escolher time, e a conversa cai na fila geral. É
+   provavelmente o gatilho de handoff mais frequente em produção. Fechar exige política nova (time
+   padrão por canal? classificação barata do texto?) — não é one-liner e não cabia na 6.5.
+
+2. **`expectativaDeAtendimento` conta a ORGANIZAÇÃO, não o time.** A frase que volta junto com a
+   confirmação — e que o agente repassa ao cliente — soma todos os `agent+` da organização. Com o
+   financeiro vazio e a empresa cheia, o agente encaminha ao financeiro e promete disponibilidade
+   que aquele setor não tem. Consertar exige mexer em `lib/escalacao/disponibilidade.ts`.
+
+Nenhum dos dois quebra o que foi construído; os dois estreitam o que se pode AFIRMAR sobre a
+feature. Ver §11 da spec.
 
 ---
 
