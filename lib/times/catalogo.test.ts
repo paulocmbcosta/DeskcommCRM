@@ -38,6 +38,25 @@ describe("catálogo de times", () => {
     expect(time?.aberto_agora).toBe(true);
   });
 
+  it("agenda ilegível fecha o time e vem marcada — não derruba a tela", async () => {
+    // `America/Asunción`, com o acento que um hispanofalante escreve natural: a
+    // coluna é jsonb sem CHECK, então o banco aceita o que o parser recusa.
+    const db = fake(
+      [{ id: "t1", name: "Cancelamentos", slug: "cancelamento", description: "",
+         schedule: { timezone: "America/Asunción", windows: [] } }],
+      [],
+    );
+    await expect(carregarTimes(db, "org", domingoMeioDia)).resolves.toMatchObject([
+      { slug: "cancelamento", aberto_agora: false, horario_invalido: true },
+    ]);
+  });
+
+  it("time com agenda boa não vem marcado", async () => {
+    const db = fake([{ id: "t1", name: "Suporte", slug: "suporte", description: "", schedule: {} }], []);
+    const [time] = await carregarTimes(db, "org", domingoMeioDia);
+    expect(time?.horario_invalido).toBe(false);
+  });
+
   it("conta os membros alocados", async () => {
     const db = fake(
       [{ id: "t1", name: "Suporte", slug: "suporte", description: "", schedule: {} }],

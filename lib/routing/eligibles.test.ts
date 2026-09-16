@@ -60,6 +60,21 @@ describe("elegibilidade com origem explícita", () => {
     const { db } = fixture({ attendant_availability: new Error("offline") });
     await expect(loadEligibleAttendants(db, "org", now, scope)).rejects.toThrow("offline");
   });
+
+  it("atendente com agenda ilegível fica de fora SOZINHO — os demais continuam entrando", async () => {
+    // `attendant_availability` aceita INSERT/UPDATE de anon, authenticated E
+    // service_role, então este é o ponto mais exposto dos três. Bia no cenário
+    // não é enfeite: sem ela, `[]` passaria por acerto e a prova seria vazia —
+    // o que se mede aqui é que um registro ruim não derruba a ORGANIZAÇÃO.
+    const { db } = fixture({
+      user_organizations: [{ user_id: "ana" }, { user_id: "bia" }],
+      attendant_availability: [
+        { user_id: "ana", capacity: 2, schedule: { timezone: "America/Asunción", windows: [] } },
+        { user_id: "bia", capacity: 2, schedule: {} },
+      ],
+    });
+    await expect(loadEligibleAttendants(db, "org", now, scope)).resolves.toMatchObject([{ userId: "bia" }]);
+  });
 });
 
 const scopeComTime = { kind: "conversation_channel", channelSessionId: "channel", teamId: "time" } as const;
@@ -117,6 +132,19 @@ describe("elegibilidade restrita por time", () => {
       ],
     });
     expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toMatchObject([{ userId: "bia" }]);
+  });
+
+  it("time com agenda ilegível fecha, em vez de derrubar o roteamento", async () => {
+    // A coluna é jsonb sem CHECK: `America/Asunción` grava e o parser recusa.
+    // Fechado é VISÍVEL — a conversa espera na fila e a Central avisa quando as
+    // tentativas esgotam. Lançar aqui pararia o worker inteiro, sem sintoma útil.
+    const { db } = fixture({
+      attendance_teams: {
+        id: "time", archived_at: null,
+        schedule: { timezone: "America/Asunción", windows: [] },
+      },
+    });
+    await expect(loadEligibleAttendants(db, "org", now, scopeComTime)).resolves.toEqual([]);
   });
 
   it("sem time no escopo, nada muda — nenhuma consulta às tabelas de time", async () => {

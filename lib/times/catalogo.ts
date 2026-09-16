@@ -12,7 +12,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { isWithinSchedule } from "@/lib/routing/eligibility";
-import { availabilityScheduleSchema } from "@/lib/schemas/routing";
+
+import { lerAgenda } from "./agenda";
 
 export interface TimeDoCatalogo {
   id: string;
@@ -22,6 +23,8 @@ export interface TimeDoCatalogo {
   schedule: unknown;
   archived_at: string | null;
   aberto_agora: boolean;
+  /** A agenda gravada não é legível pelo parser ⇒ o time conta como FECHADO. */
+  horario_invalido: boolean;
   user_ids: string[];
 }
 
@@ -48,9 +51,15 @@ export async function carregarTimes(
     porTime.set(m.team_id, [...(porTime.get(m.team_id) ?? []), m.user_id]);
   }
 
-  return ((times ?? []) as Array<Omit<TimeDoCatalogo, "aberto_agora" | "user_ids">>).map((t) => ({
-    ...t,
-    aberto_agora: isWithinSchedule(availabilityScheduleSchema.parse(t.schedule ?? {}), now),
-    user_ids: porTime.get(t.id) ?? [],
-  }));
+  return ((times ?? []) as Array<Omit<TimeDoCatalogo, "aberto_agora" | "user_ids" | "horario_invalido">>).map((t) => {
+    const { agenda, valida } = lerAgenda(t.schedule);
+    return {
+      ...t,
+      // Agenda ilegível = FECHADO, nunca 24/7: a tela mostra o aviso e o gestor
+      // conserta. "Aberto" sob um horário que ninguém lê é mentira sem sintoma.
+      aberto_agora: valida && isWithinSchedule(agenda, now),
+      horario_invalido: !valida,
+      user_ids: porTime.get(t.id) ?? [],
+    };
+  });
 }

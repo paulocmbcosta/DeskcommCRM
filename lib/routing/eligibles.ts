@@ -14,7 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { isAttendantEligible, isWithinSchedule, OPEN_LOAD_STATUSES } from "./eligibility";
 import type { RoutingCandidate } from "./decide";
-import { availabilityScheduleSchema } from "@/lib/schemas/routing";
+import { lerAgenda } from "@/lib/times/agenda";
 
 export type RoutingScope =
   | { kind: "conversation_channel"; channelSessionId: string; teamId?: string | null }
@@ -59,7 +59,10 @@ export async function loadEligibleAttendants(
     if (!team || team.archived_at) return [];
     // O horário do time vale para TODOS os candidatos: uma checagem, não uma por
     // pessoa. Interseção com a janela do atendente, que o isAttendantEligible faz.
-    if (!isWithinSchedule(availabilityScheduleSchema.parse(team.schedule ?? {}), now)) return [];
+    // Agenda ilegível fecha o TIME em vez de derrubar a leitura: a conversa
+    // espera na fila e a Central avisa quando as tentativas esgotam, nomeando-o.
+    const { agenda: agendaDoTime, valida: agendaDoTimeValida } = lerAgenda(team.schedule);
+    if (!agendaDoTimeValida || !isWithinSchedule(agendaDoTime, now)) return [];
     const { data: membros, error: membrosError } = await supabase.from("attendance_team_members")
       .select("user_id").eq("organization_id", organizationId).eq("team_id", scope.teamId);
     if (membrosError) throw new Error(membrosError.message);
@@ -121,8 +124,10 @@ export async function loadEligibleAttendants(
   const candidates: RoutingCandidate[] = [];
   for (const r of rows) {
     const currentLoad = loadByUser.get(r.user_id) ?? 0;
-    const schedule = availabilityScheduleSchema.parse(r.schedule ?? {});
-    const eligible = isAttendantEligible(
+    // Um atendente com agenda ilegível fica de fora — sozinho, sem levar junto o
+    // roteamento da organização inteira, que era o que o `.parse()` fazia aqui.
+    const { agenda: schedule, valida: agendaValida } = lerAgenda(r.schedule);
+    const eligible = agendaValida && isAttendantEligible(
       { isAvailable: true, capacity: r.capacity, currentLoad, schedule },
       now,
     );
