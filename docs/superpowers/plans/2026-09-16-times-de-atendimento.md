@@ -1032,6 +1032,12 @@ O POST valida com `timeDeAtendimentoSchema` e chama a RPC:
 
 Os quatro portões antes disso, na ordem do molde: `requireSupportWrite()`, `requireRole("manager", { requestId, resource: "settings_teams", allowPlatformAdmin: true })`, `mfaEmDivida()`, validação Zod.
 
+⚠️ **`p_team` precisa de cast na chamada `.rpc()`.** Os tipos gerados declaram
+`fn_save_attendance_team.Args.p_team` como `string`, não `string | null` — é o que o gerador emite
+para um argumento `uuid` sem default —, mas o caminho de INSERT da RPC exige `p_team = null`. Sem o
+cast, `pnpm typecheck` reprova a criação de time. Não é defeito dos tipos; é o gerador sendo fiel
+ao catálogo.
+
 - [ ] **Passo 2: escrever `[id]/archive/route.ts`**
 
 Mesmos portões; corpo `{ arquivar: boolean }`; chama `fn_archive_attendance_team`; audita
