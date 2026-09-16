@@ -112,6 +112,37 @@ describe("quem pode assumir agora", () => {
     expect(q.disponiveis).toBe(0);
   });
 
+  // `attendant_availability.schedule` é jsonb sem CHECK, e a escrita não valida
+  // conteúdo: `America/Asunción` — com o acento que um hispanofalante escreve
+  // natural — entra no banco e o parser recusa na leitura. Enquanto esta função
+  // fazia `.parse()`, UMA linha assim LANÇAVA no meio da escalação, e o agente
+  // caía no ramo conservador por causa da agenda de OUTRA pessoa.
+  const LINHAS_COM_UMA_AGENDA_RUIM = [
+    { user_id: "boa", role: "agent", capacity: 5, schedule: {}, carga: "0" },
+    {
+      user_id: "ruim",
+      role: "agent",
+      capacity: 5,
+      schedule: { timezone: "America/Asunción", windows: [] },
+      carga: "0",
+    },
+  ];
+
+  it("agenda ilegível tira SÓ aquele atendente, e é FECHADO, nunca 24/7", async () => {
+    const q = await quemPodeAssumirAgora(dublePg(LINHAS_COM_UMA_AGENDA_RUIM), "org", AGORA);
+    // 1 e não 0: a lista não caiu junto. 1 e não 2: agenda ilegível é fechado —
+    // contá-la como "sem restrição de horário" ofereceria ao cliente alguém que
+    // talvez não esteja no expediente, que é mentira sem sintoma.
+    expect(q).toEqual({ disponiveis: 1, total: 2 });
+  });
+
+  it("e a frase ao cliente conta a pessoa boa, sem virar o aviso de erro", async () => {
+    const r = await expectativaDeAtendimento(dublePg(LINHAS_COM_UMA_AGENDA_RUIM), "org", AGORA);
+    expect(r.quem).toEqual({ disponiveis: 1, total: 2 });
+    expect(r.frase).toContain("1 pessoa da equipe");
+    expect(r.frase).not.toMatch(/NÃO prometa/);
+  });
+
   it("leitura que falha vira instrução conservadora, nunca silêncio otimista", async () => {
     const r = await expectativaDeAtendimento(
       { query: () => Promise.reject(new Error("banco fora do ar")) } as never,
