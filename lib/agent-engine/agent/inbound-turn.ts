@@ -297,13 +297,21 @@ export const AGENT_TOOL_DEFS = {
       'chame esta ferramenta — depois dela você não consegue mais falar com ele. Se você não avisar, ' +
       'o sistema manda um aviso padrão no seu lugar. Acionada a ferramenta, encerre o turno. ' +
       'NUNCA diga ao lead que "já chamei alguém" ou "já passei para a equipe" sem ter chamado esta ' +
-      'ferramenta NO MESMO turno — a frase no passado não substitui a ação, e ninguém é avisado de verdade.',
-    // Schema LARGO para o SDK (o modelo vê o campo); a validação REAL é a whitelist .strict()
+      'ferramenta NO MESMO turno — a frase no passado não substitui a ação, e ninguém é avisado de verdade. ' +
+      'DESTINO: se a organização tiver setores cadastrados, consulte crm_list_teams e passe o slug do ' +
+      'setor certo em "team" — sem ele a conversa cai na fila GERAL, onde pode esperar por alguém que ' +
+      'não trata o assunto. Slug que não existe é recusado sem passar a conversa, e a resposta traz a ' +
+      'lista válida.',
+    // Schema LARGO para o SDK (o modelo vê os campos); a validação REAL é a whitelist .strict()
     // + guard de prototype pollution dentro de applyRequestHumanHandoff — campo extra/forjado
     // vira erro de ENSINO ao modelo, nunca exceção do SDK nem strip silencioso.
     inputSchema: z
       .object({
         reason: z.string().optional().describe('por que passar ao humano (curto)'),
+        team: z
+          .string()
+          .optional()
+          .describe('slug do setor de destino, obtido em crm_list_teams'),
       })
       .passthrough(),
   },

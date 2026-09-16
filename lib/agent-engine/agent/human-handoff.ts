@@ -239,11 +239,46 @@ function linhaDoAviso(aviso: { avisado: boolean; porque?: string } | undefined):
 /** Whitelist EXATA do payload da tool (mesmo padrão .strict() da F2-10/F3-02). */
 export const requestHumanHandoffInputSchema = z.strictObject({
   reason: z.string().min(1).max(500).optional(),
+  /**
+   * SLUG do time de destino — o que `crm_list_teams` devolve, nunca um uuid: id
+   * de banco não cabe num prompt e não sobrevive a um clone. Ausente = fila
+   * geral, o comportamento de antes.
+   */
+  team: z.string().min(1).max(40).optional(),
 });
 
 const PAYLOAD_TEACHING =
-  'Campo aceito: reason (por que passar ao humano) — opcional, nada além. Lead, organização e ' +
+  'Campos aceitos: reason (por que passar ao humano) e team (slug do setor de destino, o mesmo ' +
+  'que crm_list_teams devolve) — os dois opcionais, nada além. Lead, organização e ' +
   'conversa vêm do runtime, nunca do payload da tool.';
+
+/** Uma linha por time ATIVO da organização — resolve o slug e ensina de uma vez só. */
+interface TimeAtivo {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+/**
+ * Times ativos da organização, do lado do MOTOR (`pg`). Não usa
+ * `lib/times/catalogo.ts` porque aquele carregador fala supabase-js e este
+ * módulo roda fora do request — é o mesmo par leitor/leitor que
+ * `quemPodeAssumirAgora` forma com o roster da API: dois clientes, um fato.
+ *
+ * Uma query só de propósito: ela resolve o slug pedido E produz a lista que o
+ * erro de ensino precisa citar. Duas queries dariam duas verdades — a lista
+ * ensinada poderia não conter o time que a primeira acabou de recusar.
+ */
+async function timesAtivos(db: pg.Pool, tenantId: string): Promise<TimeAtivo[]> {
+  const { rows } = await db.query<TimeAtivo>(
+    `select id, slug, name
+       from attendance_teams
+      where organization_id = $1 and archived_at is null
+      order by name`,
+    [tenantId],
+  );
+  return rows;
+}
 
 export type RequestHumanHandoffResult =
   | { ok: true; status: 'handoff_solicitado'; message: string }
@@ -274,12 +309,65 @@ export async function applyRequestHumanHandoff(
     return { ok: false, error: { code: 'invalid_payload', message: `payload inválido em request_human_handoff (${zodIssuesSummary(parsed.error)}). ${PAYLOAD_TEACHING}` } };
   }
 
+  // ⚠️ A ORDEM É A REGRA — e é a MESMA regra que `crm_request_human_handoff`
+  // (lib/mcp/tools/handoff.ts) já obedece do lado do CRM.
+  //
+  // A primeira linha de `performHumanHandoff` grava `contacts.force_human = true`,
+  // que arma o `stopGate` e mata TODO envio posterior ao lead. Um slug inválido
+  // resolvido depois disso deixaria o pior dos mundos: a conversa fora do
+  // atendimento automático, o lead sem poder ouvir mais nada do agente, e
+  // nenhum setor escolhido para vir buscá-lo. Recusar com o payload intacto é
+  // barato; desfazer a passagem não existe.
+  //
+  // Recusa é erro de ENSINO (o idioma deste módulo — campo estranho já vira
+  // ensino, nunca exceção) e cita os slugs válidos: o modelo se corrige sozinho
+  // na chamada seguinte, sem gastar um turno perguntando.
+  let teamId: string | null = null;
+  if (parsed.data.team !== undefined) {
+    const times = await timesAtivos(db, ids.tenantId);
+    const escolhido = times.find((t) => t.slug === parsed.data.team);
+    if (escolhido === undefined) {
+      const validos =
+        times.length === 0
+          ? 'esta organização não tem nenhum time cadastrado — chame a ferramenta SEM o campo team.'
+          : `times válidos: ${times.map((t) => `${t.slug} (${t.name})`).join(', ')}.`;
+      return {
+        ok: false,
+        error: {
+          code: 'invalid_payload',
+          message:
+            `time "${parsed.data.team}" não existe nesta organização; ${validos} ` +
+            'NADA foi alterado — a conversa segue com você. Chame de novo com um slug da lista ' +
+            '(ou sem team, para a fila geral).',
+        },
+      };
+    }
+    teamId = escolhido.id;
+  }
+
   await performHumanHandoff(db, ids, {
     reason: parsed.data.reason ?? 'requested_human',
     conversationSummary: opts.conversationSummary,
     ...(opts.avisoAoLead !== undefined ? { avisoAoLead: opts.avisoAoLead } : {}),
     log: opts.log,
   });
+
+  // O DESTINO na conversa. Este caminho não escolhe atendente — `performHumanHandoff`
+  // não chama o roteamento G5 — e não precisa: quem escolhe é o cron de roteamento
+  // (`lib/routing/worker.ts`), que já lê `conversations.team_id` e procura dentro do
+  // time. Gravar esta coluna é a feature inteira deste lado; sem ela o agente
+  // descobre os setores por `crm_list_teams`, escolhe, e a conversa cai na fila geral
+  // assim mesmo.
+  //
+  // `organization_id` no WHERE mesmo com o id da conversa em mãos: este módulo roda
+  // sob service role, que bypassa RLS (anti-pattern nº 10).
+  if (teamId !== null) {
+    await guardServiceEffect();
+    await db.query(
+      `update conversations set team_id = $1 where id = $2 and organization_id = $3`,
+      [teamId, ids.conversationId, ids.tenantId],
+    );
+  }
 
   // ACH-03: a expectativa vai JUNTO com a confirmação. Antes, a mensagem afirmava
   // que "um atendente vai assumir" sem que ninguém tivesse olhado se havia
@@ -299,11 +387,18 @@ export async function applyRequestHumanHandoff(
       ? 'O lead JÁ foi avisado de que uma pessoa vai assumir.'
       : 'ATENÇÃO: não foi possível avisar o lead (o canal recusou a mensagem); a equipe foi alertada disso.';
 
+  // O destino volta NOMEADO. A confirmação é a única coisa que o modelo lê depois
+  // de agir, e "handoff acionado" sozinho não distingue a conversa que foi ao
+  // setor certo da que caiu na fila geral — era a distinção que ele acabou de
+  // fazer.
+  const destino =
+    teamId !== null ? ` A conversa foi encaminhada ao setor "${parsed.data.team}".` : '';
+
   return {
     ok: true,
     status: 'handoff_solicitado',
     message:
-      `Handoff humano acionado; a conversa saiu do atendimento automático. ${jaAvisado} ${frase} ` +
+      `Handoff humano acionado; a conversa saiu do atendimento automático.${destino} ${jaAvisado} ${frase} ` +
       'Encerre o turno AGORA — você não consegue mais enviar mensagens a este lead.',
   };
 }
