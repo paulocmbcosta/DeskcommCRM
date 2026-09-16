@@ -402,7 +402,7 @@ describe("elegibilidade restrita por time", () => {
     expect(await loadEligibleAttendants(db, "org", now, scope)).toMatchObject([{ userId: "ana" }]);
     expect(filters.some(([t]) => t === "attendance_teams" || t === "attendance_team_members")).toBe(false);
   });
-});
+
   it("canal e time SOMAM: só quem está nos dois sobra", async () => {
     // Sem esta prova, a interseção pode ser trocada pela política do canal
     // sozinha e a suíte inteira segue verde — medido por sabotagem.
