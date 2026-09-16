@@ -1412,6 +1412,14 @@ de inventar um terceiro.
 Cada card de time mostra nome, slug, **aberto agora** (vindo do catálogo, mesma regra do roteador),
 nº de pessoas alocadas e o botão de arquivar. Salvar faz `POST /api/v1/settings/teams`.
 
+⚠️ **`horario_invalido` PRECISA de leitor aqui, e esta é a única tarefa que pode dá-lo.** A Task 4.5
+gravou esse campo em `TimeDoCatalogo` porque a decisão do dono foi "agenda ilegível = fechado **e
+visível**". Hoje a visibilidade existe só do lado da fila (o aviso da Central). Se o card não
+mostrar o aviso, um time com agenda ilegível simplesmente some do "aberto agora" sem dizer por quê
+— e o campo vira a forma "campo sem consumidor" do anti-pattern nº 3 do `CLAUDE.md`. O card precisa
+dizer, em português de gente: **"O horário deste time está inválido e ninguém está recebendo por
+ele. Reconfigure o horário abaixo."**
+
 - [ ] **Passo 4: rodar o gate de novo e ver passar**
 
 ```bash
