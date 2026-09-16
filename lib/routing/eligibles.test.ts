@@ -101,6 +101,24 @@ describe("elegibilidade restrita por time", () => {
     expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toEqual([]);
   });
 
+  it("canal e time SOMAM: só quem está nos dois sobra", async () => {
+    // O canal responde "por onde se fala"; o time, "sobre o quê". Quem está num
+    // só dos dois não atende — sem esta prova, a interseção pode ser trocada
+    // pela política do canal sozinha e a suíte inteira segue verde.
+    const { db } = fixture({
+      channel_routing_policies: { id: "policy" },
+      channel_routing_responsibles: [{ user_id: "ana" }, { user_id: "bia" }],
+      attendance_team_members: [{ user_id: "bia" }, { user_id: "carla" }],
+      user_organizations: [{ user_id: "ana" }, { user_id: "bia" }, { user_id: "carla" }],
+      attendant_availability: [
+        { user_id: "ana", capacity: 2, schedule: {} },
+        { user_id: "bia", capacity: 2, schedule: {} },
+        { user_id: "carla", capacity: 2, schedule: {} },
+      ],
+    });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toMatchObject([{ userId: "bia" }]);
+  });
+
   it("sem time no escopo, nada muda — nenhuma consulta às tabelas de time", async () => {
     const { db, filters } = fixture();
     expect(await loadEligibleAttendants(db, "org", now, scope)).toMatchObject([{ userId: "ana" }]);
