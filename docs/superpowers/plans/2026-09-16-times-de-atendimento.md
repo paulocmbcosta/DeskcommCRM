@@ -1342,11 +1342,21 @@ O POST valida com `timeDeAtendimentoSchema` e chama a RPC:
 
 Os quatro portões antes disso, na ordem do molde: `requireSupportWrite()`, `requireRole("manager", { requestId, resource: "settings_teams", allowPlatformAdmin: true })`, `mfaEmDivida()`, validação Zod.
 
-⚠️ **`p_team` precisa de cast na chamada `.rpc()`.** Os tipos gerados declaram
-`fn_save_attendance_team.Args.p_team` como `string`, não `string | null` — é o que o gerador emite
-para um argumento `uuid` sem default —, mas o caminho de INSERT da RPC exige `p_team = null`. Sem o
-cast, `pnpm typecheck` reprova a criação de time. Não é defeito dos tipos; é o gerador sendo fiel
-ao catálogo.
+⚠️ **Este aviso dizia que `p_team` precisava de cast. É FALSO, e foi medido.** Os tipos gerados
+de fato declaram `Args.p_team` como `string` e não `string | null` — mas isso não alcança o call
+site: `lib/supabase/server.ts` chama `createServerClient` **sem** o genérico `Database`, e
+`@supabase/ssr` declara `createServerClient<Database = any, …>`. Com `any`, os argumentos de `.rpc()`
+não são checados de forma alguma. A prova foi ativa, não dedutiva: acrescentar
+`p_argumento_que_nao_existe: 12345` à chamada deixa `pnpm typecheck` em `exit=0`.
+
+Passe `p_team` com o valor verdadeiro (`string | null`) e siga. **Se algum dia alguém tipar
+`createClient()` com `Database`**, este call site passa a precisar de `as string` — e vale um
+comentário ali quando isso acontecer.
+
+⚠️ **Passo que o plano não previa:** `lib/audit/actions.ts` precisa das ações novas
+(`routing.team_saved`, `routing.team_archived`, `routing.team_changed`). `AuditAction` é derivado
+desse array, então sem elas o `audit()` nem compila. O painel de auditoria lê o mesmo array, então
+elas aparecem no filtro sem mais nada.
 
 - [ ] **Passo 2: escrever `[id]/archive/route.ts`**
 
