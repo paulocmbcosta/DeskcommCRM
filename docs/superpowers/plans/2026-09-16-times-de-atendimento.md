@@ -1235,6 +1235,34 @@ git commit -m "feat(times): o handoff aceita um time, validado antes de qualquer
 
 ---
 
+## Task 6.5: o handoff NATIVO aceita o time — LACUNA que anulava a feature
+
+> Terceira tarefa fora da numeração (3.5, 4.5, 6.5). Nenhuma delas estava no plano; as três vieram
+> de executar, não de planejar.
+
+**A lacuna, medida.** `crm_request_human_handoff` — a tool em que a Task 6 investiu — **não alcança
+o agente publicado**: `lib/agent-engine/edge/crm/mcp-tools.ts:38` a tem em `BLOCKED_TOOL_IDS`, e o
+harness usa a tool NATIVA `request_human_handoff` (`inbound-turn.ts:291`), cujo schema aceita só
+`reason`. `crm_list_teams` NÃO é bloqueada — então o agente descobre os setores, lê o "quando usar"
+de cada um, e não tem como escolher. **A feature funcionava em teste e não funcionava no produto.**
+
+**Por que o conserto é pequeno.** Medido: `applyRequestHumanHandoff` → `performHumanHandoff` não
+usa o roteamento G5. Ele marca a conversa para humano e o **cron** escolhe depois — e o cron já
+respeita `conversations.team_id` desde a Task 3.5. Basta gravar a coluna.
+
+**Arquivos:** `lib/agent-engine/agent/human-handoff.ts` (whitelist `.strict()` + resolução do slug),
+`lib/agent-engine/agent/inbound-turn.ts` (o schema que o modelo vê).
+
+**A ordem é a regra, pela segunda vez nesta feature.** A primeira linha de `performHumanHandoff`
+grava `force_human = true`, que arma o `stopGate` e mata todo envio ao lead. Slug resolvido depois
+disso deixaria o lead calado, esperando alguém que ninguém escolheu. Resolver ANTES; slug inválido
+vira erro de ENSINO com os slugs válidos listados, no idioma que o módulo já usa.
+
+**O teste que pega isso** não é sobre a resposta — é sobre o efeito: `performHumanHandoff`
+**não foi chamado** (`not.toHaveBeenCalled()`). A asserção sobre a resposta passa com a ordem errada.
+
+---
+
 ## Task 7: as rotas de configuração
 
 **Arquivos:**
@@ -1520,9 +1548,17 @@ git commit -m "feat(times): filtro de fila por time, selo na conversa e transfer
 aviso: ele manda conferir "os responsáveis do canal", que é o lugar errado para uma conversa parada
 na fila de um time.
 
-- [ ] **Passo 2: acrescentar a versão nova da função aos DOIS artefatos**
+- [ ] **Passo 2: uma migration NOVA — a 0263 já está aplicada**
 
-Acrescente ao fim do bloco da migration 0263 (e ao apêndice do baseline, antes da varredura anon):
+⚠️ **Esta instrução mudou.** A versão anterior mandava acrescentar ao bloco da migration 0263. Isso
+virou proibido no momento em que a 0263 foi aplicada no banco de produção: a doutrina do repo diz
+que **migration já aplicada nunca se edita — corrige-se com uma forward-fix nova**. Um clone que já
+tivesse rodado a 0263 nunca veria o acréscimo.
+
+Crie `supabase/migrations/<timestamp>_0264_o_aviso_nomeia_o_time.sql` (confirme o próximo `NNNN`
+com `ls supabase/migrations/ | grep -oE '_[0-9]{4}_' | tr -d _ | sort -n | tail -1`), acrescente o
+MESMO SQL ao apêndice do `baseline.sql` **antes do bloco de varredura anon**, e a linha no MANIFEST.
+A tripla inteira, como na Task 1. O conteúdo:
 
 ```sql
 -- O aviso de conversa sem responsável passa a NOMEAR o time. Sem isto, quem lê
