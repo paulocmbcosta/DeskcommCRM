@@ -87,11 +87,28 @@ RLS: `tenant_isolation_attendance_teams_all` e `tenant_isolation_attendance_team
 via `fn_user_org_ids()`, com `revoke all` + `grant select to authenticated, service_role` no
 molde das gêmeas — **escrita só por RPC `security definer`**.
 
-Uma tensão que vale resolver no papel: o `CLAUDE.md` manda nomear a policy
-`tenant_isolation_<tabela>_all`, mas as gêmeas usam sufixo `_select`, porque só concedem SELECT.
-Vale a doutrina: policy `for all`, **e o GRANT continua só de SELECT** — o GRANT é o portão mais
-estreito dos dois, e é ele que impede escrita pela REST. Policy larga com grant estreito é seguro;
-o inverso não seria.
+⚠️ **Eu resolvi esta tensão ERRADO, e o CI mostrou.** O parágrafo original dizia: o `CLAUDE.md`
+manda nomear `tenant_isolation_<tabela>_all`, as gêmeas usam `_select`, "vale a doutrina: policy
+`for all`, e o GRANT continua só de SELECT — policy larga com grant estreito é seguro".
+
+O raciocínio sobre segurança estava certo e a conclusão estava errada, porque eu li uma linha sobre
+o **nome** da policy como se mandasse o **comando**. E existe um gate que proíbe exatamente isso:
+`tests/invariants/rbac-config-ia-canais.test.ts` — *"nenhuma tabela NOVA entra com policy ALL
+só-tenancy"* — reprova toda policy `cmd = ALL` cujo predicado não mencione `role_at_least`, porque
+essa é a forma da dívida de RBAC que o repo parou de aceitar.
+
+**O estado correto, entregue pela migration 0265:** as duas policies são `for select`, com o nome
+acompanhando (`tenant_isolation_<tabela>_select`), como as gêmeas. O `for all` nunca foi necessário:
+a escrita não passa por RLS (é pelas três `security definer`, que rodam como o dono) e o `revoke all`
+tira INSERT/UPDATE/DELETE dos três papéis do PostgREST — medido em produção.
+
+A leitura **não** ganha `role_at_least` de propósito: o inbox precisa NOMEAR o time de uma conversa,
+e o selo é visível a `viewer`. Restringir a leitura por papel imprimiria "Sem time" numa conversa
+que tem time.
+
+A lição: "policy larga com grant estreito é seguro" é verdade sobre segurança e irrelevante para a
+pergunta que o gate faz, que é sobre **dívida**. Largura sem consumidor é dívida mesmo quando é
+inofensiva.
 
 ### Por que cada campo (DIRC)
 
