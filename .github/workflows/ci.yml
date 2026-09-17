@@ -25,7 +25,19 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 45 e não 15 pela MESMA razão do teto de heap logo abaixo: runner de
+    # repositório privado tem metade dos núcleos do público, e esta suíte tem
+    # 9.347 casos.
+    #
+    # O teto de 15 nunca foi atingido antes porque o job morria ANTES de chegar
+    # aos testes: o Typecheck abortava por falta de memória. Medido nesta
+    # rodada, com o heap já corrigido: Typecheck, Lint, Channel leak e Role rank
+    # passaram, e `Unit tests` foi cortado aos 15min19s — o segundo gargalo
+    # estava escondido atrás do primeiro.
+    #
+    # Se voltar a estourar, a resposta é dividir a suíte em partes paralelas
+    # (como o `e2e` já faz), não subir o número de novo sem medir.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
