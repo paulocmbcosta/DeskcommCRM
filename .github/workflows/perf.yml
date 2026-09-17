@@ -3,14 +3,56 @@ name: perf
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
+      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
+      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
+      #
+      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
+      # protection faz o PR nunca receber aquele check e ficar travado para
+      # sempre. Hoje este repositório não tem branch protection (plano Free não
+      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
+      # virar um job que reporta sucesso de propósito.
+      - "docs/**"
+      - "**/*.md"
+      - ".changes/**"
   push:
     branches: [main]
+    paths-ignore:
+      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
+      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
+      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
+      #
+      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
+      # protection faz o PR nunca receber aquele check e ficar travado para
+      # sempre. Hoje este repositório não tem branch protection (plano Free não
+      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
+      # virar um job que reporta sucesso de propósito.
+      - "docs/**"
+      - "**/*.md"
+      - ".changes/**"
 
 # O GITHUB_TOKEN deste job serve a `actions/checkout` (clone) e a
 # `actions/setup-node` (manifest de `actions/node-versions`, repo público).
 # `pnpm build` é local e o relatório de tamanho é escrita em arquivo do runner
 # (`>> $GITHUB_STEP_SUMMARY`), sem token. Ver o comentário em ci.yml para o
 # porquê de o bloco ficar no topo.
+# Rodada obsoleta não se paga. Sem isto, cada push no PR começa um ciclo novo e
+# DEIXA o anterior correr até o fim — 75 minutos de `e2e` para produzir um
+# resultado que já nasceu velho. Medido nesta conta em setembro de 2026: a branch
+# de Times gerou 8 rodadas de `ci` e 8 de `e2e`, sete de cada obsoletas, e a cota
+# de 2.000 minutos do plano Free acabou em 1.751.
+#
+# `cancel-in-progress` só para PULL REQUEST, nunca para `push` na main: cancelar
+# uma rodada da main interromperia a publicação de imagem de uma versão real,
+# deixando o cliente com uma tag que aponta para nada.
+#
+# Isto NÃO reduz cobertura: o ciclo completo continua rodando no commit que
+# importa, que é o último.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

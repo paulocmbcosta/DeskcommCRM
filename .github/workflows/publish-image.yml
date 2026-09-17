@@ -46,6 +46,15 @@ on:
   pull_request:
   workflow_dispatch: {}
 
+# Rodada obsoleta não se paga — ver o bloco igual em ci.yml, que traz a medição.
+# `cancel-in-progress` só para PULL REQUEST: em PR a imagem é construída e NÃO
+# publicada, então cancelar não perde artefato. Num `push` na main ou em tag,
+# cancelar interromperia a publicação de uma versão real e deixaria o cliente
+# com uma tag apontando para nada.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
 
