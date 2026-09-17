@@ -113,3 +113,22 @@ export const channelRoutingPatchSchema = z.object({
   user_ids: z.array(z.string().uuid()).max(1000),
   reset: z.boolean().default(false),
 }).strict();
+
+/**
+ * Um time de atendimento. O `schedule` reusa `availabilityScheduleSchema` de
+ * propósito: é o MESMO shape do atendente, validado pela MESMA regra, e é o que
+ * permite a interseção de horários ser composição em vez de algoritmo novo.
+ *
+ * O regex do `slug` é o MESMO de `fn_save_attendance_team` (migration 0263 e o
+ * apêndice do baseline). Se divergirem, a tela aceita o que o banco recusa e o
+ * usuário leva um erro cru de Postgres.
+ */
+export const timeDeAtendimentoSchema = z.object({
+  id: z.string().uuid().nullable().default(null),
+  name: z.string().trim().min(1).max(60),
+  slug: z.string().regex(/^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/, "use letras minúsculas, números e hífen"),
+  description: z.string().trim().max(500).default(""),
+  schedule: availabilityScheduleSchema.default({ timezone: "America/Sao_Paulo", windows: [] }),
+  user_ids: z.array(z.string().uuid()).max(1000).default([]),
+}).strict();
+export type TimeDeAtendimento = z.infer<typeof timeDeAtendimentoSchema>;

@@ -98,14 +98,21 @@ export async function getQueuePosition(
   organizationId: string,
   lastInboundAt: string | null,
   now: Date,
+  teamId?: string | null,
 ): Promise<number> {
   const naFila = comandosDaFila(await orgTemAutomatico(supabase, organizationId));
   const ref = lastInboundAt ?? now.toISOString();
-  const { count } = await supabase
+  let q = supabase
     .from("conversations")
     .select("id", { count: "exact", head: true })
     .eq("organization_id", organizationId)
     .in("comando_da_conversa", naFila)
     .lte("last_inbound_at", ref);
+  // A fila do time é OUTRA fila. Contar a geral daria ao cliente uma posição que
+  // não existe na tela de quem vai atendê-lo — número errado dito com confiança.
+  // Numa instalação sem time nenhum, toda conversa tem team_id null e a conta é
+  // idêntica à de antes: não há regressão a pagar por esta precisão.
+  q = teamId ? q.eq("team_id", teamId) : q.is("team_id", null);
+  const { count } = await q;
   return count ?? 1;
 }

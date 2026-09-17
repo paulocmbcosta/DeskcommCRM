@@ -57,6 +57,12 @@ export async function GET(req: NextRequest): Promise<Response> {
     tag: url.searchParams.get("tag") ?? undefined,
     unread: url.searchParams.get("unread") ?? undefined,
     channel_session_id: url.searchParams.get("channel_session_id") ?? undefined,
+    // O TIME (migration 0263): `none` = fila geral, `mine` = meus times + a
+    // fila geral, ou o uuid de um time. A cerca de
+    // `tests/unit/rota-le-todo-filtro-do-schema.test.ts` cobra esta linha a
+    // partir do momento em que a chave existe no schema — é ela que impede a
+    // terceira repetição do defeito que o comentário do `tag` descreve.
+    team_id: url.searchParams.get("team_id") ?? undefined,
     search: url.searchParams.get("search") ?? undefined,
     cursor: url.searchParams.get("cursor") ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined,

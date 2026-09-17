@@ -25,7 +25,7 @@
  */
 import { ROLE_RANK, type Role } from "@/lib/auth/types";
 import { isAttendantEligible, OPEN_LOAD_STATUSES } from "@/lib/routing/eligibility";
-import { availabilityScheduleSchema } from "@/lib/schemas/routing";
+import { lerAgenda } from "@/lib/times/agenda";
 
 import type { Queryable } from "../agent-engine/queue/queue";
 
@@ -85,14 +85,22 @@ export async function quemPodeAssumirAgora(
     // também não o escolhe; prometer com ele contado seria prometer o que o
     // roteamento nunca vai entregar.
     if (r.capacity === null) return false;
-    return isAttendantEligible(
-      {
-        isAvailable: true,
-        capacity: r.capacity,
-        currentLoad: Number(r.carga),
-        schedule: availabilityScheduleSchema.parse(r.schedule ?? {}),
-      },
-      now,
+    // Agenda que o parser não lê (a coluna é jsonb sem CHECK) fecha AQUELE
+    // atendente, e mais ninguém. Com `.parse()` aqui, uma linha ruim lançava no
+    // meio da escalação e o agente caía no ramo conservador por causa da agenda
+    // de OUTRA pessoa — o cliente ouvia "sem prazo" com a equipe inteira online.
+    const { agenda: schedule, valida } = lerAgenda(r.schedule);
+    return (
+      valida &&
+      isAttendantEligible(
+        {
+          isAvailable: true,
+          capacity: r.capacity,
+          currentLoad: Number(r.carga),
+          schedule,
+        },
+        now,
+      )
     );
   }).length;
 

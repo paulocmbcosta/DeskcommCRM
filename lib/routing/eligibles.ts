@@ -12,13 +12,13 @@
 import type { Json } from "@/lib/database.types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { isAttendantEligible, OPEN_LOAD_STATUSES } from "./eligibility";
+import { isAttendantEligible, isWithinSchedule, OPEN_LOAD_STATUSES } from "./eligibility";
 import type { RoutingCandidate } from "./decide";
-import { availabilityScheduleSchema } from "@/lib/schemas/routing";
+import { lerAgenda } from "@/lib/times/agenda";
 
 export type RoutingScope =
-  | { kind: "conversation_channel"; channelSessionId: string }
-  | { kind: "organization_summary" };
+  | { kind: "conversation_channel"; channelSessionId: string; teamId?: string | null }
+  | { kind: "organization_summary"; teamId?: string | null };
 export class InvalidRoutingChannel extends Error {
   constructor() { super("routing_channel_invalid"); }
 }
@@ -47,6 +47,29 @@ export async function loadEligibleAttendants(
       // Policy existente vazia é restrição explícita, não ausência de configuração.
       if (allowed.size === 0) return [];
     }
+  }
+  // Time é restrição ORTOGONAL ao canal (canal = por onde se fala; time = sobre
+  // o quê), por isso é campo do escopo e não variante: handoff para time NUM
+  // canal precisa das duas ao mesmo tempo, e a variante perderia o canal.
+  if (scope.teamId) {
+    const { data: team, error: teamError } = await supabase.from("attendance_teams")
+      .select("id, schedule, archived_at")
+      .eq("organization_id", organizationId).eq("id", scope.teamId).maybeSingle();
+    if (teamError) throw new Error(teamError.message);
+    if (!team || team.archived_at) return [];
+    // O horário do time vale para TODOS os candidatos: uma checagem, não uma por
+    // pessoa. Interseção com a janela do atendente, que o isAttendantEligible faz.
+    // Agenda ilegível fecha o TIME em vez de derrubar a leitura: a conversa
+    // espera na fila e a Central avisa quando as tentativas esgotam, nomeando-o.
+    const { agenda: agendaDoTime, valida: agendaDoTimeValida } = lerAgenda(team.schedule);
+    if (!agendaDoTimeValida || !isWithinSchedule(agendaDoTime, now)) return [];
+    const { data: membros, error: membrosError } = await supabase.from("attendance_team_members")
+      .select("user_id").eq("organization_id", organizationId).eq("team_id", scope.teamId);
+    if (membrosError) throw new Error(membrosError.message);
+    const doTime = new Set((membros ?? []).map((m: { user_id: string }) => m.user_id));
+    // Time sem membro é restrição explícita — mesma leitura da política de canal vazia.
+    if (doTime.size === 0) return [];
+    allowed = allowed === null ? doTime : new Set([...allowed].filter((u) => doTime.has(u)));
   }
   const { data: members, error: memberError } = await supabase.from("user_organizations")
     .select("user_id").eq("organization_id", organizationId).is("revoked_at", null)
@@ -101,8 +124,10 @@ export async function loadEligibleAttendants(
   const candidates: RoutingCandidate[] = [];
   for (const r of rows) {
     const currentLoad = loadByUser.get(r.user_id) ?? 0;
-    const schedule = availabilityScheduleSchema.parse(r.schedule ?? {});
-    const eligible = isAttendantEligible(
+    // Um atendente com agenda ilegível fica de fora — sozinho, sem levar junto o
+    // roteamento da organização inteira, que era o que o `.parse()` fazia aqui.
+    const { agenda: schedule, valida: agendaValida } = lerAgenda(r.schedule);
+    const eligible = agendaValida && isAttendantEligible(
       { isAvailable: true, capacity: r.capacity, currentLoad, schedule },
       now,
     );

@@ -1923,6 +1923,93 @@ export type Database = {
           },
         ]
       }
+      attendance_team_members: {
+        Row: {
+          created_at: string
+          organization_id: string
+          team_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          organization_id: string
+          team_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          organization_id?: string
+          team_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attendance_team_members_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attendance_team_members_organization_id_team_id_fkey"
+            columns: ["organization_id", "team_id"]
+            isOneToOne: false
+            referencedRelation: "attendance_teams"
+            referencedColumns: ["organization_id", "id"]
+          },
+          {
+            foreignKeyName: "attendance_team_members_organization_id_user_id_fkey"
+            columns: ["organization_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "user_organizations"
+            referencedColumns: ["organization_id", "user_id"]
+          },
+        ]
+      }
+      attendance_teams: {
+        Row: {
+          archived_at: string | null
+          created_at: string
+          description: string
+          id: string
+          name: string
+          organization_id: string
+          schedule: Json
+          slug: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          created_at?: string
+          description?: string
+          id?: string
+          name: string
+          organization_id: string
+          schedule?: Json
+          slug: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          created_at?: string
+          description?: string
+          id?: string
+          name?: string
+          organization_id?: string
+          schedule?: Json
+          slug?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attendance_teams_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       attendant_availability: {
         Row: {
           capacity: number
@@ -3447,6 +3534,7 @@ export type Database = {
           status: string
           status_changed_at: string
           tags: string[]
+          team_id: string | null
           unread_count_for_assignee: number
           updated_at: string
           usable_for_rag: boolean
@@ -3490,6 +3578,7 @@ export type Database = {
           status?: string
           status_changed_at?: string
           tags?: string[]
+          team_id?: string | null
           unread_count_for_assignee?: number
           updated_at?: string
           usable_for_rag?: boolean
@@ -3533,6 +3622,7 @@ export type Database = {
           status?: string
           status_changed_at?: string
           tags?: string[]
+          team_id?: string | null
           unread_count_for_assignee?: number
           updated_at?: string
           usable_for_rag?: boolean
@@ -3573,6 +3663,13 @@ export type Database = {
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "attendance_teams"
             referencedColumns: ["id"]
           },
         ]
@@ -7703,6 +7800,26 @@ export type Database = {
       fn_request_channel_routing: {
         Args: { p_conversation: string; p_org: string }
         Returns: undefined
+      }
+      fn_save_attendance_team: {
+        Args: {
+          p_description: string
+          p_name: string
+          p_org: string
+          p_schedule: Json
+          p_slug: string
+          p_team: string
+          p_users: string[]
+        }
+        Returns: Json
+      }
+      fn_archive_attendance_team: {
+        Args: { p_arquivar: boolean; p_org: string; p_team: string }
+        Returns: Json
+      }
+      fn_conversation_set_team: {
+        Args: { p_conversation: string; p_org: string; p_team: string }
+        Returns: Json
       }
       fn_wake_channel_routing: {
         Args: { p_channel?: string; p_org: string }

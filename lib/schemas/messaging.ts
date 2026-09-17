@@ -134,6 +134,23 @@ export const transferConversationSchema = z.object({
 
 export type TransferConversationInput = z.infer<typeof transferConversationSchema>;
 
+/**
+ * Transferir a conversa para um TIME (migration 0263) — ou tirá-la de todos
+ * eles, que é o que `null` significa e por isso ele é valor legítimo, não
+ * ausência.
+ *
+ * `.strict()` de propósito: um `organization_id` no corpo é RECUSADO com 422 em
+ * vez de ignorado em silêncio. A org sai de `auth.org.orgId` e de nenhum outro
+ * lugar; recusar é a diferença entre "não te obedeci" e "não te ouvi", e só a
+ * primeira o cliente consegue depurar. Mesma decisão de
+ * `timeDeAtendimentoSchema`, na tela de configuração dos times.
+ */
+export const conversationTeamSchema = z
+  .object({ team_id: z.string().uuid().nullable() })
+  .strict();
+
+export type ConversationTeamInput = z.infer<typeof conversationTeamSchema>;
+
 export const updateConversationStatusSchema = z.object({
   status: conversationStatusSchema,
 });
@@ -220,6 +237,51 @@ export const CONVERSATION_TERMINAL_STATUSES = ["closed", "archived"] as const;
  * cuidando — é a aba IA), terminais não entram.
  */
 export const CONVERSATION_QUEUE_STATUSES = ["open", "pending"] as const;
+
+/**
+ * A FILA POR TIME — a MESMA régua para a lista e para o contador do badge.
+ *
+ * Três formas, e as três são necessárias:
+ *
+ *   `none`   a fila geral: as conversas SEM time. Sem este valor não haveria
+ *            como pedi-la — ausência do parâmetro significa "não filtre", que é
+ *            outra pergunta.
+ *   `mine`   os times de quem está olhando, MAIS as sem time.
+ *   `<uuid>` um time específico.
+ *
+ * ⚠️ É FILTRO, não barreira. Quem enxerga o quê continua sendo a RLS de
+ * `conversations` e o `visibility_mode` da organização; chamar isto de restrição
+ * de segurança seria afirmar uma proteção que não existe.
+ *
+ * Valor fora dessas três formas é RECUSADO, e não ignorado — a mesma decisão de
+ * `status` e `comando`, pela mesma razão (lista menor sem explicação parece
+ * resposta). E aqui há um segundo motivo, mecânico: um `team_id` que não é uuid
+ * chegaria ao Postgres como `22P02` e viraria 500 — erro de sistema para o que
+ * é, na verdade, uma URL inválida.
+ *
+ * Mora FORA do objeto porque a rota de contagem (`/conversations/counts`) não
+ * usa este schema inteiro e precisa da mesma régua: sem ela, o badge aceitaria
+ * um valor que a lista recusa.
+ */
+export const filtroDeTimeSchema = z
+  .string()
+  .transform((v, ctx) => {
+    const valor = v.trim();
+    // Vazio é "não filtre": um `?team_id=` sem valor sai de um `<select>` que
+    // voltou para "todas as filas", e recusá-lo devolveria 422 para um gesto que
+    // o usuário fez na tela.
+    if (valor === "") return undefined;
+    if (valor === "none" || valor === "mine") return valor;
+    if (z.string().uuid().safeParse(valor).success) return valor;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `team_id inválido: ${valor}` });
+    return z.NEVER;
+  })
+  // `.optional()` DEPOIS do transform, e isto não é estilo: antes dele a chave
+  // vira OBRIGATÓRIA no tipo inferido (o transform é quem passa a produzir o
+  // `undefined`), e todo chamador do handler — inclusive as tools MCP, que moram
+  // fora deste diretório — passaria a ter de escrever `team_id: undefined` à
+  // mão. Medido: o typecheck reprovou `lib/mcp/tools/conversations.ts` assim.
+  .optional();
 
 export const listConversationsQuerySchema = z.object({
   /**
@@ -315,6 +377,12 @@ export const listConversationsQuerySchema = z.object({
   assigned_to: z.union([z.string().uuid(), z.literal("me"), z.literal("unassigned")]).optional(),
   channel_session_id: z.string().uuid().optional(),
   tag: conversationTagSchema.optional(),
+  /**
+   * A fila por TIME (migration 0263). A régua inteira — as três formas que ele
+   * aceita e por que valor fora delas é recusado — mora em `filtroDeTimeSchema`,
+   * no topo deste arquivo, porque a rota de contagem usa a MESMA.
+   */
+  team_id: filtroDeTimeSchema,
   /**
    * Só as que têm mensagem não lida para o dono.
    *

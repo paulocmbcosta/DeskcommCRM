@@ -23,9 +23,29 @@ permissions:
   contents: read
 
 jobs:
+  # ⚠️ O teto e o heap abaixo são declarados em
+  # `tests/unit/preambulo-do-ci-nao-come-o-relogio.test.ts` (const TETOS), que é
+  # onde a RAZÃO fica registrada e revisada. Mudar um sem o outro reprova.
+  #
+  # A linha `timeout-minutes` tem de ficar nos primeiros 400 caracteres depois do
+  # nome do job: é a janela que aquele gate lê. Comentário longo vai ACIMA da
+  # chave do job, nunca entre ela e o teto — senão o gate deixa de ENCONTRAR o
+  # número e reprova por não medir, que é pior que reprovar por medir.
+  # 45 e não 15 pela MESMA razão do teto de heap logo abaixo: runner de
+  # repositório privado tem metade dos núcleos do público, e esta suíte tem
+  # 9.347 casos.
+  #
+  # O teto de 15 nunca foi atingido antes porque o job morria ANTES de chegar
+  # aos testes: o Typecheck abortava por falta de memória. Medido nesta
+  # rodada, com o heap já corrigido: Typecheck, Lint, Channel leak e Role rank
+  # passaram, e `Unit tests` foi cortado aos 15min19s — o segundo gargalo
+  # estava escondido atrás do primeiro.
+  #
+  # Se voltar a estourar, a resposta é dividir a suíte em partes paralelas
+  # (como o `e2e` já faz), não subir o número de novo sem medir.
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -34,8 +54,21 @@ jobs:
         # aceita `timeout-minutes`. Razão e medições: o cabeçalho da action.
         timeout-minutes: 5
 
+      # O teto de heap é EXPLÍCITO porque o padrão do Node não serve aqui, e a
+      # razão não é o código: runner de repositório PÚBLICO tem 16 GB, o de
+      # repositório PRIVADO tem 7 GB, e o Node dimensiona o heap a partir da RAM
+      # da máquina. O mesmo `tsc` que passa no upstream público aborta num fork
+      # privado com `FATAL ERROR: Ineffective mark-compacts near heap limit` e
+      # exit 134 — medido na main deste fork em 2026-09-16, antes de qualquer
+      # feature: `invariants` verde e `verify` vermelho pelo estouro.
+      #
+      # 5 GB deixa folga para o SO e para o pnpm nos 7 GB disponíveis. Se um dia
+      # voltar a abortar, o número sobe junto com a evidência — não se troca por
+      # `--no-check` nem se remove o passo.
       - name: Typecheck
         run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=5120
 
       - name: Lint
         run: pnpm lint

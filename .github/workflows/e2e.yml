@@ -81,12 +81,26 @@ jobs:
   # matrix são máquinas diferentes, com IPs diferentes, então a separação
   # deixa de depender de reiniciar o processo.
   #
-  # O teto de 30 min FICA. Ele é o que denuncia a suíte crescendo de novo;
-  # subi-lo seria trocar um vermelho honesto por um CI que demora mais a cada
-  # mês sem ninguém perceber.
+  # O teto DENUNCIA a suíte crescendo de novo, e subi-lo por conveniência seria
+  # trocar um vermelho honesto por um CI que demora mais a cada mês sem ninguém
+  # perceber. Essa regra continua valendo — o que mudou foi a régua.
+  #
+  # ⚠️ 2026-09-17: o teto virou 60, e NÃO por crescimento da suíte. Este fork é
+  # PRIVADO, e runner de repositório privado tem metade dos núcleos do público.
+  # O mesmo trabalho leva cerca do dobro do tempo, então 30 min aqui e 30 min no
+  # repositório público não medem a mesma coisa.
+  #
+  # Medido na MAIN deste fork, antes de qualquer branch de feature: as três
+  # partes começaram 11:49:28 e foram cortadas 12:19:45 — 30 min exatos, o teto,
+  # sem nenhuma spec nova. O e2e NUNCA completou neste fork.
+  #
+  # O que a regra original protege segue protegido: 60 num runner de metade do
+  # tamanho é o mesmo rigor que 30 no dobro. Se estourar os 60, a resposta é a
+  # que este bloco sempre deu — MAIS PARTES, não mais relógio.
   e2e-parte:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60, e a razão inteira está no bloco acima — leia-o antes de mexer.
+    timeout-minutes: 60
     strategy:
       # Sem fail-fast: se a parte 1 quebrar, ainda quero saber se a 2 também.
       # Com ele ligado, o primeiro vermelho esconde o outro e o conserto vira
@@ -606,6 +620,7 @@ jobs:
         qa-titulos-das-telas.spec.ts
         qa-equipe-pinta-na-hora.spec.ts
         qa-sugestao-rejeitada-e-motivo.spec.ts
+        times-de-atendimento.spec.ts
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts

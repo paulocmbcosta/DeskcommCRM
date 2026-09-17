@@ -49,8 +49,15 @@ const ACTION = join(process.cwd(), ".github/actions/preparar-node/action.yml");
  */
 const TETOS: Record<string, { minutos: number; razao: string }> = {
   "ci.yml::verify": {
-    minutos: 15,
-    razao: "trabalho real medido: p90 594s, máximo 609s em 51 verdes — folga de ~4m45",
+    minutos: 45,
+    razao:
+      "15 era a régua do runner do repositório de ORIGEM, público (p90 594s, máximo 609s " +
+      "em 51 verdes). Este repositório é PRIVADO, e runner privado tem metade dos núcleos " +
+      "— o mesmo trabalho leva cerca do dobro. Medido aqui em 2026-09-17: o job completo " +
+      "levou 28min17s (08:55:33→09:23:50), com Typecheck, Lint, Channel leak e Role rank " +
+      "verdes e a suíte inteira rodada. 45 dá ~17 de folga, proporcional à que o 15 dava lá. " +
+      "O rigor não caiu: a régua seguiu a máquina. Se estourar 45, a resposta é dividir a " +
+      "suíte em partes paralelas — como o e2e faz —, não subir de novo.",
   },
   "ci.yml::invariants": {
     minutos: 20,

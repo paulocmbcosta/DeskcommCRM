@@ -147,6 +147,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // Desliga só os AUXILIARES e mantém a aba: a aba é onde a pessoa está, e
   // limpá-la junto a tiraria do lugar sem ela ter pedido.
   const limparFiltrosAuxiliares = useCallback(() => {
+    // O time sai junto: ele é auxiliar como o canal e a etiqueta, e deixá-lo de
+    // pé faria "Limpar filtros" devolver uma lista ainda filtrada — a mentira de
+    // tela que este botão existe para desfazer. (Ele não é enumerado aqui: o
+    // objeto é reconstruído do zero, então filtro novo nasce limpo.)
     setFilterValue({ tab, search: "", onlyUnread: false });
   }, [tab, setFilterValue]);
 
@@ -188,6 +192,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         : undefined,
       channel_session_id: filterValue.channel_session_id,
       tag: filterValue.tag,
+      team_id: filterValue.team_id,
       unread: filterValue.onlyUnread || undefined,
     }),
     [
@@ -196,6 +201,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       filterValue.search,
       filterValue.channel_session_id,
       filterValue.tag,
+      filterValue.team_id,
       filterValue.onlyUnread,
     ],
   );

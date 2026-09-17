@@ -93,6 +93,14 @@ export interface ConversationsFilters {
   unread?: boolean;
   channel_session_id?: string;
   tag?: string;
+  /**
+   * A FILA por setor (migration 0263): `mine` (meus times + a geral), `none` (só
+   * a geral) ou o id de um time.
+   *
+   * É filtro de TELA, não barreira: quem enxerga o quê continua sendo a RLS de
+   * `conversations` e o `visibility_mode` da organização.
+   */
+  team_id?: string;
 }
 
 interface ListResponse {
@@ -130,6 +138,10 @@ export function useConversationsRealtime(
       if (filters.unread) qs.set("unread", "true");
       if (filters.channel_session_id) qs.set("channel_session_id", filters.channel_session_id);
       if (filters.tag) qs.set("tag", filters.tag);
+      // Sem esta linha o campo existiria no tipo e a lista voltaria INTEIRA,
+      // parecendo funcionar — é a metade do trabalho que o typecheck não pega,
+      // e a mesma que já custou o `comando` uma vez.
+      if (filters.team_id) qs.set("team_id", filters.team_id);
       if (pageParam) qs.set("cursor", pageParam);
       qs.set("limit", "50");
       try {

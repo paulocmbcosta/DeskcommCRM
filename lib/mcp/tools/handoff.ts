@@ -17,6 +17,12 @@ import { beginServiceAtOrigin, assertServiceBoundarySupabase } from "@/lib/atend
  *   - sem ninguém elegível → fila (fallback), retornando a posição.
  *   Retorno estruturado: { assigned_to } OU { queued: true, position }.
  *   Efeitos auditados (assignment event reason='handoff') preservados nos dois casos.
+ *
+ * v3 (times): `team` opcional — o SLUG, descoberto em runtime por `crm_list_teams`,
+ *   nunca um uuid no prompt. Validado ANTES de qualquer mutação: slug inválido
+ *   recusa com `available_teams` e a conversa fica como estava. Válido, grava
+ *   `conversations.team_id` e entra no escopo dos elegíveis E na posição da fila
+ *   — a fila do time é outra fila. Sem `team`, o comportamento é o de antes.
  */
 import { z } from "zod";
 
@@ -25,6 +31,7 @@ import { loadEligibleAttendants } from "@/lib/routing/eligibles";
 import { selectRoundRobin } from "@/lib/routing/decide";
 import { getQueuePosition } from "@/lib/routing/queue";
 import { logger } from "@/lib/logger";
+import { carregarTimes } from "@/lib/times/catalogo";
 import type { McpToolDefinition } from "../types";
 
 const inputShape = {
@@ -33,6 +40,8 @@ const inputShape = {
   urgency: z.enum(["low", "normal", "high"]).default("normal"),
   /** Atendente alvo opcional: só atribui se elegível agora; senão cai no rodízio G5. */
   target_user_id: z.string().uuid().optional(),
+  /** Slug do time de destino (crm_list_teams). Ausente = comportamento de antes. */
+  team: z.string().min(1).max(40).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 };
 
@@ -43,7 +52,8 @@ export const crmRequestHumanHandoff: McpToolDefinition<typeof inputShape> = {
     "destino pelo roteamento G5: atende o target_user_id se elegível agora, senão rodízio " +
     "entre os disponíveis; sem ninguém elegível vai para a fila. Registra activity + " +
     "event_log + audit. Retorna assigned_to OU queued+position. Use quando o cliente pedir " +
-    "atendente humano ou o agente identificar limite da automação.",
+    "atendente humano ou o agente identificar limite da automação. " +
+    "Passe team (slug de crm_list_teams) para mandar ao setor certo; sem team, vai para a fila geral.",
   inputSchema: inputShape,
   category: "handoff",
   requiresRole: "agent",
@@ -59,6 +69,37 @@ export const crmRequestHumanHandoff: McpToolDefinition<typeof inputShape> = {
     if (convErr) throw new Error(convErr.message);
     if (!conv || conv.organization_id !== ctx.organizationId) {
       throw new Error("conversation_not_found");
+    }
+
+    // A ordem é a regra: o slug é validado enquanto NADA foi mutado. Validar
+    // depois deixaria a conversa em `pending` com o bot silenciado e sem destino
+    // — pior que recusar. Recusa estruturada com a lista válida: o modelo se
+    // corrige sozinho na chamada seguinte.
+    let teamId: string | null = null;
+    if (input.team) {
+      const { data: team, error: teamErr } = await ctx.supabase
+        .from("attendance_teams")
+        .select("id")
+        .eq("organization_id", ctx.organizationId)
+        .eq("slug", input.team)
+        .is("archived_at", null)
+        .maybeSingle();
+      if (teamErr) throw new Error(teamErr.message);
+      if (!team) {
+        const times = await carregarTimes(ctx.supabase, ctx.organizationId, new Date());
+        return {
+          handoff_recorded: false,
+          conversation_id: input.conversation_id,
+          error: "team_not_found",
+          available_teams: times.map((t) => ({
+            slug: t.slug,
+            name: t.name,
+            when_to_use: t.description,
+          })),
+          next_action: "Escolha um dos times listados em available_teams e chame esta ferramenta de novo.",
+        };
+      }
+      teamId = team.id;
     }
 
     const boundary = conv.contact_id ? await beginServiceAtOrigin(ctx.supabase, ctx.organizationId, conv.contact_id, conv.channel_session_id) : undefined;
@@ -99,9 +140,18 @@ export const crmRequestHumanHandoff: McpToolDefinition<typeof inputShape> = {
 
     if (result.triggered) {
       const now = new Date();
+      // O destino é gravado ANTES de escolher quem assume: se ninguém puder
+      // agora, a conversa espera na fila DO TIME, e é `conversations.team_id`
+      // que põe o cron de roteamento e o inbox olhando para o setor certo.
+      if (teamId) {
+        const { error: teamUpdateErr } = await ctx.supabase
+          .from("conversations").update({ team_id: teamId })
+          .eq("id", input.conversation_id).eq("organization_id", ctx.organizationId);
+        if (teamUpdateErr) throw new Error(teamUpdateErr.message);
+      }
       // INB-12: mesmos elegíveis do worker de roteamento (G5) — um algoritmo só.
       const eligibles = await loadEligibleAttendants(ctx.supabase, ctx.organizationId, now, {
-        kind: "conversation_channel", channelSessionId: conv.channel_session_id,
+        kind: "conversation_channel", channelSessionId: conv.channel_session_id, teamId,
       });
       const picked =
         input.target_user_id && eligibles.some((e) => e.userId === input.target_user_id)
@@ -148,11 +198,16 @@ export const crmRequestHumanHandoff: McpToolDefinition<typeof inputShape> = {
           if (error) throw new Error(error.message);
         }
         queued = Boolean(queuedRows?.length);
+        // O time entra AQUI também, e o parâmetro é opcional de propósito no
+        // `getQueuePosition` — esquecê-lo não reprova no typecheck e o cliente
+        // de um setor ouviria a posição da fila GERAL, número errado dito com
+        // confiança. A fila do time é outra fila.
         position = queued ? await getQueuePosition(
           ctx.supabase,
           ctx.organizationId,
           conv.last_inbound_at ?? null,
           now,
+          teamId,
         ) : null;
       }
     }
@@ -162,6 +217,7 @@ export const crmRequestHumanHandoff: McpToolDefinition<typeof inputShape> = {
       conversation_id: input.conversation_id,
       // Retorno estruturado v2: um destes dois lados é populado.
       assigned_to: assignedUserId,
+      team_id: teamId,
       queued,
       position,
       // Compat com o contrato anterior (callers que liam assigned_to_user_id).

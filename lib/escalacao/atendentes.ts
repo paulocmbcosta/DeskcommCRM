@@ -16,7 +16,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ROLE_RANK, type Role } from "@/lib/auth/types";
 import { isAttendantEligible, OPEN_LOAD_STATUSES } from "@/lib/routing/eligibility";
-import { availabilityScheduleSchema } from "@/lib/schemas/routing";
+import { lerAgenda } from "@/lib/times/agenda";
 
 const COLUNAS_DISPONIBILIDADE =
   "user_id, is_available, capacity, schedule, last_heartbeat_at, updated_at";
@@ -117,15 +117,23 @@ export async function carregarRosterDeAtendimento(
  * configurado", e o worker o trata como fora (só entram linhas de
  * `attendant_availability` com `is_available`). Responder true aqui faria o
  * agente prometer um atendente que o roteamento nunca escolheria.
+ *
+ * NÃO LANÇA por agenda ruim. `attendant_availability.schedule` é jsonb sem
+ * CHECK, então o banco aceita o que o parser recusa; e quem chama isto é sempre
+ * um `roster.filter(...)`, onde um throw mata a LISTA INTEIRA — a organização
+ * ficava sem elegível nenhum por causa de uma linha. Agenda ilegível fecha
+ * aquele atendente e só ele.
  */
 export function podeAssumirAgora(atendente: AtendenteDoRoster, now: Date): boolean {
   if (atendente.capacidade === null) return false;
+  const { agenda: schedule, valida } = lerAgenda(atendente.agenda);
+  if (!valida) return false;
   return isAttendantEligible(
     {
       isAvailable: atendente.disponivel,
       capacity: atendente.capacidade,
       currentLoad: atendente.cargaAtual,
-      schedule: availabilityScheduleSchema.parse(atendente.agenda ?? {}),
+      schedule,
     },
     now,
   );

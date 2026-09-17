@@ -18,6 +18,8 @@ import type {
 import type { Conversation } from "@/lib/types/messaging";
 import { normalizarTermoDeBusca } from "@/lib/inbox/termo-de-busca";
 
+import { MEUS_TIMES, aplicarPredicadoDeTime, predicadoDeTime } from "./_filtro-de-time";
+
 /**
  * Prepara o termo digitado para viajar dentro de um `or=` do PostgREST.
  *
@@ -86,7 +88,7 @@ const SELECT_COLS = `
   status_changed_at, service_revision, service_closed_at, service_started_at, current_demanda_id, assigned_to_user_id, assigned_to_user_name, assignee_kind, assigned_at, last_inbound_at,
   last_outbound_at, last_message_at, last_message_preview,
   unread_count_for_assignee, is_group, group_chat_id, tags, metadata,
-  snooze_until, created_at, updated_at,
+  snooze_until, created_at, updated_at, team_id,
   bot_silenced_until, last_handoff_at,
   comando_da_conversa,
   contacts:contact_id (id, display_name, name, phone_number, is_anonymized, tags, is_blocked, avatar_storage_path, force_human),
@@ -189,6 +191,39 @@ export async function listConversationsHandler(
   }
   if (q.channel_session_id) query = query.eq("channel_session_id", q.channel_session_id);
   if (q.tag) query = query.contains("tags", [q.tag]); // tags @> array[tag] (GIN)
+
+  // O TIME (migration 0263) — o SETOR que espera pela conversa, não a pessoa.
+  //
+  // No banco, e no mesmo ponto dos outros filtros auxiliares, pela razão de
+  // sempre: filtrar depois de paginar devolveria páginas curtas e um "carregar
+  // mais" que às vezes não traz nada.
+  //
+  // A régua mora em `_filtro-de-time.ts` porque a contagem do badge aplica a
+  // MESMA — e quando cada lado monta o predicado por conta própria, a aba passa
+  // a contar o que a lista não mostra.
+  if (q.team_id === MEUS_TIMES && ctx.actor.type !== "user") {
+    // Um ator de máquina não tem "meus times". Recusar é a única saída honesta:
+    // responder a fila geral seria uma lista plausível para uma pergunta que
+    // não foi feita. Mesma decisão de `assigned_to=me`, logo abaixo.
+    throw new ApiError(
+      400,
+      "invalid_request",
+      undefined,
+      ctx.requestId,
+      '"team_id=mine" requer ator humano.',
+    );
+  }
+  if (q.team_id) {
+    query = aplicarPredicadoDeTime(
+      query,
+      await predicadoDeTime(
+        supabase,
+        ctx.organization_id,
+        ctx.actor.type === "user" ? ctx.actor.id : null,
+        q.team_id,
+      ),
+    );
+  }
 
   // No BANCO, e não em memória: filtrar depois de paginar devolveria páginas curtas —
   // e, quando a página inteira estivesse lida, uma lista vazia que a tela apresentava

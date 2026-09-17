@@ -41,6 +41,7 @@ import {
   crmResumeAiAttendance,
 } from "./escalacao";
 import { crmRequestHumanHandoff } from "./handoff";
+import { crmListTeams } from "./times";
 import {
   crmSearchKnowledge,
   crmListKnowledgeSources,
@@ -127,6 +128,7 @@ export const allTools: ReadonlyArray<McpToolDefinition> = [
   crmListFollowups,
   crmListAtRiskLeads,
   crmListAvailableAttendants,
+  crmListTeams,
   crmListHumanCases,
   crmGetHumanCase,
   // write

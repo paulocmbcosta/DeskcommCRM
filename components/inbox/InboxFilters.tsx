@@ -16,6 +16,7 @@ import { channelLabel, useChannelSessions } from "@/hooks/channels/useChannelSes
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useConversationTagVocabulary } from "@/hooks/inbox/useConversationTags";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
+import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 import type { Role, VisibilityMode } from "@/lib/auth/types";
 
 export type InboxTab = "unassigned" | "mine" | "all" | "closed" | "ai";
@@ -50,7 +51,25 @@ export interface InboxFiltersValue {
   onlyUnread: boolean;
   channel_session_id?: string;
   tag?: string;
+  /**
+   * A FILA por setor (migration 0263): `mine` (meus times + a geral), `none` (só
+   * a geral) ou o id de um time. `undefined` é "todas as filas".
+   *
+   * ⚠️ O default é `undefined` DE PROPÓSITO, e a decisão é de tela, não de
+   * segurança. Nascer em `mine` esconderia, de quem não está em time nenhum,
+   * toda conversa encaminhada a um setor — inclusive uma que ESTÁ atribuída a
+   * ela, porque o filtro é por time e não por dono. Numa instalação que acabou
+   * de atualizar, o inbox encolheria sozinho sem nada na tela dizendo por quê.
+   * Quem quiser a visão por setor a escolhe, e a escolha fica visível no
+   * seletor.
+   */
+  team_id?: string;
 }
+
+/** "Os times de quem está olhando, mais a fila geral." */
+export const FILA_MEUS_TIMES = "mine";
+/** "Só o que ninguém encaminhou para setor nenhum." */
+export const FILA_GERAL = "none";
 
 interface Props {
   value: InboxFiltersValue;
@@ -96,7 +115,12 @@ export function InboxFilters({ value, onChange }: Props) {
     unread: value.onlyUnread,
     tag: value.tag,
     channel_session_id: value.channel_session_id,
+    // O time entra aqui pela MESMA razão que a tag e o canal entraram: com a
+    // fila filtrada por setor e o badge contando a organização inteira, a aba
+    // passaria a anunciar trabalho que a lista abaixo dela não mostra.
+    team_id: value.team_id,
   });
+  const { data: times } = useTimesDoInbox();
 
   const tabs = activeOrg
     ? visibleInboxTabs(activeOrg.role, activeOrg.visibility_mode)
@@ -134,6 +158,27 @@ export function InboxFilters({ value, onChange }: Props) {
     !tagVocabulary.includes(value.tag);
   const mostrarSeletorDeTag =
     (tagVocabulary?.length ?? 0) > 0 || tagForaDoVocabulario;
+
+  // Arquivado não é destino de filtro: ele existe no catálogo só para o selo do
+  // cabeçalho saber nomear conversa antiga.
+  const timesVivos = (times ?? []).filter((time) => !time.archived);
+  // O MESMO tratamento do canal e da etiqueta, pela terceira vez e pela mesma
+  // razão: o time filtrado foi arquivado, o seletor sumiria com o filtro AINDA
+  // APLICADO, e a lista ficaria num subconjunto sem nada dizendo por quê.
+  const timeForaDaLista =
+    value.team_id != null &&
+    value.team_id !== FILA_MEUS_TIMES &&
+    value.team_id !== FILA_GERAL &&
+    times != null &&
+    !timesVivos.some((time) => time.id === value.team_id);
+  /**
+   * Sem time cadastrado, o seletor NÃO existe.
+   *
+   * Uma instalação que nunca criou setor nenhum não ganha um filtro a mais na
+   * barra por causa de uma feature que ela não usa — e "Meus times" numa org sem
+   * times seria uma opção que responde sempre a mesma coisa.
+   */
+  const mostrarSeletorDeTime = timesVivos.length > 0 || timeForaDaLista;
 
   // O timer lê o valor MAIS RECENTE, não o do render em que foi agendado.
   //
@@ -214,6 +259,51 @@ export function InboxFilters({ value, onChange }: Props) {
             {t("Não lidos")}
           </button>
         </div>
+
+        {/* A FILA POR SETOR, em linha própria e ACIMA das demais.
+            Própria porque ela responde "de quem é este trabalho", que é uma
+            pergunta de outra ordem que "por qual número" e "com que etiqueta" —
+            e porque três seletores numa coluna de 280px deixam ~88px para cada
+            um, largura em que todo rótulo vira reticência. */}
+        {mostrarSeletorDeTime && (
+          <Select
+            value={value.team_id ?? "all"}
+            onValueChange={(v) =>
+              onChange({ ...value, team_id: v === "all" ? undefined : v })
+            }
+          >
+            <SelectTrigger
+              className={cn(
+                "h-8 w-full rounded-full border-transparent bg-surface-elevated px-3 text-xs shadow-none",
+                value.team_id != null && "border-accent bg-accent-soft text-accent",
+              )}
+              aria-label={t("Filtrar por time")}
+            >
+              <SelectValue placeholder={t("Todas as filas")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("Todas as filas")}</SelectItem>
+              <SelectItem value={FILA_MEUS_TIMES}>{t("Meus times")}</SelectItem>
+              {/* A fila geral precisa de um valor PRÓPRIO: a ausência do filtro
+                  significa "não filtre", que é outra pergunta — sem esta opção
+                  não haveria como pedir "o que ninguém encaminhou". */}
+              <SelectItem value={FILA_GERAL}>{t("Fila geral (sem time)")}</SelectItem>
+              {/* A órfã entra na lista pelo mesmo motivo da etiqueta: sem ela o
+                  Select mostraria o placeholder no lugar do valor JÁ escolhido. */}
+              {timeForaDaLista && value.team_id != null && (
+                <SelectItem value={value.team_id}>{t("Time arquivado")}</SelectItem>
+              )}
+              {timesVivos.map((time) => (
+                <SelectItem key={time.id} value={time.id}>
+                  {time.name}
+                  {!time.aberto_agora && (
+                    <span className="ml-1 text-muted-foreground">· {t("fechado agora")}</span>
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
         {(showChannelSwitch || mostrarSeletorDeTag) && (
           <div className="flex gap-2">

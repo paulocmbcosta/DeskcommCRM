@@ -3,7 +3,8 @@ import { useState } from "react";
 import { useT } from "@/hooks/i18n/useT";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Badge, badgeVariants } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { JanelaSelo } from "@/components/inbox/JanelaSelo";
 import { Phone, ArrowRight } from "@/lib/ui/icons";
 import { useAuth } from "@/hooks/auth/AuthProvider";
@@ -16,7 +17,9 @@ import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 import { OwnerBadge } from "@/components/kanban/OwnerBadge";
 import { comandoDaConversa, ROTULO_DO_MOTIVO } from "@/lib/inbox/comando-da-conversa";
 import { ReassignDialog } from "@/components/inbox/ReassignDialog";
+import { TransferirParaTimeDialog } from "@/components/inbox/TransferirParaTimeDialog";
 import { SnoozeButton } from "@/components/inbox/SnoozeButton";
+import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 import type { ConversationWithContact } from "@/hooks/inbox/useConversationsRealtime";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
@@ -64,6 +67,12 @@ export function ConversationHeader({ conversation }: Props) {
   // atendendo em instalação que nunca configurou agente nenhum.
   const automaticoDaOrg = useAutomaticoAtivo();
   const [reassignOpen, setReassignOpen] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
+  /**
+   * O catálogo de times. Uma consulta para o inbox inteiro (o react-query dedupa
+   * pela chave), e é dela que sai o NOME do setor — a conversa carrega só o id.
+   */
+  const times = useTimesDoInbox();
 
   const c = conversation.contacts ?? null;
   const displayName = rotuloDoContato(c, t);
@@ -126,6 +135,29 @@ export function ConversationHeader({ conversation }: Props) {
   const podePausar =
     automaticoAtivo && !encerrada && conversation.assigned_to_user_id !== null;
 
+  /**
+   * O SETOR que espera por esta conversa (migration 0263).
+   *
+   * O selo só afirma o que sabe. São três situações, e só duas viram selo:
+   *
+   *   time conhecido ......... mostra o NOME dele.
+   *   sem time, org com times  mostra "Sem time" — que aqui é informação, e não
+   *                            ausência dela: diz que a conversa está na fila
+   *                            geral, e que dava para encaminhá-la.
+   *   time que o catálogo não  NÃO mostra nada. Imprimir "Sem time" para uma
+   *   nomeia (lista ainda não  conversa que TEM time seria mentira de tela, e é
+   *   chegou)                  o caminho mais curto até ela.
+   *
+   * Numa instalação que nunca criou setor nenhum, o selo não existe: a feature
+   * inteira fica invisível para quem não a usa, que é como toda adição a uma
+   * tela cheia deveria entrar.
+   */
+  const timeId = conversation.team_id ?? null;
+  const timeDaConversa = (times.data ?? []).find((time) => time.id === timeId) ?? null;
+  const orgTemTimes = (times.data?.filter((time) => !time.archived).length ?? 0) > 0;
+  const mostrarSeloDoTime =
+    timeDaConversa !== null || (timeId === null && orgTemTimes);
+
   if (user.support?.access_mode === "support_readonly") return <header className="flex items-center justify-between border-b p-4">
     <strong>{displayName}</strong><span className="text-sm text-muted-foreground">{STATUS_LABEL[status] ?? status} · Somente leitura</span>
   </header>;
@@ -171,6 +203,36 @@ export function ConversationHeader({ conversation }: Props) {
               {t(ROTULO_DO_MOTIVO[motivo])}
             </Badge>
           )}
+          {/* O SELO DO TIME É A PORTA DO ENCAMINHAMENTO.
+              Um botão a mais na barra de ações custa ~85px numa fileira que já
+              estourou a caixa útil em 1280px uma vez (ver o comentário no topo
+              do JSX). O selo precisa existir de qualquer jeito — então ele é o
+              botão, e o gesto fica onde a informação está. Em conversa
+              encerrada ele volta a ser só selo: encaminhar o que acabou
+              colocaria de novo na fila de alguém algo que ninguém pediu. */}
+          {mostrarSeloDoTime &&
+            (encerrada ? (
+              <Badge
+                variant="outline"
+                className="h-4 px-1.5 text-[10px]"
+                data-testid="selo-do-time"
+              >
+                {timeDaConversa?.name ?? t("Sem time")}
+              </Badge>
+            ) : (
+              <button
+                type="button"
+                data-testid="selo-do-time"
+                title={t("Encaminhar esta conversa para outro time.")}
+                onClick={() => setTimeOpen(true)}
+                className={cn(
+                  badgeVariants({ variant: "outline" }),
+                  "h-4 cursor-pointer px-1.5 text-[10px] hover:bg-surface-elevated",
+                )}
+              >
+                {timeDaConversa?.name ?? t("Sem time")}
+              </button>
+            ))}
         </div>
 
         {/* QUEM ESTÁ NO COMANDO, com nome e por GEOMETRIA — disco cheio para
@@ -332,6 +394,12 @@ export function ConversationHeader({ conversation }: Props) {
         conversationId={conversation.id}
         open={reassignOpen}
         onOpenChange={setReassignOpen}
+      />
+      <TransferirParaTimeDialog
+        conversationId={conversation.id}
+        timeAtual={timeId}
+        open={timeOpen}
+        onOpenChange={setTimeOpen}
       />
     </div>
   );

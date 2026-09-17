@@ -585,6 +585,18 @@ export const NAV_CATALOG = [
     minRole: "manager",
   },
   {
+    // "de atendimento" no rótulo não é enfeite: "Equipe" (/app/team) já existe e
+    // significa TODO MUNDO da organização. Dois vizinhos chamados "Equipe" e
+    // "Times" obrigariam o usuário a adivinhar qual é qual.
+    href: "/app/settings/teams",
+    label: "Times de atendimento",
+    description: "Os setores que recebem conversa: quem está em cada um e a que horas atendem.",
+    icon: "UsersThree",
+    group: "organizacao",
+    section: "Sua empresa",
+    minRole: "manager",
+  },
+  {
     href: "/app/settings/tenant",
     label: "Organização",
     description: "Dados da empresa, retenção de dados e encarregado de LGPD.",
