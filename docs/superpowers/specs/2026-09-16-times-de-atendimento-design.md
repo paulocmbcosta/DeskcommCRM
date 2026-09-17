@@ -12,12 +12,12 @@ entre: um atendente específico (se estiver elegível agora), o rodízio entre o
 ou — sem ninguém — a **fila única da organização**.
 
 Quem opera um negócio com setores não tem como expressar isso. Um provedor de internet
-(caso motivador: Totus Telecom) precisa de cinco destinos distintos — Suporte Técnico,
+(caso motivador: um provedor de internet real) precisa de cinco destinos distintos — Suporte Técnico,
 Financeiro/Cobrança, Comercial, Cancelamentos e Fornecedores —, e hoje um pedido de
 cancelamento e uma dúvida de boleto caem no mesmo lugar, para a mesma pessoa.
 
 Há ainda um requisito de horário que o modelo atual não consegue expressar: o setor de
-Cancelamentos da Totus atende **seg–sex 08h–18h**, enquanto a empresa atende **seg–sáb
+Cancelamentos desse provedor atende **seg–sex 08h–18h**, enquanto a empresa atende **seg–sáb
 08h–20h** e **dom/feriado 08h–13h**.
 
 ---
@@ -30,7 +30,7 @@ Cancelamentos da Totus atende **seg–sex 08h–18h**, enquanto a empresa atende
 | 2 | Sem ninguém elegível, a conversa espera na **fila do time**, sem transbordo | Transbordo automático após N minutos — entregaria justamente o cancelamento de sábado ao comercial, que é o que a feature existe para evitar. Fila geral sempre — o assunto se perderia no momento em que mais importa |
 | 3 | Horário = **interseção**: janela do atendente ∧ janela do time | Só do atendente (uma pessoa tem uma agenda só, e a decisão 1 põe a mesma pessoa em dois setores com horários diferentes). Time sobrescreve o atendente (entregaria conversa a quem está fora do próprio expediente) |
 | 4 | O agente descobre os times **em runtime**, por tool, e escolhe pelo assunto | Enum fixo de papéis do produto (fecharia o vocabulário e quebraria o multi-nicho; a doutrina do repo é `text` + check, nunca enum). Slug escrito no prompt de cada org (colaria a identidade da empresa no prompt) |
-| 5 | Fork independente que **continua puxando** o upstream | Fork duro (perderia correção de segurança e de bug que outra pessoa mantém). PR upstream antes do deploy (bloquearia a Totus na revisão de um mantenedor que não somos nós) |
+| 5 | Fork independente que **continua puxando** o upstream | Fork duro (perderia correção de segurança e de bug que outra pessoa mantém). PR upstream antes do deploy (bloquearia a o cliente motivador na revisão de um mantenedor que não somos nós) |
 
 **Consequência da 5:** o código nasce no padrão da doutrina do repo — tripla de migration,
 apêndice idempotente, fragmento de release, teste que fica vermelho sem a mudança. Não por
@@ -354,7 +354,7 @@ Honestidade sobre os limites deste documento, porque desenho não é prova:
   antes do primeiro deploy — é uma falha-em-verde à espera.
 - **O banco de desenvolvimento é o de produção** (decisão consciente do dono). Aplicar a
   migration localmente altera o banco real. Hoje há pouquíssimo dado, mas isso muda quando a
-  Totus entrar.
+  o primeiro cliente de porte entrar.
 - **A carga não foi medida.** `attendance_team_members` entra no caminho quente do roteamento
   (uma query a mais por decisão). Com os volumes de hoje é irrelevante; com cinco setores e
   centenas de conversas/dia, não foi medido.
