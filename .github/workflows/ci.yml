@@ -2,8 +2,34 @@ name: ci
 
 on:
   pull_request:
+    paths-ignore:
+      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
+      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
+      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
+      #
+      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
+      # protection faz o PR nunca receber aquele check e ficar travado para
+      # sempre. Hoje este repositório não tem branch protection (plano Free não
+      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
+      # virar um job que reporta sucesso de propósito.
+      - "docs/**"
+      - "**/*.md"
+      - ".changes/**"
   push:
     branches: [main]
+    paths-ignore:
+      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
+      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
+      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
+      #
+      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
+      # protection faz o PR nunca receber aquele check e ficar travado para
+      # sempre. Hoje este repositório não tem branch protection (plano Free não
+      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
+      # virar um job que reporta sucesso de propósito.
+      - "docs/**"
+      - "**/*.md"
+      - ".changes/**"
 
 # O GITHUB_TOKEN destes jobs serve a `actions/checkout` (clone) e a
 # `actions/setup-node` (manifest de `actions/node-versions`, repo público) —

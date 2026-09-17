@@ -32,10 +32,56 @@ name: e2e
 # job inteiro e reportou VERDE com o `supabase start` quebrado e zero teste
 # executado. Verde que não distingue "passou" de "nem rodou" é pior que vermelho.
 on:
+  # `workflow_dispatch` primeiro porque é o caminho de quem QUER o e2e agora:
+  # Actions → e2e → Run workflow. Antes de mesclar algo arriscado, é o botão.
+  workflow_dispatch: {}
   pull_request:
     branches: [main]
+    # SEM `synchronize` — este é o corte de custo desta mudança.
+    #
+    # O padrão do `pull_request` é [opened, synchronize, reopened], e
+    # `synchronize` é "empurrei outro commit". Com ele, um PR de 8 pushes paga 8
+    # vezes os ~75 minutos faturados das três partes. Sem ele, paga uma.
+    #
+    # O que se perde: o sinal do e2e passa a valer para o commit de ABERTURA, não
+    # para o último. Isso é aceitável HOJE por uma razão medida, não por
+    # economia: o e2e tem 11 falhas HERDADAS (medidas contra uma linha de base
+    # própria, PR #4) e oscila entre execuções do mesmo commit — `kanban-owner-filter`
+    # foi de vermelho a verde e `retorno-anti-morte` de verde a vermelho sem
+    # nenhuma mudança de código. Um gate que não gateia não merece 75 minutos por
+    # push.
+    #
+    # ⚠️ QUANDO AS 11 VOLTAREM AO VERDE, `synchronize` VOLTA AQUI. Este bloco é
+    # dívida declarada, não decisão de arquitetura.
+    types: [opened, reopened, ready_for_review]
+    paths-ignore:
+      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
+      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
+      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
+      #
+      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
+      # protection faz o PR nunca receber aquele check e ficar travado para
+      # sempre. Hoje este repositório não tem branch protection (plano Free não
+      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
+      # virar um job que reporta sucesso de propósito.
+      - "docs/**"
+      - "**/*.md"
+      - ".changes/**"
   push:
     branches: [main]
+    paths-ignore:
+      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
+      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
+      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
+      #
+      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
+      # protection faz o PR nunca receber aquele check e ficar travado para
+      # sempre. Hoje este repositório não tem branch protection (plano Free não
+      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
+      # virar um job que reporta sucesso de propósito.
+      - "docs/**"
+      - "**/*.md"
+      - ".changes/**"
 
 # O GITHUB_TOKEN deste job serve a `actions/checkout` (clone) e a
 # `actions/setup-node` (manifest de `actions/node-versions`, repo público).
