@@ -27,7 +27,7 @@
 # medição em vez de confiar nesta linha:
 #
 #   gh pr list --state all --limit 60 --json number,createdAt,author,headRepositoryOwner
-#   (filtre headRepositoryOwner != melgarafael, pegue o 1º comentário não-bot)
+#   (filtre headRepositoryOwner != paulocmbcosta, pegue o 1º comentário não-bot)
 #
 # veredito. O molde é `triagem/references/resposta-ao-contribuidor.md`, seção
 # "Acolhida" — mudar o texto lá sem mudar aqui faz a versão humana e a
@@ -102,7 +102,7 @@ jobs:
   # que não é o dela. É `repository_owner` e não `repository` porque renomear o
   # repositório não deve calar a acolhida; mudar de dono deve.
   acolher:
-    if: github.repository_owner == 'melgarafael' && github.event.pull_request.head.repo.full_name != github.repository
+    if: github.repository_owner == 'paulocmbcosta' && github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

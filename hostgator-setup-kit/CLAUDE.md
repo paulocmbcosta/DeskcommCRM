@@ -14,7 +14,7 @@ cada um — vive em `.agents/skills/deskcomm-instalar/SKILL.md` na raiz do repos
 Se você está vendo só esta pasta, clone o repositório (o instalador precisa dele de qualquer forma):
 
 ```bash
-git clone --depth 1 https://github.com/melgarafael/DeskcommCRM.git deskcommcrm
+git clone --depth 1 https://github.com/paulocmbcosta/DeskcommCRM.git deskcommcrm
 cd deskcommcrm
 cat .agents/skills/deskcomm-instalar/SKILL.md
 ```

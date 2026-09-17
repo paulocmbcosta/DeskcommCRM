@@ -94,3 +94,15 @@ Rafael Melgaço <rafael@maudibrasil.com.br> <rafael@automatiklabs.com.br>
 # mergeados no mesmo dia sem nada no perfil — e escolheu creditar.
 # A regra geral do arquivo (só o provado pela API) NÃO muda por causa desta linha.
 automatikpg-ux <automatikpg@gmail.com> root <root@vpsbr-15867794.vpshostgator.com.br>
+
+# @paulocmbcosta — o dono deste repositório desde 2026-09, quando o fork virou
+# projeto próprio (o remoto `upstream` foi removido). Commita de uma máquina só,
+# mas com dois e-mails: o do `git config` e o noreply do GitHub.
+#
+# Prova pela API do GitHub, reproduzível: `gh api users/paulocmbcosta --jq .id`
+# devolve 112350008, o número que abre o e-mail noreply — logo as duas
+# assinaturas são a mesma conta. E `git log v1.28.0..origin/main --format='%an <%ae>'
+# | sort -u` devolve só estas duas: tudo que este repositório produziu depois de
+# se separar da origem, sem PR de terceiros no meio. `quem-sou.sh` lê esta linha para
+# saber quem é o mantenedor.
+Paulo Cesar <paulocmbcosta@gmail.com> <112350008+paulocmbcosta@users.noreply.github.com>

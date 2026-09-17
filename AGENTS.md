@@ -160,9 +160,13 @@ O CI tem cinco checks obrigatórios na `main`: `verify`, `build-and-size`, `inva
 `imagens-ok`. Não confie nesta lista — reconte antes de citar:
 
 ```bash
-gh api repos/melgarafael/DeskcommCRM/branches/main/protection \
+gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection \
   --jq '.required_status_checks.contexts|join(", ")'
 ```
+
+Enquanto esse comando devolver `Branch not protected`, nenhum check é obrigatório aqui: o
+repositório nasceu como fork em 2026-09 e o GitHub não copia a proteção. Recriá-la é o passo 4 de
+`docs/runbooks/repositorio-proprio.md`.
 
 `e2e` roda três partes em paralelo; as specs de fora estão declaradas, **com motivo escrito**, em
 `FORA_DO_CI` dentro de `.github/workflows/e2e.yml`. Leia em vez de supor:

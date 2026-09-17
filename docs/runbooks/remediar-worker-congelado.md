@@ -79,7 +79,7 @@ atendeu o tempo todo; atendeu com o agente de dois meses atrás.
 Read-only, seguro em produção, não precisa de clone:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/melgarafael/DeskcommCRM/main/hostgator-setup-kit/diagnostico.sh | bash
+curl -fsSL https://raw.githubusercontent.com/paulocmbcosta/DeskcommCRM/main/hostgator-setup-kit/diagnostico.sh | bash
 ```
 
 Ou, se o operador já tem o projeto no disco:
@@ -346,7 +346,7 @@ O resultado é uma imagem local **com nome de registry** — que parece publicad
 
 ```
 revision: []                                          ← vazio: não veio do CI
-source:   [https://github.com/melgarafael/DeskcommCRM] ← veio do LABEL do Dockerfile
+source:   [https://github.com/paulocmbcosta/DeskcommCRM] ← veio do LABEL do Dockerfile
 está no registry de verdade? NAO
 ```
 

@@ -13,7 +13,7 @@ item derruba PR** na triagem (medido nos relatos de triagem de agosto e setembro
 | `e2e` | ver `receita-e2e-local.md` | spec nova órfã, tela quebrada |
 | `imagens-ok` | (só no CI) as três imagens Docker constroem e o app **sobe** | `Dockerfile*`, `docker-compose*`, kit |
 
-A lista acima envelhece: confira com `gh api repos/melgarafael/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts'`.
+A lista acima envelhece: confira com `gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts'`.
 O `pre-voo.sh` faz isso quando o `gh` está logado.
 
 ## B. O que só a triagem vê (o `pre-voo.sh` mede)

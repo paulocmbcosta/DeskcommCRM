@@ -410,9 +410,15 @@ Checks **obrigatórios** na branch protection da `main` (verificado na configura
 Todos os **cinco** são **obrigatórios** — medido em 2026-08-14 na branch protection:
 
 ```console
-$ gh api repos/melgarafael/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")'
+$ gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")'
 verify, build-and-size, invariants, e2e, imagens-ok
 ```
+
+**Neste repositório o comando acima devolve `Branch not protected`, e enquanto devolver isso nenhum
+check é obrigatório.** Ele nasceu como fork em 2026-09, e o GitHub não copia branch protection; o
+bloco acima descreve a origem, não este repositório. Recriar a proteção é o passo 4 de
+`docs/runbooks/repositorio-proprio.md` — e ele exige antes tirar o `paths-ignore` de `ci.yml` e
+`perf.yml`, porque check obrigatório que não roda num PR só de prosa trava esse PR para sempre.
 
 Duas correções que este bloco já pagou: o `e2e` entrou para a lista depois de o arquivo ser escrito, e
 a versão anterior dizia que ele "ainda não é obrigatório"; depois o `imagens-ok` entrou e o arquivo
