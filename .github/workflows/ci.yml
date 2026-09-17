@@ -19,6 +19,22 @@ on:
 # não corrige vazamento em vigor: tira a garantia de uma configuração que muda
 # fora do repo, num clique, sem PR e sem deixar rastro aqui. `packages: write`
 # continua por job em publish-image.yml — mesma regra, menor escopo que precisa.
+# Rodada obsoleta não se paga. Sem isto, cada push no PR começa um ciclo novo e
+# DEIXA o anterior correr até o fim — 75 minutos de `e2e` para produzir um
+# resultado que já nasceu velho. Medido nesta conta em setembro de 2026: a branch
+# de Times gerou 8 rodadas de `ci` e 8 de `e2e`, sete de cada obsoletas, e a cota
+# de 2.000 minutos do plano Free acabou em 1.751.
+#
+# `cancel-in-progress` só para PULL REQUEST, nunca para `push` na main: cancelar
+# uma rodada da main interromperia a publicação de imagem de uma versão real,
+# deixando o cliente com uma tag que aponta para nada.
+#
+# Isto NÃO reduz cobertura: o ciclo completo continua rodando no commit que
+# importa, que é o último.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
