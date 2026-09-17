@@ -174,6 +174,34 @@ const AUTHENTICATED_PERMITIDO: readonly Excecao[] = [
       "declarado pela migration 0034 e não há call site de RPC para removê-lo " +
       "com segurança sem medir o disparo de cada trigger.",
   },
+  {
+    fn: "fn_save_attendance_team(uuid,uuid,text,text,text,jsonb,uuid[])",
+    razao:
+      "POST app/api/v1/settings/teams/route.ts usa createClient da sessão; a RPC exige " +
+      "auth.uid(), manager, suporte de escrita e MFA, valida o slug pelo mesmo regex do Zod " +
+      "da tela, e confere os membros contra user_organizations da MESMA org com `for share` " +
+      "antes de gravar. Escrita por REST é impossível: `revoke all` tira INSERT/UPDATE dos " +
+      "três papéis do PostgREST. tests/invariants/times-nao-vazam-entre-organizacoes.test.ts " +
+      "prova o permission denied nos três papéis, o cross-org com JWT de manager e as duas " +
+      "FKs compostas por escrita direta.",
+  },
+  {
+    fn: "fn_archive_attendance_team(uuid,uuid,boolean)",
+    razao:
+      "POST app/api/v1/settings/teams/[id]/archive/route.ts usa createClient da sessão; " +
+      "mesmos portões da irmã (manager, suporte, MFA) e o time vem do PATH, a org da sessão. " +
+      "Só alterna archived_at — não apaga, porque conversa encerrada aponta para o time. " +
+      "Mesmo invariante de isolamento.",
+  },
+  {
+    fn: "fn_conversation_set_team(uuid,uuid,uuid)",
+    razao:
+      "POST app/api/v1/conversations/[id]/team/route.ts usa createClient da sessão (com o " +
+      "admin client a RPC recusaria tudo: a primeira linha exige auth.uid()). Papel agent, " +
+      "suporte de escrita, time e conversa conferidos contra a org da sessão. Grava o time, " +
+      "solta o dono, registra conversation_assignment_events reason='team_transfer' e pede o " +
+      "roteamento — idempotente, então não duplica evento com a trigger. Mesmo invariante.",
+  },
 ];
 
 interface Definer {
