@@ -86,7 +86,16 @@ jobs:
   # mês sem ninguém perceber.
   e2e-parte:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 e não 30 pela mesma razão do `verify` no ci.yml: runner de repositório
+    # privado tem metade dos núcleos do público.
+    #
+    # Medido na MAIN deste fork, antes de qualquer branch de feature: as três
+    # partes começaram 11:49:28 e foram cortadas 12:19:45 — exatamente 30
+    # minutos, o teto. Não é travamento: é a suíte não cabendo no relógio.
+    #
+    # Se voltar a estourar, a resposta é aumentar o número de PARTES (a divisão
+    # já existe), não o relógio.
+    timeout-minutes: 60
     strategy:
       # Sem fail-fast: se a parte 1 quebrar, ainda quero saber se a 2 também.
       # Com ele ligado, o primeiro vermelho esconde o outro e o conserto vira
