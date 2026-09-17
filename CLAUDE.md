@@ -383,7 +383,7 @@ Checks **obrigatórios** na branch protection da `main` (verificado na configura
 - **`verify`** (`ci.yml`) — typecheck + lint + test:unit.
 - **`invariants`** (`ci.yml`) — `pnpm test:db`: sobe `pgvector/pgvector:pg15` — o PISO que dizemos suportar, não a versão mais rica que temos à mão —, aplica `supabase/baseline.sql` em modo install (`ON_ERROR_STOP=1`) e update (idempotência), e roda os testes de invariante, incluindo o de isolamento RLS entre 2 organizações.
 - **`build-and-size`** (`perf.yml`) — `pnpm build` em Node 22.
-- **`e2e`** (`e2e.yml`) — sobe Supabase local, aplica o `baseline.sql` e roda **todas as specs Playwright menos as que `FORA_DO_CI` declara**. O número saiu daqui de propósito: ele apodreceu **cinco** vezes (a quinta em 2026-08-24, quando `inbox-quem-manda.spec.ts` entrou), e a condição que o PR #242 pôs para parar de recontar já tinha vencido na quarta. Quem precisa do número roda o comando abaixo — comando não envelhece. Quais ficam de fora, e por quê, é o que a própria variável diz — **não confie nesta linha, leia-a**:
+- **`e2e`** (`e2e.yml`) — **roda, mas não é obrigatório neste repositório** (o porquê logo abaixo); sobe Supabase local, aplica o `baseline.sql` e roda **todas as specs Playwright menos as que `FORA_DO_CI` declara**. O número saiu daqui de propósito: ele apodreceu **cinco** vezes (a quinta em 2026-08-24, quando `inbox-quem-manda.spec.ts` entrou), e a condição que o PR #242 pôs para parar de recontar já tinha vencido na quarta. Quem precisa do número roda o comando abaixo — comando não envelhece. Quais ficam de fora, e por quê, é o que a própria variável diz — **não confie nesta linha, leia-a**:
 
   ```bash
   git show origin/main:.github/workflows/e2e.yml | \
@@ -407,18 +407,18 @@ Checks **obrigatórios** na branch protection da `main` (verificado na configura
   **Por que não há mais número aqui.** O conserto que este parágrafo pedia era pôr a prosa sob gate — `tests/unit/e2e-cobertura-completa.test.ts` cobrando também o texto daqui. Tirar o número é melhor e mais barato: não há o que policiar, e a diferença entre disco e CI segue vigiada onde importa, no próprio teste, que reprova toda spec nova que não esteja em `SPECS_PARTE_*` ou em `FORA_DO_CI` **com motivo escrito**. Prosa que nenhum gate lê é prosa que diverge; prosa que não afirma número não tem como divergir.
 - **`imagens-ok`** (`publish-image.yml`) — reprova quando qualquer uma das três imagens Docker não constrói. **É obrigatório desde 2026-08-13**; este arquivo dizia o contrário em outro parágrafo (ver a doutrina de packaging acima, já corrigida).
 
-Todos os **cinco** são **obrigatórios** — medido em 2026-08-14 na branch protection:
+Neste repositório são **quatro** os obrigatórios — medido em 2026-09-18 na branch protection, recriada nesse dia (o fork não a herdou da origem):
 
 ```console
 $ gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")'
-verify, build-and-size, invariants, e2e, imagens-ok
+verify, build-and-size, invariants, imagens-ok
 ```
 
-**Neste repositório o comando acima devolve `Branch not protected`, e enquanto devolver isso nenhum
-check é obrigatório.** Ele nasceu como fork em 2026-09, e o GitHub não copia branch protection; o
-bloco acima descreve a origem, não este repositório. Recriar a proteção é o passo 4 de
-`docs/runbooks/repositorio-proprio.md` — e ele exige antes tirar o `paths-ignore` de `ci.yml` e
-`perf.yml`, porque check obrigatório que não roda num PR só de prosa trava esse PR para sempre.
+`e2e` roda em todo PR mas **não é exigido** aqui: ele só dispara em `opened`/`reopened` (dívida
+declarada em `e2e.yml`, à espera de as falhas herdadas ficarem verdes de forma estável), e check
+exigido que não roda no segundo push trava o PR. Quando voltar a `synchronize`, entra na lista com o
+`gh api -X PATCH` de `docs/runbooks/repositorio-proprio.md`. Por isso `ci.yml` e `perf.yml` não têm
+`paths-ignore`: check obrigatório que não roda num PR só de prosa trava esse PR para sempre.
 
 Duas correções que este bloco já pagou: o `e2e` entrou para a lista depois de o arquivo ser escrito, e
 a versão anterior dizia que ele "ainda não é obrigatório"; depois o `imagens-ok` entrou e o arquivo

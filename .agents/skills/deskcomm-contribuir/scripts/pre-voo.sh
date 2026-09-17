@@ -155,8 +155,14 @@ fi
 
 # ── 9. A régua real, se o gh estiver logado ──────────────────────────────────
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  checks="$(gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")' 2>/dev/null || true)"
-  [ -n "$checks" ] && ok "checks obrigatórios na main hoje: $checks" || nao "não consegui ler a branch protection (sem permissão?) — a lista em CLAUDE.md pode estar velha"
+  # `gh api` imprime o CORPO do erro no stdout (um 404 vem como JSON) e sai com 1:
+  # só o exit distingue "li a lista" de "não há proteção". Sem o `&&`, o JSON
+  # do 404 era exibido como se fosse a lista de checks — medido em 2026-09-18.
+  if checks="$(gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")' 2>/dev/null)" && [ -n "$checks" ]; then
+    ok "checks obrigatórios na main hoje: $checks"
+  else
+    nao "não consegui ler a branch protection (não existe, ou sem permissão) — a lista em CLAUDE.md pode estar velha"
+  fi
 else
   nao "gh não logado: checks obrigatórios NÃO MEDIDOS (a lista em CLAUDE.md/CONTRIBUTING.md pode estar velha)"
 fi
