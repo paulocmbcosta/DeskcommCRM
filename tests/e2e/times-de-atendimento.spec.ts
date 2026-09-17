@@ -81,7 +81,14 @@ test.describe("times de atendimento — a tela que cadastra os setores", () => {
     await expect(porta).toBeVisible();
     await porta.click();
     await page.waitForURL(/\/app\/settings\/teams/);
-    await expect(page.getByTestId("painel-de-times")).toBeVisible();
+    // 20s e não os 5 do padrão: esta é a PRIMEIRA visita a esta rota num Next.js
+    // frio, e a tela é Server Component que vai ao banco duas vezes (times e
+    // nomes dos atendentes) antes do primeiro byte. Medido: passou numa execução
+    // e estourou os 5s na seguinte, no mesmo commit — o runner de repositório
+    // privado tem metade dos núcleos, e a compilação da rota cai inteira nesta
+    // espera. Afrouxar o RELÓGIO não afrouxa a asserção: o que se exige continua
+    // sendo o painel VISÍVEL, não um `waitForTimeout` que passaria de qualquer jeito.
+    await expect(page.getByTestId("painel-de-times")).toBeVisible({ timeout: 20_000 });
 
     // 2. O formulário de time novo.
     await page.getByRole("button", { name: /Novo time/i }).click();
