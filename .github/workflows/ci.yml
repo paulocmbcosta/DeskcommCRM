@@ -23,20 +23,28 @@ permissions:
   contents: read
 
 jobs:
+  # ⚠️ O teto e o heap abaixo são declarados em
+  # `tests/unit/preambulo-do-ci-nao-come-o-relogio.test.ts` (const TETOS), que é
+  # onde a RAZÃO fica registrada e revisada. Mudar um sem o outro reprova.
+  #
+  # A linha `timeout-minutes` tem de ficar nos primeiros 400 caracteres depois do
+  # nome do job: é a janela que aquele gate lê. Comentário longo vai ACIMA da
+  # chave do job, nunca entre ela e o teto — senão o gate deixa de ENCONTRAR o
+  # número e reprova por não medir, que é pior que reprovar por medir.
+  # 45 e não 15 pela MESMA razão do teto de heap logo abaixo: runner de
+  # repositório privado tem metade dos núcleos do público, e esta suíte tem
+  # 9.347 casos.
+  #
+  # O teto de 15 nunca foi atingido antes porque o job morria ANTES de chegar
+  # aos testes: o Typecheck abortava por falta de memória. Medido nesta
+  # rodada, com o heap já corrigido: Typecheck, Lint, Channel leak e Role rank
+  # passaram, e `Unit tests` foi cortado aos 15min19s — o segundo gargalo
+  # estava escondido atrás do primeiro.
+  #
+  # Se voltar a estourar, a resposta é dividir a suíte em partes paralelas
+  # (como o `e2e` já faz), não subir o número de novo sem medir.
   verify:
     runs-on: ubuntu-latest
-    # 45 e não 15 pela MESMA razão do teto de heap logo abaixo: runner de
-    # repositório privado tem metade dos núcleos do público, e esta suíte tem
-    # 9.347 casos.
-    #
-    # O teto de 15 nunca foi atingido antes porque o job morria ANTES de chegar
-    # aos testes: o Typecheck abortava por falta de memória. Medido nesta
-    # rodada, com o heap já corrigido: Typecheck, Lint, Channel leak e Role rank
-    # passaram, e `Unit tests` foi cortado aos 15min19s — o segundo gargalo
-    # estava escondido atrás do primeiro.
-    #
-    # Se voltar a estourar, a resposta é dividir a suíte em partes paralelas
-    # (como o `e2e` já faz), não subir o número de novo sem medir.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
