@@ -34,8 +34,21 @@ jobs:
         # aceita `timeout-minutes`. Razão e medições: o cabeçalho da action.
         timeout-minutes: 5
 
+      # O teto de heap é EXPLÍCITO porque o padrão do Node não serve aqui, e a
+      # razão não é o código: runner de repositório PÚBLICO tem 16 GB, o de
+      # repositório PRIVADO tem 7 GB, e o Node dimensiona o heap a partir da RAM
+      # da máquina. O mesmo `tsc` que passa no upstream público aborta num fork
+      # privado com `FATAL ERROR: Ineffective mark-compacts near heap limit` e
+      # exit 134 — medido na main deste fork em 2026-09-16, antes de qualquer
+      # feature: `invariants` verde e `verify` vermelho pelo estouro.
+      #
+      # 5 GB deixa folga para o SO e para o pnpm nos 7 GB disponíveis. Se um dia
+      # voltar a abortar, o número sobe junto com a evidência — não se troca por
+      # `--no-check` nem se remove o passo.
       - name: Typecheck
         run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=5120
 
       - name: Lint
         run: pnpm lint
