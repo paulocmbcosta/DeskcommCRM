@@ -418,9 +418,19 @@ export const listConversationsQuerySchema = z.object({
 
 export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema>;
 
+/** "O atendimento em andamento (ou o último, se a conversa está encerrada)." */
+export const ATENDIMENTO_VIGENTE = "vigente";
+
 export const listMessagesQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+  /**
+   * RECORTA a conversa num atendimento (migration 0266): o id de um, ou
+   * `vigente`. AUSENTE = a conversa inteira, que é o contrato de sempre — quem
+   * já consumia esta rota (MCP, exportações) não passa a ver menos mensagens
+   * por causa de uma feature de tela.
+   */
+  atendimento_id: z.union([z.literal(ATENDIMENTO_VIGENTE), z.string().uuid()]).optional(),
 });
 
 export type ListMessagesQuery = z.infer<typeof listMessagesQuerySchema>;

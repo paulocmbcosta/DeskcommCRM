@@ -98,6 +98,10 @@ export const AUDIT_ACTIONS = [
   "conversation.transferred",
   "conversation.released",
   "conversation.closed",
+  // Reabrir era auditado como `conversation.released` — o PATCH só tinha três
+  // ramos e `open` caía no último. Soltar o dono e retomar um atendimento
+  // encerrado são decisões diferentes, e o protocolo (0266) depende da segunda.
+  "conversation.reopened",
   // O par que faltava do `ai.reactivated_by_agent`: pausar o atendimento
   // automático numa conversa não tinha rota e, portanto, não tinha ação de
   // auditoria. Desligar uma automação é decisão auditável tanto quanto religá-la.
