@@ -5,7 +5,17 @@
 > sonda que prova que ele funcionou. Quatro deles **não cabem num PR** — dependem de tela ou de
 > segredo do dono do repositório — e é por isso que este documento existe.
 >
-> Estado medido em 2026-09-18, ao ser escrito. Não confie nas afirmações: rode as sondas.
+> **Executado de ponta a ponta em 2026-09-18.** A tabela diz o estado no fim daquela sessão;
+> reconfira na fonte — as sondas estão aqui para isso, e foi por confiar numa nota de estado
+> que a doutrina de packaging passou um dia inteiro afirmando o contrário do que valia.
+>
+> | Passo | Estado | Prova |
+> |---|---|---|
+> | 1. Pacotes públicos | feito | a sonda devolve `200` nas três em `latest`, `stable` e `1.29.0` |
+> | 2. App da release | feito | `gh secret list` lista os dois; o `cortar-tag` assinou a `v1.29.0` como `deskcomm-release[bot]` |
+> | 3. Imagens da versão | feito | `200` nas três em `1.29.0`; `stable` com o mesmo digest |
+> | 4. Proteção da `main` | feito | `verify, build-and-size, invariants, imagens-ok` (PR #7 tirou o `paths-ignore`) |
+> | 5. VPS | feito | `/api/v1/health` → `1.29.0`; contêineres em `ghcr.io/paulocmbcosta/*:1.29.0` |
 
 ## A sonda
 
@@ -50,14 +60,15 @@ open source. Público é o caminho.
 
 `release.yml` abre o PR de release e cria a tag com o token de um **GitHub App**, nunca com o
 `GITHUB_TOKEN` (tag criada por ele não dispara `publish-image.yml`; a razão está no cabeçalho do
-workflow). O fork **não herda segredos**: o job `cortar-tag` falha em todo push na `main` por não
-achar `RELEASE_APP_ID` e `RELEASE_APP_PRIVATE_KEY`, e esse é o vermelho de
+workflow). O fork **não herda segredos**: sem `RELEASE_APP_ID` e `RELEASE_APP_PRIVATE_KEY`, o job
+`cortar-tag` falha em todo push na `main`, e esse é o vermelho de
 `gh run list --workflow=release.yml`.
 
 Criar o App (uma vez, uns cinco minutos):
 
 > https://github.com/settings/apps/new
-> - **GitHub App name**: `deskcomm-release` (ou outro — o assinante do commit é fixado pelo workflow, não pelo App)
+> - **GitHub App name**: único no GitHub inteiro — `deskcomm-release` pode estar tomado; use
+>   `deskcomm-release-<seu-usuário>` (o assinante do commit é fixado pelo workflow, não pelo App)
 > - **Homepage URL**: a URL deste repositório
 > - **Webhook**: desmarque *Active*
 > - **Repository permissions**: *Contents* → Read and write; *Pull requests* → Read and write
@@ -65,19 +76,25 @@ Criar o App (uma vez, uns cinco minutos):
 > - **Create GitHub App** → anote o **App ID** → **Generate a private key** (baixa um `.pem`)
 > - Na barra lateral, **Install App** → este repositório
 
-Depois, no seu computador (o `.pem` não passa pelo chat e não entra no repositório):
+Depois, no seu computador (o `.pem` não passa pelo chat e não entra no repositório). O macOS pode
+recusar a leitura de `~/Downloads` pelo terminal (`operation not permitted`): mova o arquivo para
+a pasta pessoal antes, ou libere a pasta em Privacidade e Segurança › Arquivos e Pastas.
 
 ```bash
 gh secret set RELEASE_APP_ID --repo paulocmbcosta/DeskcommCRM --body '<App ID>'
-gh secret set RELEASE_APP_PRIVATE_KEY --repo paulocmbcosta/DeskcommCRM < ~/Downloads/deskcomm-release.*.private-key.pem
-rm ~/Downloads/deskcomm-release.*.private-key.pem
+gh secret set RELEASE_APP_PRIVATE_KEY --repo paulocmbcosta/DeskcommCRM < ~/<nome-do-app>.<data>.private-key.pem
+rm ~/<nome-do-app>.<data>.private-key.pem
 ```
 
-**Verificação:** `gh secret list --repo paulocmbcosta/DeskcommCRM` lista os dois.
+**Verificação:** `gh secret list --repo paulocmbcosta/DeskcommCRM` lista os dois. A instalação do
+App não dá para listar com o token do `gh`; quem a prova é o primeiro passo de qualquer run do
+`release` (`create-github-app-token`), que falha na hora se o App não estiver instalado.
 
 Cortar a versão é o ciclo de [`../doctrine/versionamento.md`](../doctrine/versionamento.md):
-*Actions → release → Run workflow* abre o PR `Release X.Y.Z`; o merge dele cria a tag `vX.Y.Z`,
-publica as três imagens em `X.Y.Z` e move `stable`. Para ver o número que sairia, sem escrever:
+*Actions → release → Run workflow* abre o PR `Release X.Y.Z`; o merge dele — **com commit de
+merge, nunca squash**: o `cortar-tag` lê o assinante do segundo pai, que tem de ser o App — cria
+a tag `vX.Y.Z`, publica as três imagens em `X.Y.Z` e move `stable`. Para ver o número que sairia,
+sem escrever:
 
 ```bash
 pnpm release:conferir
@@ -100,20 +117,18 @@ for i in deskcommcrm deskcomm-worker deskcomm-scheduler; do echo "$i $V: $(ghcr_
 
 ## 4. Recriar a proteção da `main`
 
-O GitHub não copia branch protection num fork. Aqui ela **não existe**: o comando que o
-`CLAUDE.md` manda rodar devolve `Branch not protected`. Sem ela, "cinco checks obrigatórios" é
-prosa — o merge depende de quem mergeia. Em repositório público a proteção está disponível no
-plano Free.
+O GitHub não copia branch protection num fork. Sem ela, "checks obrigatórios" é prosa — o merge
+depende de quem mergeia. Em repositório público a proteção está disponível no plano Free.
 
-**Antes de exigir um check, garanta que ele roda em todo push.** `ci.yml` e `perf.yml` têm
-`paths-ignore` para `docs/**`, `**/*.md` e `.changes/**` (PR #5 deste repositório, para poupar a
-cota de Actions de quando ele era privado). Check obrigatório que não roda num PR só de prosa
-deixa esse PR **travado para sempre** — o próprio `ci.yml` avisa. Repositório público tem Actions
-sem cota nos runners padrão, então o motivo do `paths-ignore` já não vale: tire-o dos dois arquivos
-no mesmo PR em que ligar a proteção, ou não exija `verify`, `build-and-size` e `invariants`.
+**Antes de exigir um check, garanta que ele roda em todo push.** `ci.yml` e `perf.yml` tinham
+`paths-ignore` para `docs/**`, `**/*.md` e `.changes/**` (PR #5, para poupar a cota de Actions de
+quando o repositório era privado). Check obrigatório que não roda num PR só de prosa deixa esse PR
+**travado para sempre**, porque o GitHub não conta check ausente como verde. Repositório público
+tem Actions sem cota nos runners padrão, então o filtro saiu (PR #7). Se ele voltar, a proteção
+tem de sair junto.
 
-`e2e` fica de fora até voltar a rodar em `synchronize` (dívida declarada em `e2e.yml`): um check
-exigido que só roda no `opened` bloqueia o PR no segundo push.
+`e2e` fica de fora: desde o PR #9 ele não roda em PR (só no push na `main` e por `Run workflow`),
+e check exigido que não roda trava o PR.
 
 ```bash
 gh api -X PUT repos/paulocmbcosta/DeskcommCRM/branches/main/protection --input - <<'JSON'
@@ -142,25 +157,45 @@ gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_
 ## 5. A VPS que veio do repositório de origem passa a acompanhar este
 
 Uma instalação feita a partir do repositório de origem tem o clone em `/root/DeskcommCRM` com
-`origin` apontando para lá, e o `agent.sh` (cron a cada 5 minutos) anuncia na tela as versões
-**de lá**. O `update.sh` faz `git checkout` da tag mais nova do `origin` e regrava as três imagens
-a partir do `IMG_NS` do kit **daquela tag** — então trocar o remoto basta: a primeira versão
-cortada aqui já traz o kit com o namespace deste repositório.
+`origin` apontando para lá, e o `agent.sh` (cron a cada 5 minutos) busca as tags **de lá** — e a
+origem continua lançando versões. Este passo já dizia "trocar o remoto basta". Não basta. Três
+armadilhas, todas pagas em 2026-09-18:
+
+1. **As tags da origem já estão no clone.** A VPS tinha `v1.29.0` a `v1.32.1` da origem, buscadas
+   pelo cron. A nossa `v1.29.0` aponta para outro commit, então o `fetch` recusa (`would clobber
+   existing tag`) — e, se não recusasse, o `update.sh` escolheria a `v1.32.1` da origem e
+   instalaria **o produto de lá**. Apague as tags que não batem com o remoto antes de buscar.
+2. **O `update.sh` que roda é o do kit ANTIGO.** Ele carrega `_common.sh` na memória antes do
+   `git checkout` da tag nova, e o `IMG_NS` ali ainda é o namespace da origem: ele grava no `.env`
+   e puxa `ghcr.io/melgarafael/*:1.29.0`, que existe e é público. Medido: a VPS subiu com o
+   produto da origem sobre o nosso banco por sete minutos, saudável no `docker ps`. Faça o
+   `git checkout` da tag **antes** de rodar o `update.sh`: ele detecta "código na versão, imagem
+   antiga", e regrava as imagens já com o namespace certo.
+3. **`drop trigger` no `job_queue` deadlocka com o worker de pé.** O `baseline.sql` recria os
+   triggers dessa tabela, e a primeira aplicação avisou `deadlock detected`; a segunda passou.
+   Confira os triggers depois (abaixo) e, se faltar algum, rode o `update.sh` de novo.
 
 Só depois dos passos 1 e 3 (imagens públicas e existentes na versão), na VPS:
 
 ```bash
 cd /root/DeskcommCRM
+cp .env ".env.bak-$(date +%F-%H%M)"
 git remote set-url origin https://github.com/paulocmbcosta/DeskcommCRM.git
+# tags locais que não existem no remoto, ou apontam para outro commit: fora
+git ls-remote --tags --refs origin | awk '{print $1, $2}' | sed 's#refs/tags/##' | sort > /tmp/tags-remoto
+git for-each-ref --format='%(objectname) %(refname:short)' refs/tags | sort > /tmp/tags-local
+for t in $(comm -23 /tmp/tags-local /tmp/tags-remoto | awk '{print $2}'); do git tag -d "$t"; done
 git fetch --tags origin
-bash hostgator-setup-kit/update.sh
+git checkout "$(git tag -l 'v*' --sort=-v:refname | head -1)"   # o kit NOVO fica no disco ANTES do update
+bash hostgator-setup-kit/update.sh                                # backup, banco, imagens deste repositório, up
 ```
 
 Nada de `sed` no `.env` nem de `latest`/`always`: o `update.sh` grava as três imagens pinadas em
 `X.Y.Z` com `pull_policy=missing`, que é o que a doutrina exige de uma instalação. Use o
 `update.sh`, não `docker compose` à mão: a função `dc()` escolhe os arquivos de compose pelo perfil
 da instalação (nesta VPS o proxy é o Caddy do próprio stack, e `-f docker-compose.traefik.yml`
-seria errado).
+seria errado). Rodando por SSH sem ninguém no terminal, dispare com `nohup … > log 2>&1 &` e leia
+o log — e nunca `pkill -f <trecho-do-comando>`: o padrão casa com a própria sessão SSH e a derruba.
 
 **Verificação:**
 
@@ -169,6 +204,9 @@ docker ps --format '{{.Names}}\t{{.Image}}' | grep deskcomm          # as três 
 curl -s https://<DOMÍNIO>/api/v1/health | jq -r '.data.version'      # X.Y.Z
 curl -s -o /dev/null -w '%{http_code}\n' https://<DOMÍNIO>/           # 307, nunca 404
 grep -E '^(APP|WORKER|SCHEDULER)_(IMAGE|PULL_POLICY)=' .env          # pinadas em X.Y.Z, missing
+set -a; . ./.env; set +a; . hostgator-setup-kit/_common.sh
+docker run --rm postgres:17-alpine psql "$(url_do_schema)" -Atc \
+  "select tgname, tgenabled::text from pg_trigger where tgrelid = 'public.job_queue'::regclass"
 ```
 
 Rollback: `bash hostgator-setup-kit/update.sh --to v1.28.0 --force` (a tag existe aqui também).
@@ -176,7 +214,12 @@ Para voltar ao remoto antigo, `git remote set-url origin` de volta.
 
 ## O que este runbook não resolve
 
-- **As falhas herdadas do `e2e`.** Até ficarem verdes e o `synchronize` voltar, `e2e` não entra
-  na proteção.
+- **As falhas herdadas do `e2e`.** Ele não roda mais em PR (PR #9); roda no push na `main` e por
+  `Run workflow`. Até ficar verde de forma estável e voltar a `synchronize`, não entra na proteção.
 - **A cota de Actions.** Público = runners padrão sem cota. Se o repositório voltar a ser privado,
   o `paths-ignore` e a concorrência do PR #5 voltam a importar, e o passo 4 precisa ser revisto.
+- **Os sete minutos de produto da origem.** Entre o primeiro `update.sh` e a correção, o app, o
+  worker e o scheduler da origem (1.29.0 de lá) rodaram sobre este banco. O schema é o nosso
+  (aplicado pelo nosso `baseline.sql`), mas o que aquele worker processou naquela janela foi com a
+  lógica de lá. Nenhum sintoma medido; fica registrado para quem investigar algo estranho datado
+  de 2026-09-18 entre 00:33 e 00:40.
