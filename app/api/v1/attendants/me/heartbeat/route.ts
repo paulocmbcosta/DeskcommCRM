@@ -16,11 +16,18 @@ import { randomUUID } from "node:crypto";
 import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(): Promise<Response> {
+  // Sessão de suporte somente-leitura não é atendente: não mantém ninguém online
+  // em nome de outra pessoa. A tela nem mostra o controle para ela; esta guarda
+  // é a do servidor.
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = randomUUID();
   const authz = await requireRole("agent", { requestId, resource: "attendant_availability" });
   if (!authz.ok) return authz.response;

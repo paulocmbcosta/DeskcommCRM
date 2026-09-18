@@ -128,6 +128,9 @@ describe("GET /api/v1/attendants/availability", () => {
         "is_available",
         "last_heartbeat_at",
         "name",
+        // A pausa (migration 0267): o painel mostra "Em pausa · motivo · há N".
+        "pause_reason",
+        "paused_at",
         "role",
         "schedule",
         "updated_at",
