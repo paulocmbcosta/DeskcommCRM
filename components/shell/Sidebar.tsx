@@ -327,15 +327,32 @@ export function SidebarContent({
             {!collapsed && <span className="truncate">{t(rodape.label)}</span>}
           </Link>
         )}
-        <VersionFooter collapsed={collapsed} onNavigate={onNavigate} />
+        {/* O ALERTA de versão nova tem linha própria: ele pede atenção. */}
+        <VersionFooter collapsed={collapsed} onNavigate={onNavigate} variante="alerta" />
+        {/*
+          A VERSÃO EM EXECUÇÃO DIVIDE A LINHA COM O "RECOLHER".
+
+          Ela tinha linha própria (~24px), e o orçamento de altura do menu — a
+          conta do comentário acima, "sobrou 19px de folga" — foi medido SEM ela:
+          o rótulo aparece de forma assíncrona (`useSystemVersion`), depois da
+          medição. Com ele presente, medido em 1280×900 como admin: o menu
+          precisava de 744px e tinha 739px — 5px de rolagem numa barra que existe
+          para caber inteira. A spec `navegacao` passava por medir cedo demais.
+
+          Não se raspou densidade do menu (a regra deste arquivo): o que saiu foi
+          uma linha do RODAPÉ. No rail recolhido a linha volta a empilhar — ali
+          não há largura para os dois lado a lado, e sobra altura.
+        */}
+        <div className={cn(!collapsed && "flex items-center justify-between gap-1")}>
+        {collapsed && <VersionFooter collapsed={collapsed} onNavigate={onNavigate} variante="discreta" />}
         {showCollapseControl && (
           <button
             type="button"
             onClick={() => startTransition(() => toggleSidebar(collapsed))}
             disabled={isPending}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-              collapsed && "justify-center px-2",
+              "flex min-w-0 flex-1 items-center gap-2 rounded-md px-3 py-2 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              collapsed && "w-full justify-center px-2",
             )}
             aria-label={collapsed ? t("Expandir sidebar") : t("Recolher sidebar")}
           >
@@ -347,6 +364,8 @@ export function SidebarContent({
             {!collapsed && <span>{t("Recolher")}</span>}
           </button>
         )}
+        {!collapsed && <VersionFooter collapsed={collapsed} onNavigate={onNavigate} variante="discreta" />}
+        </div>
       </div>
     </>
   );
