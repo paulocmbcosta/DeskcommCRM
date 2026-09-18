@@ -58,6 +58,13 @@ export interface Conversation {
    * razão de `comando_da_conversa`.
    */
   team_id?: string | null;
+  /**
+   * O PROTOCOLO do atendimento vigente (migration 0266) — o do último, quando a
+   * conversa está encerrada. Cópia desnormalizada de `atendimentos.protocol`,
+   * escrita pelo mesmo trigger na mesma transação. `null` em grupo (grupo não
+   * vira atendimento) e em resposta de versão anterior ainda em cache.
+   */
+  protocol?: string | null;
   created_at: string;
   updated_at: string;
 }

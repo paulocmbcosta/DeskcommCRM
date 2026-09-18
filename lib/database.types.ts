@@ -1923,6 +1923,102 @@ export type Database = {
           },
         ]
       }
+      atendimento_protocol_counters: {
+        Row: {
+          dia: string
+          organization_id: string
+          ultimo: number
+        }
+        Insert: {
+          dia: string
+          organization_id: string
+          ultimo?: number
+        }
+        Update: {
+          dia?: string
+          organization_id?: string
+          ultimo?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "atendimento_protocol_counters_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      atendimentos: {
+        Row: {
+          assigned_to_user_id: string | null
+          assigned_to_user_name: string | null
+          closed_at: string | null
+          closed_by_name: string | null
+          closed_by_user_id: string | null
+          closed_status: string | null
+          conversation_id: string
+          created_at: string
+          id: string
+          organization_id: string
+          protocol: string
+          started_at: string
+          team_id: string | null
+        }
+        Insert: {
+          assigned_to_user_id?: string | null
+          assigned_to_user_name?: string | null
+          closed_at?: string | null
+          closed_by_name?: string | null
+          closed_by_user_id?: string | null
+          closed_status?: string | null
+          conversation_id: string
+          created_at?: string
+          id?: string
+          organization_id: string
+          protocol: string
+          started_at?: string
+          team_id?: string | null
+        }
+        Update: {
+          assigned_to_user_id?: string | null
+          assigned_to_user_name?: string | null
+          closed_at?: string | null
+          closed_by_name?: string | null
+          closed_by_user_id?: string | null
+          closed_status?: string | null
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          organization_id?: string
+          protocol?: string
+          started_at?: string
+          team_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "atendimentos_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "atendimentos_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "atendimentos_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "attendance_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       attendance_team_members: {
         Row: {
           created_at: string
@@ -3451,6 +3547,67 @@ export type Database = {
           },
         ]
       }
+      conversation_events: {
+        Row: {
+          actor_kind: string
+          actor_name: string | null
+          actor_user_id: string | null
+          atendimento_id: string | null
+          conversation_id: string
+          created_at: string
+          id: string
+          organization_id: string
+          payload: Json
+          type: string
+        }
+        Insert: {
+          actor_kind?: string
+          actor_name?: string | null
+          actor_user_id?: string | null
+          atendimento_id?: string | null
+          conversation_id: string
+          created_at?: string
+          id?: string
+          organization_id: string
+          payload?: Json
+          type: string
+        }
+        Update: {
+          actor_kind?: string
+          actor_name?: string | null
+          actor_user_id?: string | null
+          atendimento_id?: string | null
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          organization_id?: string
+          payload?: Json
+          type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_events_atendimento_id_fkey"
+            columns: ["atendimento_id"]
+            isOneToOne: false
+            referencedRelation: "atendimentos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_events_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "conversation_events_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       conversation_notes: {
         Row: {
           body: string
@@ -3523,6 +3680,7 @@ export type Database = {
           last_outbound_at: string | null
           metadata: Json
           organization_id: string
+          protocol: string | null
           provider_conversation_id: string | null
           rag_review_status: string | null
           service_closed_at: string | null
@@ -3567,6 +3725,7 @@ export type Database = {
           last_outbound_at?: string | null
           metadata?: Json
           organization_id: string
+          protocol?: string | null
           provider_conversation_id?: string | null
           rag_review_status?: string | null
           service_closed_at?: string | null
@@ -3611,6 +3770,7 @@ export type Database = {
           last_outbound_at?: string | null
           metadata?: Json
           organization_id?: string
+          protocol?: string | null
           provider_conversation_id?: string | null
           rag_review_status?: string | null
           service_closed_at?: string | null
@@ -8000,6 +8160,31 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      fn_service_status_com_ator: {
+        Args: {
+          p_actor: string | null
+          p_conversation: string
+          p_expected: number | null
+          p_org: string
+          p_retomar?: boolean
+          p_status: string
+        }
+        Returns: Database["public"]["Tables"]["conversations"]["Row"]
+      }
+      fn_conversation_event_add: {
+        Args: {
+          p_actor?: string | null
+          p_conversation: string
+          p_org: string
+          p_payload?: Json
+          p_type: string
+        }
+        Returns: string
+      }
+      fn_proximo_protocolo: {
+        Args: { p_org: string; p_quando: string }
+        Returns: string
       }
       fn_service_inbound: { Args: { p_message: string }; Returns: undefined }
       fn_service_lock: {
