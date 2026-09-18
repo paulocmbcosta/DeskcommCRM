@@ -72,7 +72,7 @@ afterEach(() => {
 
 describe("o seletor de fila por time", () => {
   it("não existe numa organização sem times", () => {
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
     expect(screen.queryByLabelText("Filtrar por time")).toBeNull();
   });
 
@@ -80,13 +80,13 @@ describe("o seletor de fila por time", () => {
     // Arquivado não recebe conversa nova: oferecê-lo como fila seria oferecer um
     // setor que ninguém mais atende.
     timesRef.current = [time({ archived: true })];
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
     expect(screen.queryByLabelText("Filtrar por time")).toBeNull();
   });
 
   it("aparece com time cadastrado e oferece as duas filas que não são time", async () => {
     timesRef.current = [time(), time({ id: "t-2", name: "Suporte", aberto_agora: false })];
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
     const gatilho = screen.getByLabelText("Filtrar por time");
     await userEvent.click(gatilho);
     expect(screen.getByText("Meus times")).toBeTruthy();
@@ -103,7 +103,7 @@ describe("o seletor de fila por time", () => {
     // esta propagação, o seletor mudaria de rótulo e a lista continuaria inteira.
     timesRef.current = [time()];
     const onChange = vi.fn();
-    render(<InboxFilters value={VALUE} onChange={onChange} />);
+    render(<InboxFilters aberto value={VALUE} onChange={onChange} />);
     await userEvent.click(screen.getByLabelText("Filtrar por time"));
     await userEvent.click(screen.getByText("Financeiro"));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ team_id: "t-1" }));
@@ -112,7 +112,7 @@ describe("o seletor de fila por time", () => {
   it("voltar para `Todas as filas` tira o filtro — e não manda a string 'all'", async () => {
     timesRef.current = [time()];
     const onChange = vi.fn();
-    render(<InboxFilters value={{ ...VALUE, team_id: "t-1" }} onChange={onChange} />);
+    render(<InboxFilters aberto value={{ ...VALUE, team_id: "t-1" }} onChange={onChange} />);
     await userEvent.click(screen.getByLabelText("Filtrar por time"));
     await userEvent.click(screen.getAllByText("Todas as filas")[0]!);
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ team_id: undefined }));

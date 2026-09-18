@@ -88,10 +88,10 @@ const SELECT_COLS = `
   status_changed_at, service_revision, service_closed_at, service_started_at, current_demanda_id, assigned_to_user_id, assigned_to_user_name, assignee_kind, assigned_at, last_inbound_at,
   last_outbound_at, last_message_at, last_message_preview,
   unread_count_for_assignee, is_group, group_chat_id, tags, metadata,
-  snooze_until, created_at, updated_at, team_id,
+  snooze_until, created_at, updated_at, team_id, protocol,
   bot_silenced_until, last_handoff_at,
   comando_da_conversa,
-  contacts:contact_id (id, display_name, name, phone_number, is_anonymized, tags, is_blocked, avatar_storage_path, force_human),
+  contacts:contact_id (id, display_name, name, phone_number, email, is_anonymized, tags, is_blocked, avatar_storage_path, force_human),
   channel_sessions:channel_session_id (phone_number, display_name, provider)
 `;
 
@@ -355,10 +355,20 @@ export async function listConversationsHandler(
     const ids = idsQueCabemNaURL(
       (contatos ?? []).map((c) => (c as { id: string }).id),
     );
+    // ─── O PROTOCOLO É CHAVE DE BUSCA (migration 0266) ────────────────────
+    //
+    // `conversations.protocol` é o protocolo VIGENTE — o do último atendimento.
+    // O de um atendimento ANTERIOR da mesma conversa não mora aqui: quem o acha
+    // é `GET /api/v1/atendimentos?protocol=`, que a lista consulta ao lado e
+    // mostra acima dos resultados, sem depender da aba. Mesmo piso de 4 dígitos
+    // do telefone, pela mesma razão: "12" casaria metade da base.
+    const porProtocolo = pareceTelefone ? [`protocol.ilike.*${somenteDigitos}*`] : [];
     if (ids.length > 0) {
       query = query.or(
-        `last_message_preview.ilike.*${s}*,contact_id.in.(${ids.join(",")})`,
+        [`last_message_preview.ilike.*${s}*`, `contact_id.in.(${ids.join(",")})`, ...porProtocolo].join(","),
       );
+    } else if (porProtocolo.length > 0) {
+      query = query.or([`last_message_preview.ilike.*${s}*`, ...porProtocolo].join(","));
     } else {
       // Sem ids casados, um `contact_id.in.()` vazio é SQL inválido no
       // PostgREST — a busca por conteúdo segue sozinha, como antes.
@@ -484,9 +494,20 @@ export async function patchConversationHandler(
 
   if (input.status !== undefined) {
     const observed = await getConversationHandler(supabase, ctx, conversationId);
-    const { error: statusError } = await createAdminClient().rpc("fn_service_status", {
+    // COM AUTOR, e `open` CONTINUA o atendimento (migration 0266).
+    //
+    // Esta porta usa o service role, então `auth.uid()` é nulo dentro do banco e
+    // a linha do tempo diria "o sistema fechou". O autor viaja por parâmetro.
+    //
+    // `p_retomar` só é verdadeiro no `open` pedido por ESTA porta: é o "Reabrir"
+    // — alguém decidiu continuar aquele atendimento, e o protocolo não muda.
+    // Quando quem tira a conversa do estado terminal é o cliente escrevendo de
+    // novo (`fn_service_inbound`), nasce atendimento novo com protocolo novo.
+    const { error: statusError } = await createAdminClient().rpc("fn_service_status_com_ator", {
       p_org: ctx.organization_id, p_conversation: conversationId, p_status: input.status,
-      p_expected: input.expected_revision ?? observed.service_revision,
+      p_expected: input.expected_revision ?? observed.service_revision ?? null,
+      p_actor: ctx.actor.type === "user" ? ctx.actor.id : null,
+      p_retomar: input.status === "open",
     });
     if (statusError) throw new ApiError(statusError.code === "40001" ? 409 : statusError.code === "P0002" ? 404 : 500,
       statusError.code === "40001" ? "conflict" : statusError.code === "P0002" ? "not_found" : "internal_error", undefined, ctx.requestId, statusError.message);
@@ -526,7 +547,9 @@ export async function patchConversationHandler(
         ? "conversation.claimed"
         : input.status === "closed"
           ? "conversation.closed"
-          : "conversation.released";
+          : input.status === "open"
+            ? "conversation.reopened"
+            : "conversation.released";
     await audit({
       action,
       actorUserId: a.actorUserId,

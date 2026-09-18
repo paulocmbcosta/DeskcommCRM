@@ -44,6 +44,7 @@ export async function GET(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const qsParsed = listMessagesQuerySchema.safeParse({
     cursor: url.searchParams.get("cursor") ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined,
+    atendimento_id: url.searchParams.get("atendimento_id") ?? undefined,
   });
   if (!qsParsed.success) {
     return fail("validation_failed", t("Query inválida."), 422, {

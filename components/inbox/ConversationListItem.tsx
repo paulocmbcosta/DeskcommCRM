@@ -5,7 +5,7 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import type { Locale } from "date-fns";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
-import { Phone, Robot } from "@/lib/ui/icons";
+import { Clock, Phone, Robot, UsersThree } from "@/lib/ui/icons";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { OwnerBadge } from "@/components/kanban/OwnerBadge";
@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 import type { ConversationWithContact } from "@/hooks/inbox/useConversationsRealtime";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
+import { esperaDaConversa, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
+import { canalPorExtenso as canalInteiro, rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 
 interface Props {
   conversation: ConversationWithContact;
@@ -22,13 +24,32 @@ interface Props {
   /** Posição 1-based na fila (G5-03). Presente só na visão Fila. */
   queuePosition?: number;
   /**
-   * Mostrar POR ONDE a conversa entrou.
+   * Mostrar POR ONDE a conversa entrou — hoje, SEMPRE.
    *
-   * Só com mais de um número conectado. Com um só, o rótulo seria a mesma
-   * palavra em toda linha da lista — ruído que ensina o olho a ignorar a área
-   * onde vivem os avisos que importam (bloqueado, tags).
+   * Já foi "só com mais de um número": com um só, o rótulo se repete em toda
+   * linha. A decisão virou a pedido do dono do produto, e por uma razão de
+   * operação: a instalação nasce com um número e ganha o segundo (ou um canal
+   * de outro tipo) sem aviso, e quem atende precisa saber por onde a pessoa
+   * entrou ANTES de abrir a conversa. A repetição deixou de ser ruído porque
+   * saiu da faixa dos selos — agora mora no rodapé do card, ao lado do time,
+   * numa linha que tem sempre a mesma forma e o olho aprende a ler em bloco.
+   *
+   * A prop fica (ausente = mostra) para o teste conseguir desligá-la.
    */
   mostrarCanal?: boolean;
+  /**
+   * O NOME do time que espera pela conversa. Vem por PROP, do catálogo que a
+   * lista carrega UMA vez — a conversa só carrega o id, e um hook por linha
+   * seriam 50 assinaturas da mesma consulta.
+   *
+   * `undefined` = o catálogo ainda não chegou (não afirme nada);
+   * `null` = a conversa não tem time.
+   */
+  nomeDoTime?: string | null;
+  /** A organização usa times? Sem nenhum, "Sem time" seria a mesma palavra em toda linha de uma feature que ela não usa. */
+  orgTemTimes?: boolean;
+  /** Relógio injetável: a espera é função do tempo, e teste não espera meia hora. */
+  agora?: Date;
   /**
    * Mostrar QUEM está no comando de cada conversa.
    *
@@ -100,25 +121,25 @@ function relativeTime(iso: string | null, locale: Locale): string {
   return format(d, "dd/MM");
 }
 
-/** "Aguardando há 5 min" — desde a última mensagem do cliente (fallback: criação). */
-function waitingLabel(
-  conversation: ConversationWithContact,
-  t: (texto: string) => string = (texto) => texto, locale: Locale,
-): string {
-  const since = conversation.last_inbound_at ?? conversation.created_at;
-  if (!since) return t("Aguardando");
-  return `${t("Aguardando")} ${formatDistanceToNowStrict(new Date(since), { addSuffix: true, locale: locale })}`;
-}
+/** A cor da espera. Texto E cor: quem enxerga mal cor lê o mesmo tempo escrito. */
+const COR_DA_ESPERA: Record<NivelDeEspera, string> = {
+  normal: "text-text-muted",
+  atencao: "text-warning-fg",
+  critico: "text-error-fg",
+};
 
 export function ConversationListItem({
   conversation,
   isSelected,
   onSelect,
   queuePosition,
-  mostrarCanal,
+  mostrarCanal = true,
   mostrarAtendente,
   mostrarAutomatico = true,
   automaticoDaOrg,
+  nomeDoTime,
+  orgTemTimes = false,
+  agora,
 }: Props) {
   const localeDaData = useLocaleDeData();
   const t = useT();
@@ -159,14 +180,33 @@ export function ConversationListItem({
   // dois canais é o que decide o tom da resposta e qual número a pessoa vê
   // respondendo. Cai no nome do canal quando não há número (canal recém-criado).
   const canal = conversation.channel_sessions ?? null;
-  const rotuloCanal = canal?.phone_number ?? canal?.display_name ?? null;
+  const rotuloCanal = rotuloDoCanal(canal);
+  // O `title` diz o NÚMERO inteiro: o rótulo abrevia, e quem precisa conferir
+  // por qual linha a pessoa entrou não deveria ter de abrir a conversa.
+  const canalPorExtenso = canalInteiro(canal);
 
   const temSelos =
     visibleTags.length > 0 ||
     (mostrarAtendente && comando.quem === "humano") ||
-    (mostrarCanal && rotuloCanal != null) ||
     Boolean(c?.is_blocked) ||
     Boolean(c?.is_anonymized);
+
+  const espera = esperaDaConversa(
+    {
+      status: conversation.status,
+      last_inbound_at: conversation.last_inbound_at,
+      last_outbound_at: conversation.last_outbound_at,
+    },
+    agora ?? new Date(),
+  );
+
+  // O rodapé: DE QUEM é (time) e POR ONDE entrou (canal). Três estados para o
+  // time, e só dois viram texto — o mesmo critério do selo do cabeçalho: com o
+  // catálogo ainda carregando (`undefined`), afirmar "Sem time" sobre uma
+  // conversa que TEM time seria mentira de tela.
+  const rotuloDoTime =
+    typeof nomeDoTime === "string" ? nomeDoTime : nomeDoTime === null && orgTemTimes ? t("Sem time") : null;
+  const mostrarRodape = rotuloDoTime !== null || (mostrarCanal && rotuloCanal !== null);
 
   return (
     <button
@@ -210,19 +250,6 @@ export function ConversationListItem({
       </div>
 
       <div className="min-w-0 flex-1">
-        {queuePosition !== undefined && (
-          <div className="mb-1 flex items-center gap-1.5">
-            <span
-              className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-soft px-1 text-[10px] font-medium tabular-nums text-accent"
-              aria-label={`${t("Posição")} ${queuePosition} ${t("na fila")}`}
-            >
-              {queuePosition}º
-            </span>
-            <span className="text-[11px] text-text-muted">
-              {waitingLabel(conversation, t, localeDaData)}
-            </span>
-          </div>
-        )}
         <div className="flex items-baseline justify-between gap-2">
           <span
             className={cn(
@@ -268,16 +295,6 @@ export function ConversationListItem({
             {mostrarAtendente && comando.quem === "humano" && (
               <OwnerBadge ownerKind="user" ownerName={comando.nome ?? t("Atendente")} compacto />
             )}
-            {mostrarCanal && rotuloCanal && (
-              <Badge
-                variant="outline"
-                className="h-4 gap-1 px-1.5 text-[10px] font-normal text-text-muted"
-                title={`${t("Entrou por")} ${rotuloCanal}`}
-              >
-                <Phone size={9} weight="regular" aria-hidden />
-                {rotuloCanal}
-              </Badge>
-            )}
             {c?.is_blocked && (
               <Badge variant="destructive" className="h-4 px-1.5 text-[10px]">
                 {t("Bloqueado")}
@@ -287,6 +304,59 @@ export function ConversationListItem({
               <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
                 {t("Anonimizado")}
               </Badge>
+            )}
+          </div>
+        )}
+
+        {/* A ESPERA, em linha própria e em TODA aba — não só na Fila. É a
+            resposta a "qual eu atendo primeiro?", e a conversa com dono parada
+            há três horas precisa gritar tanto quanto a que ninguém pegou. */}
+        {(espera || queuePosition !== undefined) && (
+          <div
+            className={cn(
+              "mt-1.5 flex items-center gap-1.5 text-[11px] font-medium",
+              COR_DA_ESPERA[espera?.nivel ?? "normal"],
+            )}
+            data-testid="espera-da-conversa"
+            data-nivel={espera?.nivel ?? "normal"}
+          >
+            {queuePosition !== undefined && (
+              <span
+                className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-soft px-1 text-[10px] font-medium tabular-nums text-accent"
+                aria-label={`${t("Posição")} ${queuePosition} ${t("na fila")}`}
+              >
+                {queuePosition}º
+              </span>
+            )}
+            <Clock size={12} weight={espera && espera.nivel !== "normal" ? "fill" : "regular"} aria-hidden />
+            <span className="truncate">
+              {espera ? `${t("Aguardando há")} ${formatarEspera(espera.ms, t)}` : t("Aguardando")}
+            </span>
+          </div>
+        )}
+
+        {mostrarRodape && (
+          <div
+            // `flex-wrap`: em coluna estreita o canal desce para a linha de baixo
+            // em vez de cortar o nome do time — reticências aqui escondem
+            // justamente o que o rodapé existe para dizer.
+            className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-muted"
+            data-testid="rodape-da-conversa"
+          >
+            {rotuloDoTime !== null && (
+              <span className="flex min-w-0 items-center gap-1" title={`${t("Time")}: ${rotuloDoTime}`}>
+                <UsersThree size={12} weight="regular" className="shrink-0" aria-hidden />
+                <span className="truncate">{rotuloDoTime}</span>
+              </span>
+            )}
+            {mostrarCanal && rotuloCanal !== null && (
+              <span
+                className="flex min-w-0 items-center gap-1"
+                title={`${t("Entrou por")} ${canalPorExtenso ?? rotuloCanal}`}
+              >
+                <Phone size={12} weight="regular" className="shrink-0" aria-hidden />
+                <span className="truncate">{rotuloCanal}</span>
+              </span>
             )}
           </div>
         )}

@@ -46,9 +46,14 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .eq("organization_id", authz.org.orgId).maybeSingle();
   if (readError) return fail("internal_error", readError.message, 500, { requestId });
   if (!visible) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
-  const { data, error } = await createAdminClient().rpc("fn_service_status", {
+  // COM AUTOR (migration 0266): o service role não tem `auth.uid()`, e sem o
+  // parâmetro o atendimento fecharia sem dizer por quem — que é exatamente o que
+  // o protocolo existe para responder.
+  const { data, error } = await createAdminClient().rpc("fn_service_status_com_ator", {
     p_org: visible.organization_id, p_conversation: id, p_status: "closed",
-    p_expected: parsed.data.expected_revision ?? visible.service_revision,
+    p_expected: parsed.data.expected_revision ?? visible.service_revision ?? null,
+    p_actor: user.id,
+    p_retomar: false,
   });
   if (error) return fail(error.code === "40001" ? "conflict" : "internal_error",
     error.code === "40001" ? t("O atendimento mudou. Atualize e tente novamente.") : error.message,

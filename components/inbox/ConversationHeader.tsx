@@ -26,6 +26,14 @@ import { phoneForDisplay } from "@/lib/channels/phone-variants";
 
 interface Props {
   conversation: ConversationWithContact;
+  /**
+   * A tela está mostrando um atendimento ANTIGO (migration 0266), aberto pelo
+   * histórico ou pela busca por protocolo. As ações daqui — assumir, transferir,
+   * fechar — agem sobre a conversa como ela está HOJE; oferecê-las em cima de
+   * mensagens de três meses atrás faria alguém fechar o atendimento de agora
+   * achando que mexia no antigo. A identidade fica, a barra de ações sai.
+   */
+  somenteLeitura?: boolean;
 }
 
 /**
@@ -54,7 +62,7 @@ const STATUS_LABEL: Record<string, string> = {
   archived: "Arquivada",
 };
 
-export function ConversationHeader({ conversation }: Props) {
+export function ConversationHeader({ conversation, somenteLeitura = false }: Props) {
   const t = useT();
   const { user } = useAuth();
   const claim = useClaimConversation();
@@ -261,7 +269,7 @@ export function ConversationHeader({ conversation }: Props) {
       {/* `shrink-0` saiu daqui: era ele que impunha o piso de largura. Agora a
           barra pode encolher e quebrar internamente, e os botões continuam
           todos visíveis e clicáveis — só que em duas linhas quando preciso. */}
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <div className={cn("flex min-w-0 flex-wrap items-center gap-1.5", somenteLeitura && "hidden")} data-testid="acoes-da-conversa">
         {isOpen && (
           <Button
             size="sm"

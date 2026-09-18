@@ -648,6 +648,7 @@ jobs:
         logo-moldura-no-tema-escuro.spec.ts
         historico-de-captacao.spec.ts
         inbox-quem-manda.spec.ts
+        inbox-protocolo-e-historico.spec.ts
         inbox-rotulo-de-origem.spec.ts
         troca-de-organizacao-tem-volta.spec.ts
         organizacoes-criacao-convite-e-cache.spec.ts

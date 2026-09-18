@@ -20,6 +20,8 @@ import type { Message, Note } from "@/lib/types/messaging";
 
 interface Props {
   conversationId: string | null;
+  /** Recorta a conversa num atendimento ANTIGO. `null` = o vigente (migration 0266). */
+  atendimentoId?: string | null;
   /** Escolher uma mensagem para responder. Sobe até o composer. */
   onResponder?: (m: Message) => void;
 }
@@ -47,10 +49,10 @@ function dayLabel(d: Date, t: (texto: string) => string = (texto) => texto, loca
   return format(d, "dd/MM/yyyy", { locale: locale });
 }
 
-export function ChatThread({ conversationId, onResponder }: Props) {
+export function ChatThread({ conversationId, atendimentoId = null, onResponder }: Props) {
   const localeDaData = useLocaleDeData();
   const t = useT();
-  const q = useMessagesRealtime(conversationId);
+  const q = useMessagesRealtime(conversationId, atendimentoId);
   const notes = useConversationNotes(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -87,7 +89,7 @@ export function ChatThread({ conversationId, onResponder }: Props) {
   // próxima conversa seria confundida com um "carregar mais antigas".
   useEffect(() => {
     paginasVistas.current = 0;
-  }, [conversationId]);
+  }, [conversationId, atendimentoId]);
 
   // Rola ao fim na primeira carga e quando chega mensagem/nota nova — mas NÃO
   // quando o crescimento veio do "Carregar mais antigas".
@@ -185,7 +187,7 @@ export function ChatThread({ conversationId, onResponder }: Props) {
         {...sinalDoCanal}
         className="flex h-full items-center justify-center text-sm text-muted-foreground"
       >
-        {t("Nenhuma mensagem nesta conversa.")}
+        {atendimentoId ? t("Nenhuma mensagem neste atendimento.") : t("Nenhuma mensagem nesta conversa.")}
       </div>
     );
   }

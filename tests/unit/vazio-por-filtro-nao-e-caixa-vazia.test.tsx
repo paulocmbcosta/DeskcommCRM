@@ -25,6 +25,9 @@ vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (s: string) => s }));
 vi.mock("@/hooks/channels/useChannelSessions", () => ({
   useChannelSessions: () => ({ data: [] }),
 }));
+// O catálogo de times alimenta o rodapé do card (que aqui é um mock) — a lista
+// o consulta uma vez. Sem time nenhum, o caso medido por este arquivo não muda.
+vi.mock("@/hooks/inbox/useTimesDoInbox", () => ({ useTimesDoInbox: () => ({ data: [] }) }));
 vi.mock("@/hooks/ai/useAutomaticoAtivo", () => ({
   useAutomaticoAtivo: () => ({ data: false }),
 }));
