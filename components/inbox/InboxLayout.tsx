@@ -431,8 +431,17 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       // fechado e trilho + painel com ele aberto — fechar o painel devolve a
       // largura à conversa sem ninguém recalcular grade. As contas de 1280px
       // (992 úteis): 292 de lista + 308 de painel aberto deixam 392 de conversa,
-      // 22px acima do piso do composer (370).
-      className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:grid-cols-[300px_1fr] xl:grid-cols-[292px_minmax(0,1fr)_auto] 2xl:grid-cols-[344px_minmax(0,1fr)_auto]"
+      // 22px acima do piso do composer (370). A partir de 1400px a lista ganha
+      // os 300px cheios (344 com o trilho): em 1400 sobram 460 de conversa — a
+      // lista estreita só vale na faixa em que ela é o preço de a conversa caber.
+      //
+      // ⚠️ AS TRÊS FAIXAS SÃO MUTUAMENTE EXCLUSIVAS (`md:max-xl:`, `xl:max-[1399px]:`,
+      // `min-[1400px]:`), e isso foi medido, não escolhido por gosto. A primeira
+      // versão era `xl:… min-[1400px]:…`, em cascata — e o Tailwind 4 emitiu a
+      // regra do breakpoint arbitrário ANTES da do `xl` no CSS final, então em
+      // 1440px o `xl` vencia e a lista ficava nos 248px para sempre. Sem
+      // sobreposição não há ordem para errar.
+      className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:max-xl:grid-cols-[300px_1fr] xl:max-[1399px]:grid-cols-[292px_minmax(0,1fr)_auto] min-[1400px]:grid-cols-[344px_minmax(0,1fr)_auto]"
       /*
        * O ESTADO DO TEMPO REAL, LEGÍVEL DE FORA — mesmo par que o dossiê do lead
        * já publica (`LeadDossier`), e pela mesma razão: quando a entrega morre,
@@ -576,7 +585,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         )}
         {selectedConversation ? (
           <>
-            <ConversationHeader conversation={selectedConversation} />
+            <ConversationHeader conversation={selectedConversation} somenteLeitura={vendoAtendimentoAntigo} />
             {/* ATENDIMENTO ANTIGO NA TELA. O aviso diz três coisas que o
                 atendente precisa saber antes de qualquer outra: que aquilo não
                 é o presente, de quando é, e como voltar. */}

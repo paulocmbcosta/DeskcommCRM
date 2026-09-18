@@ -31,6 +31,7 @@ import {
   Phone,
   Pulse,
 } from "@/lib/ui/icons";
+import { rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -200,8 +201,7 @@ export function PainelDaConversa({
     conversation?.team_id != null
       ? ((times.data ?? []).find((time) => time.id === conversation.team_id)?.name ?? null)
       : null;
-  const canal = conversation?.channel_sessions ?? null;
-  const rotuloDoCanal = canal?.display_name ?? canal?.phone_number ?? null;
+  const rotuloCanal = rotuloDoCanal(conversation?.channel_sessions ?? null);
 
   const trilho = (
     <TooltipProvider delayDuration={200}>
@@ -265,30 +265,47 @@ export function PainelDaConversa({
         {/* O CABEÇALHO é o mesmo nas três abas: quem é, em que pé está, e o
             PROTOCOLO — que é o dado que o cliente pede por telefone e o
             atendente precisa achar sem procurar. */}
-        <header className="flex items-start gap-3 border-b border-border px-3 py-3">
-          <Avatar className="h-10 w-10 shrink-0">
-            <AvatarFallback className="bg-surface-elevated text-xs font-medium text-text-muted">
-              {iniciais(nome)}
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-text">{nome}</div>
-            {telefone && <div className="truncate text-xs text-text-muted">{telefone}</div>}
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="flex items-center justify-end gap-1 text-[11px] text-text-muted">
-              <span className="h-1.5 w-1.5 rounded-full bg-border-strong" aria-hidden />
-              {atendimentoEmTela
-                ? t(rotuloDoAtendimento(atendimentoEmTela))
-                : t(STATUS_LEGIVEL[conversation.status] ?? conversation.status)}
-            </div>
-            {protocolo && (
-              <div className="mt-0.5 flex items-center justify-end gap-0.5" data-testid="protocolo-do-atendimento">
-                <span className="font-mono text-[11px] tabular-nums text-text-muted">{protocolo}</span>
-                <Copiavel valor={protocolo} rotulo={t("protocolo")} />
+        <header className="border-b border-border px-3 py-3">
+          <div className="flex items-start gap-3">
+            <Avatar className="h-10 w-10 shrink-0">
+              <AvatarFallback className="bg-surface-elevated text-xs font-medium text-text-muted">
+                {iniciais(nome)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-sm font-semibold text-text">{nome}</span>
+                <span className="flex shrink-0 items-center gap-1 text-[11px] text-text-muted">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      atendimentoEmTela && !atendimentoEmTela.closed_at ? "bg-success" : "bg-border-strong",
+                    )}
+                    aria-hidden
+                  />
+                  {atendimentoEmTela
+                    ? t(rotuloDoAtendimento(atendimentoEmTela))
+                    : t(STATUS_LEGIVEL[conversation.status] ?? conversation.status)}
+                </span>
               </div>
-            )}
+              {telefone && <div className="truncate text-xs text-text-muted">{telefone}</div>}
+            </div>
           </div>
+          {/* O protocolo em linha PRÓPRIA: dividindo a fileira com o nome, os dois
+              se cortavam numa coluna de 264px — e são os dois dados que o
+              atendente lê em voz alta para o cliente. */}
+          {protocolo && (
+            <div
+              className="mt-2 flex items-center justify-between gap-2 rounded-md bg-surface-elevated px-2 py-1"
+              data-testid="protocolo-do-atendimento"
+            >
+              <span className="text-[11px] text-text-muted">{t("Protocolo")}</span>
+              <span className="flex items-center gap-1">
+                <span className="font-mono text-xs font-medium tabular-nums text-text">{protocolo}</span>
+                <Copiavel valor={protocolo} rotulo={t("protocolo")} />
+              </span>
+            </div>
+          )}
         </header>
 
         {aba === "detalhes" && (
@@ -340,7 +357,7 @@ export function PainelDaConversa({
                     : t(STATUS_LEGIVEL[conversation.status] ?? conversation.status)}
                 </Campo>
                 <Campo rotulo={t("Canal")}>
-                  <span className="truncate">{rotuloDoCanal ?? "—"}</span>
+                  <span className="truncate">{rotuloCanal ?? "—"}</span>
                 </Campo>
                 {(nomeDoTime !== null || (times.data ?? []).some((time) => !time.archived)) && (
                   <Campo rotulo={t("Time")}>
@@ -478,7 +495,7 @@ export function PainelDaConversa({
                     {/* A LINHA: um traço contínuo entre os pontos. É ela que diz
                         "isto veio depois daquilo" — o que o cartão não dizia. */}
                     {i < itensDaLinha.length - 1 && (
-                      <span className="absolute bottom-0 left-[4px] top-3 w-px bg-border" aria-hidden />
+                      <span className="absolute bottom-0 left-[4px] top-3.5 w-px bg-border-strong" aria-hidden />
                     )}
                     <span
                       className={cn("relative mt-1 h-[9px] w-[9px] shrink-0 rounded-full", COR_DO_TOM[item.tom])}

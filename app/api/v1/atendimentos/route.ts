@@ -20,6 +20,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { traduzir } from "@/lib/i18n/dicionario";
 import type { AtendimentoResumo } from "@/lib/inbox/eventos-da-conversa";
+import { rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -96,7 +97,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     closed_by_name: a.closed_by_name,
     assigned_to_user_name: a.assigned_to_user_name,
     team_id: a.team_id,
-    canal: a.conversations?.channel_sessions?.phone_number ?? a.conversations?.channel_sessions?.display_name ?? null,
+    canal: rotuloDoCanal(a.conversations?.channel_sessions ?? null),
     contato: rotuloDoContato(a.conversations?.contacts ?? null, t),
   }));
   return ok(linhas, { requestId });

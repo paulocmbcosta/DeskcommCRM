@@ -15,6 +15,7 @@ import type { ConversationWithContact } from "@/hooks/inbox/useConversationsReal
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
 import { esperaDaConversa, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
+import { canalPorExtenso as canalInteiro, rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 
 interface Props {
   conversation: ConversationWithContact;
@@ -127,21 +128,6 @@ const COR_DA_ESPERA: Record<NivelDeEspera, string> = {
   critico: "text-error-fg",
 };
 
-/** "MP wp · 1037": o apelido diz QUAL linha; os quatro dígitos desempatam dois apelidos iguais. */
-function rotuloDoCanal(canal: { phone_number?: string | null; display_name?: string | null } | null): string | null {
-  if (!canal) return null;
-  const preenchido = (valor: string | null | undefined) => {
-    const limpo = valor?.trim() ?? "";
-    return limpo === "" ? null : limpo;
-  };
-  // É o apelido do CANAL (`channel_sessions`), não o nome de uma pessoa: a regra
-  // de `rotuloDoContato` — que proíbe remontar aquela cadeia à mão — não é esta.
-  const nome = preenchido(canal.display_name);
-  const numero = preenchido(canal.phone_number);
-  if (nome && numero) return `${nome} · ${numero.replace(/\D/g, "").slice(-4)}`;
-  return nome ?? numero;
-}
-
 export function ConversationListItem({
   conversation,
   isSelected,
@@ -197,7 +183,7 @@ export function ConversationListItem({
   const rotuloCanal = rotuloDoCanal(canal);
   // O `title` diz o NÚMERO inteiro: o rótulo abrevia, e quem precisa conferir
   // por qual linha a pessoa entrou não deveria ter de abrir a conversa.
-  const canalPorExtenso = canal?.phone_number ?? canal?.display_name ?? null;
+  const canalPorExtenso = canalInteiro(canal);
 
   const temSelos =
     visibleTags.length > 0 ||
@@ -351,7 +337,10 @@ export function ConversationListItem({
 
         {mostrarRodape && (
           <div
-            className="mt-1 flex items-center gap-3 text-[11px] text-text-muted"
+            // `flex-wrap`: em coluna estreita o canal desce para a linha de baixo
+            // em vez de cortar o nome do time — reticências aqui escondem
+            // justamente o que o rodapé existe para dizer.
+            className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-muted"
             data-testid="rodape-da-conversa"
           >
             {rotuloDoTime !== null && (
