@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Pausa do atendente, teto por time e a fila que acorda (migration 0267)",
+    "subtitle": "A pausa é indisponibilidade com explicação; o teto do time é revalidado dentro do claim; abrir vaga adianta quem já esperava, sem criar evento para quem não esperava.",
+    "output": "pausa-e-limite-por-time.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "tela", "label": "Tela" },
+    { "id": "api", "label": "API" },
+    { "id": "banco", "label": "Banco" },
+    { "id": "rodizio", "label": "Rodízio" }
+  ],
+  "mainPath": ["controle", "api-status", "rpc-status", "disponibilidade", "elegiveis", "claim"],
+  "nodes": [
+    { "id": "controle", "lane": "tela", "col": 1, "type": "frontend", "label": "StatusDoAtendente — barra superior, em toda tela" },
+    { "id": "painel-equipe", "lane": "tela", "col": 2, "type": "frontend", "label": "Equipe › Atendimento — quem está em pausa, por quê, há quanto" },
+    { "id": "editor-de-time", "lane": "tela", "col": 3, "type": "frontend", "label": "Times de atendimento — limite por atendente" },
+    { "id": "api-status", "lane": "api", "col": 1, "type": "backend", "label": "GET/POST /attendants/me/status" },
+    { "id": "api-heartbeat", "lane": "api", "col": 2, "type": "backend", "label": "POST /attendants/me/heartbeat — o sinal de vida" },
+    { "id": "api-times", "lane": "api", "col": 3, "type": "backend", "label": "POST /settings/teams — salva o time e o teto" },
+    { "id": "rpc-status", "lane": "banco", "col": 1, "type": "backend", "label": "fn_attendant_set_status" },
+    { "id": "disponibilidade", "lane": "banco", "col": 2, "type": "database", "label": "attendant_availability (+ paused_at, pause_reason, pause_note)" },
+    { "id": "triggers-de-pausa", "lane": "banco", "col": 3, "type": "backend", "label": "fn_attendant_pause_coerente / _registra" },
+    { "id": "historico-de-pausas", "lane": "banco", "col": 4, "type": "database", "label": "attendant_pause_log" },
+    { "id": "times", "lane": "banco", "col": 5, "type": "database", "label": "attendance_teams.max_concurrent" },
+    { "id": "cron-heartbeat", "lane": "banco", "col": 6, "type": "backend", "label": "cron attendant-heartbeat — derruba quem sumiu" },
+    { "id": "elegiveis", "lane": "rodizio", "col": 1, "type": "backend", "label": "loadEligibleAttendants — disponível ∧ horário ∧ capacidade ∧ teto do time" },
+    { "id": "decisao", "lane": "rodizio", "col": 2, "type": "backend", "label": "selectRoundRobin — menos carga primeiro, rodízio no empate" },
+    { "id": "claim", "lane": "rodizio", "col": 3, "type": "backend", "label": "fn_channel_routing_claim — revalida pausa, capacidade e teto NA transação" },
+    { "id": "vaga-aberta", "lane": "rodizio", "col": 4, "type": "backend", "label": "trg_routing_vaga_aberta → fn_routing_acorda_pendentes" },
+    { "id": "fila", "lane": "rodizio", "col": 5, "type": "database", "label": "event_log — conversation.routing_requested" }
+  ],
+  "edges": [
+    { "from": "controle", "to": "api-status", "label": "online / pausa com motivo / offline" },
+    { "from": "controle", "to": "api-heartbeat", "label": "a cada 60s, só quando online" },
+    { "from": "api-status", "to": "rpc-status", "label": "client do usuário; org da sessão" },
+    { "from": "rpc-status", "to": "disponibilidade", "label": "is_available + campos de pausa" },
+    { "from": "api-heartbeat", "to": "disponibilidade", "label": "last_heartbeat_at" },
+    { "from": "cron-heartbeat", "to": "disponibilidade", "label": "sem sinal há 15 min → offline" },
+    { "from": "disponibilidade", "to": "triggers-de-pausa", "label": "qualquer caminho que escreva" },
+    { "from": "triggers-de-pausa", "to": "historico-de-pausas", "label": "abre e fecha, com ended_by" },
+    { "from": "disponibilidade", "to": "painel-equipe", "label": "roster: pausa, motivo, carga" },
+    { "from": "disponibilidade", "to": "api-status", "label": "estado de agora" },
+    { "from": "editor-de-time", "to": "api-times", "label": "limite (vazio = sem teto)" },
+    { "from": "api-times", "to": "times", "label": "fn_set_attendance_team_limit" },
+    { "from": "disponibilidade", "to": "elegiveis", "label": "só is_available = true" },
+    { "from": "times", "to": "elegiveis", "label": "teto por atendente, contando só o time" },
+    { "from": "elegiveis", "to": "decisao", "label": "candidatos com carga" },
+    { "from": "decisao", "to": "claim", "label": "o escolhido" },
+    { "from": "times", "to": "claim", "label": "teto relido dentro da transação" },
+    { "from": "disponibilidade", "to": "claim", "label": "pausa relida dentro da transação" },
+    { "from": "claim", "to": "fila", "label": "capacity_changed → reagenda" },
+    { "from": "vaga-aberta", "to": "fila", "label": "adianta só o que já esperava" },
+    { "from": "disponibilidade", "to": "fila", "label": "voltar da pausa acorda (0228)" },
+    { "from": "fila", "to": "elegiveis", "label": "worker de roteamento (cron 1×/min)" },
+    { "from": "historico-de-pausas", "to": "painel-equipe", "label": "leitura do gestor (base dos relatórios de pausa)" }
+  ]
+}
