@@ -274,14 +274,20 @@ test.describe("Inbox — quem manda nesta conversa", () => {
     // Sem `if`: com o negócio semeado a linha TEM de aparecer. Uma asserção
     // condicional aqui passaria calada justamente no caso em que a feature não
     // funciona — que é o modo de falha que esta entrega existe para acabar.
-    await expect(page.getByText("Atividade", { exact: true }).first()).toBeVisible({
-      timeout: 30_000,
-    });
-    await expect(page.getByText(/Assumiu a conversa/i).first()).toBeVisible({
+    //
+    // A seção "Atividade" do painel virou a aba LINHA DO TEMPO (migration 0266):
+    // a troca de comando deixou de depender de existir um negócio para pendurar a
+    // linha — quem a registra agora é o trigger da conversa — e o gesto aparece
+    // com o nome de quem o fez.
+    await page.getByTestId("painel-aba-linha").first().click();
+    const linhaDoTempo = page.getByTestId("linha-do-tempo-da-conversa").first();
+    await expect(linhaDoTempo).toBeVisible({ timeout: 30_000 });
+    await expect(linhaDoTempo.getByText("Atendimento assumido").first()).toBeVisible({
       timeout: 30_000,
     });
     // E com o NOME de quem agiu, não "Você/time" — é a diferença entre saber que
     // uma pessoa mexeu e saber QUAL pessoa.
+    await expect(linhaDoTempo.getByText(/assumiu a conversa\./).first()).toBeVisible();
     await expect(page.getByText(/Você\/time/).first()).toHaveCount(0);
 
     // -----------------------------------------------------------------
