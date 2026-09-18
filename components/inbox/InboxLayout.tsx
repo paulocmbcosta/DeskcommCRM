@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/hooks/i18n/useT";
+import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
+import { format } from "date-fns";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { estadoDaJanela, formatarDecorrido } from "@/lib/channels/janela";
@@ -15,12 +17,16 @@ import {
 } from "@/hooks/inbox/useConversationsRealtime";
 import { useConversation, isNotFound } from "@/hooks/inbox/useConversation";
 import { ConversationList } from "./ConversationList";
-import { InboxFilters, type InboxFiltersValue, type InboxTab } from "./InboxFilters";
+import { INBOX_TABS, InboxFilters, type InboxFiltersValue, type InboxTab } from "./InboxFilters";
+import { InboxAbas } from "./InboxAbas";
 import { ChatThread } from "./ChatThread";
 import { Composer, type ComposerHandle } from "./Composer";
 import { ConversationHeader } from "./ConversationHeader";
 import { RetentionNotice } from "./RetentionNotice";
-import { CRMSidePanel } from "./CRMSidePanel";
+import { PainelDaConversa, type AbaDoPainel } from "./PainelDaConversa";
+import { ResultadosPorProtocolo } from "./ResultadosPorProtocolo";
+import { useAtendimentosDoContato } from "@/hooks/inbox/useAtendimentos";
+import type { AtendimentoResumo } from "@/lib/inbox/eventos-da-conversa";
 import type { Message as ConversationMensagem } from "@/lib/types/messaging";
 import { InboxKeyboardShortcuts } from "./InboxKeyboardShortcuts";
 
@@ -116,6 +122,7 @@ interface InboxLayoutProps {
 
 export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {}) {
   const t = useT();
+  const localeDaData = useLocaleDeData();
   const { activeOrg, user } = useAuth();
   const supportReadonly = user.support?.access_mode === "support_readonly";
   const orgId = activeOrg?.orgId ?? null;
@@ -155,6 +162,18 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   }, [tab, setFilterValue]);
 
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  /**
+   * O ATENDIMENTO que a tela mostra (migration 0266). `null` é o VIGENTE — o
+   * caso de sempre. Vira um id quando alguém abre um atendimento antigo pelo
+   * histórico do painel ou pela busca por protocolo: a conversa passa a mostrar
+   * só as mensagens daquele episódio, e o composer trava (não se responde num
+   * atendimento que acabou; responde-se no de agora).
+   */
+  const [atendimentoId, setAtendimentoId] = useState<string | null>(null);
+  /** Os seletores de filtro ficam recolhidos; abrir uma conversa os fecha. */
+  const [filtrosAbertos, setFiltrosAbertos] = useState(false);
+  /** A aba do painel direito. `null` = só o trilho, e a conversa fica com a largura. */
+  const [abaDoPainel, setAbaDoPainel] = useState<AbaDoPainel | null>("detalhes");
   const [visibleIds, setVisibleIds] = useState<string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   /** A ficha do contato como painel deslizante — só existe abaixo do `xl`. */
@@ -254,6 +273,29 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
 
   const colunas = colunasDoCelular(Boolean(selectedId));
 
+  // O HISTÓRICO DE ATENDIMENTOS do contato. Mora aqui, e não dentro do painel,
+  // porque três peças dependem dele: o painel (lista e contador), a conversa
+  // (qual episódio mostrar) e o composer (trava quando o episódio é antigo).
+  const contatoSelecionadoId = selectedConversation?.contact_id ?? null;
+  const atendimentosQ = useAtendimentosDoContato(
+    contatoSelecionadoId,
+    `${selectedConversation?.status ?? ""}:${selectedConversation?.protocol ?? ""}:${selectedConversation?.service_revision ?? ""}`,
+  );
+  const atendimentosDaConversa = useMemo(
+    () => (atendimentosQ.data ?? []).filter((a) => a.conversation_id === selectedConversation?.id),
+    [atendimentosQ.data, selectedConversation?.id],
+  );
+  // A lista vem do mais novo para o mais velho: o vigente é o aberto, ou — com a
+  // conversa encerrada — o último.
+  const atendimentoVigente =
+    atendimentosDaConversa.find((a) => !a.closed_at) ?? atendimentosDaConversa[0] ?? null;
+  const atendimentoEscolhido =
+    atendimentoId !== null ? (atendimentosDaConversa.find((a) => a.id === atendimentoId) ?? null) : null;
+  // Escolher o próprio vigente pelo histórico é o caso normal, não um "antigo".
+  const vendoAtendimentoAntigo =
+    atendimentoEscolhido !== null && atendimentoEscolhido.id !== atendimentoVigente?.id;
+  const atendimentoEmTela = atendimentoEscolhido ?? atendimentoVigente;
+
   const claim = useClaimConversation();
   const close = useCloseConversation();
 
@@ -274,8 +316,21 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // conversa, que hoje entra por `initialSelectedId` vindo da rota.
   const handleSelect = useCallback((id: string | null) => {
     setSelectedId(id);
+    // Trocar de conversa volta ao atendimento vigente DELA: o id de um episódio
+    // pertence a uma conversa só, e carregá-lo para outra pediria à rota um
+    // atendimento que não é daquela conversa (404).
+    setAtendimentoId(null);
+    // Os filtros fecham: escolheu-se o que atender, a coluna volta a ser lista.
+    setFiltrosAbertos(false);
     // Sem isto, escolher "responder" numa conversa e trocar para outra levaria
     // a citação junto — e a resposta sairia citando mensagem de outro cliente.
+    setRespondendo(null);
+  }, []);
+  /** Abrir um atendimento pelo histórico ou pelo protocolo: a conversa E o episódio, juntos. */
+  const abrirAtendimento = useCallback((a: AtendimentoResumo) => {
+    setSelectedId(a.conversation_id);
+    setAtendimentoId(a.id);
+    setFiltrosAbertos(false);
     setRespondendo(null);
   }, []);
   const handleVisibleChange = useCallback((ids: string[]) => setVisibleIds(ids), []);
@@ -371,7 +426,12 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   return (
     <OpenConversationProvider conversationId={selectedId}>
     <div
-      className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:grid-cols-[300px_1fr] xl:grid-cols-[272px_1fr_296px] 2xl:grid-cols-[300px_1fr_320px]"
+      // A terceira coluna é `auto`: ela mede o TRILHO (44px) com o painel
+      // fechado e trilho + painel com ele aberto — fechar o painel devolve a
+      // largura à conversa sem ninguém recalcular grade. As contas de 1280px
+      // (992 úteis): 292 de lista + 308 de painel aberto deixam 392 de conversa,
+      // 22px acima do piso do composer (370).
+      className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:grid-cols-[300px_1fr] xl:grid-cols-[292px_minmax(0,1fr)_auto] 2xl:grid-cols-[344px_minmax(0,1fr)_auto]"
       /*
        * O ESTADO DO TEMPO REAL, LEGÍVEL DE FORA — mesmo par que o dossiê do lead
        * já publica (`LeadDossier`), e pela mesma razão: quando a entrega morre,
@@ -410,20 +470,39 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       */}
       <div
         className={cn(
-          "h-full min-h-0 flex-col border-r border-border md:flex",
+          "h-full min-h-0 border-r border-border md:flex",
           colunas.lista,
         )}
       >
-        <InboxFilters value={filterValue} onChange={setFilterValue} />
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <ConversationList
-            listQuery={listQ}
-            filters={filters}
-            selectedId={selectedId}
-            onSelect={handleSelect}
-            onVisibleChange={handleVisibleChange}
-            onLimparFiltros={limparFiltrosAuxiliares}
+        {/* O TRILHO das abas, em pé: devolve à lista a altura que a faixa
+            horizontal de abas tomava. Ver `InboxAbas`. */}
+        <InboxAbas value={filterValue} onChange={setFilterValue} />
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+          {/* O NOME da aba, por extenso. No trilho só cabe o ícone, e dica de
+              mouse não existe em tela de toque — sem esta linha, quem atende do
+              celular não teria onde LER em que visão está. */}
+          <div className="flex items-center justify-between px-3 pt-2.5" data-testid="inbox-aba-atual">
+            <h2 className="text-sm font-semibold text-text">
+              {t(INBOX_TABS.find((m) => m.value === tab)?.label ?? "Fila")}
+            </h2>
+          </div>
+          <InboxFilters
+            value={filterValue}
+            onChange={setFilterValue}
+            aberto={filtrosAbertos}
+            onAbertoChange={setFiltrosAbertos}
           />
+          <ResultadosPorProtocolo termo={filterValue.search} onAbrir={abrirAtendimento} />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <ConversationList
+              listQuery={listQ}
+              filters={filters}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              onVisibleChange={handleVisibleChange}
+              onLimparFiltros={limparFiltrosAuxiliares}
+            />
+          </div>
         </div>
       </div>
 
@@ -471,9 +550,24 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                     {t("Ficha")}
                   </Button>
                 </SheetTrigger>
-                <SheetContent side="right" className="w-[min(22rem,90vw)] overflow-y-auto p-0">
+                <SheetContent side="right" className="w-[min(24rem,92vw)] p-0">
                   <SheetTitle className="sr-only">{t("Ficha do contato")}</SheetTitle>
-                  <CRMSidePanel conversation={selectedConversation} />
+                  <PainelDaConversa
+                    conversation={selectedConversation}
+                    // No painel deslizante não existe "só o trilho": fechado, ele
+                    // seria uma gaveta vazia. Cai nos detalhes.
+                    aba={abaDoPainel ?? "detalhes"}
+                    onAbaChange={(proxima) => setAbaDoPainel(proxima ?? "detalhes")}
+                    atendimentos={atendimentosQ.data}
+                    atendimentosComErro={atendimentosQ.isError}
+                    onTentarDeNovo={() => void atendimentosQ.refetch()}
+                    atendimentoEmTela={atendimentoEmTela}
+                    onAbrirAtendimento={(a) => {
+                      abrirAtendimento(a);
+                      setFichaAberta(false);
+                    }}
+                    larguraLivre
+                  />
                 </SheetContent>
               </Sheet>
             )}
@@ -482,8 +576,37 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         {selectedConversation ? (
           <>
             <ConversationHeader conversation={selectedConversation} />
+            {/* ATENDIMENTO ANTIGO NA TELA. O aviso diz três coisas que o
+                atendente precisa saber antes de qualquer outra: que aquilo não
+                é o presente, de quando é, e como voltar. */}
+            {vendoAtendimentoAntigo && atendimentoEscolhido && (
+              <div
+                className="flex flex-wrap items-center justify-between gap-2 border-b border-warning-border bg-warning-bg/40 px-4 py-2 text-xs text-warning-fg"
+                data-testid="aviso-atendimento-antigo"
+                role="status"
+              >
+                <span>
+                  {t("Você está vendo o atendimento")}{" "}
+                  <strong className="font-mono tabular-nums">{atendimentoEscolhido.protocol}</strong>
+                  {atendimentoEscolhido.closed_at
+                    ? ` — ${t("encerrado em")} ${format(new Date(atendimentoEscolhido.closed_at), "dd/MM/yyyy", { locale: localeDaData })}`
+                    : ""}
+                  .
+                </span>
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAtendimentoId(null)}>
+                  {t("Voltar ao atendimento atual")}
+                </Button>
+              </div>
+            )}
             <div className="min-h-0 flex-1 overflow-hidden">
-              <ChatThread conversationId={selectedConversation.id} onResponder={setRespondendo} />
+              <ChatThread
+                conversationId={selectedConversation.id}
+                // `null` = o vigente. Só vira id quando o episódio é ANTIGO: o
+                // vigente tem de ficar na chave de cache em que o envio
+                // otimista escreve (ver `useMessagesRealtime`).
+                atendimentoId={vendoAtendimentoAntigo ? atendimentoId : null}
+                onResponder={setRespondendo}
+              />
             </div>
             <RetentionNotice conversationId={selectedConversation.id} />
             {motivoDaJanela && (
@@ -496,7 +619,13 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             <Composer
               ref={composerRef}
               conversationId={selectedConversation.id}
-              blockedReason={supportReadonly ? "Acompanhamento somente leitura" : blockedReason}
+              blockedReason={
+                supportReadonly
+                  ? "Acompanhamento somente leitura"
+                  : vendoAtendimentoAntigo
+                    ? t("Este atendimento já foi encerrado. Volte ao atendimento atual para responder.")
+                    : blockedReason
+              }
               janelaFechada={motivoDaJanela}
               disabled={selectedConversation.status === "closed"}
               contactName={selectedConversation.contacts?.name ?? null}
@@ -519,7 +648,16 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       </div>
 
       <div className="hidden h-full min-h-0 xl:block">
-        <CRMSidePanel conversation={selectedConversation} />
+        <PainelDaConversa
+          conversation={selectedConversation}
+          aba={abaDoPainel}
+          onAbaChange={setAbaDoPainel}
+          atendimentos={atendimentosQ.data}
+          atendimentosComErro={atendimentosQ.isError}
+          onTentarDeNovo={() => void atendimentosQ.refetch()}
+          atendimentoEmTela={atendimentoEmTela}
+          onAbrirAtendimento={abrirAtendimento}
+        />
       </div>
 
       <InboxKeyboardShortcuts

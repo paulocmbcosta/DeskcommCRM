@@ -30,6 +30,13 @@ import { phoneForDisplay } from "@/lib/channels/phone-variants";
 
 interface Props {
   conversation: ConversationWithContact | null;
+  /**
+   * Dentro do `PainelDaConversa`: sem borda nem rolagem próprias (o painel já
+   * tem), sem o cartão de contato (o cabeçalho do painel já diz quem é) e sem a
+   * seção "Atividade" — que virou a aba Linha do tempo, em linha, junto com o
+   * que acontece na conversa.
+   */
+  embutido?: boolean;
 }
 
 interface LeadRow {
@@ -401,7 +408,7 @@ function CamposDoFunil({
   );
 }
 
-export function CRMSidePanel({ conversation }: Props) {
+export function CRMSidePanel({ conversation, embutido = false }: Props) {
   const { user } = useAuth();
   const readonly = user.support?.access_mode === "support_readonly";
   const localeDaData = useLocaleDeData();
@@ -546,14 +553,19 @@ export function CRMSidePanel({ conversation }: Props) {
   }
 
   return (
-    <aside className="flex h-full flex-col gap-4 overflow-y-auto border-l border-border bg-background p-4">
+    <aside
+      className={cn(
+        "flex flex-col gap-4 bg-background",
+        embutido ? "p-3" : "h-full overflow-y-auto border-l border-border p-4",
+      )}
+    >
       <section>
         <h3 className="text-xs font-semibold text-text">
-          {t("Contato")}
+          {embutido ? t("Ações do contato") : t("Contato")}
         </h3>
         <Card className="mt-2 space-y-2 p-3 text-sm">
-          <div className="font-medium">{displayName}</div>
-          {contact?.phone_number && (
+          {!embutido && <div className="font-medium">{displayName}</div>}
+          {!embutido && contact?.phone_number && (
             <div className="text-xs text-muted-foreground">{phoneForDisplay(contact.phone_number)}</div>
           )}
           {tags.length > 0 && (
@@ -587,7 +599,7 @@ export function CRMSidePanel({ conversation }: Props) {
               <Users size={12} className="mr-1" weight="regular" aria-hidden />
               {leadDialogOpen && defaultPipeline.isLoading ? t("Carregando…") : t("Lead")}
             </Button>
-            {contactId && (
+            {contactId && !embutido && (
               <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-xs">
                 <Link href={`/app/contacts/${contactId}`}>
                   {t("Ver contato")}
@@ -747,9 +759,9 @@ export function CRMSidePanel({ conversation }: Props) {
         )}
       </section>
 
-      <Separator />
+      {!embutido && <Separator />}
 
-      <section>
+      {!embutido && <section>
         <h3 className="text-xs font-semibold text-text">
           {t("Atividade")}
         </h3>
@@ -786,7 +798,7 @@ export function CRMSidePanel({ conversation }: Props) {
         ) : (
           <SemLista vazio="Sem atividade." erro={erro} onTentarDeNovo={() => setTentativa((n) => n + 1)} />
         )}
-      </section>
+      </section>}
     </aside>
   );
 }

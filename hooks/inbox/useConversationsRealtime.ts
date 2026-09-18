@@ -13,6 +13,8 @@ export interface ContactSummary {
   display_name: string | null;
   name: string | null;
   phone_number: string | null;
+  /** Para a ficha do painel do inbox. Opcional: conversas em cache de antes do campo existir. */
+  email?: string | null;
   tags: string[];
   is_blocked: boolean;
   is_anonymized: boolean;

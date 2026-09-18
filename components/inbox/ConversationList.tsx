@@ -4,9 +4,8 @@ import { useT } from "@/hooks/i18n/useT";
 import type { InfiniteData, UseInfiniteQueryResult } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useChannelSessions } from "@/hooks/channels/useChannelSessions";
-
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
+import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 
 import { ConversationListItem } from "./ConversationListItem";
 import { EmptyInbox } from "@/components/empty";
@@ -43,14 +42,20 @@ export function ConversationList({
   onLimparFiltros,
 }: Props) {
   const t = useT();
-  // Só mostra POR ONDE a conversa entrou quando há mais de um número. Com um
-  // só, o rótulo seria a mesma palavra em toda linha — ruído que ensina o olho
-  // a ignorar a área onde vivem os avisos que importam.
+  // O TIME de cada conversa. O catálogo é UMA consulta para a lista inteira (e o
+  // react-query a dedupa com o cabeçalho e os filtros); a conversa carrega só o
+  // id, e o nome sai daqui. Arquivado entra no mapa de propósito: conversa
+  // antiga aponta para time arquivado, e ele ainda precisa ter nome.
   //
-  // `?? []` e não `undefined`: enquanto a lista de canais carrega, o certo é
-  // NÃO mostrar. Mostrar e sumir depois é pior que aparecer um instante tarde.
-  const canais = useChannelSessions().data ?? [];
-  const maisDeUmCanal = canais.length > 1;
+  // O CANAL deixou de ser decidido aqui. Era "só com mais de um número"; hoje o
+  // card mostra sempre, no rodapé, ao lado do time — ver o comentário da prop
+  // `mostrarCanal` em `ConversationListItem`.
+  const times = useTimesDoInbox();
+  const nomeDoTimePorId = useMemo(
+    () => new Map((times.data ?? []).map((time) => [time.id, time.name] as const)),
+    [times.data],
+  );
+  const orgTemTimes = (times.data ?? []).some((time) => !time.archived);
 
   // Fila (G5-03): a lista já vem ordenada por tempo de espera (server), então a
   // posição é o índice na lista visível. Só mostramos posição/espera nessa visão.
@@ -166,7 +171,16 @@ export function ConversationList({
             isSelected={c.id === selectedId}
             onSelect={onSelect}
             queuePosition={isQueue ? i + 1 : undefined}
-            mostrarCanal={maisDeUmCanal}
+            // `undefined` enquanto o catálogo carrega: o card não afirma
+            // "Sem time" sobre uma conversa cujo time ele ainda não sabe nomear.
+            nomeDoTime={
+              times.data == null
+                ? undefined
+                : c.team_id
+                  ? (nomeDoTimePorId.get(c.team_id) ?? undefined)
+                  : null
+            }
+            orgTemTimes={orgTemTimes}
             mostrarAtendente={mostrarAtendente}
             mostrarAutomatico={mostrarAutomatico}
             automaticoDaOrg={automaticoDaOrg.data}

@@ -178,6 +178,36 @@ export function descreverEventoDaConversa(evento: EventoDaConversa, t: Tradutor)
   }
 }
 
+/**
+ * Atividades do NEGÓCIO (`crm_lead_activities`) que a linha do tempo da
+ * conversa JÁ conta por conta própria. Entram juntas na mesma tela, e sem este
+ * corte o mesmo gesto — assumir, transferir, liberar, pausar, passar para uma
+ * pessoa — apareceria duas vezes, uma de cada fonte.
+ *
+ * Os valores são `source_module` dos dois emissores: `inbox.comando`
+ * (`lib/inbox/atividade-de-comando.ts`) e `human-handoff`
+ * (`lib/agent-engine/agent/human-handoff.ts`).
+ */
+export const ORIGENS_JA_CONTADAS_PELA_CONVERSA = ["inbox.comando", "human-handoff"] as const;
+
+/** Uma atividade do negócio, como a linha do tempo a recebe. */
+export interface AtividadeDoNegocio {
+  id: string;
+  type: string;
+  source_module: string;
+  performed_at: string;
+  reason: string | null;
+  actor_kind: string | null;
+  performed_by_name: string | null;
+}
+
+export interface LinhaDoTempoDaConversa {
+  eventos: EventoDaConversa[];
+  atividades: AtividadeDoNegocio[];
+  /** A leitura das atividades do negócio falhou: a tela DIZ, não finge lista vazia. */
+  atividades_indisponiveis: boolean;
+}
+
 /** O atendimento como a tela o lê — histórico do contato e busca por protocolo. */
 export interface AtendimentoResumo {
   id: string;

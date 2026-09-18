@@ -1,20 +1,34 @@
 "use client";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
 import { useRefetchDeSeguranca } from "@/hooks/realtime/useRefetchDeSeguranca";
 import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import type { Message } from "@/lib/types/messaging";
+import { ATENDIMENTO_VIGENTE } from "@/lib/schemas/messaging";
 
 interface MessagesResponse {
   data: Message[];
   meta?: { cursor?: string | null; has_more?: boolean };
 }
 
-export function useMessagesRealtime(conversationId: string | null) {
+/**
+ * `atendimentoId` RECORTA a conversa num episódio (migration 0266).
+ *
+ * `null` é o atendimento VIGENTE — e a chave de cache dele continua sendo
+ * `["messages", conversationId]`, sem terceiro segmento, de propósito: é nessa
+ * chave exata que `useSendMessage` escreve a mensagem otimista. Só se envia no
+ * atendimento vigente, então é a única chave que precisa casar. Um episódio
+ * antigo ganha chave própria, e o `invalidateQueries` por prefixo alcança as
+ * duas.
+ */
+export function useMessagesRealtime(conversationId: string | null, atendimentoId: string | null = null) {
   const qc = useQueryClient();
-  const queryKey = ["messages", conversationId] as const;
+  const queryKey = useMemo(
+    () => (atendimentoId ? (["messages", conversationId, atendimentoId] as const) : (["messages", conversationId] as const)),
+    [conversationId, atendimentoId],
+  );
 
   const query = useInfiniteQuery({
     queryKey,
@@ -27,6 +41,7 @@ export function useMessagesRealtime(conversationId: string | null) {
       const qs = new URLSearchParams();
       if (pageParam) qs.set("cursor", pageParam);
       qs.set("limit", "50");
+      qs.set("atendimento_id", atendimentoId ?? ATENDIMENTO_VIGENTE);
       try {
         return await apiClient.get<MessagesResponse>(
           `/api/v1/conversations/${conversationId}/messages?${qs.toString()}`,

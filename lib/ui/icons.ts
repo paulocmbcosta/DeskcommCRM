@@ -142,4 +142,12 @@ export {
   GoogleLogo,
   MapPin,
   ArrowsOutSimple,
+  // inbox: trilho de abas, linha do tempo da conversa, protocolo e pausa do atendente
+  Pulse,
+  User,
+  Hash,
+  Envelope,
+  Coffee,
+  Circle,
+  ArrowCounterClockwise,
 } from "@phosphor-icons/react/dist/ssr";

@@ -1,9 +1,8 @@
 "use client";
 import { useT } from "@/hooks/i18n/useT";
 import { useEffect, useRef, useState } from "react";
-import { MagnifyingGlass } from "@/lib/ui/icons";
+import { Bell, Funnel, MagnifyingGlass } from "@/lib/ui/icons";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -15,13 +14,12 @@ import {
 import { channelLabel, useChannelSessions } from "@/hooks/channels/useChannelSessions";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useConversationTagVocabulary } from "@/hooks/inbox/useConversationTags";
-import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 import type { Role, VisibilityMode } from "@/lib/auth/types";
 
 export type InboxTab = "unassigned" | "mine" | "all" | "closed" | "ai";
 
-const INBOX_TABS: { value: InboxTab; label: string }[] = [
+export const INBOX_TABS: { value: InboxTab; label: string }[] = [
   { value: "unassigned", label: "Fila" },
   { value: "mine", label: "Minhas" },
   { value: "all", label: "Todas" },
@@ -74,10 +72,38 @@ export const FILA_GERAL = "none";
 interface Props {
   value: InboxFiltersValue;
   onChange: (next: InboxFiltersValue) => void;
+  /**
+   * Os seletores (time, número, etiqueta) ficam RECOLHIDOS — abrem no funil,
+   * filtra-se, e fecham de novo, para a coluna ser de conversas e não de
+   * controles. Controlado pelo pai quando ele quer fechá-los por conta própria
+   * (o inbox fecha ao abrir uma conversa); sem as duas props, o componente
+   * cuida do próprio estado.
+   */
+  aberto?: boolean;
+  onAbertoChange?: (aberto: boolean) => void;
 }
 
-export function InboxFilters({ value, onChange }: Props) {
+/**
+ * Quantos filtros auxiliares estão valendo AGORA.
+ *
+ * É o que impede o recolhimento de virar mentira de tela: com os seletores
+ * fechados, um filtro ativo seria invisível — a lista encolheria sem nada
+ * dizendo por quê. O número no funil diz, e o funil muda de cor.
+ */
+export function contarFiltrosAuxiliares(value: InboxFiltersValue): number {
+  return [value.team_id, value.channel_session_id, value.tag].filter((v) => v != null).length;
+}
+
+export function InboxFilters({ value, onChange, aberto, onAbertoChange }: Props) {
   const t = useT();
+  const [abertoLocal, setAbertoLocal] = useState(false);
+  const filtrosAbertos = aberto ?? abertoLocal;
+  const alternarFiltros = () => {
+    const proximo = !filtrosAbertos;
+    setAbertoLocal(proximo);
+    onAbertoChange?.(proximo);
+  };
+  const filtrosAtivos = contarFiltrosAuxiliares(value);
   const [searchInput, setSearchInput] = useState(value.search);
   /**
    * O campo escuta o valor de FORA — e só ele.
@@ -108,37 +134,8 @@ export function InboxFilters({ value, onChange }: Props) {
   const { data: channels } = useChannelSessions({ refetchInterval: 30_000 });
   const { activeOrg } = useAuth();
   const { data: tagVocabulary } = useConversationTagVocabulary(activeOrg?.orgId ?? null);
-  // Os MESMOS filtros que a lista aplicou. Badge que conta o que a aba não mostra
-  // manda o atendente procurar trabalho que não existe — a regra já estava escrita
-  // na rota; faltava alcançar os filtros ao lado da aba.
-  const { data: counts } = useConversationCounts(activeOrg?.orgId ?? null, {
-    unread: value.onlyUnread,
-    tag: value.tag,
-    channel_session_id: value.channel_session_id,
-    // O time entra aqui pela MESMA razão que a tag e o canal entraram: com a
-    // fila filtrada por setor e o badge contando a organização inteira, a aba
-    // passaria a anunciar trabalho que a lista abaixo dela não mostra.
-    team_id: value.team_id,
-  });
   const { data: times } = useTimesDoInbox();
 
-  const tabs = activeOrg
-    ? visibleInboxTabs(activeOrg.role, activeOrg.visibility_mode)
-    : INBOX_TABS.map((t) => t.value);
-  const countFor: Partial<Record<InboxTab, number>> = {
-    // `fila` é o nome novo; `unassigned` é o alias que a rota versionada mantém.
-    // O `??` cobre a janela em que a página ainda lê um cache de react-query
-    // gravado antes do deploy — sem ele o badge sumiria por alguns segundos.
-    unassigned: counts?.fila ?? counts?.unassigned,
-    // A aba do automático ganhou contador junto com o significado: ela deixou de
-    // filtrar `ai_handling` (2 conversas) e passou a mostrar o que o robô conduz
-    // (47, na instalação onde isto foi medido). Um número que existe na API e não
-    // aparece na tela é trabalho feito que ninguém vê.
-    ai: counts?.automatico,
-    mine: counts?.mine,
-    all: counts?.all,
-    closed: counts?.closed,
-  };
   // Filtrar por um número que saiu da lista (o operador acabou de excluir o
   // canal) deixa o inbox mostrando um subconjunto — às vezes vazio — sem nada na
   // tela dizendo que há filtro. O número some do dropdown junto com o canal, e o
@@ -241,25 +238,59 @@ export function InboxFilters({ value, onChange }: Props) {
               aria-label={t("Buscar conversas")}
             />
           </div>
-          {/* Botão pressionável em vez de Switch: o filtro vive na mesma linha
-              da busca, e o Switch com rótulo pedia uma linha inteira só para
-              si numa coluna de 280px. */}
+          {/* O FUNIL guarda os seletores. Ele nunca esconde um filtro LIGADO:
+              com algo valendo, muda de cor e mostra quantos são — é a diferença
+              entre recolher controles e esconder estado. */}
+          <button
+            type="button"
+            aria-expanded={filtrosAbertos}
+            aria-controls="inbox-filtros-auxiliares"
+            aria-label={t("Filtros")}
+            title={t("Filtros")}
+            data-testid="inbox-abrir-filtros"
+            onClick={alternarFiltros}
+            className={cn(
+              "relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors",
+              "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+              filtrosAtivos > 0 || filtrosAbertos
+                ? "border-accent bg-accent-soft text-accent"
+                : "border-transparent bg-surface-elevated text-text-muted hover:text-text",
+            )}
+          >
+            <Funnel size={16} weight={filtrosAtivos > 0 ? "fill" : "regular"} aria-hidden />
+            {filtrosAtivos > 0 && (
+              <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold tabular-nums leading-none text-accent-foreground">
+                {filtrosAtivos}
+              </span>
+            )}
+          </button>
+          {/* Pressionável em vez de Switch: o filtro vive na linha da busca, e
+              um Switch com rótulo pedia uma fileira inteira só para si. */}
           <button
             type="button"
             aria-pressed={value.onlyUnread}
+            aria-label={t("Não lidos")}
+            title={t("Não lidos")}
             onClick={() => onChange({ ...value, onlyUnread: !value.onlyUnread })}
             className={cn(
-              "h-9 shrink-0 rounded-full border px-3 text-xs font-medium transition-colors",
+              "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors",
               "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
               value.onlyUnread
                 ? "border-accent bg-accent text-accent-foreground"
-                : "border-border bg-transparent text-text-muted hover:bg-surface-elevated",
+                : "border-transparent bg-surface-elevated text-text-muted hover:text-text",
             )}
           >
-            {t("Não lidos")}
+            <Bell size={16} weight={value.onlyUnread ? "fill" : "regular"} aria-hidden />
           </button>
         </div>
 
+        {filtrosAbertos && (
+        <div id="inbox-filtros-auxiliares" data-testid="inbox-filtros-auxiliares" className="space-y-2">
+        {!mostrarSeletorDeTime && !showChannelSwitch && !mostrarSeletorDeTag && (
+          <p className="px-1 text-xs text-text-muted">
+            {t("Ainda não há o que filtrar: os filtros aparecem quando existir mais de um número, um time ou uma etiqueta.")}
+          </p>
+        )}
         {/* A FILA POR SETOR, em linha própria e ACIMA das demais.
             Própria porque ela responde "de quem é este trabalho", que é uma
             pergunta de outra ordem que "por qual número" e "com que etiqueta" —
@@ -369,34 +400,9 @@ export function InboxFilters({ value, onChange }: Props) {
             )}
           </div>
         )}
+        </div>
+        )}
       </div>
-
-      {/* Faixa sublinhada, não caixa cinza: cinco abas num grid de 280px
-          espremiam "Fechadas" contra "Automático" até os rótulos se tocarem. */}
-      <Tabs
-        value={value.tab}
-        onValueChange={(v) => onChange({ ...value, tab: v as InboxTab })}
-        className="px-3"
-      >
-        <TabsList className="h-auto w-full justify-between gap-2 rounded-none bg-transparent p-0 [scrollbar-width:none]">
-          {tabs.map((tab) => {
-            const meta = INBOX_TABS.find((t) => t.value === tab)!;
-            const count = countFor[tab];
-            return (
-              <TabsTrigger
-                key={tab}
-                value={tab}
-                className="-mb-px shrink-0 gap-1 rounded-none border-b-2 border-transparent px-0 pb-2 pt-1 text-xs font-medium text-text-muted data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-text data-[state=active]:shadow-none"
-              >
-                {t(meta.label)}
-                {typeof count === "number" && count > 0 && (
-                  <span className="text-[11px] tabular-nums text-text-subtle">{count}</span>
-                )}
-              </TabsTrigger>
-            );
-          })}
-        </TabsList>
-      </Tabs>
     </div>
   );
 }
