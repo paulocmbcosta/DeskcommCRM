@@ -156,16 +156,16 @@ data de ativação não é auditável pelo repositório, e a lista viva está lo
 comando ao lado. **Não há número aqui de propósito**: esta linha já afirmou uma contagem exata
 de specs e "a única de fora", e as duas envelheceram — a suíte cresce toda semana e a lista de
 exceções muda com ela. Quem fica de fora é o que a própria variável declara; leia, não confie:
-O CI tem cinco checks obrigatórios na `main`: `verify`, `build-and-size`, `invariants`, `e2e`,
-`imagens-ok`. Não confie nesta lista — reconte antes de citar:
+O CI tem quatro checks obrigatórios na `main`: `verify`, `build-and-size`, `invariants` e
+`imagens-ok`. O `e2e` roda em todo PR mas não é exigido: só dispara em `opened` (ver `e2e.yml`), e
+check exigido que não roda no segundo push trava o PR. Não confie nesta lista — reconte antes de citar:
 
 ```bash
 gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection \
   --jq '.required_status_checks.contexts|join(", ")'
 ```
 
-Enquanto esse comando devolver `Branch not protected`, nenhum check é obrigatório aqui: o
-repositório nasceu como fork em 2026-09 e o GitHub não copia a proteção. Recriá-la é o passo 4 de
+A proteção foi recriada em 2026-09-18 (o fork não a herdou); o procedimento é o passo 4 de
 `docs/runbooks/repositorio-proprio.md`.
 
 `e2e` roda três partes em paralelo; as specs de fora estão declaradas, **com motivo escrito**, em
@@ -182,7 +182,7 @@ o Claude Code lê o espelho em `.claude/skills/`). Carregue o guia quando o pedi
 a pessoa não saiba que ele existe — `tests/unit/skills-embutidas.test.ts` exige que este arquivo
 cite cada um:
 
-**Os cinco são checks obrigatórios** na branch protection da `main` — medido em 2026-08-14 @ `741c4ec8` (o comando exige permissão de **admin** no repositório: com token de contribuidor ele devolve `404`, medido em 2026-09-13):
+**Os quatro são checks obrigatórios** na branch protection da `main` — medido em 2026-09-18, no dia em que ela foi recriada (o comando exige permissão de **admin** no repositório: com token de contribuidor ele devolve `404`):
 | Situação                                                                            | Guia                    |
 | ----------------------------------------------------------------------------------- | ----------------------- |
 | Instalar, atualizar ou consertar a instalação numa VPS; domínio, Supabase, WhatsApp | `deskcomm-instalar`     |

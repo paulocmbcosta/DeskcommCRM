@@ -1,35 +1,17 @@
 name: ci
 
+# Sem `paths-ignore`, de propósito. Ele existiu aqui (PR #5) para poupar a cota
+# de Actions de quando o repositório era privado; em repositório público os
+# runners padrão não têm cota. E ele é incompatível com a proteção da `main`:
+# check obrigatório que não roda num PR só de prosa deixa esse PR travado para
+# sempre, porque o GitHub não conta check ausente como verde. `verify` e
+# `invariants` são obrigatórios — ver docs/runbooks/repositorio-proprio.md,
+# passo 4. Quem quiser poupar runner em PR de prosa faz um job que reporta
+# sucesso de propósito, nunca um filtro de caminho.
 on:
   pull_request:
-    paths-ignore:
-      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
-      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
-      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
-      #
-      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
-      # protection faz o PR nunca receber aquele check e ficar travado para
-      # sempre. Hoje este repositório não tem branch protection (plano Free não
-      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
-      # virar um job que reporta sucesso de propósito.
-      - "docs/**"
-      - "**/*.md"
-      - ".changes/**"
   push:
     branches: [main]
-    paths-ignore:
-      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
-      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
-      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
-      #
-      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
-      # protection faz o PR nunca receber aquele check e ficar travado para
-      # sempre. Hoje este repositório não tem branch protection (plano Free não
-      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
-      # virar um job que reporta sucesso de propósito.
-      - "docs/**"
-      - "**/*.md"
-      - ".changes/**"
 
 # O GITHUB_TOKEN destes jobs serve a `actions/checkout` (clone) e a
 # `actions/setup-node` (manifest de `actions/node-versions`, repo público) —
