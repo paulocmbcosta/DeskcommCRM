@@ -8,6 +8,76 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.30.0] — 2026-09-18
+
+### Adicionado
+
+- **Cada atendimento tem número de protocolo, e o inbox ganhou trilho de abas, histórico e linha do tempo** **Protocolo por atendimento.** Toda conversa passa a nascer com um número de
+  protocolo (`AAAAMMDD` + sequência do dia, por organização), visível no painel da
+  conversa e copiável com um clique. Quando o atendimento é fechado e o cliente
+  escreve de novo, nasce um atendimento NOVO com protocolo NOVO — o anterior fica
+  guardado no histórico do contato. O botão **Reabrir** continua o mesmo
+  atendimento, com o mesmo número. As conversas que já existiam recebem um
+  protocolo na atualização, sem nenhuma ação sua.
+
+  **A conversa mostra um atendimento por vez.** Com o retorno do cliente, a tela
+  abre só as mensagens do atendimento de agora. Os anteriores ficam no relógio do
+  painel direito (**Atendimentos anteriores**): data, status, quem atendeu e o
+  protocolo de cada um — clique para abrir. Dá também para digitar o número do
+  protocolo na busca do inbox: o atendimento aparece acima da lista, esteja a
+  conversa na aba que estiver.
+
+  **Linha do tempo da conversa.** A seção "Atividade" saiu do fim do painel e virou
+  uma aba própria, em linha: conversa aberta, transferida para a fila de um time,
+  assumida, transferida, liberada, encerrada (e por quem), reaberta, automático
+  pausado ou devolvido. Antes, encaminhar para um time e fechar a conversa não
+  deixavam rastro em tela nenhuma.
+
+  **Mais espaço para as conversas.** As abas (Fila, Minhas, Todas, Fechadas,
+  Automático) foram para um trilho vertical à esquerda, e os filtros por time,
+  número e etiqueta ficam recolhidos atrás do ícone de funil — que mostra quantos
+  filtros estão ligados, para nenhum ficar escondido. O painel direito também
+  recolhe: clicar na aba aberta devolve a largura à conversa.
+
+  **O card diz de quem é e por onde entrou.** Cada conversa da lista mostra o time
+  que a espera e o canal por onde o cliente falou (apelido do número + quatro
+  dígitos finais), sempre — não só quando há mais de um número. E a linha
+  "Aguardando há…" aparece em todas as abas, mudando de cor depois de 30 minutos e
+  de 2 horas sem resposta.
+
+- **O atendente entra em pausa com motivo, cada time pode ter um limite de conversas, e a fila anda sozinha quando abre vaga** **Status de atendimento na barra de cima.** Quem atende ganhou um seletor ao lado
+  do sino: **Online**, **Em pausa** e **Offline**. Entrar em pausa pede o motivo
+  (banheiro, almoço, intervalo, reunião, treinamento ou outro) e aceita uma
+  observação. Em pausa, a pessoa **não recebe conversa nova** do rodízio: a do time
+  dela vai para outro colega ou espera na fila. As que já são dela continuam com
+  ela. Voltar é um clique, e a fila é tentada de novo na hora.
+
+  **O gestor vê quem está em pausa, por quê e há quanto tempo**, em Equipe ›
+  Atendimento. Cada pausa fica registrada com início, fim e motivo — é a base para
+  os relatórios de pausa por operador.
+
+  **Limite de conversas por time.** Em Configurações › Times de atendimento, cada
+  time pode ter um *limite de conversas simultâneas por atendente*. Com todos no
+  limite, a conversa nova **espera na fila do time** até alguém ter vaga, em vez de
+  ir para quem já está cheio. Sem limite (o padrão), continua valendo só a
+  capacidade individual de cada pessoa, como antes.
+
+  **Quem tem menos atendimento recebe primeiro.** A distribuição automática passa a
+  olhar a carga antes do rodízio: a conversa nova vai para quem está com menos
+  conversas abertas, e só no empate vale a vez de quem recebeu há mais tempo.
+
+  **A fila anda quando abre vaga.** Fechar ou liberar uma conversa já faz o sistema
+  tentar de novo quem estava esperando — antes, depois de algumas tentativas, a
+  espera chegava a 15 minutos mesmo com atendente livre.
+
+  **Conserto que vem junto:** quem ficava "disponível" era derrubado para offline
+  15 minutos depois, porque nenhuma tela avisava ao sistema que a pessoa continuava
+  ali. Agora o navegador avisa sozinho enquanto o CRM estiver aberto, em qualquer
+  tela.
+
+  Nada muda para quem usa o atendimento em modo manual e não tem times: o seletor
+  de status aparece, mas ninguém é obrigado a usá-lo.
+
 ## [1.29.0] — 2026-09-18
 
 ### Adicionado
@@ -4810,7 +4880,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.29.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.0...HEAD
+[1.30.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/melgarafael/DeskcommCRM/compare/v1.27.3...v1.28.0
 [1.27.3]: https://github.com/melgarafael/DeskcommCRM/compare/v1.27.2...v1.27.3
