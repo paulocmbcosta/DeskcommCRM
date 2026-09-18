@@ -142,6 +142,20 @@ describe("o que cada linha diz", () => {
     expect(d.tom).toBe("fim");
   });
 
+  it("encerramento do LEGADO (backfill) não inventa autor: nem 'por', nem 'automaticamente'", () => {
+    const d = descreverEventoDaConversa(
+      evento({ type: "closed", actor_kind: "system", payload: { status: "closed", backfill: true } }),
+      t,
+    );
+    expect(d.titulo).toBe("Conversa encerrada");
+    expect(d.detalhe).toBeNull();
+  });
+
+  it("CONTROLE: encerramento sem autor e sem backfill continua dizendo que foi automático", () => {
+    const d = descreverEventoDaConversa(evento({ type: "closed", actor_kind: "system", payload: { status: "closed" } }), t);
+    expect(d.detalhe).toBe("Encerrada automaticamente.");
+  });
+
   it("reabrir avisa que o protocolo é o mesmo", () => {
     expect(descreverEventoDaConversa(evento({ type: "reopened" }), t).detalhe).toContain(
       "O protocolo continua o mesmo.",

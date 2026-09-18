@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -227,6 +228,57 @@ describe("o ciclo: fechar, o cliente voltar, reabrir", () => {
     expect(out).toContain("closed|user|Ana Atendente|closed");
     // Assumir cala o automático na MESMA instrução: o evento é "assumiu", não dois.
     expect(out.filter((l) => l.startsWith("ai_paused"))).toEqual([]);
+  });
+});
+
+describe("o legado ganha as duas linhas que o banco observou (migration 0268)", () => {
+  // O bloco é EXTRAÍDO do baseline — o que o `update.sh` do self-hoster aplica —,
+  // e não reescrito aqui: copiar o SQL para dentro do teste mediria a cópia.
+  const baseline = readFileSync("supabase/baseline.sql", "utf8");
+  const inicio = baseline.indexOf("-- ---- a linha do tempo das conversas que já existiam (migration 0268) ----");
+  const bloco = baseline.slice(inicio, baseline.indexOf("-- ---- VARREDURA anon:", inicio));
+
+  it("o instrumento acha o bloco (guarda de vacuidade)", () => {
+    expect(inicio).toBeGreaterThan(-1);
+    expect(bloco).toContain("insert into public.conversation_events");
+  });
+
+  it("atendimento SEM evento (o estado de quem atualizou) ganha 'opened' e 'closed' com o carimbo ORIGINAL", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        -- Reproduz o legado: atendimento fechado no passado, e nenhuma linha do tempo.
+        update public.atendimentos set started_at = '2026-03-10 20:40:00+00', closed_at = '2026-03-10 21:15:00+00', closed_status = 'closed'
+         where conversation_id='${conv}';
+        delete from public.conversation_events where conversation_id='${conv}';
+        ${bloco}
+        select '@@' || type || '|' || actor_kind || '|' || (payload->>'backfill') || '|' || to_char(created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI')
+          from public.conversation_events where conversation_id='${conv}' order by created_at;
+        -- Idempotente: a segunda aplicação não duplica.
+        ${bloco}
+        select '@@' || count(*) from public.conversation_events where conversation_id='${conv}';
+        rollback;
+      `),
+    );
+    expect(out).toEqual([
+      "opened|system|true|2026-03-10 20:40",
+      "closed|system|true|2026-03-10 21:15",
+      "2",
+    ]);
+  });
+
+  it("atendimento que JÁ tem o 'opened' do trigger não ganha um segundo", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${bloco}
+        select '@@' || count(*) filter (where type='opened') from public.conversation_events where conversation_id='${conv}';
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["1"]);
   });
 });
 

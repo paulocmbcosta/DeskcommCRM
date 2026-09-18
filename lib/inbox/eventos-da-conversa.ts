@@ -100,7 +100,12 @@ export function descreverEventoDaConversa(evento: EventoDaConversa, t: Tradutor)
     case "closed":
       return {
         titulo: t(DESFECHO_DO_STATUS[texto(p.status) ?? "closed"] ?? "Conversa encerrada"),
-        detalhe: por("Por") ?? (evento.actor_kind === "system" ? t("Encerrada automaticamente.") : null),
+        // `backfill`: encerramento de ANTES da linha do tempo existir (migration
+        // 0268). O banco sabe QUANDO fechou, não POR QUEM — e dizer "automaticamente"
+        // sobre uma conversa que alguém fechou à mão seria inventar o autor.
+        detalhe:
+          por("Por") ??
+          (p.backfill === true ? null : evento.actor_kind === "system" ? t("Encerrada automaticamente.") : null),
         tom: "fim",
       };
     case "reopened":
