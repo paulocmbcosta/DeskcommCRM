@@ -12,10 +12,18 @@
  * canal excluído sumiu da listagem: o alternador some com o penúltimo número, e
  * some junto com ele o único controle capaz de desfazer um filtro que continua
  * valendo — inbox filtrado, às vezes vazio, sem nada na tela dizendo por quê.
+ *
+ * As ABAS saíram do `InboxFilters` para o trilho `InboxAbas` (a faixa horizontal
+ * tomava a altura da lista), e os SELETORES passaram a viver recolhidos atrás do
+ * funil. Os casos abaixo medem a MESMA coisa de antes, no componente que hoje a
+ * desenha: as abas no trilho, os seletores com o painel aberto (`aberto`). O
+ * bloco do fim prova o que o recolhimento não pode fazer — esconder um filtro
+ * que está valendo.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
+import { InboxAbas } from "@/components/inbox/InboxAbas";
 import { InboxFilters, visibleInboxTabs, type InboxFiltersValue } from "@/components/inbox/InboxFilters";
 import type * as CanaisModule from "@/hooks/channels/useChannelSessions";
 import type { ChannelSession } from "@/hooks/channels/useChannelSessions";
@@ -107,10 +115,10 @@ describe("visibleInboxTabs (lógica pura de visões)", () => {
   });
 });
 
-describe("InboxFilters render — 3 visões + escopo", () => {
+describe("InboxAbas render — 3 visões + escopo", () => {
   it("agent em modo own*: mostra Minhas e Fila, esconde Todas", () => {
     setOrg("agent", "own_and_unassigned");
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxAbas value={VALUE} onChange={() => {}} />);
     expect(screen.getByRole("tab", { name: /Minhas/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Fila/ })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /Todas/ })).not.toBeInTheDocument();
@@ -118,13 +126,13 @@ describe("InboxFilters render — 3 visões + escopo", () => {
 
   it("manager: mostra Todas", () => {
     setOrg("manager", "own_and_unassigned");
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxAbas value={VALUE} onChange={() => {}} />);
     expect(screen.getByRole("tab", { name: /Todas/ })).toBeInTheDocument();
   });
 
   it("contagens por visão são renderizadas (Fila=3, Minhas=2)", () => {
     setOrg("manager", "all");
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxAbas value={VALUE} onChange={() => {}} />);
     expect(screen.getByRole("tab", { name: /Fila/ })).toHaveTextContent("3");
     expect(screen.getByRole("tab", { name: /Minhas/ })).toHaveTextContent("2");
     expect(screen.getByRole("tab", { name: /Todas/ })).toHaveTextContent("5");
@@ -135,14 +143,14 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
   it("um número só: não há o que alternar, o seletor não aparece", () => {
     setOrg("manager", "all");
     canaisRef.current = [canal()];
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
     expect(screen.queryByLabelText(SELETOR)).not.toBeInTheDocument();
   });
 
   it("dois números: o seletor aparece com os dois", () => {
     setOrg("manager", "all");
     canaisRef.current = [canal(), canal({ id: "canal-2", display_name: "Suporte" })];
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
     expect(screen.getByLabelText(SELETOR)).toBeInTheDocument();
   });
 
@@ -156,7 +164,7 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
     setOrg("manager", "all");
     canaisRef.current = [canal()];
     render(
-      <InboxFilters value={{ ...VALUE, channel_session_id: "canal-excluido" }} onChange={() => {}} />,
+      <InboxFilters aberto value={{ ...VALUE, channel_session_id: "canal-excluido" }} onChange={() => {}} />,
     );
     const seletor = screen.getByLabelText(SELETOR);
     expect(seletor).toBeInTheDocument();
@@ -175,7 +183,7 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
     setOrg("manager", "all");
     tagsRef.current = [];
     render(
-      <InboxFilters value={{ ...VALUE, tag: "etiqueta-orfa" }} onChange={() => {}} />,
+      <InboxFilters aberto value={{ ...VALUE, tag: "etiqueta-orfa" }} onChange={() => {}} />,
     );
     const seletor = screen.getByLabelText("Filtrar por tag");
     expect(seletor).toBeInTheDocument();
@@ -187,14 +195,14 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
     // ganharia um controle vazio em toda instalação que nunca usou etiqueta.
     setOrg("manager", "all");
     tagsRef.current = [];
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
     expect(screen.queryByLabelText("Filtrar por tag")).not.toBeInTheDocument();
   });
 
   it("filtro que casa com a lista: nada de 'Número removido'", () => {
     setOrg("manager", "all");
     canaisRef.current = [canal(), canal({ id: "canal-2", display_name: "Suporte" })];
-    render(<InboxFilters value={{ ...VALUE, channel_session_id: "canal-2" }} onChange={() => {}} />);
+    render(<InboxFilters aberto value={{ ...VALUE, channel_session_id: "canal-2" }} onChange={() => {}} />);
     const seletor = screen.getByLabelText(SELETOR);
     expect(seletor).toHaveTextContent("Suporte");
     expect(seletor).not.toHaveTextContent("Número removido");
@@ -210,8 +218,35 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
     setOrg("manager", "all");
     canaisRef.current = undefined;
     render(
-      <InboxFilters value={{ ...VALUE, channel_session_id: "canal-1" }} onChange={() => {}} />,
+      <InboxFilters aberto value={{ ...VALUE, channel_session_id: "canal-1" }} onChange={() => {}} />,
     );
     expect(screen.queryByText("Número removido")).not.toBeInTheDocument();
+  });
+});
+
+describe("InboxFilters — recolher os seletores não esconde filtro ligado", () => {
+  it("fechado por padrão: os seletores não estão na tela", () => {
+    setOrg("manager", "all");
+    canaisRef.current = [canal({ id: "canal-1" }), canal({ id: "canal-2" })];
+    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    expect(screen.queryByTestId("inbox-filtros-auxiliares")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filtros" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("com filtro valendo e o painel FECHADO, o funil diz quantos são", () => {
+    // O recolhimento só é honesto se o estado continuar visível: sem o número,
+    // a lista encolheria por um filtro que ninguém vê.
+    setOrg("manager", "all");
+    canaisRef.current = [canal({ id: "canal-1" }), canal({ id: "canal-2" })];
+    render(
+      <InboxFilters value={{ ...VALUE, channel_session_id: "canal-2", tag: "vip" }} onChange={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: "Filtros" })).toHaveTextContent("2");
+  });
+
+  it("sem filtro nenhum, o funil não mostra número", () => {
+    setOrg("manager", "all");
+    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    expect(screen.getByRole("button", { name: "Filtros" })).toHaveTextContent("");
   });
 });

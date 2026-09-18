@@ -54,7 +54,7 @@ export function ResultadosPorProtocolo({ termo, onAbrir }: Props) {
                 </span>
                 <span className="block truncate text-xs text-text">{a.contato}</span>
                 <span className="block text-[11px] tabular-nums text-text-muted">
-                  {format(new Date(a.started_at), "dd/MM/yyyy HH:mm", { locale })}
+                  {Number.isNaN(new Date(a.started_at).getTime()) ? "—" : format(new Date(a.started_at), "dd/MM/yyyy HH:mm", { locale })}
                 </span>
               </span>
             </button>

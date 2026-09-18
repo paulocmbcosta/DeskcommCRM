@@ -9,7 +9,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Archive, Inbox, Robot, User, UsersThree } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 
-import { INBOX_TABS, visibleInboxTabs, type InboxFiltersValue, type InboxTab } from "./InboxFilters";
+import { INBOX_TABS, visibleInboxTabs, type InboxTab } from "@/lib/inbox/abas";
+import type { InboxFiltersValue } from "./InboxFilters";
 
 /**
  * AS ABAS DO INBOX, EM PÉ.

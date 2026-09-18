@@ -17,7 +17,8 @@ import {
 } from "@/hooks/inbox/useConversationsRealtime";
 import { useConversation, isNotFound } from "@/hooks/inbox/useConversation";
 import { ConversationList } from "./ConversationList";
-import { INBOX_TABS, InboxFilters, type InboxFiltersValue, type InboxTab } from "./InboxFilters";
+import { InboxFilters, type InboxFiltersValue } from "./InboxFilters";
+import { INBOX_TABS, type InboxTab } from "@/lib/inbox/abas";
 import { InboxAbas } from "./InboxAbas";
 import { ChatThread } from "./ChatThread";
 import { Composer, type ComposerHandle } from "./Composer";

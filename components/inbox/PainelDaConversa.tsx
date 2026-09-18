@@ -1,6 +1,6 @@
 "use client";
 import type { ComponentType } from "react";
-import { format } from "date-fns";
+import { format, type Locale } from "date-fns";
 import Link from "next/link";
 
 import { useT } from "@/hooks/i18n/useT";
@@ -95,6 +95,17 @@ interface Props {
   larguraLivre?: boolean;
 }
 
+/**
+ * Data que NUNCA derruba o painel. `format` do date-fns LANÇA em data inválida,
+ * e um carimbo ausente (conversa em cache de versão anterior, payload parcial)
+ * viraria tela em branco na coluna inteira por causa de um rótulo.
+ */
+function dataLegivel(iso: string | null | undefined, padrao: string, locale: Locale): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : format(d, padrao, { locale });
+}
+
 function iniciais(nome: string): string {
   const partes = nome.trim().split(/\s+/).filter(Boolean);
   if (partes.length === 0) return "?";
@@ -109,7 +120,7 @@ function Copiavel({ valor, rotulo }: { valor: string; rotulo: string }) {
       type="button"
       aria-label={`${t("Copiar")} ${rotulo}`}
       title={`${t("Copiar")} ${rotulo}`}
-      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-subtle hover:bg-surface-elevated hover:text-text"
+      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-text-subtle hover:bg-surface-elevated hover:text-text"
       onClick={async () => {
         const copiou = await copyToClipboard(valor);
         if (copiou) toast.success(t("Copiado."));
@@ -344,16 +355,16 @@ export function PainelDaConversa({
                   </span>
                 </Campo>
                 <Campo rotulo={t("Criada em")}>
-                  {format(new Date(atendimentoEmTela?.started_at ?? conversation.created_at), "dd/MM/yyyy HH:mm", { locale })}
+                  {dataLegivel(atendimentoEmTela?.started_at ?? conversation.created_at, "dd/MM/yyyy HH:mm", locale)}
                 </Campo>
                 {atendimentoEmTela?.closed_at ? (
                   <Campo rotulo={t("Encerrada em")}>
-                    {format(new Date(atendimentoEmTela.closed_at), "dd/MM/yyyy HH:mm", { locale })}
+                    {dataLegivel(atendimentoEmTela.closed_at, "dd/MM/yyyy HH:mm", locale)}
                   </Campo>
                 ) : (
                   conversation.last_message_at && (
                     <Campo rotulo={t("Última mensagem")}>
-                      {format(new Date(conversation.last_message_at), "dd/MM/yyyy HH:mm", { locale })}
+                      {dataLegivel(conversation.last_message_at, "dd/MM/yyyy HH:mm", locale)}
                     </Campo>
                   )
                 )}
@@ -414,7 +425,7 @@ export function PainelDaConversa({
                           </span>
                         </span>
                         <span className="text-[11px] tabular-nums text-text-muted">
-                          {format(new Date(a.started_at), "dd/MM/yyyy HH:mm", { locale })}
+                          {dataLegivel(a.started_at, "dd/MM/yyyy HH:mm", locale)}
                           {a.canal ? ` · ${a.canal}` : ""}
                         </span>
                         {(a.assigned_to_user_name || naTela) && (
@@ -477,7 +488,7 @@ export function PainelDaConversa({
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="text-xs font-medium text-text">{item.titulo}</span>
                         <time className="shrink-0 text-[11px] tabular-nums text-text-subtle" dateTime={item.quando}>
-                          {format(new Date(item.quando), "dd/MM HH:mm", { locale })}
+                          {dataLegivel(item.quando, "dd/MM HH:mm", locale)}
                         </time>
                       </div>
                       {item.detalhe && <p className="mt-0.5 text-[11px] leading-snug text-text-muted">{item.detalhe}</p>}

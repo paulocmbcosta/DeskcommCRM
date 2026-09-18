@@ -130,8 +130,14 @@ const COR_DA_ESPERA: Record<NivelDeEspera, string> = {
 /** "MP wp · 1037": o apelido diz QUAL linha; os quatro dígitos desempatam dois apelidos iguais. */
 function rotuloDoCanal(canal: { phone_number?: string | null; display_name?: string | null } | null): string | null {
   if (!canal) return null;
-  const nome = canal.display_name?.trim() || null;
-  const numero = canal.phone_number?.trim() || null;
+  const preenchido = (valor: string | null | undefined) => {
+    const limpo = valor?.trim() ?? "";
+    return limpo === "" ? null : limpo;
+  };
+  // É o apelido do CANAL (`channel_sessions`), não o nome de uma pessoa: a regra
+  // de `rotuloDoContato` — que proíbe remontar aquela cadeia à mão — não é esta.
+  const nome = preenchido(canal.display_name);
+  const numero = preenchido(canal.phone_number);
   if (nome && numero) return `${nome} · ${numero.replace(/\D/g, "").slice(-4)}`;
   return nome ?? numero;
 }
