@@ -144,7 +144,7 @@ const GATILHO_ESPERADO: Record<string, { condicao: string | null; efeito: string
   "e2e.yml::e2e": {
     condicao: "always()",
     efeito:
-      "Este é o check obrigatório `e2e`, a fachada da matriz. Precisa de `always()` para " +
+      "Este é o `e2e`, a fachada da matriz (não é obrigatório neste repositório). Precisa de `always()` para " +
       "ler o resultado das partes e reprovar `skipped`.",
   },
   "perf.yml::build-and-size": {

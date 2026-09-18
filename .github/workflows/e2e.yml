@@ -13,21 +13,17 @@ name: e2e
 # limitador de login do produto é por IP (60/300s) e no CI todos os specs vêm do
 # mesmo 127.0.0.1. Ver o comentário do passo "E2E — parte 1 de 3".
 #
-# É CHECK OBRIGATÓRIO. A régua, para reconferir em vez de acreditar nesta linha:
+# NÃO é check obrigatório neste repositório. A régua, para reconferir em vez de
+# acreditar nesta linha:
 #   $ gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection \
 #       --jq '.required_status_checks.contexts|join(", ")'
-#   verify, build-and-size, invariants, e2e, imagens-ok   # medido em 2026-08-14
+#   verify, build-and-size, invariants, imagens-ok   # medido em 2026-09-18
 #
-# São CINCO. A versão anterior deste bloco colava a saída de 2026-08-12, com
-# quatro — `imagens-ok` virou obrigatório em 2026-08-13, um dia depois. Trocar
-# uma afirmação vencida por outra vencida é o mesmo defeito, e o commit
-# bcd88c30 desta branch existe justamente por causa dele: quem lê aqui para
-# saber contra o que medir concluiria que imagem quebrada não segura merge.
-# Este cabeçalho afirmou o contrário ("NÃO-BLOQUEANTE por ausência… quando N
-# execuções seguidas passarem limpas, adicionar aos obrigatórios") por tempo
-# demais depois de a promoção ter acontecido — e quem lesse isso mediria o custo
-# de uma mudança contra a régua errada.
-#
+# Na origem ele era o quinto obrigatório; aqui ficou de fora ao recriar a
+# proteção (o fork não a herda), porque só disparava em `opened` — check
+# exigido que não roda no segundo push trava o PR — e porque oscila entre
+# execuções do mesmo commit. O bloco `on:` abaixo diz o que roda hoje e como
+# voltar.
 # O job falha honestamente: a primeira versão usava `continue-on-error: true` no
 # job inteiro e reportou VERDE com o `supabase start` quebrado e zero teste
 # executado. Verde que não distingue "passou" de "nem rodou" é pior que vermelho.
@@ -35,38 +31,23 @@ on:
   # `workflow_dispatch` primeiro porque é o caminho de quem QUER o e2e agora:
   # Actions → e2e → Run workflow. Antes de mesclar algo arriscado, é o botão.
   workflow_dispatch: {}
-  pull_request:
-    branches: [main]
-    # SEM `synchronize` — este é o corte de custo desta mudança.
-    #
-    # O padrão do `pull_request` é [opened, synchronize, reopened], e
-    # `synchronize` é "empurrei outro commit". Com ele, um PR de 8 pushes paga 8
-    # vezes os ~75 minutos faturados das três partes. Sem ele, paga uma.
-    #
-    # O que se perde: o sinal do e2e passa a valer para o commit de ABERTURA, não
-    # para o último. Isso é aceitável HOJE por uma razão medida, não por
-    # economia: o e2e tem 11 falhas HERDADAS (medidas contra uma linha de base
-    # própria, PR #4) e oscila entre execuções do mesmo commit — `kanban-owner-filter`
-    # foi de vermelho a verde e `retorno-anti-morte` de verde a vermelho sem
-    # nenhuma mudança de código. Um gate que não gateia não merece 75 minutos por
-    # push.
-    #
-    # ⚠️ QUANDO AS 11 VOLTAREM AO VERDE, `synchronize` VOLTA AQUI. Este bloco é
-    # dívida declarada, não decisão de arquitetura.
-    types: [opened, reopened, ready_for_review]
-    paths-ignore:
-      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
-      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
-      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
-      #
-      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
-      # protection faz o PR nunca receber aquele check e ficar travado para
-      # sempre. Hoje este repositório não tem branch protection (plano Free não
-      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
-      # virar um job que reporta sucesso de propósito.
-      - "docs/**"
-      - "**/*.md"
-      - ".changes/**"
+  # SEM `pull_request`, por decisão do dono em 2026-09-18, durante o
+  # desenvolvimento: as três partes levam ~25 min, oscilam entre execuções do
+  # mesmo commit (medido no PR #6: `agenda-google-sync` vermelho e verde no
+  # mesmo SHA) e não são check obrigatório — um PR podia ser mesclado com elas
+  # ainda rodando. Sinal que ninguém espera e que às vezes mente não vale 25
+  # minutos de painel por PR. O e2e continua rodando no push na `main` (abaixo,
+  # assíncrono: não segura tag nem publicação) e por `Run workflow`, que é o
+  # botão para antes de mesclar algo arriscado.
+  #
+  # Para voltar aos PRs, restaure este bloco. `paths-ignore` só é aceitável
+  # enquanto o check NÃO for obrigatório, e `synchronize` fica de fora até as
+  # falhas herdadas ficarem verdes (8 pushes = 8 × 75 min faturados):
+  #
+  #   pull_request:
+  #     branches: [main]
+  #     types: [opened, reopened, ready_for_review]
+  #     paths-ignore: ["docs/**", "**/*.md", ".changes/**"]
   push:
     branches: [main]
     paths-ignore:
