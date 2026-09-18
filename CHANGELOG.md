@@ -8,6 +8,25 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.30.1] — 2026-09-18
+
+### Corrigido
+
+- **A linha do tempo das conversas antigas deixa de aparecer vazia** Na 1.30.0 toda conversa que já existia ganhou um protocolo, mas a aba
+  **Linha do tempo** delas abria dizendo "Nada registrado neste atendimento
+  ainda" — a atualização criou o atendimento, e não as linhas.
+
+  Agora cada conversa antiga mostra os dois fatos que o sistema de fato guardou:
+  quando o atendimento **abriu** e, se for o caso, quando **fechou**, com a data
+  original. O que não tem registro confiável no passado — quem assumiu, para que
+  time foi — não é inventado: a linha do tempo completa vale do momento da
+  atualização em diante.
+
+- **O status de atendimento diz Disponível e Indisponível, em vez de Online e Offline** Na 1.30.0 o seletor de status da barra de cima mostrava "Offline" ao lado do
+  sino — e, ali, a palavra parecia dizer que o **sistema** estava fora do ar. O
+  status fala da pessoa (recebe ou não conversa nova), então os rótulos passaram a
+  ser **Disponível**, **Em pausa** e **Indisponível**. Nada muda no funcionamento.
+
 ## [1.30.0] — 2026-09-18
 
 ### Adicionado
@@ -4880,7 +4899,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.1...HEAD
+[1.30.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/melgarafael/DeskcommCRM/compare/v1.27.3...v1.28.0
