@@ -179,6 +179,14 @@
       "sublabel": "TRAVA 2 bot_silenced_until · TRAVA 3 assignee_kind='user'"
     },
     {
+      "id": "novoAtendimento",
+      "lane": "dados",
+      "col": 7,
+      "type": "service",
+      "label": "fn_service_inbound — ramo 'reopened' (0269)",
+      "sublabel": "o cliente volta depois de ENCERRADO: o atendimento novo nasce sem as três travas"
+    },
+    {
       "id": "casos",
       "lane": "dados",
       "col": 3,
@@ -232,7 +240,7 @@
       "col": 5,
       "type": "service",
       "label": "event_log ai.handoff_resolved",
-      "sublabel": "único produtor do sinal que retoma follow-up pausado"
+      "sublabel": "o sinal que retoma follow-up pausado — dois produtores: a devolução pela pessoa e o atendimento novo (0269)"
     },
     {
       "id": "runtimeNativo",
@@ -783,6 +791,24 @@
       "from": "retomada",
       "to": "atendimentoManual",
       "label": "'Devolver ao automático' desfaz esta pausa ANTES da hora (solta a TRAVA 2, a mesma) — sem clique nenhum, o prazo vence e a IA volta sozinha"
+    },
+    {
+      "id": "e67",
+      "from": "novoAtendimento",
+      "to": "conversas",
+      "label": "encerrar É a devolução: zera time, dono, bot_silenced_until e os carimbos de passagem — só no retorno do CLIENTE, nunca no 'Reabrir' da pessoa"
+    },
+    {
+      "id": "e68",
+      "from": "novoAtendimento",
+      "to": "contacts",
+      "label": "force_human = false — só se nenhuma OUTRA conversa do mesmo cliente está com passagem em aberto"
+    },
+    {
+      "id": "e69",
+      "from": "novoAtendimento",
+      "to": "evento",
+      "label": "emite ai.handoff_resolved — só quando havia passagem a encerrar"
     }
   ],
   "cards": [

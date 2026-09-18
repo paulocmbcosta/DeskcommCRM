@@ -1105,6 +1105,15 @@ Default IA-06: bot **não reassume**. `conversations.bot_silenced_until` (timest
 
 Próxima conversation no mesmo contact (status=resolved + nova abertura) começa com bot, exceto `contacts.force_human=true`.
 
+> **Atualização (2026-09-19, migration 0269).** O "exceto" acima deixou de valer para o retorno do
+> CLIENTE. Encerrar o atendimento passou a ser a devolução completa: quando o cliente escreve numa
+> conversa encerrada, `fn_service_inbound` (ramo `reopened`) abre o atendimento novo sem time, sem
+> dono, sem `bot_silenced_until`, sem os carimbos de passagem — e solta `contacts.force_human`,
+> **desde que nenhuma outra conversa do mesmo cliente esteja com passagem em aberto**. Emite
+> `ai.handoff_resolved` só quando havia passagem a encerrar. "Reabrir" pela pessoa NÃO passa por
+> esse ramo: continua o mesmo atendimento, com as travas que ele tinha. Para conferir na fonte:
+> `grep -n "havia_passagem" supabase/baseline.sql`.
+
 ---
 
 ## 8. Guardrails LLM

@@ -18,7 +18,7 @@ import { orgTemAutomatico } from "@/lib/ai/agents/org-tem-automatico";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
 import { createClient } from "@/lib/supabase/server";
 
-import { aplicarPredicadoDeTime, predicadoDeTime } from "../_filtro-de-time";
+import { aplicarPredicadoDeTime, predicadoDeTime, type ConsultaFiltravel } from "../_filtro-de-time";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +69,10 @@ export function contagemSoNaoLidas(sp: URLSearchParams): boolean {
   return sp.get("unread") === "true";
 }
 
+/** Uma contagem que ainda aceita o predicado de time — e que, aguardada, diz quanto e se falhou. */
+type ContagemFiltravel = ConsultaFiltravel &
+  PromiseLike<{ count: number | null; error: { message: string } | null }>;
+
 export async function GET(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
   const supabase = await createClient();
@@ -117,9 +121,42 @@ export async function GET(req: NextRequest): Promise<Response> {
       .from("conversations")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", org);
-    for (const [coluna, valor] of auxiliares) q = q.eq(coluna, valor);
+    // A etiqueta NÃO é igualdade: `conversations.tags` é array, e a lista a filtra
+    // com `contains` (`_handler.ts`). Aqui ela saía como `.eq("tag", …)` — coluna
+    // que não existe —, e com uma etiqueta escolhida a rota inteira respondia
+    // erro: os números sumiam de TODAS as abas justo quando havia filtro ligado.
+    for (const [coluna, valor] of auxiliares) {
+      q = coluna === "tag" ? q.contains("tags", [String(valor)]) : q.eq(coluna, valor);
+    }
     if (soNaoLidas) q = q.gt("unread_count_for_assignee", 0);
     return aplicarPredicadoDeTime(q, time);
+  };
+
+  // A aba FECHADAS conta ATENDIMENTOS, não conversas (ver `atendimentos/_handler.ts`):
+  // a conversa é uma por cliente e canal, e reabre quando ele volta — contar
+  // conversas fechadas deixava de fora todo atendimento encerrado de quem voltou.
+  // Fábrica própria porque a tabela é outra; a RÉGUA é a mesma, herdada inteira:
+  // organização, número, etiqueta, não lidas (os três moram na conversa, por isso
+  // o `!inner`) e o time — que aqui é o do FECHAMENTO, igual à lista da aba.
+  const countAtendimentosFechados = () => {
+    let q = supabase
+      .from("atendimentos")
+      .select("id, conversations!inner(id)", { count: "exact", head: true })
+      .eq("organization_id", org)
+      .not("closed_at", "is", null);
+    for (const [coluna, valor] of auxiliares) {
+      q =
+        coluna === "tag"
+          ? q.contains("conversations.tags", [String(valor)])
+          : q.eq(`conversations.${coluna}`, valor);
+    }
+    if (soNaoLidas) q = q.gt("conversations.unread_count_for_assignee", 0);
+    // O cast poupa o compilador de uma conta que ele não termina: o builder
+    // tipado por um `select` COM EMBED, entregue a um genérico, estoura a
+    // profundidade de instanciação (TS2589) — e só o `next build` acusa, porque
+    // o `tsconfig` do typecheck não segue o mesmo caminho. O que se preserva é o
+    // que a rota lê: `count` e `error`.
+    return aplicarPredicadoDeTime(q as unknown as ContagemFiltravel, time);
   };
 
   // Espelha tabToFilter (InboxLayout): unassigned = fila aberta sem dono;
@@ -155,7 +192,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     // A aba "Fechadas" existia SEM número nenhum. Num inbox antigo, é o número
     // que diz o tamanho do arquivo — e a sua ausência fazia a aba parecer um
     // lugar vazio. Mesma fábrica: herda organização e filtros.
-    countExact().in("status", CONVERSATION_TERMINAL_STATUSES),
+    countAtendimentosFechados(),
   ]);
 
   const firstErr =

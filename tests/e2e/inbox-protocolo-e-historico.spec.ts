@@ -18,7 +18,13 @@
  *   2. o protocolo que o banco gerou CHEGA à tela, e muda quando o cliente volta;
  *   3. abrir um atendimento antigo recorta a conversa naquele episódio e trava
  *      o composer — e "voltar ao atual" desfaz os dois;
- *   4. a busca pelo protocolo ANTIGO acha o atendimento estando em outra aba.
+ *   4. a busca pelo protocolo ANTIGO acha o atendimento estando em outra aba;
+ *   5. o atendimento novo começa do ZERO — sem o time nem o dono do anterior
+ *      (migration 0269): quem falou com a Cobrança e volta por outro assunto
+ *      passa pela triagem de novo, em vez de cair na fila da Cobrança;
+ *   6. a aba Fechadas lista ATENDIMENTOS: o que foi encerrado continua lá depois
+ *      que o cliente volta e a conversa reabre — contra o PostgREST de verdade,
+ *      que é onde os filtros embutidos (`conversations.tags`) podem falhar.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -247,8 +253,36 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     expect(segundo).toMatch(/^\d{14}$/);
     expect(segundo, "o retorno do cliente abre protocolo novo").not.toBe(primeiro);
 
+    // O atendimento novo começa do ZERO: nem o time nem o dono do anterior.
+    // Quem falou com a Cobrança e voltou por causa da instalação não pode cair
+    // na fila da Cobrança — passa pela triagem de novo.
+    const { data: depoisDoRetorno, error: erroDoRetorno } = await db
+      .from("conversations")
+      .select("status, team_id, assigned_to_user_id, bot_silenced_until, last_handoff_at")
+      .eq("id", conversation)
+      .single();
+    if (erroDoRetorno) throw erroDoRetorno;
+    expect(depoisDoRetorno).toEqual({
+      status: "open",
+      team_id: null,
+      assigned_to_user_id: null,
+      bot_silenced_until: null,
+      last_handoff_at: null,
+    });
+
     await page.goto(`/app/inbox?filter=all&id=${conversation}`);
     await expect(page.getByTestId("painel-da-conversa").first().getByTestId("protocolo-do-atendimento")).toContainText(segundo);
+    // …e a TELA diz a mesma coisa: o card saiu da Cobrança.
+    const rodapeDepois = page.locator(`[data-conversation-id="${conversation}"]`).getByTestId("rodape-da-conversa");
+    await expect(rodapeDepois).toContainText("Sem time");
+    await expect(rodapeDepois).not.toContainText("Cobrança");
+    // A linha do tempo do atendimento novo conta UMA coisa — que ele abriu. O
+    // reset não é gesto de ninguém: não vira "saiu do time" nem "IA retomou".
+    await page.getByTestId("painel-aba-linha").click();
+    const linhaDoNovo = page.getByTestId("linha-do-tempo-da-conversa");
+    await expect(linhaDoNovo).toContainText("Novo atendimento aberto");
+    await expect(linhaDoNovo).not.toContainText("Cobrança");
+    await page.screenshot({ path: `${evidence}/04b-atendimento-novo-do-zero.png` });
     // A conversa mostra SÓ o atendimento de agora: a mensagem antiga não está.
     const thread = page.getByTestId("chat-thread");
     await expect(thread).toContainText("Voltei, agora é sobre a instalação");
@@ -292,6 +326,75 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await page.screenshot({ path: `${evidence}/07-busca-por-protocolo.png` });
     await achado.click();
     await expect(page.getByTestId("aviso-atendimento-antigo")).toContainText(primeiro);
+
+    // ─── 7. Fechadas lista o ATENDIMENTO — a conversa está ABERTA de novo ───
+    // É a linha que a lista antiga (conversas em status fechado) perdia: o
+    // cliente voltou, a conversa reabriu, e o que a Cobrança encerrou sumia.
+    await page.goto("/app/inbox?filter=closed");
+    const fechados = page.getByTestId("lista-de-atendimentos-fechados");
+    const encerrado = fechados.getByTestId("atendimento-fechado").filter({ hasText: primeiro });
+    await expect(encerrado).toBeVisible();
+    await expect(fechados.getByTestId("atendimento-fechado")).toHaveCount(1);
+    await expect(encerrado).toContainText("Fernando Protocolo");
+    await expect(encerrado).toContainText("Juliana Teste");
+    // Quem encerrou cabe INTEIRO: é o dado que o gestor procura nesta aba.
+    const cortou = await encerrado
+      .getByTestId("quem-encerrou")
+      .evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+    expect(cortou, "o nome de quem encerrou saiu com reticências").toBe(false);
+    // O time é o do FECHAMENTO — a conversa, hoje, não tem time nenhum.
+    await expect(encerrado).toContainText("Cobrança");
+    await expect(encerrado).toContainText("Whats Suporte · 4063");
+    await expect(encerrado.getByTestId("cliente-voltou")).toBeVisible();
+    // O badge conta a mesma unidade que a lista mostra.
+    await expect(page.getByRole("tab", { name: "Fechadas" })).toContainText("1");
+    await page.screenshot({ path: `${evidence}/08-fechadas-lista-atendimentos.png` });
+
+    // A busca dentro da aba acha pelo número e pelo nome — e o bloco de cima não
+    // repete o mesmo atendimento.
+    await page.getByLabel("Buscar conversas").fill(primeiro);
+    await expect(encerrado).toBeVisible();
+    await expect(page.getByTestId("resultado-por-protocolo").filter({ hasText: primeiro })).toHaveCount(0);
+    await page.getByLabel("Buscar conversas").fill("Fernando");
+    await expect(encerrado).toBeVisible();
+    await page.getByLabel("Buscar conversas").fill("Zuleica Inexistente");
+    await expect(fechados.getByTestId("atendimento-fechado")).toHaveCount(0);
+    await page.getByLabel("Buscar conversas").fill("");
+
+    // Os filtros, contra o PostgREST de verdade (dublê não prova filtro embutido).
+    const ler = async (qs: string) => {
+      const r = await page.request.get(`/api/v1/atendimentos?status=closed${qs}`);
+      expect(r.status(), `atendimentos?status=closed${qs}`).toBe(200);
+      return ((await r.json()) as { data: Array<{ protocol: string }> }).data.map((a) => a.protocol);
+    };
+    expect(await ler(`&team_id=${time}`), "o time do FECHAMENTO acha o atendimento").toEqual([primeiro]);
+    expect(await ler("&team_id=none"), "a conversa hoje está sem time, mas o atendimento foi da Cobrança").toEqual([]);
+    expect(await ler(`&channel_session_id=${session}`)).toEqual([primeiro]);
+    expect(await ler("&tag=urgente")).toEqual([]);
+    await sql(`update public.conversations set tags = array['urgente'] where id = $1`, [conversation]);
+    expect(await ler("&tag=urgente")).toEqual([primeiro]);
+    // A contagem com etiqueta respondia ERRO (`.eq("tag")`, coluna que não existe)
+    // e os números sumiam de todas as abas. Agora responde, e conta igual à lista.
+    const contagem = await page.request.get("/api/v1/conversations/counts?tag=urgente");
+    expect(contagem.status()).toBe(200);
+    expect(((await contagem.json()) as { data: { closed: number; all: number } }).data).toMatchObject({
+      closed: 1,
+      all: 1,
+    });
+
+    // Clicar abre AQUELE atendimento — recortado e travado —, não o atual.
+    await encerrado.click();
+    await expect(page.getByTestId("aviso-atendimento-antigo")).toContainText(primeiro);
+    await expect(page.getByTestId("chat-thread")).toContainText("Quero a segunda via do boleto");
+    await expect(page.getByTestId("chat-thread")).not.toContainText("Voltei, agora é sobre a instalação");
+    await expect(encerrado).toHaveAttribute("aria-current", "true");
+    // A ficha é a do atendimento que está na tela: o time é o da Cobrança, que o
+    // encerrou — a conversa, hoje, está sem time, e não é dela que a ficha fala.
+    const fichaDoAntigo = page.getByTestId("painel-da-conversa").first().getByTestId("ficha-da-conversa");
+    await expect(fichaDoAntigo).toContainText(primeiro);
+    await expect(fichaDoAntigo).toContainText("Cobrança");
+    await expect(fichaDoAntigo).not.toContainText("Sem time");
+    await page.screenshot({ path: `${evidence}/09-fechadas-abre-o-atendimento.png` });
   } finally {
     await context.close();
     if (org) await db.from("organizations").delete().eq("id", org);

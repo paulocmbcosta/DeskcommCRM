@@ -197,10 +197,15 @@ export function PainelDaConversa({
     return [...eventos, ...atividades].sort((x, y) => new Date(x.quando).getTime() - new Date(y.quando).getTime());
   })();
 
+  // O time da FICHA é o do atendimento que está na tela — a mesma regra do
+  // Responsável logo abaixo. Encerrado, vale o time com que ele FECHOU
+  // (`atendimentos.team_id`): depois que o cliente volta, a conversa começa sem
+  // time (0269), e a ficha do atendimento que a Cobrança encerrou diria "Sem time".
+  const timeDaFichaId = atendimentoEmTela?.closed_at
+    ? atendimentoEmTela.team_id
+    : (conversation?.team_id ?? null);
   const nomeDoTime =
-    conversation?.team_id != null
-      ? ((times.data ?? []).find((time) => time.id === conversation.team_id)?.name ?? null)
-      : null;
+    timeDaFichaId != null ? ((times.data ?? []).find((time) => time.id === timeDaFichaId)?.name ?? null) : null;
   const rotuloCanal = rotuloDoCanal(conversation?.channel_sessions ?? null);
 
   const trilho = (

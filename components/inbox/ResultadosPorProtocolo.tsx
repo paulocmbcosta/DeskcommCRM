@@ -23,13 +23,18 @@ import { Hash } from "@/lib/ui/icons";
 interface Props {
   termo: string;
   onAbrir: (atendimento: AtendimentoResumo) => void;
+  /**
+   * A aba "Fechadas" já lista os atendimentos ENCERRADOS e responde pelo
+   * protocolo deles; lá este bloco mostra só o que a lista não tem.
+   */
+  ocultarEncerrados?: boolean;
 }
 
-export function ResultadosPorProtocolo({ termo, onAbrir }: Props) {
+export function ResultadosPorProtocolo({ termo, onAbrir, ocultarEncerrados = false }: Props) {
   const t = useT();
   const locale = useLocaleDeData();
   const busca = useBuscaPorProtocolo(termo);
-  const achados = busca.data ?? [];
+  const achados = (busca.data ?? []).filter((a) => !ocultarEncerrados || !a.closed_at);
   if (achados.length === 0) return null;
 
   return (

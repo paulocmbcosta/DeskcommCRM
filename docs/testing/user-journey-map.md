@@ -349,6 +349,10 @@ nunca por `update` de status.
 | 9 | O cliente volta: protocolo NOVO, e a conversa mostra só o atendimento de agora | protocolo ≠ anterior; mensagem antiga ausente do thread | ✅ |
 | 10 | O histórico lista os dois atendimentos; abrir o antigo recorta a conversa, some com as ações e trava o composer; "voltar ao atual" desfaz | `aviso-atendimento-antigo`, `acoes-da-conversa` oculto | ✅ |
 | 11 | A busca pelo protocolo ANTIGO acha o atendimento estando em outra aba | `resultado-por-protocolo` na aba Minhas | ✅ |
+| 12 | O atendimento novo começa do ZERO: sem o time nem o dono do anterior, IA religada (migration 0269) | `conversations` com `team_id`/dono/silêncio/passagem nulos; card "Sem time"; linha do tempo só com "Novo atendimento aberto" | ✅ |
+| 13 | A aba Fechadas lista ATENDIMENTOS: o encerrado continua lá com a conversa ABERTA de novo, marcado "o cliente voltou", com quem encerrou (sem reticências), o time do FECHAMENTO e o canal; o badge conta a mesma unidade | `lista-de-atendimentos-fechados`, `cliente-voltou`, `quem-encerrou` medido por `scrollWidth`, badge `1` | ✅ |
+| 14 | Na aba Fechadas a busca acha pelo protocolo e pelo nome, e os filtros valem contra o PostgREST de verdade (time do fechamento, número, etiqueta); a contagem com etiqueta responde 200 | `GET /atendimentos?status=closed&…` e `GET /conversations/counts?tag=` pela sessão logada | ✅ |
+| 15 | Clicar num atendimento encerrado abre AQUELE atendimento (recortado, composer travado) e a ficha mostra o time que o encerrou, não "Sem time" | `aviso-atendimento-antigo`, `ficha-da-conversa` com "Cobrança" | ✅ |
 
 **Achados desta rodada, consertados na causa:**
 
@@ -358,10 +362,24 @@ nunca por `update` de status.
   Conserto: três faixas mutuamente exclusivas. A spec mede a largura do card em 1440px.
 - **Data inválida derrubava o painel inteiro.** `format()` do date-fns LANÇA; um carimbo
   ausente virava tela em branco na coluna. Agora o rótulo cai em "—".
+- **A contagem com etiqueta derrubava o número de TODAS as abas** (achado em 2026-09-19, ao
+  levar a contagem da aba Fechadas para `atendimentos`). A fábrica de
+  `conversations/counts` aplicava todo filtro auxiliar como igualdade, e a etiqueta saía como
+  `.eq("tag", …)` — coluna que não existe (`tags` é array). Com uma etiqueta escolhida a rota
+  respondia erro e os badges sumiam. Agora é `contains`, como a lista sempre fez; o caso 14 mede
+  o 200 pela sessão logada e `tests/unit/badge-espelha-o-filtro.test.ts` proíbe a igualdade crua.
+- **Reabrir por mensagem do cliente herdava o roteamento do atendimento anterior.** Medido no
+  corpo de `fn_service_inbound` (0222): o ramo `reopened` zerava dono e agente de IA e não tocava
+  `team_id`, `bot_silenced_until`, `last_handoff_at` nem `contacts.force_human`. Quem falou com o
+  Financeiro na segunda e voltava pedindo suporte na quarta caía na fila do Financeiro, com a IA
+  muda. Migration 0269; gate em `tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts`.
 
 **NÃO medido:** telefone de verdade (a spec não conecta WAHA); o trilho em tela de toque
 (a dica de mouse não existe lá — o nome da aba escrito no topo é a resposta, e está medido
-só em desktop); ordem dos eventos quando dois chegam no mesmo milissegundo.
+só em desktop); ordem dos eventos quando dois chegam no mesmo milissegundo; a aba Fechadas com
+milhares de atendimentos (a paginação por `(closed_at, id)` é medida em unidade, não em volume);
+o agente de IA de verdade respondendo no atendimento novo (a spec prova o ESTADO que o religa —
+silêncio, passagem e `force_human` limpos —, não a resposta dele).
 
 ## J25 — Entrar em pausa com motivo, o gestor ver, e o time ter teto `[P1]`
 

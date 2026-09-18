@@ -107,6 +107,53 @@ describe("nenhuma contagem é montada por fora da fábrica", () => {
     expect(fonte).toContain("closed: closed.count");
   });
 
+  it("a aba Fechadas conta ATENDIMENTOS — a mesma unidade que a lista dela mostra", () => {
+    // A conversa é uma por cliente e canal e REABRE quando ele volta. Contando
+    // conversas fechadas, o atendimento que o Financeiro encerrou de manhã saía
+    // do número à tarde, quando o mesmo cliente escrevia pedindo suporte — e a
+    // lista da aba (`atendimentos?status=closed`) mostraria uma linha que o
+    // badge não conta. A unidade é uma só, nas duas pontas.
+    const fabrica = fonte.slice(
+      fonte.indexOf("const countAtendimentosFechados = () =>"),
+      fonte.indexOf("// Espelha tabToFilter"),
+    );
+    expect(fabrica, "a fábrica dos fechados sumiu").not.toBe("");
+    expect(fabrica).toContain('.from("atendimentos")');
+    expect(fabrica).toContain('.not("closed_at", "is", null)');
+    // …e herda a régua INTEIRA: organização, auxiliares, não lidas e time.
+    expect(fabrica).toContain("organization_id");
+    expect(fabrica, "os filtros auxiliares não entram na fábrica dos fechados").toContain("auxiliares");
+    expect(fabrica, "o filtro de não lidas não entra na fábrica dos fechados").toContain("soNaoLidas");
+    expect(fabrica, "o filtro de time não entra na fábrica dos fechados").toContain("aplicarPredicadoDeTime");
+
+    const dentroDoPromiseAll = fonte.slice(
+      fonte.indexOf("await Promise.all(["),
+      fonte.indexOf("]);", fonte.indexOf("await Promise.all([")),
+    );
+    expect(dentroDoPromiseAll).toContain("countAtendimentosFechados()");
+    // O caminho antigo — conversas EM status terminal — não pode voltar por engano.
+    // (`.not("status", "in", …)` continua legítimo: é a aba Todas excluindo-as.)
+    expect(dentroDoPromiseAll).not.toContain('.in("status", CONVERSATION_TERMINAL_STATUSES)');
+  });
+
+  it("a etiqueta filtra por `contains` no array — `.eq(\"tag\")` derrubava a rota inteira", () => {
+    // `conversations` não tem coluna `tag`: tem `tags text[]`. A fábrica fazia
+    // `q.eq("tag", valor)` para todo auxiliar, o PostgREST respondia erro, e com
+    // uma etiqueta escolhida os números sumiam de TODAS as abas. A lista sempre
+    // usou `contains` (`conversations/_handler.ts`) — o badge tem de usar a mesma.
+    const fabricas = fonte.slice(
+      fonte.indexOf("const countExact = () =>"),
+      fonte.indexOf("// Espelha tabToFilter"),
+    );
+    expect(fabricas).toContain('q.contains("tags", [String(valor)])');
+    expect(fabricas).toContain('q.contains("conversations.tags", [String(valor)])');
+    // Igualdade crua sobre o par só é aceitável DEPOIS de separar a etiqueta.
+    const igualdadesCruas = fabricas
+      .split("\n")
+      .filter((l) => /q\s*=\s*q\.eq\(coluna, valor\)/.test(l));
+    expect(igualdadesCruas, "auxiliar aplicado por igualdade sem separar a etiqueta").toEqual([]);
+  });
+
   it("o comentário não cita arquivo de teste que não existe", () => {
     // A linha 69 citava `tests/unit/badge-espelha-a-aba.test.ts`, que NUNCA existiu
     // — medido com `find` e com `git log`. Citação falsa dentro do código é pior
