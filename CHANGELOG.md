@@ -8,6 +8,38 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.31.0] — 2026-09-18
+
+### Adicionado
+
+- **Cliente que volta depois de encerrado começa um atendimento do zero, e a aba Fechadas passa a listar atendimentos** **Quando o cliente volta, o atendimento novo começa do zero.** Encerrar um
+  atendimento passa a ser a devolução completa: se o mesmo cliente escrever de
+  novo, o protocolo novo nasce **sem o time e sem o responsável do anterior**, com
+  a IA religada e passando pela triagem outra vez. Antes, quem tinha falado com o
+  Financeiro e voltava pedindo suporte caía direto na fila do Financeiro, com a IA
+  muda. O botão **Reabrir** não muda: ele continua o mesmo atendimento, com o
+  mesmo protocolo e o mesmo time.
+
+  **A aba Fechadas lista atendimentos, não conversas.** Tudo o que foi encerrado
+  aparece ali — inclusive de quem já voltou e está sendo atendido de novo, com a
+  marca **o cliente voltou**. Cada linha mostra o protocolo, quem encerrou, o time
+  que encerrou e o canal; clicar abre aquele atendimento, só com as mensagens
+  dele. A busca da aba acha pelo número do protocolo e pelo nome do cliente, e o
+  número no ícone da aba conta a mesma coisa que a lista mostra.
+
+  **Corrigido junto:** com um filtro de etiqueta ligado, os números das abas do
+  inbox sumiam. Voltaram.
+
+  Nada a fazer na atualização: a mudança entra sozinha pelo `update.sh`.
+
+### Corrigido
+
+- **O menu lateral volta a caber inteiro na tela, sem rolagem, com o número da versão à vista** Em telas de 900px de altura, a barra lateral ganhava uma rolagem de poucos
+  pixels: o rótulo "versão X" do rodapé ocupava uma linha própria que o desenho do
+  menu não previa. O número da versão passou a dividir a linha com o "Recolher", e
+  o menu cabe inteiro de novo. O aviso de **versão nova disponível** continua com
+  linha própria, porque ele pede atenção.
+
 ## [1.30.1] — 2026-09-18
 
 ### Corrigido
@@ -4899,7 +4931,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.0...HEAD
+[1.31.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.1...v1.31.0
 [1.30.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.28.0...v1.29.0
