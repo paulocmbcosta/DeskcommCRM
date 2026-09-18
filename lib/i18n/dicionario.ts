@@ -8893,6 +8893,10 @@ export const DICIONARIO: Traducoes = {
   "Treinamento": { es: "Capacitación" },
   "Pausa": { es: "Pausa" },
   "conversas por atendente": { es: "conversaciones por agente" },
+  "Indisponível": { es: "No disponible" },
+  "Ficar disponível": { es: "Ponerme disponible" },
+  "Ficar indisponível": { es: "Ponerme no disponible" },
+  "Indisponível você não recebe conversas novas do rodízio.": { es: "No disponible no recibes conversaciones nuevas de la rotación." },
 };
 
 /**

@@ -30,7 +30,7 @@ import { CaretDown, Coffee } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 
 /**
- * O STATUS DE ATENDIMENTO, na barra superior — online, em pausa ou offline.
+ * O STATUS DE ATENDIMENTO, na barra superior — disponível, em pausa ou indisponível.
  *
  * Mora na barra de cima, e não dentro do inbox, por duas razões: o rodízio
  * distribui conversa para quem está "online" esteja a pessoa na tela que
@@ -51,10 +51,19 @@ const COR_DO_STATUS = {
   offline: "bg-border-strong",
 } as const;
 
+/**
+ * "Disponível" e "Indisponível", NÃO "Online" e "Offline".
+ *
+ * A primeira versão dizia "● Offline" na barra de cima, ao lado do sino — e ali
+ * a palavra lê como "o SISTEMA está fora do ar". Quem mediu isso foi a catraca
+ * `degradacao-silenciosa.spec.ts`, que procura na tela qualquer aviso de conexão
+ * e passou a achar um: o meu rótulo. Este controle fala da PESSOA (recebe ou não
+ * conversa nova), não da conexão — e a palavra tem de dizer isso sozinha.
+ */
 const ROTULO_DO_STATUS = {
-  online: "Online",
+  online: "Disponível",
   paused: "Em pausa",
-  offline: "Offline",
+  offline: "Indisponível",
 } as const;
 
 export function StatusDoAtendente() {
@@ -130,7 +139,7 @@ export function StatusDoAtendente() {
                 ? t("Você recebe conversas novas do rodízio.")
                 : status === "paused"
                   ? t("Em pausa você não recebe conversas novas. As que já são suas continuam com você.")
-                  : t("Offline você não recebe conversas novas do rodízio.")}
+                  : t("Indisponível você não recebe conversas novas do rodízio.")}
             </p>
             {isError && <p className="text-xs font-normal text-error-fg">{t("Não consegui ler o seu status.")}</p>}
             {typeof data?.current_load === "number" && (
@@ -147,7 +156,7 @@ export function StatusDoAtendente() {
             onClick={() => mudar.mutate({ status: "online" })}
           >
             <span className={cn("mr-2 h-2 w-2 rounded-full", COR_DO_STATUS.online)} aria-hidden />
-            {emPausa ? t("Voltar da pausa") : t("Ficar online")}
+            {emPausa ? t("Voltar da pausa") : t("Ficar disponível")}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={mudar.isPending}
@@ -163,7 +172,7 @@ export function StatusDoAtendente() {
             onClick={() => mudar.mutate({ status: "offline" })}
           >
             <span className={cn("mr-2 h-2 w-2 rounded-full", COR_DO_STATUS.offline)} aria-hidden />
-            {t("Ficar offline")}
+            {t("Ficar indisponível")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
