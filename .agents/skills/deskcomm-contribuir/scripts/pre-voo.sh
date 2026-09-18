@@ -24,7 +24,7 @@ echo "── pré-voo do contribuidor · $(date -u +%Y-%m-%dT%H:%MZ) ──"
 # ── 0. Âncora ────────────────────────────────────────────────────────────────
 if git fetch origin -q 2>/dev/null; then :; else olhe "sem rede: origin/main pode estar velha (git fetch origin)"; fi
 if ! git rev-parse -q --verify origin/main >/dev/null 2>&1; then
-  trava "origin/main não existe neste clone — adicione o remoto do repositório principal: git remote add upstream https://github.com/melgarafael/DeskcommCRM.git && git fetch upstream && git branch --track main-upstream upstream/main"
+  trava "origin/main não existe neste clone — adicione o remoto do repositório principal: git remote add upstream https://github.com/paulocmbcosta/DeskcommCRM.git && git fetch upstream && git branch --track main-upstream upstream/main"
   exit 0
 fi
 MAIN="$(git rev-parse --short origin/main)"
@@ -155,7 +155,7 @@ fi
 
 # ── 9. A régua real, se o gh estiver logado ──────────────────────────────────
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  checks="$(gh api repos/melgarafael/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")' 2>/dev/null || true)"
+  checks="$(gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")' 2>/dev/null || true)"
   [ -n "$checks" ] && ok "checks obrigatórios na main hoje: $checks" || nao "não consegui ler a branch protection (sem permissão?) — a lista em CLAUDE.md pode estar velha"
 else
   nao "gh não logado: checks obrigatórios NÃO MEDIDOS (a lista em CLAUDE.md/CONTRIBUTING.md pode estar velha)"

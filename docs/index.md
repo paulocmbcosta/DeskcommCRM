@@ -126,6 +126,7 @@ acessibilidade).
 | [`runbooks/deploy.md`](runbooks/deploy.md) | **Deploy em produção — os dois `-f` do compose, verificação pós-deploy** |
 | [`runbooks/remediar-worker-congelado.md`](runbooks/remediar-worker-congelado.md) | **Incidente: o worker congelado** — diagnóstico (`diagnostico.sh`), impacto medido e as duas rotas de remediação. **Ainda não ensaiado** |
 | [`runbooks/ativar-packaging.md`](runbooks/ativar-packaging.md) | **Ativação da doutrina de packaging** — os 3 passos que não cabem num PR (pacote público, check obrigatório, primeira release) |
+| [`runbooks/repositorio-proprio.md`](runbooks/repositorio-proprio.md) | **Publicar e instalar do próprio repositório** — os pacotes públicos no GHCR (só pela tela: não há API), o App que assina a release, a proteção da `main` que o fork não herda, e como uma VPS instalada do repositório de origem passa a acompanhar este |
 | [`runbooks/custo-e-cota-do-supabase.md`](runbooks/custo-e-cota-do-supabase.md) | **“Meu Supabase estourou a cota”** — como medir a origem do consumo, os dois intervalos da fila e as duas tabelas que só crescem |
 | [`runbooks/waha-hostgator.md`](runbooks/waha-hostgator.md) | Runbook do WAHA em produção |
 | [`runbooks/cloudpanel.md`](runbooks/cloudpanel.md) | **VPS que já tem CloudPanel/Nginx nas portas 80/443** — o modo proxy externo do kit, o endereço fixo para o Nginx do host e o 403 do webhook global |

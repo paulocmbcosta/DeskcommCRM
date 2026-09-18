@@ -5,7 +5,7 @@
 #
 # Sinais, em ordem de custo (nenhum toca a rede sem `gh` já logado):
 #   1. o e-mail do git está no .mailmap do repo como o dono do produto;
-#   2. o `gh` está logado como @melgarafael;
+#   2. o `gh` está logado como @paulocmbcosta (a conta dona de `origin`);
 #   3. o `origin` é o repositório principal ou um fork (informativo).
 #
 # Uso: bash quem-sou.sh            → "mantenedor — ..." ou "contribuidor — ..."
@@ -28,7 +28,7 @@ motivo=""
 if [ -n "$email" ] && [ -f "$raiz/.mailmap" ]; then
   # Duas etapas e busca LITERAL (-F): o e-mail do noreply do GitHub tem "+", que
   # numa expressão regular quer dizer outra coisa e fazia esse e-mail não casar.
-  if grep -i '^Rafael Melgaço ' "$raiz/.mailmap" 2>/dev/null | grep -qiF "<${email}>"; then
+  if grep -i '^Paulo Cesar ' "$raiz/.mailmap" 2>/dev/null | grep -qiF "<${email}>"; then
     motivo="o e-mail do git ($email) está no .mailmap como o dono do produto"
   fi
 fi
@@ -36,11 +36,11 @@ fi
 # 2) gh logado como o dono (só se o gh existe; nunca pede login).
 if [ -z "$motivo" ] && command -v gh >/dev/null 2>&1; then
   login="$(gh api user --jq .login 2>/dev/null || true)"
-  [ "$login" = "melgarafael" ] && motivo="o gh está logado como @melgarafael"
+  [ "$login" = "paulocmbcosta" ] && motivo="o gh está logado como @paulocmbcosta"
 fi
 
 case "$origin" in
-  *github.com[:/]melgarafael/DeskcommCRM*) remoto="origin é o repositório principal" ;;
+  *github.com[:/]paulocmbcosta/DeskcommCRM*) remoto="origin é o repositório principal" ;;
   "")                                       remoto="sem origin configurado" ;;
   *)                                        remoto="origin é um fork ($origin)" ;;
 esac

@@ -16,7 +16,7 @@
 
 ```bash
 SHA=$(git rev-parse HEAD)
-gh api "repos/melgarafael/DeskcommCRM/actions/runs?head_sha=$SHA" \
+gh api "repos/paulocmbcosta/DeskcommCRM/actions/runs?head_sha=$SHA" \
   --jq '.workflow_runs[] | "\(.name): \(.status) / \(.conclusion // "-")"'
 gh pr checks <número>          # o resumo por check
 ```
