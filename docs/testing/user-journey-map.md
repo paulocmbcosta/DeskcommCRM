@@ -326,7 +326,7 @@ o fonte dos quatro sítios e compara o CONJUNTO do trigger com o da constante.
 
 ---
 
-## J23 — Atender com protocolo: fechar, o cliente voltar, achar pelo número `[P1]`
+## J24 — Atender com protocolo: fechar, o cliente voltar, achar pelo número `[P1]`
 
 **Quem:** atendente e gestor de uma operação regulada (telecom) — cada atendimento
 precisa de NÚMERO DE PROTOCOLO, e o cliente liga dizendo o número.
