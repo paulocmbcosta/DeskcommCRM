@@ -16,6 +16,7 @@ import {
   type ConversationWithContact,
 } from "@/hooks/inbox/useConversationsRealtime";
 import { useConversation, isNotFound } from "@/hooks/inbox/useConversation";
+import { AtendimentosFechadosList } from "./AtendimentosFechadosList";
 import { ConversationList } from "./ConversationList";
 import { InboxFilters, type InboxFiltersValue } from "./InboxFilters";
 import { INBOX_TABS, type InboxTab } from "@/lib/inbox/abas";
@@ -226,6 +227,19 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
     ],
   );
 
+
+  // A aba Fechadas pergunta por ATENDIMENTOS, e os filtros auxiliares são os
+  // mesmos — só não carregam o `comando`/`status` da aba, que ali não existem.
+  const filtrosDosFechados = useMemo(
+    () => ({
+      search: filters.search,
+      channel_session_id: filters.channel_session_id,
+      tag: filters.tag,
+      team_id: filters.team_id,
+      unread: filters.unread,
+    }),
+    [filters.search, filters.channel_session_id, filters.tag, filters.team_id, filters.unread],
+  );
 
   // We need the selected conversation object for header / composer / side panel.
   // Source it from the same query the list uses to avoid an extra request.
@@ -502,16 +516,36 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             aberto={filtrosAbertos}
             onAbertoChange={setFiltrosAbertos}
           />
-          <ResultadosPorProtocolo termo={filterValue.search} onAbrir={abrirAtendimento} />
+          {/* Na aba Fechadas a própria lista já responde pelo protocolo dos
+              ENCERRADOS; aqui em cima ficam só os que ela não mostra (o
+              atendimento em andamento), senão o mesmo número sairia duas vezes. */}
+          <ResultadosPorProtocolo
+            termo={filterValue.search}
+            onAbrir={abrirAtendimento}
+            ocultarEncerrados={tab === "closed"}
+          />
           <div className="min-h-0 flex-1 overflow-hidden">
-            <ConversationList
-              listQuery={listQ}
-              filters={filters}
-              selectedId={selectedId}
-              onSelect={handleSelect}
-              onVisibleChange={handleVisibleChange}
-              onLimparFiltros={limparFiltrosAuxiliares}
-            />
+            {tab === "closed" ? (
+              // A unidade desta aba é o ATENDIMENTO, não a conversa: o que foi
+              // encerrado continua aqui mesmo depois que o cliente volta e a
+              // conversa reabre (ver `AtendimentosFechadosList`).
+              <AtendimentosFechadosList
+                filtros={filtrosDosFechados}
+                atendimentoEmTelaId={selectedId ? (atendimentoEmTela?.id ?? null) : null}
+                onAbrir={abrirAtendimento}
+                onVisibleChange={handleVisibleChange}
+                onLimparFiltros={limparFiltrosAuxiliares}
+              />
+            ) : (
+              <ConversationList
+                listQuery={listQ}
+                filters={filters}
+                selectedId={selectedId}
+                onSelect={handleSelect}
+                onVisibleChange={handleVisibleChange}
+                onLimparFiltros={limparFiltrosAuxiliares}
+              />
+            )}
           </div>
         </div>
       </div>

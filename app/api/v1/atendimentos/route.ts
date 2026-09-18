@@ -23,6 +23,8 @@ import type { AtendimentoResumo } from "@/lib/inbox/eventos-da-conversa";
 import { rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 import { createClient } from "@/lib/supabase/server";
 
+import { listarAtendimentosFechados, listarFechadosSchema } from "./_handler";
+
 export const dynamic = "force-dynamic";
 
 /** Mesmo piso do telefone na busca do inbox: menos que isso casa metade da base. */
@@ -62,6 +64,34 @@ export async function GET(req: NextRequest): Promise<Response> {
   const authz = await requireRole("viewer", { requestId, resource: "conversations" });
   if (!authz.ok) return authz.response;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
+
+  // DUAS PERGUNTAS NA MESMA PORTA, separadas por `status`:
+  //   ?status=closed  → a lista paginada da aba "Fechadas" do inbox;
+  //   ?protocol=…     → a busca pelo número, que responde fora de qualquer aba.
+  const sp = new URL(req.url).searchParams;
+  if (sp.get("status") === "closed") {
+    const q = listarFechadosSchema.safeParse({
+      cursor: sp.get("cursor") ?? undefined,
+      limit: sp.get("limit") ?? undefined,
+      search: sp.get("search") ?? undefined,
+      channel_session_id: sp.get("channel_session_id") ?? undefined,
+      tag: sp.get("tag") ?? undefined,
+      team_id: sp.get("team_id") ?? undefined,
+      unread: sp.get("unread") ?? undefined,
+    });
+    if (!q.success) return fail("validation_failed", t("Query inválida."), 422, { requestId });
+    const resultado = await listarAtendimentosFechados(
+      await createClient(),
+      { organizationId: authz.org.orgId, userId: authz.user.id, t },
+      q.data,
+    );
+    if (!resultado.ok) {
+      return resultado.motivo === "cursor_invalido"
+        ? fail("invalid_cursor", t("Cursor inválido."), 400, { requestId })
+        : fail("internal_error", t("Não foi possível ler os atendimentos encerrados."), 500, { requestId });
+    }
+    return ok(resultado.data, { requestId, meta: { cursor: resultado.cursor, has_more: resultado.has_more } });
+  }
 
   const query = querySchema.safeParse({ protocol: new URL(req.url).searchParams.get("protocol") ?? "" });
   if (!query.success) {

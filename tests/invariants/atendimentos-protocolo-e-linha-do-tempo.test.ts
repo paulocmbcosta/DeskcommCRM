@@ -231,6 +231,122 @@ describe("o ciclo: fechar, o cliente voltar, reabrir", () => {
   });
 });
 
+describe("o atendimento novo começa do zero (migration 0269)", () => {
+  const SESSAO_A2 = "a2660000-0000-4000-8000-0000000000a8";
+
+  /** A conversa no estado em que uma passagem para humano a deixa: time, IA calada, contato travado. */
+  const comPassagemParaOFinanceiro = (conv: string) => `
+    update public.conversations set team_id='${TIME_A}', bot_silenced_until='infinity',
+           last_handoff_at=clock_timestamp(), last_handoff_reason='pediu boleto'
+     where id='${conv}';
+    update public.contacts set force_human=true where id='${CONTATO_A}';
+  `;
+  const clienteVolta = (conv: string, corpo: string) => `
+    insert into public.messages (organization_id, conversation_id, channel_session_id, contact_id, type, direction, status, sent_via, body, sent_at)
+    values ('${ORG_A}', '${conv}', '${SESSAO_A}', '${CONTATO_A}', 'text', 'inbound', 'received', 'ai', '${corpo}', clock_timestamp());
+  `;
+  const estado = (conv: string) => `
+    select '@@' || status || '|' || coalesce(team_id::text, 'SEM_TIME') || '|' || coalesce(bot_silenced_until::text, 'IA_LIGADA') || '|' || coalesce(last_handoff_at::text, 'SEM_PASSAGEM')
+      from public.conversations where id='${conv}';
+    select '@@' || force_human from public.contacts where id='${CONTATO_A}';
+  `;
+
+  it("⭐ financeiro na segunda, suporte na quarta: a volta do cliente zera time, silêncio da IA e a trava do contato", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${comPassagemParaOFinanceiro(conv)}
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${ANA}', false)).id;
+        -- CONTROLE: fechado, o estado da passagem ainda está lá (é o defeito que se media).
+        ${estado(conv)}
+        ${clienteVolta(conv, "agora é suporte")}
+        ${estado(conv)}
+        rollback;
+      `),
+    );
+    const [fechada, travadoAntes, reaberta, travadoDepois] = out;
+    expect(fechada).toMatch(new RegExp(`^closed\\|${TIME_A}\\|infinity\\|`));
+    expect(travadoAntes).toBe("true");
+    expect(reaberta).toBe("open|SEM_TIME|IA_LIGADA|SEM_PASSAGEM");
+    expect(travadoDepois).toBe("false");
+  });
+
+  it("avisa o follow-up que a passagem acabou — e só quando havia passagem", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const contar = `select '@@' || count(*) from public.event_log where organization_id='${ORG_A}' and event_type='ai.handoff_resolved' and entity_id='${conv}';`;
+    const out = linhas(
+      sql(`
+        begin;
+        ${comPassagemParaOFinanceiro(conv)}
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${ANA}', false)).id;
+        ${clienteVolta(conv, "voltei")}
+        ${contar}
+        -- Segundo ciclo, SEM passagem: fecha e o cliente volta. Nenhum sinal novo.
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${ANA}', false)).id;
+        ${clienteVolta(conv, "voltei de novo")}
+        ${contar}
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["1", "1"]);
+  });
+
+  it("CONTROLE: 'Reabrir' pelo atendente CONTINUA o atendimento — time e silêncio ficam", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${comPassagemParaOFinanceiro(conv)}
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${ANA}', false)).id;
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'open', null, '${ANA}', true)).id;
+        ${estado(conv)}
+        rollback;
+      `),
+    );
+    expect(out[0]).toMatch(new RegExp(`^open\\|${TIME_A}\\|infinity\\|`));
+    expect(out[1]).toBe("true");
+  });
+
+  it("outra conversa do MESMO cliente com passagem em aberto: a trava do contato NÃO é solta", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        insert into public.channel_sessions (id, organization_id, waha_session_name, webhook_secret_encrypted, status)
+          values ('${SESSAO_A2}', '${ORG_A}', 'inv-0269-a2', '\\x00'::bytea, 'WORKING');
+        select public.fn_upsert_wa_conversation('${ORG_A}', '${CONTATO_A}', '${SESSAO_A2}') as outra \\gset
+        update public.conversations set last_handoff_at=clock_timestamp(), bot_silenced_until='infinity' where id=:'outra';
+        ${comPassagemParaOFinanceiro(conv)}
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${ANA}', false)).id;
+        ${clienteVolta(conv, "voltei pelo primeiro número")}
+        select '@@' || force_human from public.contacts where id='${CONTATO_A}';
+        -- A conversa que voltou começa limpa de qualquer jeito; a OUTRA segue calada.
+        select '@@' || coalesce(team_id::text, 'SEM_TIME') from public.conversations where id='${conv}';
+        select '@@' || coalesce(bot_silenced_until::text, 'IA_LIGADA') from public.conversations where id=:'outra';
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["true", "SEM_TIME", "infinity"]);
+  });
+
+  it("a linha do tempo conta a volta como UM fato: nem 'fila geral' nem 'automático voltou'", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${comPassagemParaOFinanceiro(conv)}
+        delete from public.conversation_events where conversation_id='${conv}';
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${ANA}', false)).id;
+        ${clienteVolta(conv, "voltei")}
+        select '@@' || type || coalesce('|' || (payload->>'retorno'), '') from public.conversation_events where conversation_id='${conv}' order by created_at, type;
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["closed", "opened|true"]);
+  });
+});
+
 describe("o legado ganha as duas linhas que o banco observou (migration 0268)", () => {
   // O bloco é EXTRAÍDO do baseline — o que o `update.sh` do self-hoster aplica —,
   // e não reescrito aqui: copiar o SQL para dentro do teste mediria a cópia.

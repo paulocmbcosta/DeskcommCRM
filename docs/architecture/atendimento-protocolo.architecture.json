@@ -31,7 +31,11 @@
     { "id": "atividades-do-lead", "lane": "banco", "col": 7, "type": "database", "label": "crm_lead_activities (o que o negócio fez)" },
     { "id": "lista", "lane": "tela", "col": 1, "type": "frontend", "label": "Lista — card com espera, time e canal; busca por protocolo" },
     { "id": "painel", "lane": "tela", "col": 2, "type": "frontend", "label": "PainelDaConversa — Detalhes · Atendimentos anteriores · Linha do tempo" },
-    { "id": "thread", "lane": "tela", "col": 3, "type": "frontend", "label": "ChatThread — mostra UM atendimento por vez" }
+    { "id": "thread", "lane": "tela", "col": 3, "type": "frontend", "label": "ChatThread — mostra UM atendimento por vez" },
+    { "id": "reset-do-retorno", "lane": "banco", "col": 8, "type": "backend", "label": "fn_service_inbound, ramo 'reopened' (0269) — o atendimento novo começa do zero: sem time, sem silêncio, sem passagem" },
+    { "id": "followup-retomado", "lane": "entrada", "col": 4, "type": "backend", "label": "Follow-up em paused_handoff — consumidor de ai.handoff_resolved" },
+    { "id": "api-fechados", "lane": "api", "col": 5, "type": "backend", "label": "GET /atendimentos?status=closed — a lista da aba Fechadas (e a contagem dela em /conversations/counts)" },
+    { "id": "aba-fechadas", "lane": "tela", "col": 4, "type": "frontend", "label": "AtendimentosFechadosList — a aba Fechadas lista ATENDIMENTOS, com a marca 'o cliente voltou'" }
   ],
   "edges": [
     { "from": "ingestao", "to": "conversa", "label": "nasce ou reabre (fn_service_inbound)" },
@@ -55,6 +59,14 @@
     { "from": "conversa", "to": "lista", "label": "protocol, team_id, canal, espera" },
     { "from": "painel", "to": "thread", "label": "abrir atendimento antigo recorta a conversa" },
     { "from": "lista", "to": "thread", "label": "resultado por protocolo abre já recortado" },
-    { "from": "api-mensagens", "to": "thread", "label": "mensagens do episódio" }
+    { "from": "api-mensagens", "to": "thread", "label": "mensagens do episódio" },
+    { "from": "ingestao", "to": "reset-do-retorno", "label": "mensagem do cliente em conversa encerrada" },
+    { "from": "reset-do-retorno", "to": "conversa", "label": "zera time, dono, silêncio e carimbos de passagem; solta force_human se nenhuma outra conversa o segura" },
+    { "from": "reset-do-retorno", "to": "followup-retomado", "label": "ai.handoff_resolved — só quando havia passagem a encerrar" },
+    { "from": "followup-retomado", "to": "conversa", "label": "a cadência pausada pela passagem volta a valer nesta conversa" },
+    { "from": "atendimentos", "to": "api-fechados", "label": "closed_at preenchido; o time é o do FECHAMENTO" },
+    { "from": "conversa", "to": "api-fechados", "label": "!inner: número, etiqueta, não lidas e se a conversa anda de novo" },
+    { "from": "api-fechados", "to": "aba-fechadas", "label": "paginado por (closed_at, id)" },
+    { "from": "aba-fechadas", "to": "thread", "label": "clicar abre AQUELE atendimento, recortado e travado" }
   ]
 }
