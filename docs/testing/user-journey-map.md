@@ -326,6 +326,43 @@ o fonte dos quatro sítios e compara o CONJUNTO do trigger com o da constante.
 
 ---
 
+## J23 — Atender com protocolo: fechar, o cliente voltar, achar pelo número `[P1]`
+
+**Quem:** atendente e gestor de uma operação regulada (telecom) — cada atendimento
+precisa de NÚMERO DE PROTOCOLO, e o cliente liga dizendo o número.
+
+**Spec:** `tests/e2e/inbox-protocolo-e-historico.spec.ts` · evidência em
+`.superpowers/evidence/inbox-protocolo/` · banco fresco do `baseline.sql`, `next build` +
+`next start`, mensagem do cliente entrando por INSERT em `messages` (o caminho da ingestão),
+nunca por `update` de status.
+
+| # | Caso | Como se prova | Estado |
+|---|---|---|---|
+| 1 | As abas ficam num TRILHO em pé, e o nome da aba está escrito no topo da lista | `getByRole("tab")` + largura do trilho ≤ 48px medida | ✅ |
+| 2 | Os filtros ficam recolhidos: abrem no funil, fecham no funil; filtro ligado aparece como número no funil | `inbox-filtros-auxiliares` some/volta; `tests/unit/inbox-filters-scope.test.tsx` | ✅ |
+| 3 | A primeira conversa começa alto na coluna (o ganho de altura é medido) | `boundingBox` do card − topo da coluna < 140px | ✅ |
+| 4 | O card diz o TIME e o CANAL antes de abrir, sem reticências, e há quanto tempo o cliente espera | `rodape-da-conversa`, `scrollWidth ≤ clientWidth`, `espera-da-conversa` | ✅ |
+| 5 | O painel mostra o protocolo (copiável), o canal e o time | `protocolo-do-atendimento`, `ficha-da-conversa` | ✅ |
+| 6 | Fechar o painel devolve largura à conversa | largura do `chat-thread` cresce > 200px | ✅ |
+| 7 | A linha do tempo conta aberta → fila do time → assumida → encerrada, COM autor | aba Linha do tempo, textos por extenso | ✅ |
+| 8 | Fechada, a conversa some de "Minhas" | `data-conversation-id` com contagem 0 | ✅ |
+| 9 | O cliente volta: protocolo NOVO, e a conversa mostra só o atendimento de agora | protocolo ≠ anterior; mensagem antiga ausente do thread | ✅ |
+| 10 | O histórico lista os dois atendimentos; abrir o antigo recorta a conversa, some com as ações e trava o composer; "voltar ao atual" desfaz | `aviso-atendimento-antigo`, `acoes-da-conversa` oculto | ✅ |
+| 11 | A busca pelo protocolo ANTIGO acha o atendimento estando em outra aba | `resultado-por-protocolo` na aba Minhas | ✅ |
+
+**Achados desta rodada, consertados na causa:**
+
+- **A regra de 1400px da grade nunca valia.** `xl:… min-[1400px]:…` em cascata: o Tailwind 4
+  emitiu o breakpoint arbitrário ANTES do `xl` no CSS, então em 1440px o `xl` vencia e a lista
+  ficava em 248px com time e canal cortados. Medido no bundle (`.next/static/chunks/*.css`).
+  Conserto: três faixas mutuamente exclusivas. A spec mede a largura do card em 1440px.
+- **Data inválida derrubava o painel inteiro.** `format()` do date-fns LANÇA; um carimbo
+  ausente virava tela em branco na coluna. Agora o rótulo cai em "—".
+
+**NÃO medido:** telefone de verdade (a spec não conecta WAHA); o trilho em tela de toque
+(a dica de mouse não existe lá — o nome da aba escrito no topo é a resposta, e está medido
+só em desktop); ordem dos eventos quando dois chegam no mesmo milissegundo.
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Protocolo por atendimento e linha do tempo da conversa (migration 0266)",
+    "subtitle": "A conversa é o fio do canal; o atendimento é o episódio, com número próprio. Um trigger alimenta tudo, para nenhum caminho de mudança de estado ficar de fora.",
+    "output": "atendimento-protocolo.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "entrada", "label": "Quem muda a conversa" },
+    { "id": "banco", "label": "Banco" },
+    { "id": "api", "label": "API" },
+    { "id": "tela", "label": "Inbox" }
+  ],
+  "mainPath": ["ingestao", "conversa", "trigger", "atendimentos", "api-historico", "painel"],
+  "nodes": [
+    { "id": "ingestao", "lane": "entrada", "col": 1, "type": "backend", "label": "Ingestão (WAHA/Meta/Zernio) — fn_upsert_wa_conversation + INSERT em messages" },
+    { "id": "rotas-de-comando", "lane": "entrada", "col": 2, "type": "backend", "label": "Rotas do inbox — assumir, transferir, liberar, time, pausar, fechar, reabrir" },
+    { "id": "roteamento", "lane": "entrada", "col": 3, "type": "backend", "label": "Rodízio e passagem para humano (worker e motor de agentes)" },
+    { "id": "conversa", "lane": "banco", "col": 1, "type": "database", "label": "conversations (+ protocol, o vigente)" },
+    { "id": "trigger", "lane": "banco", "col": 2, "type": "backend", "label": "fn_atendimento_acompanha_conversa (AFTER INSERT/UPDATE)" },
+    { "id": "contador", "lane": "banco", "col": 3, "type": "database", "label": "atendimento_protocol_counters (org × dia)" },
+    { "id": "atendimentos", "lane": "banco", "col": 4, "type": "database", "label": "atendimentos — um por protocolo" },
+    { "id": "eventos", "lane": "banco", "col": 5, "type": "database", "label": "conversation_events — linha do tempo da conversa" },
+    { "id": "status-com-ator", "lane": "banco", "col": 6, "type": "backend", "label": "fn_service_status_com_ator — autor e 'retomar' por GUC" },
+    { "id": "api-historico", "lane": "api", "col": 1, "type": "backend", "label": "GET /contacts/[id]/atendimentos" },
+    { "id": "api-protocolo", "lane": "api", "col": 2, "type": "backend", "label": "GET /atendimentos?protocol=" },
+    { "id": "api-linha", "lane": "api", "col": 3, "type": "backend", "label": "GET /conversations/[id]/timeline (eventos + atividades do negócio)" },
+    { "id": "api-mensagens", "lane": "api", "col": 4, "type": "backend", "label": "GET /conversations/[id]/messages?atendimento_id=" },
+    { "id": "atividades-do-lead", "lane": "banco", "col": 7, "type": "database", "label": "crm_lead_activities (o que o negócio fez)" },
+    { "id": "lista", "lane": "tela", "col": 1, "type": "frontend", "label": "Lista — card com espera, time e canal; busca por protocolo" },
+    { "id": "painel", "lane": "tela", "col": 2, "type": "frontend", "label": "PainelDaConversa — Detalhes · Atendimentos anteriores · Linha do tempo" },
+    { "id": "thread", "lane": "tela", "col": 3, "type": "frontend", "label": "ChatThread — mostra UM atendimento por vez" }
+  ],
+  "edges": [
+    { "from": "ingestao", "to": "conversa", "label": "nasce ou reabre (fn_service_inbound)" },
+    { "from": "rotas-de-comando", "to": "conversa", "label": "dono, time, silêncio, status" },
+    { "from": "rotas-de-comando", "to": "status-com-ator", "label": "fechar/reabrir levam o autor" },
+    { "from": "status-com-ator", "to": "conversa", "label": "fn_service_status + GUC local à transação" },
+    { "from": "roteamento", "to": "conversa", "label": "atribui sem autor humano" },
+    { "from": "conversa", "to": "trigger", "label": "só quando status/dono/time/silêncio/handoff/lembrete mudam" },
+    { "from": "trigger", "to": "contador", "label": "próximo número do dia" },
+    { "from": "trigger", "to": "atendimentos", "label": "abre, fecha (com quem), retoma" },
+    { "from": "trigger", "to": "eventos", "label": "um evento por gesto, com autor" },
+    { "from": "trigger", "to": "conversa", "label": "grava o protocolo vigente" },
+    { "from": "atendimentos", "to": "api-historico", "label": "RLS herdada da conversa" },
+    { "from": "atendimentos", "to": "api-protocolo", "label": "busca fora da aba" },
+    { "from": "atendimentos", "to": "api-mensagens", "label": "janela [início deste, início do próximo)" },
+    { "from": "eventos", "to": "api-linha", "label": "por conversa ou por atendimento" },
+    { "from": "atividades-do-lead", "to": "api-linha", "label": "menos o que a conversa já conta" },
+    { "from": "api-historico", "to": "painel", "label": "relógio: um por protocolo" },
+    { "from": "api-linha", "to": "painel", "label": "aba Linha do tempo" },
+    { "from": "api-protocolo", "to": "lista", "label": "resultados acima da lista" },
+    { "from": "conversa", "to": "lista", "label": "protocol, team_id, canal, espera" },
+    { "from": "painel", "to": "thread", "label": "abrir atendimento antigo recorta a conversa" },
+    { "from": "lista", "to": "thread", "label": "resultado por protocolo abre já recortado" },
+    { "from": "api-mensagens", "to": "thread", "label": "mensagens do episódio" }
+  ]
+}
