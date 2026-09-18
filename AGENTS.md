@@ -157,8 +157,8 @@ comando ao lado. **Não há número aqui de propósito**: esta linha já afirmou
 de specs e "a única de fora", e as duas envelheceram — a suíte cresce toda semana e a lista de
 exceções muda com ela. Quem fica de fora é o que a própria variável declara; leia, não confie:
 O CI tem quatro checks obrigatórios na `main`: `verify`, `build-and-size`, `invariants` e
-`imagens-ok`. O `e2e` roda em todo PR mas não é exigido: só dispara em `opened` (ver `e2e.yml`), e
-check exigido que não roda no segundo push trava o PR. Não confie nesta lista — reconte antes de citar:
+`imagens-ok`. O `e2e` não roda em PR (decisão de 2026-09-18, durante o desenvolvimento) nem é exigido:
+roda no push na `main` e por `Run workflow` (ver `e2e.yml`). Não confie nesta lista — reconte antes de citar:
 
 ```bash
 gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection \
