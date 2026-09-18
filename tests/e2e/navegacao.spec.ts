@@ -221,7 +221,25 @@ test.describe("navegação agrupada", () => {
    */
   test("nenhum grupo fica fora da dobra, e em 900px o menu não rola", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
+    // ⚠️ MEDE DEPOIS DE A VERSÃO RESPONDER — o PIOR caso, não o mais rápido.
+    //
+    // O rodapé "versão X" da barra lateral aparece de forma assíncrona
+    // (`useSystemVersion`) e disputa a altura com o menu. Esta medida era tirada
+    // logo depois do login, ANTES de ele existir: passava com 19px de folga e
+    // deixava passar o estado real, com o rótulo, em que o menu estourava por
+    // 5px (744 contra 739, medido). Virou vermelho consistente na `main` no dia
+    // em que outra mudança deslocou o tempo da página — o defeito já estava lá,
+    // o teste é que media cedo.
+    const versaoRespondeu = page
+      .waitForResponse((r) => r.url().includes("/api/v1/system/version"), { timeout: 30_000 })
+      .catch(() => null);
     await loginAdmin(page);
+    await versaoRespondeu;
+    // Se há versão para mostrar, o rótulo TEM de estar na tela antes da medida.
+    // Instalação sem versão registrada não o desenha — aí o menu tem a folga
+    // inteira, e não há pior caso a esperar.
+    const rotuloDaVersao = page.getByTestId("versao-em-execucao");
+    await rotuloDaVersao.waitFor({ state: "visible", timeout: 5_000 }).catch(() => undefined);
 
     const m = await page.evaluate(() => {
       const nav = document.querySelector('nav[aria-label="Navegação principal"]')!;

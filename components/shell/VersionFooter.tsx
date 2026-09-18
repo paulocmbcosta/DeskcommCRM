@@ -15,10 +15,22 @@ import { cn } from "@/lib/utils";
 export function VersionFooter({
   collapsed,
   onNavigate,
+  variante,
 }: {
   collapsed: boolean;
   /** Fecha a gaveta do mobile — é o único Link do drawer que não a recebia. */
   onNavigate?: () => void;
+  /**
+   * QUAL das duas formas desenhar. O rodapé tem duas — o rótulo discreto
+   * ("versão 1.30.0") e o ALERTA de versão nova — e elas custam alturas
+   * diferentes. O rótulo discreto ocupava uma linha inteira (~24px) que o
+   * orçamento de altura do menu nunca contou: medido em 1280×900 como admin, com
+   * ele presente o menu precisava de 744px e tinha 739px. Agora a barra lateral
+   * o põe NA MESMA LINHA do "Recolher", e só o alerta, que pede atenção, segue
+   * com linha própria. Ausente = as duas, como antes (o comportamento de quem
+   * já usava o componente não muda).
+   */
+  variante?: "discreta" | "alerta";
 }) {
   const t = useT();
   const { data } = useSystemVersion();
@@ -32,10 +44,16 @@ export function VersionFooter({
   const alerta = data.is_owner && data.update_available;
 
   if (!alerta) {
+    if (variante === "alerta") return null;
     return (
       <p
+        data-testid="versao-em-execucao"
         className={cn(
-          "px-3 py-1 text-[11px] text-muted-foreground",
+          // Em linha com o "Recolher" não há padding horizontal próprio: quem
+          // posiciona é a linha. Sozinho (rail recolhido, gaveta do celular),
+          // volta a ter o seu.
+          variante === "discreta" && !collapsed ? "shrink-0 pr-3 text-[11px]" : "px-3 py-1 text-[11px]",
+          "text-muted-foreground",
           collapsed && "px-0 text-center",
         )}
         title={`${t("Versão")} ${label}`}
@@ -45,6 +63,7 @@ export function VersionFooter({
     );
   }
 
+  if (variante === "discreta") return null;
   const novo = data.latest_version?.replace(/^v/i, "") ?? "";
   return (
     <Link
