@@ -22,7 +22,11 @@ async function login(page: Page, email: string) {
 async function conversation(org: string, name: string) {
   const contact = await insert("contacts", { organization_id: org, name, display_name: name });
   const session = await insert("channel_sessions", { organization_id: org,
-    waha_session_name: `local-${randomUUID()}`, display_name: name, status: "STOPPED",
+    // O canal tem nome PRÓPRIO. Ele se chamava igual ao cliente, e desde a v1.30.0 o
+    // card do inbox mostra o canal sempre (rodapé, ao lado do time): com os dois
+    // iguais, `getByText(nome)` casava dois elementos e o seletor estrito reprovava
+    // — a spec media a coincidência do seed, não a mistura de inbox.
+    waha_session_name: `local-${randomUUID()}`, display_name: `Canal de ${name}`, status: "STOPPED",
     webhook_secret_encrypted: "\\x00" });
   await insert("conversations", { organization_id: org, contact_id: contact,
     channel_session_id: session, status: "open", last_message_at: new Date().toISOString(),
