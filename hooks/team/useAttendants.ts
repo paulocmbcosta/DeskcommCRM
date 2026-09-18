@@ -20,6 +20,9 @@ export interface AttendantAvailability {
   updated_at: string | null;
   /** Conversas abertas atribuídas (G5-04): a mesma carga que o router usa. */
   current_load: number;
+  /** Em pausa desde quando (migration 0267); ausente em resposta de versão anterior. */
+  paused_at?: string | null;
+  pause_reason?: string | null;
 }
 
 const ATTENDANTS_KEY = ["team", "attendants"] as const;

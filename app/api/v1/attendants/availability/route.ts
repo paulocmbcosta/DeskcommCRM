@@ -26,7 +26,7 @@ import { createClient } from "@/lib/supabase/server";
 export const dynamic = "force-dynamic";
 
 const SELECT_COLS =
-  "user_id, is_available, capacity, schedule, last_heartbeat_at, updated_at";
+  "user_id, is_available, capacity, schedule, last_heartbeat_at, updated_at, paused_at, pause_reason";
 
 interface AvailabilityRow {
   user_id: string;
@@ -35,6 +35,8 @@ interface AvailabilityRow {
   schedule: unknown;
   last_heartbeat_at: string | null;
   updated_at: string | null;
+  paused_at?: string | null;
+  pause_reason?: string | null;
 }
 
 export async function GET(_req: NextRequest): Promise<Response> {
@@ -101,6 +103,8 @@ export async function GET(_req: NextRequest): Promise<Response> {
     last_heartbeat_at: m.ultimoSinalDeVida,
     updated_at: m.atualizadoEm,
     current_load: m.cargaAtual,
+    paused_at: m.emPausaDesde,
+    pause_reason: m.motivoDaPausa,
   }));
 
   return ok(rows, { requestId });

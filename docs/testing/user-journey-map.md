@@ -363,6 +363,41 @@ nunca por `update` de status.
 (a dica de mouse não existe lá — o nome da aba escrito no topo é a resposta, e está medido
 só em desktop); ordem dos eventos quando dois chegam no mesmo milissegundo.
 
+## J25 — Entrar em pausa com motivo, o gestor ver, e o time ter teto `[P1]`
+
+**Quem:** o atendente (sai para o almoço, não pode receber conversa) e o gestor (precisa saber
+quem está em pausa, por quê, e limitar quantas conversas cada um pega no time).
+
+**Spec:** `tests/e2e/pausa-do-atendente.spec.ts` · evidência em
+`.superpowers/evidence/pausa-do-atendente/` · dois navegadores (atendente e gestor) no mesmo
+banco fresco. A DISTRIBUIÇÃO em si — quem recebe, quem espera — é provada no banco
+(`tests/invariants/pausa-do-atendente-e-limite-por-time.test.ts`): o claim é uma transação.
+
+| # | Caso | Como se prova | Estado |
+|---|---|---|---|
+| 1 | O status está na barra de cima de QUALQUER tela (usado aqui no Funil) | `status-do-atendente` visível em `/app/kanban` | ✅ |
+| 2 | Ficar online grava disponibilidade e o SINAL DE VIDA sai sozinho | `is_available` e `last_heartbeat_at` lidos no banco | ✅ |
+| 3 | Entrar em pausa exige motivo (o botão nasce desabilitado) | `confirmar-pausa` disabled até escolher | ✅ |
+| 4 | O motivo escolhido se distingue dos outros — medido por cor computada | `getComputedStyle`, com `poll` por causa da transição | ✅ |
+| 5 | A pausa da tela é a do banco: histórico aberto com motivo e observação, e `is_available=false` | `attendant_pause_log` + `attendant_availability` | ✅ |
+| 6 | O gestor vê "Em pausa · Almoço · há N" em Equipe › Atendimento | `atendente-em-pausa` | ✅ |
+| 7 | Voltar encerra a pausa no histórico, com `ended_by=self` | `attendant_pause_log` | ✅ |
+| 8 | O limite do time, salvo pela tela, volta do banco depois do reload — e aparece no cartão | `teto-do-time`, `resumo-do-teto`, `max_concurrent` no banco | ✅ |
+
+**No banco (invariante):** em pausa o claim devolve `capacity_changed`; teto 1 → a segunda conversa
+espera com capacidade pessoal sobrando; fechar adianta quem esperava **sem criar evento novo**;
+voltar pelo PATCH da tela de Equipe também fecha a pausa (o caso que quebrou na primeira versão:
+`update of paused_at` não dispara quando quem escreve é `is_available`).
+
+**Achado desta rodada:** nenhuma tela emitia o sinal de vida — o cron `attendant-heartbeat`
+derrubava todo atendente 15 minutos depois de ficar disponível, e o rodízio parava sem nada na
+tela dizendo por quê. O `useStatusDoAtendente` é o outro lado daquele cron.
+
+**NÃO medido:** o worker de roteamento rodando de ponta a ponta com duas pessoas reais (a spec
+prova a tela e o invariante prova o claim, mas o caminho cron → worker → claim não foi dirigido
+num só teste); pausa que atravessa o fim do expediente (não há encerramento automático — a
+pausa fica aberta até a pessoa voltar, e o relatório futuro vai precisar tratar isso).
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,

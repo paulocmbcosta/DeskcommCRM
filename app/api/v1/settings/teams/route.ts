@@ -99,8 +99,28 @@ export async function POST(req: Request): Promise<Response> {
     return fail("internal_error", "Não foi possível salvar. Tente novamente.", 500, { requestId });
   }
   const salvo = data as { id: string } | null;
+  // O TETO vai por RPC própria (migration 0267): mexer na assinatura de
+  // `fn_save_attendance_team` abriria uma janela, durante a atualização, em que
+  // app e banco discordam de quantos parâmetros ela tem. Se ESTA falhar, o time
+  // já está salvo — a resposta diz exatamente isso, em vez de um erro genérico
+  // que faria o gestor refazer o que deu certo.
+  if (salvo?.id) {
+    const { error: erroDoTeto } = await db.rpc("fn_set_attendance_team_limit", {
+      p_org: auth.org.orgId,
+      p_team: salvo.id,
+      p_limit: parsed.data.max_concurrent,
+    });
+    if (erroDoTeto) {
+      return fail(
+        "internal_error",
+        "O time foi salvo, mas o limite de conversas por atendente não foi gravado. Abra o time e salve de novo.",
+        500,
+        { requestId },
+      );
+    }
+  }
   void audit({ action: "routing.team_saved", actorUserId: auth.user.id, organizationId: auth.org.orgId,
     resourceType: "attendance_team", resourceId: salvo?.id ?? null, requestId,
-    metadata: { slug: parsed.data.slug, user_ids: parsed.data.user_ids } });
+    metadata: { slug: parsed.data.slug, user_ids: parsed.data.user_ids, max_concurrent: parsed.data.max_concurrent } });
   return ok(data, { requestId });
 }

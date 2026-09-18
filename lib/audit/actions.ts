@@ -261,6 +261,8 @@ export const AUDIT_ACTIONS = [
   "demanda.encerrada",
   "routing.worker_run",
   "attendant.heartbeat_swept",
+  // Online / em pausa (com motivo) / offline — o gesto do atendente (migration 0267).
+  "attendant.status_changed",
   "webhook.source_created",
   "webhook.source_updated",
   "webhook.source_deleted",

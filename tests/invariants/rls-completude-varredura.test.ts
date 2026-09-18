@@ -77,6 +77,7 @@ interface Excecao {
 const PROVA_PROPRIA: readonly Excecao[] = [
   { tabela: "atendimentos", razao: "tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts — JWT do tenant B lê zero e o de A lê as suas (controle positivo); anon/authenticated/service_role sem escrita; escopo herdado da conversa" },
   { tabela: "conversation_events", razao: "tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts — mesma prova da linha acima, nos dois sentidos A/B; a porta de escrita (`fn_conversation_event_add`) recusa conversa de outra organização" },
+  { tabela: "attendant_pause_log", razao: "tests/invariants/pausa-do-atendente-e-limite-por-time.test.ts — a própria pessoa e o gestor leem (controle positivo); o colega e o tenant B leem zero; anon/authenticated/service_role sem escrita; FK composta recusa pausa de quem não é da organização" },
   { tabela: "atendimento_protocol_counters", razao: "tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts — contador privado: RLS ligada sem policy e sem grant; `permission denied` medido para anon, authenticated e service_role" },
   { tabela: "channel_routing_policies", razao: "tests/invariants/channel-routing.test.ts — dois tenants reais, leitura positiva local e negativa cruzada por JWT; FK composta rejeita canal de outra org" },
   { tabela: "channel_routing_responsibles", razao: "tests/invariants/channel-routing.test.ts — JWT do tenant B não lê responsáveis de A; revogação remove vínculo e claim revalida membro ativo" },

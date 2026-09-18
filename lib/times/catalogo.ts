@@ -22,6 +22,8 @@ export interface TimeDoCatalogo {
   description: string;
   schedule: unknown;
   archived_at: string | null;
+  /** Teto de conversas simultâneas por atendente neste time (0267). `null` = sem teto. */
+  max_concurrent: number | null;
   aberto_agora: boolean;
   /** A agenda gravada não é legível pelo parser ⇒ o time conta como FECHADO. */
   horario_invalido: boolean;
@@ -35,7 +37,7 @@ export async function carregarTimes(
   opts: { incluirArquivados?: boolean } = {},
 ): Promise<TimeDoCatalogo[]> {
   let consulta = db.from("attendance_teams")
-    .select("id, name, slug, description, schedule, archived_at")
+    .select("id, name, slug, description, schedule, archived_at, max_concurrent")
     .eq("organization_id", organizationId)
     .order("name");
   if (!opts.incluirArquivados) consulta = consulta.is("archived_at", null);

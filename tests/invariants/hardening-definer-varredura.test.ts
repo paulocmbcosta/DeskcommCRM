@@ -194,6 +194,26 @@ const AUTHENTICATED_PERMITIDO: readonly Excecao[] = [
       "Mesmo invariante de isolamento.",
   },
   {
+    fn: "fn_attendant_set_status(uuid,text,text,text,uuid)",
+    razao:
+      "POST app/api/v1/attendants/me/status/route.ts usa createClient da sessão (com o admin " +
+      "client a RPC recusaria tudo: a primeira linha exige auth.uid()). Papel agent e suporte " +
+      "de escrita conferidos contra a org; o alvo é o PRÓPRIO usuário, e só manager muda o de " +
+      "outro membro — que tem de ser membro ativo agent+ da MESMA org. Pausa sem motivo é " +
+      "recusada. O histórico de pausas é escrito por trigger; a tabela não aceita escrita pela " +
+      "REST. tests/invariants/pausa-do-atendente-e-limite-por-time.test.ts prova a recusa do " +
+      "colega, de organização alheia e da pausa sem motivo.",
+  },
+  {
+    fn: "fn_set_attendance_team_limit(uuid,uuid,integer)",
+    razao:
+      "POST app/api/v1/settings/teams/route.ts usa createClient da sessão, logo depois de " +
+      "fn_save_attendance_team e com o id que ela devolveu. Mesmos portões da irmã: auth.uid(), " +
+      "manager, suporte de escrita e MFA; o time é conferido contra a org da sessão; o limite " +
+      "aceita só 1..1000 ou null. RPC própria em vez de parâmetro novo na irmã para não abrir " +
+      "janela de assinatura divergente durante a atualização. Mesmo invariante da linha acima.",
+  },
+  {
     fn: "fn_conversation_set_team(uuid,uuid,uuid)",
     razao:
       "POST app/api/v1/conversations/[id]/team/route.ts usa createClient da sessão (com o " +

@@ -15,7 +15,7 @@ export interface RoutingCandidate {
   userId: string;
   /** Fato persistido relido no claim, sem confundir com defaults do parser. */
   scheduleSnapshot?: Json;
-  /** Conversas abertas atribuídas (carga atual) — desempate no modo round_robin. */
+  /** Conversas abertas atribuídas (carga atual) — PRIMEIRO critério da escolha: menos carga recebe antes. */
   currentLoad: number;
   /** Epoch ms da última atribuição recebida; null = nunca (prioridade máxima no rodízio). */
   lastAssignedAt: number | null;
@@ -41,13 +41,27 @@ export interface DecideRoutingInput {
 }
 
 /**
- * Rodízio real (não random): entre elegíveis, o que recebeu atribuição há mais
- * tempo (ou nunca) vem primeiro; desempate determinístico por userId. Deriva o
- * "último atribuído" de conversation_assignment_events — sem coluna de estado.
+ * QUEM TEM MENOS ATENDIMENTO RECEBE PRIMEIRO; no empate, rodízio.
+ *
+ * Era rodízio puro — quem recebeu há mais tempo vinha primeiro, e a carga só
+ * servia de porta (`currentLoad < capacity`). O JSDoc de `currentLoad` já dizia
+ * "desempate", mas o `sort` nunca o leu. Com equipe de verdade o rodízio puro
+ * distribui mal: quem fecha rápido e quem está com cinco conversas emperradas
+ * recebem no mesmo ritmo, e a fila anda na velocidade do mais lento.
+ *
+ * A carga primeiro, e o rodízio como desempate: com todo mundo na mesma carga
+ * (o começo do dia, a equipe ociosa) o comportamento é idêntico ao anterior —
+ * quem recebeu há mais tempo (ou nunca) vem primeiro, desempate final
+ * determinístico por userId. "Último atribuído" sai de
+ * conversation_assignment_events — sem coluna de estado.
+ *
+ * O nome ficou: é o modo `round_robin` da configuração, e renomeá-lo mexeria no
+ * contrato de `organizations.settings.routing`.
  */
 export function selectRoundRobin(eligibles: RoutingCandidate[]): string | null {
   if (eligibles.length === 0) return null;
   const sorted = [...eligibles].sort((a, b) => {
+    if (a.currentLoad !== b.currentLoad) return a.currentLoad - b.currentLoad;
     const la = a.lastAssignedAt ?? -1;
     const lb = b.lastAssignedAt ?? -1;
     if (la !== lb) return la - lb; // mais antigo (ou nunca = -1) primeiro

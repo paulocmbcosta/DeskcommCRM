@@ -30,6 +30,8 @@ function doRoster(over: Partial<AtendenteDoRoster> = {}): AtendenteDoRoster {
     ultimoSinalDeVida: null,
     atualizadoEm: null,
     cargaAtual: 0,
+    emPausaDesde: null,
+    motivoDaPausa: null,
     ...over,
   };
 }
