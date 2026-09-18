@@ -111,6 +111,44 @@ describe("elegibilidade restrita por time", () => {
     expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toMatchObject([{ userId: "ana" }]);
   });
 
+  it("teto do time: quem já tem o máximo DAQUELE setor fica de fora, e a conversa espera", async () => {
+    // Capacidade pessoal 10, teto do Suporte 2. Ana tem 2 no Suporte: cheia
+    // para o time, embora sobre capacidade — a conversa NÃO vai para ela.
+    const { db } = fixture({
+      attendant_availability: [{ user_id: "ana", capacity: 10, schedule: {} }],
+      attendance_teams: { id: "time", schedule: {}, archived_at: null, max_concurrent: 2 },
+      conversations: [
+        { assigned_to_user_id: "ana", team_id: "time" },
+        { assigned_to_user_id: "ana", team_id: "time" },
+      ],
+    });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toEqual([]);
+  });
+
+  it("teto do time conta só o que é do time: conversa de OUTRO setor não ocupa vaga", async () => {
+    const { db } = fixture({
+      attendant_availability: [{ user_id: "ana", capacity: 10, schedule: {} }],
+      attendance_teams: { id: "time", schedule: {}, archived_at: null, max_concurrent: 2 },
+      conversations: [
+        { assigned_to_user_id: "ana", team_id: "time" },
+        { assigned_to_user_id: "ana", team_id: "outro-time" },
+        { assigned_to_user_id: "ana", team_id: null },
+      ],
+    });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toMatchObject([
+      { userId: "ana", currentLoad: 3 },
+    ]);
+  });
+
+  it("sem teto no time (null), vale só a capacidade da pessoa — como sempre foi", async () => {
+    const { db } = fixture({
+      attendant_availability: [{ user_id: "ana", capacity: 10, schedule: {} }],
+      attendance_teams: { id: "time", schedule: {}, archived_at: null, max_concurrent: null },
+      conversations: Array.from({ length: 6 }, () => ({ assigned_to_user_id: "ana", team_id: "time" })),
+    });
+    expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toMatchObject([{ userId: "ana" }]);
+  });
+
   it("time arquivado não devolve ninguém", async () => {
     const { db } = fixture({ attendance_teams: { id: "time", schedule: {}, archived_at: "2026-01-01T00:00:00Z" } });
     expect(await loadEligibleAttendants(db, "org", now, scopeComTime)).toEqual([]);

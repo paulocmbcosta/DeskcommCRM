@@ -98,6 +98,7 @@ export function EditorDeTime({
       timezone: agenda.timezone,
       windows: agenda.windows,
       userIds: time?.user_ids ?? [],
+      teto: time?.max_concurrent != null ? String(time.max_concurrent) : "",
     };
   }, [time]);
 
@@ -115,6 +116,8 @@ export function EditorDeTime({
   const [timezone, setTimezone] = useState(inicial.timezone);
   const [windows, setWindows] = useState<ScheduleWindow[]>(inicial.windows);
   const [userIds, setUserIds] = useState<string[]>(inicial.userIds);
+  /** Texto, não número: campo vazio é "sem limite", e `0` digitado não pode virar isso em silêncio. */
+  const [teto, setTeto] = useState(inicial.teto);
 
   /** Reabrir relê as props: outro gestor pode ter salvado enquanto isto estava fechado. */
   function abrir() {
@@ -125,6 +128,7 @@ export function EditorDeTime({
     setTimezone(inicial.timezone);
     setWindows(inicial.windows);
     setUserIds(inicial.userIds);
+    setTeto(inicial.teto);
     setAberto(true);
   }
 
@@ -135,8 +139,12 @@ export function EditorDeTime({
     description: descricao.trim(),
     schedule: { timezone, windows },
     user_ids: userIds,
+    // Vazio = sem teto. Qualquer outra coisa vai ao schema como número, e é ele
+    // quem recusa zero, negativo e texto — o botão Salvar apaga junto.
+    max_concurrent: teto.trim() === "" ? null : Number(teto),
   };
   const conferido = timeDeAtendimentoSchema.safeParse(payload);
+  const erroDeTeto = teto.trim() !== "" && !/^[1-9]\d{0,3}$/.test(teto.trim());
   const erroDeSlug = slug.length > 0 && !/^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/.test(slug);
 
   function enviar(e: React.FormEvent) {
@@ -174,6 +182,14 @@ export function EditorDeTime({
               {lerAgenda(time.schedule).agenda.windows.length === 0
                 ? t("atende a qualquer hora")
                 : resumoDeJanelas(lerAgenda(time.schedule).agenda.windows, t)}
+              {/* O teto à vista, sem abrir o time: é ele que explica por que uma
+                  conversa está esperando com atendente online. */}
+              {time.max_concurrent != null && (
+                <span data-testid="resumo-do-teto">
+                  {" · "}
+                  {t("até")} {time.max_concurrent} {t("conversas por atendente")}
+                </span>
+              )}
             </p>
           )}
         </div>
@@ -243,6 +259,26 @@ export function EditorDeTime({
                   : t("É por este nome curto que o agente de IA chama o time.")}
               </p>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor={`teto-${time?.id ?? "novo"}`}>{t("Limite de conversas simultâneas por atendente")}</Label>
+            <Input
+              id={`teto-${time?.id ?? "novo"}`}
+              value={teto}
+              inputMode="numeric"
+              maxLength={4}
+              placeholder={t("Sem limite")}
+              className="max-w-[10rem]"
+              disabled={salvar.isPending}
+              data-testid="teto-do-time"
+              onChange={(e) => setTeto(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {erroDeTeto
+                ? t("Use um número inteiro a partir de 1, ou deixe em branco para não limitar.")
+                : t("Com todos no limite, a conversa nova espera na fila do time até alguém ter vaga — não vai para quem já está cheio.")}
+            </p>
           </div>
 
           <div className="space-y-1.5">

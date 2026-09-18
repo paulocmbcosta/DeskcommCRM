@@ -39,6 +39,23 @@ describe("selectRoundRobin (rodízio real)", () => {
   });
 });
 
+describe("quem tem MENOS atendimento recebe primeiro", () => {
+  it("a carga vence o rodízio: quem recebeu agora mas está livre passa na frente de quem está cheio", () => {
+    // `cheio` recebeu há mais tempo — pelo rodízio puro seria a vez dele — e está
+    // com 4 conversas; `livre` acabou de receber e está com 1. A conversa nova
+    // vai para quem tem folga, senão a fila anda no ritmo do mais lento.
+    expect(selectRoundRobin([cand("cheio", 1000, 4), cand("livre", 9000, 1)])).toBe("livre");
+  });
+
+  it("na MESMA carga, o rodízio decide — comportamento idêntico ao de antes", () => {
+    expect(selectRoundRobin([cand("recente", 5000, 2), cand("antigo", 1000, 2)])).toBe("antigo");
+  });
+
+  it("carga zero para todos (começo do dia): nunca-atribuído primeiro", () => {
+    expect(selectRoundRobin([cand("b", 1000, 0), cand("a", null, 0)])).toBe("a");
+  });
+});
+
 describe("decideRouting — os 5 cenários do acceptance", () => {
   it("round_robin com elegível ⇒ assign ao elegível (nunca ao inelegível — já filtrado)", () => {
     const action = decideRouting({

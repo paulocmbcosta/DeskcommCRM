@@ -130,5 +130,13 @@ export const timeDeAtendimentoSchema = z.object({
   description: z.string().trim().max(500).default(""),
   schedule: availabilityScheduleSchema.default({ timezone: "America/Sao_Paulo", windows: [] }),
   user_ids: z.array(z.string().uuid()).max(1000).default([]),
+  /**
+   * Teto de conversas simultâneas POR ATENDENTE dentro deste time (migration
+   * 0267). `null` = sem teto, e aí vale só a capacidade da pessoa. Com o teto
+   * atingido por todos, a conversa ESPERA na fila do time em vez de transbordar
+   * para quem já está cheio. Opcional com default: cliente antigo da rota, que
+   * não manda o campo, não passa a ser recusado pelo `.strict()`.
+   */
+  max_concurrent: z.number().int().min(1).max(1000).nullable().default(null),
 }).strict();
 export type TimeDeAtendimento = z.infer<typeof timeDeAtendimentoSchema>;

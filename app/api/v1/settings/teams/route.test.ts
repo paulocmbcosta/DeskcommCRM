@@ -177,8 +177,39 @@ describe("POST /api/v1/settings/teams", () => {
     await POST(req({ ...corpoValido, p_org: outraOrg }));
     await POST(req({ ...corpoValido, organization_id: outraOrg }));
     await POST(req());
-    expect(rpc.mock.calls.length).toBe(1);
+    // DUAS chamadas, e as duas do corpo LEGÍTIMO: salvar o time e gravar o teto
+    // dele (migration 0267 — RPC própria, para não mexer na assinatura da
+    // primeira). Os dois corpos contrabandeados seguem morrendo antes de
+    // qualquer RPC: se um deles passasse, seriam quatro.
+    expect(rpc.mock.calls.map((c) => c[0])).toEqual([
+      "fn_save_attendance_team",
+      "fn_set_attendance_team_limit",
+    ]);
     for (const chamada of rpc.mock.calls) expect(chamada[1].p_org).toBe(org);
+  });
+
+  it("o teto do time vai por RPC própria, com a org da sessão e o id que o banco devolveu", async () => {
+    await POST(req({ ...corpoValido, max_concurrent: 5 }));
+    expect(rpc).toHaveBeenCalledWith("fn_set_attendance_team_limit", { p_org: org, p_team: time, p_limit: 5 });
+  });
+
+  it("sem teto no corpo, grava `null` — 'sem limite' é valor, não ausência", async () => {
+    await POST(req());
+    expect(rpc).toHaveBeenCalledWith("fn_set_attendance_team_limit", { p_org: org, p_team: time, p_limit: null });
+  });
+
+  it("teto inválido é recusado antes de qualquer escrita", async () => {
+    const res = await POST(req({ ...corpoValido, max_concurrent: 0 }));
+    expect(res.status).toBe(422);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("time salvo e teto que falhou: a resposta DIZ que o time foi salvo", async () => {
+    rpc.mockResolvedValueOnce({ data: { id: time, slug: "financeiro", user_ids: [atendente] }, error: null });
+    rpc.mockResolvedValueOnce({ data: null, error: { code: "XX000", message: "boom" } });
+    const res = await POST(req({ ...corpoValido, max_concurrent: 5 }));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error.message).toMatch(/O time foi salvo/);
   });
 
   it("corpo inválido não vira erro de sistema", async () => {
@@ -217,7 +248,7 @@ describe("POST /api/v1/settings/teams", () => {
       organizationId: org,
       resourceType: "attendance_team",
       resourceId: time,
-      metadata: { slug: "financeiro", user_ids: [atendente] },
+      metadata: { slug: "financeiro", user_ids: [atendente], max_concurrent: null },
     }));
   });
 });

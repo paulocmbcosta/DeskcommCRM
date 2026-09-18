@@ -19,7 +19,7 @@ import { isAttendantEligible, OPEN_LOAD_STATUSES } from "@/lib/routing/eligibili
 import { lerAgenda } from "@/lib/times/agenda";
 
 const COLUNAS_DISPONIBILIDADE =
-  "user_id, is_available, capacity, schedule, last_heartbeat_at, updated_at";
+  "user_id, is_available, capacity, schedule, last_heartbeat_at, updated_at, paused_at, pause_reason";
 
 export interface AtendenteDoRoster {
   userId: string;
@@ -32,6 +32,10 @@ export interface AtendenteDoRoster {
   atualizadoEm: string | null;
   /** Conversas abertas atribuídas — mesma contagem que o worker de roteamento usa. */
   cargaAtual: number;
+  /** Em pausa desde quando (migration 0267). `null` = não está em pausa. */
+  emPausaDesde: string | null;
+  /** O motivo da pausa — vocabulário em `lib/atendimento/pausa.ts`. */
+  motivoDaPausa: string | null;
 }
 
 /**
@@ -72,6 +76,8 @@ export async function carregarRosterDeAtendimento(
     schedule: unknown;
     last_heartbeat_at: string | null;
     updated_at: string | null;
+    paused_at?: string | null;
+    pause_reason?: string | null;
   };
   const porUsuario = new Map(
     ((availData ?? []) as LinhaDisponibilidade[]).map((a) => [a.user_id, a] as const),
@@ -105,6 +111,8 @@ export async function carregarRosterDeAtendimento(
       ultimoSinalDeVida: a?.last_heartbeat_at ?? null,
       atualizadoEm: a?.updated_at ?? null,
       cargaAtual: cargaPorUsuario.get(m.user_id) ?? 0,
+      emPausaDesde: a?.paused_at ?? null,
+      motivoDaPausa: a?.pause_reason ?? null,
     };
   });
 }

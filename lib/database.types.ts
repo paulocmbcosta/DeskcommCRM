@@ -2068,6 +2068,7 @@ export type Database = {
           created_at: string
           description: string
           id: string
+          max_concurrent: number | null
           name: string
           organization_id: string
           schedule: Json
@@ -2075,6 +2076,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          max_concurrent?: number | null
           archived_at?: string | null
           created_at?: string
           description?: string
@@ -2086,6 +2088,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          max_concurrent?: number | null
           archived_at?: string | null
           created_at?: string
           description?: string
@@ -2113,6 +2116,9 @@ export type Database = {
           is_available: boolean
           last_heartbeat_at: string | null
           organization_id: string
+          pause_note: string | null
+          pause_reason: string | null
+          paused_at: string | null
           schedule: Json
           updated_at: string
           user_id: string
@@ -2123,6 +2129,9 @@ export type Database = {
           is_available?: boolean
           last_heartbeat_at?: string | null
           organization_id: string
+          pause_note?: string | null
+          pause_reason?: string | null
+          paused_at?: string | null
           schedule?: Json
           updated_at?: string
           user_id: string
@@ -2133,6 +2142,9 @@ export type Database = {
           is_available?: boolean
           last_heartbeat_at?: string | null
           organization_id?: string
+          pause_note?: string | null
+          pause_reason?: string | null
+          paused_at?: string | null
           schedule?: Json
           updated_at?: string
           user_id?: string
@@ -2144,6 +2156,54 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      attendant_pause_log: {
+        Row: {
+          ended_at: string | null
+          ended_by: string | null
+          id: string
+          note: string | null
+          organization_id: string
+          reason: string
+          started_at: string
+          user_id: string
+        }
+        Insert: {
+          ended_at?: string | null
+          ended_by?: string | null
+          id?: string
+          note?: string | null
+          organization_id: string
+          reason: string
+          started_at?: string
+          user_id: string
+        }
+        Update: {
+          ended_at?: string | null
+          ended_by?: string | null
+          id?: string
+          note?: string | null
+          organization_id?: string
+          reason?: string
+          started_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attendant_pause_log_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attendant_pause_log_organization_id_user_id_fkey"
+            columns: ["organization_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "user_organizations"
+            referencedColumns: ["organization_id", "user_id"]
           },
         ]
       }
@@ -8161,6 +8221,21 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      fn_attendant_set_status: {
+        Args: {
+          p_note?: string | null
+          p_org: string
+          p_reason?: string | null
+          p_status: string
+          p_user?: string | null
+        }
+        Returns: Json
+      }
+      fn_set_attendance_team_limit: {
+        Args: { p_limit: number | null; p_org: string; p_team: string }
+        Returns: Json
+      }
+      fn_routing_acorda_pendentes: { Args: { p_org: string }; Returns: number }
       fn_service_status_com_ator: {
         Args: {
           p_actor: string | null

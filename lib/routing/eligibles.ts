@@ -31,6 +31,8 @@ export async function loadEligibleAttendants(
   scope: RoutingScope,
 ): Promise<RoutingCandidate[]> {
   let allowed: Set<string> | null = null;
+  /** Teto de conversas simultâneas POR ATENDENTE dentro do time (migration 0267). `null` = sem teto. */
+  let tetoDoTime: number | null = null;
   if (scope.kind === "conversation_channel") {
     const { data: channel, error: channelError } = await supabase.from("channel_sessions")
       .select("id").eq("organization_id", organizationId).eq("id", scope.channelSessionId).maybeSingle();
@@ -53,7 +55,7 @@ export async function loadEligibleAttendants(
   // canal precisa das duas ao mesmo tempo, e a variante perderia o canal.
   if (scope.teamId) {
     const { data: team, error: teamError } = await supabase.from("attendance_teams")
-      .select("id, schedule, archived_at")
+      .select("id, schedule, archived_at, max_concurrent")
       .eq("organization_id", organizationId).eq("id", scope.teamId).maybeSingle();
     if (teamError) throw new Error(teamError.message);
     if (!team || team.archived_at) return [];
@@ -63,6 +65,8 @@ export async function loadEligibleAttendants(
     // espera na fila e a Central avisa quando as tentativas esgotam, nomeando-o.
     const { agenda: agendaDoTime, valida: agendaDoTimeValida } = lerAgenda(team.schedule);
     if (!agendaDoTimeValida || !isWithinSchedule(agendaDoTime, now)) return [];
+    const teto = (team as { max_concurrent?: number | null }).max_concurrent;
+    tetoDoTime = typeof teto === "number" && teto > 0 ? teto : null;
     const { data: membros, error: membrosError } = await supabase.from("attendance_team_members")
       .select("user_id").eq("organization_id", organizationId).eq("team_id", scope.teamId);
     if (membrosError) throw new Error(membrosError.message);
@@ -89,15 +93,23 @@ export async function loadEligibleAttendants(
   // Carga atual: conversas abertas atribuídas, contadas por dono (1 query).
   const { data: openConvs, error: loadError } = await supabase
     .from("conversations")
-    .select("assigned_to_user_id")
+    .select("assigned_to_user_id, team_id")
     .eq("organization_id", organizationId)
     .in("assigned_to_user_id", userIds)
     .in("status", OPEN_LOAD_STATUSES as unknown as string[]);
   if (loadError) throw new Error(loadError.message);
   const loadByUser = new Map<string, number>();
-  for (const c of (openConvs ?? []) as Array<{ assigned_to_user_id: string | null }>) {
+  // A carga DENTRO do time, contada na mesma leitura. O teto do time é por
+  // atendente e só conta o que é daquele setor: quem atende Suporte e Comercial
+  // pode estar no teto de um e livre no outro. O teto da PESSOA (`capacity`)
+  // continua valendo por cima, somando tudo.
+  const loadNoTimeByUser = new Map<string, number>();
+  for (const c of (openConvs ?? []) as Array<{ assigned_to_user_id: string | null; team_id?: string | null }>) {
     if (c.assigned_to_user_id) {
       loadByUser.set(c.assigned_to_user_id, (loadByUser.get(c.assigned_to_user_id) ?? 0) + 1);
+      if (scope.teamId && c.team_id === scope.teamId) {
+        loadNoTimeByUser.set(c.assigned_to_user_id, (loadNoTimeByUser.get(c.assigned_to_user_id) ?? 0) + 1);
+      }
     }
   }
 
@@ -127,6 +139,10 @@ export async function loadEligibleAttendants(
     // Um atendente com agenda ilegível fica de fora — sozinho, sem levar junto o
     // roteamento da organização inteira, que era o que o `.parse()` fazia aqui.
     const { agenda: schedule, valida: agendaValida } = lerAgenda(r.schedule);
+    // No teto do time: fica de fora, e a conversa ESPERA na fila do setor — não
+    // transborda para quem já está cheio. `fn_channel_routing_claim` repete esta
+    // conta dentro da transação; aqui ela evita a tentativa inútil.
+    if (tetoDoTime !== null && (loadNoTimeByUser.get(r.user_id) ?? 0) >= tetoDoTime) continue;
     const eligible = agendaValida && isAttendantEligible(
       { isAvailable: true, capacity: r.capacity, currentLoad, schedule },
       now,

@@ -11,6 +11,8 @@ import {
   type AttendantAvailability,
 } from "@/hooks/team/useAttendants";
 import { isHeartbeatStale } from "@/lib/routing/eligibility";
+import { rotuloDoMotivoDePausa } from "@/lib/atendimento/pausa";
+import { formatarEspera } from "@/lib/inbox/espera";
 import {
   ROUTING_MODES,
   type RoutingConfig,
@@ -89,7 +91,19 @@ function summarizeSchedule(windows: ScheduleWindow[], t: (texto: string) => stri
 }
 
 function StatusBadge({ attendant, now }: { attendant: Attendant; now: Date }) {
+  const t = useT();
   const a = attendant.availability;
+  // A PAUSA vem primeiro: "offline" diria menos do que se sabe. O gestor olha
+  // esta coluna para entender por que a fila do time não anda — e "em pausa,
+  // almoço, há 40 min" é uma resposta; "offline" é só a falta dela.
+  if (a?.paused_at) {
+    const ms = Math.max(0, now.getTime() - new Date(a.paused_at).getTime());
+    return (
+      <Badge variant="outline" className="border-warning-border bg-warning-bg/40 text-warning-fg" data-testid="atendente-em-pausa">
+        {t("Em pausa")} · {t(rotuloDoMotivoDePausa(a.pause_reason))} · {formatarEspera(ms, t)}
+      </Badge>
+    );
+  }
   const online = !!a?.is_available && !isHeartbeatStale(a.last_heartbeat_at, now);
   return online ? (
     <Badge variant="default">Online</Badge>
