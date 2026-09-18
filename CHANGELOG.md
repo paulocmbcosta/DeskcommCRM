@@ -8,6 +8,47 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.29.0] — 2026-09-18
+
+### Adicionado
+
+- **O atendimento agora vai para o time certo** Times de atendimento: cadastre Suporte, Cobrança, Comercial, Cancelamentos ou o que a
+  sua operação usar, aloque atendentes em cada um — a mesma pessoa pode estar em vários —
+  e defina o horário do setor, que pode ser diferente do horário de quem atende. O setor
+  de cancelamentos atende de segunda a sexta até as 18h mesmo numa empresa que atende
+  sábado até as 20h.
+
+  O agente de IA descobre os times sozinho e escolhe pelo assunto da conversa, lendo o
+  campo "quando usar" que você escreve na tela. O prompt do agente não precisa conhecer
+  nome nem identificador de time nenhum, então renomear um setor não exige mexer no
+  agente.
+
+  Sem ninguém do time disponível, a conversa espera na fila daquele setor em vez de cair
+  no colo de quem não atende aquilo, e a Central avisa nomeando o time. No inbox há um
+  filtro por fila, um selo dizendo de quem é a conversa, e o atendente pode transferir de
+  setor a qualquer momento.
+
+### Alterado
+
+- **O instalador e as imagens passam a vir deste repositório** Quem instala ou atualiza a partir deste repositório clona daqui e recebe as três
+  imagens publicadas por ele, em `ghcr.io/paulocmbcosta`. Até agora o kit de
+  instalação, o compose e o `.env` de exemplo apontavam para o repositório de origem
+  do projeto, do qual este foi bifurcado — uma instalação feita por aqui acompanhava
+  as versões de lá, não as daqui. As telas, o banco e o WhatsApp não mudam.
+
+### Corrigido
+
+- **Uma agenda com fuso escrito errado não derruba mais a lista de atendentes** O horário de atendimento de cada pessoa é gravado com o fuso, e o fuso escrito
+  com acento — `America/Asunción`, como um hispanofalante escreve natural — era
+  aceito na hora de salvar e recusado na hora de ler. O resultado aparecia longe da
+  tela que o causou: a lista de quem pode assumir uma conversa voltava vazia para a
+  organização inteira, e o atendimento automático prometia retorno "sem prazo" ao
+  cliente mesmo com a equipe toda online — por causa da agenda de UMA pessoa.
+
+  Agora a agenda que o sistema não consegue ler fecha apenas aquele atendente, que
+  fica fora do rodízio até corrigir o horário dele; todos os demais continuam
+  recebendo conversa normalmente.
+
 ## [1.28.0] — 2026-09-16
 
 ### Adicionado
@@ -4769,7 +4810,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/melgarafael/DeskcommCRM/compare/v1.28.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.29.0...HEAD
+[1.29.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/melgarafael/DeskcommCRM/compare/v1.27.3...v1.28.0
 [1.27.3]: https://github.com/melgarafael/DeskcommCRM/compare/v1.27.2...v1.27.3
 [1.27.2]: https://github.com/melgarafael/DeskcommCRM/compare/v1.27.1...v1.27.2
