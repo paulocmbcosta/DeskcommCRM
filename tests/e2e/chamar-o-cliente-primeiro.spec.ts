@@ -63,8 +63,13 @@ async function criarContatoSemConversa(
     data: { name: nome, source: "manual" },
   });
   expect(criado.ok(), await criado.text()).toBe(true);
+  // `createContactHandler` devolve `{ contact, action }` — o contato vem
+  // ANINHADO, não na raiz. Supor `data.id` produzia
+  // `invalid input syntax for type uuid: "undefined"` no PATCH seguinte, e o
+  // erro chegava como 500 do banco, longe da causa. Medido no CI em 2026-09-19.
   const { data } = await criado.json();
-  const id = data.id as string;
+  const id = data.contact.id as string;
+  expect(id, "o POST de contato não devolveu o id").toBeTruthy();
 
   const telefone = telefoneNovo();
   const completado = await page.request.patch(`/api/v1/contacts/${id}`, {
