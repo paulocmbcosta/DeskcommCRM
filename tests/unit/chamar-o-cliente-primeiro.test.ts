@@ -147,6 +147,28 @@ describe("os elos de tela que somem sem barulho", () => {
     expect(fonte).toMatch(/requireRole\("agent"/);
   });
 
+  it("iniciar conversa usa SERVICE ROLE — as RPCs são revogadas de `authenticated`", () => {
+    // Defeito medido na revisão deste PR, antes de sair: a rota nasceu com
+    // `createClient()` (client de sessão) e teria falhado em 100% das chamadas.
+    // Abrir a conversa passa por `fn_service_begin`, e o baseline faz
+    // `revoke execute … from public,anon,authenticated`. Nada disso aparece em
+    // typecheck, lint ou unitário de lógica — só no uso real.
+    //
+    // O baseline entra na asserção de propósito: se um dia a função for
+    // concedida a `authenticated`, este caso passa a medir uma verdade velha,
+    // e é melhor que ele quebre e obrigue alguém a reler.
+    const rota = readFileSync("app/api/v1/conversations/iniciar/route.ts", "utf8");
+    expect(rota).toMatch(/createAdminClient\(\)/);
+    expect(rota, "voltou ao client de sessão").not.toMatch(/createClient\(\)/);
+
+    const baseline = readFileSync("supabase/baseline.sql", "utf8");
+    const revogacoes = baseline
+      .split("\n")
+      .filter((l) => /^revoke execute on function public\.fn_service_begin/.test(l));
+    expect(revogacoes.length, "fn_service_begin deixou de ser revogada").toBeGreaterThan(0);
+    expect(revogacoes.some((l) => l.includes("authenticated"))).toBe(true);
+  });
+
   it("nenhuma das telas novas nomeia um provider", () => {
     // Invariante 1 de `docs/doctrine/restricao-de-canal.md`. O `lint:channels`
     // é o guarda primário; este caso existe porque o lint tem allowlist e um

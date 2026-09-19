@@ -32,7 +32,7 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { iniciarConversaEEnviar } from "@/lib/messaging/iniciar-conversa";
 import { iniciarConversaSchema, validateRequest } from "@/lib/schemas";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
@@ -64,11 +64,26 @@ export async function POST(req: NextRequest): Promise<Response> {
     throw err;
   }
 
-  // Client de SESSÃO (RLS ligada), não admin: é o mesmo caminho de
-  // `POST /messages`, e as policies de `conversations`/`messages` já
-  // respondem por este usuário. Admin aqui exigiria refiltrar tudo à mão
-  // (anti-pattern 10) sem ganhar nada.
-  const supabase = await createClient();
+  // ─── Admin client, e NÃO o de sessão ───────────────────────────────────
+  //
+  // Não é conveniência: com o client de sessão esta rota falharia em 100% das
+  // chamadas. Abrir a conversa passa por `fn_service_begin`, e o baseline a
+  // revoga de `authenticated` (`revoke execute … from public,anon,authenticated;
+  // grant … to service_role`). O mesmo vale para `fn_upsert_wa_contact`, que
+  // cria o cadastro quando só vem telefone. É por isso que
+  // `open-with-contact` — a rota irmã, que faz a metade de cima deste ato —
+  // também usa o admin.
+  //
+  // Para conferir na fonte em vez de acreditar nesta linha:
+  //   grep -n "function public.fn_service_begin" supabase/baseline.sql | grep -iE "grant|revoke"
+  //
+  // O tenant continua garantido à mão, que é o que o anti-pattern 10 exige:
+  // `organizationId` sai do gate de papel acima e nunca do corpo, e as duas
+  // peças o recebem explícito — `openSharedContactConversation(db, orgId, …)`
+  // filtra por ele, e `sendMessageHandler` filtra `organization_id` em toda
+  // consulta justamente porque metade dos chamadores dele já é service role
+  // (ver o comentário longo em `_handler.ts`, que nomeia o vazamento medido).
+  const supabase = createAdminClient();
 
   try {
     const resultado = await iniciarConversaEEnviar(
