@@ -373,6 +373,13 @@ nunca por `update` de status.
   `team_id`, `bot_silenced_until`, `last_handoff_at` nem `contacts.force_human`. Quem falou com o
   Financeiro na segunda e voltava pedindo suporte na quarta caía na fila do Financeiro, com a IA
   muda. Migration 0269; gate em `tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts`.
+- **"Fechada" sem dizer por quem — achado em PRODUÇÃO, não no teste** (2026-09-19, logo depois
+  de subir a 1.31.0). Quatro atendimentos encerrados pela tela tinham `actor_kind='user'` e
+  `actor_name` nulo: o trigger da 0266 lia o nome só de `full_name`, e os dois usuários da
+  instalação não têm essa chave. A spec e os invariantes criavam TODO usuário com `full_name` —
+  mediam o caminho feliz, que não é o de quem instalou cedo. Migration 0270: régua única
+  `fn_nome_do_usuario` (nome; na falta, o início do e-mail) + backfill idempotente. O invariante
+  novo cria o usuário que faltava: sem `full_name`.
 
 **NÃO medido:** telefone de verdade (a spec não conecta WAHA); o trilho em tela de toque
 (a dica de mouse não existe lá — o nome da aba escrito no topo é a resposta, e está medido

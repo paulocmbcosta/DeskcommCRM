@@ -35,7 +35,8 @@
     { "id": "reset-do-retorno", "lane": "banco", "col": 8, "type": "backend", "label": "fn_service_inbound, ramo 'reopened' (0269) — o atendimento novo começa do zero: sem time, sem silêncio, sem passagem" },
     { "id": "followup-retomado", "lane": "entrada", "col": 4, "type": "backend", "label": "Follow-up em paused_handoff — consumidor de ai.handoff_resolved" },
     { "id": "api-fechados", "lane": "api", "col": 5, "type": "backend", "label": "GET /atendimentos?status=closed — a lista da aba Fechadas (e a contagem dela em /conversations/counts)" },
-    { "id": "aba-fechadas", "lane": "tela", "col": 4, "type": "frontend", "label": "AtendimentosFechadosList — a aba Fechadas lista ATENDIMENTOS, com a marca 'o cliente voltou'" }
+    { "id": "aba-fechadas", "lane": "tela", "col": 4, "type": "frontend", "label": "AtendimentosFechadosList — a aba Fechadas lista ATENDIMENTOS, com a marca 'o cliente voltou'" },
+    { "id": "nome-do-usuario", "lane": "banco", "col": 9, "type": "backend", "label": "fn_nome_do_usuario (0270) — o nome cadastrado; na falta, o início do e-mail" }
   ],
   "edges": [
     { "from": "ingestao", "to": "conversa", "label": "nasce ou reabre (fn_service_inbound)" },
@@ -67,6 +68,9 @@
     { "from": "atendimentos", "to": "api-fechados", "label": "closed_at preenchido; o time é o do FECHAMENTO" },
     { "from": "conversa", "to": "api-fechados", "label": "!inner: número, etiqueta, não lidas e se a conversa anda de novo" },
     { "from": "api-fechados", "to": "aba-fechadas", "label": "paginado por (closed_at, id)" },
-    { "from": "aba-fechadas", "to": "thread", "label": "clicar abre AQUELE atendimento, recortado e travado" }
+    { "from": "aba-fechadas", "to": "thread", "label": "clicar abre AQUELE atendimento, recortado e travado" },
+    { "from": "nome-do-usuario", "to": "trigger", "label": "autor do evento, quem atendia ao fechar, e os nomes do payload de assumida/liberada" },
+    { "from": "nome-do-usuario", "to": "atendimentos", "label": "backfill idempotente de closed_by_name e assigned_to_user_name gravados em branco" },
+    { "from": "nome-do-usuario", "to": "eventos", "label": "backfill idempotente de actor_name gravado em branco" }
   ]
 }
