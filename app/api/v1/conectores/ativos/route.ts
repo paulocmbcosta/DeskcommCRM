@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 
 import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { roleAtLeast } from "@/lib/auth/types";
 import { conectoresLigados } from "@/lib/conectores/conexao";
 import { obterConector } from "@/lib/conectores/registro";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -26,7 +26,10 @@ export async function GET(): Promise<Response> {
   const requestId = randomUUID();
   const authz = await requireRole("viewer", { requestId, resource: "conectores" });
   if (!authz.ok) return authz.response;
-  if (ROLE_RANK[authz.org.role] < ROLE_RANK.agent) return ok([], { requestId });
+  // `roleAtLeast`, e não comparar o rank na mão: o 401/403 já foi decidido pelo
+  // `requireRole` acima (é ele quem aplica o gate de MFA); aqui o papel já
+  // resolvido só escolhe entre "nenhuma aba" e "as abas desta organização".
+  if (!roleAtLeast(authz.org.role, "agent")) return ok([], { requestId });
 
   try {
     const ligados = await conectoresLigados(createAdminClient(), authz.org.orgId);
