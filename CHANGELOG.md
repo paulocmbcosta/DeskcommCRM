@@ -8,6 +8,18 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.32.1] — 2026-09-19
+
+### Corrigido
+
+- **A nota interna aparece só no atendimento em que foi escrita** As notas internas atravessavam os atendimentos: a nota escrita num atendimento
+  já encerrado continuava aparecendo no atendimento novo do mesmo cliente, e a
+  nota de hoje aparecia ao abrir um atendimento antigo pelo histórico ou pela aba
+  Fechadas. As mensagens já eram separadas por atendimento; as notas não.
+
+  Agora cada nota fica no atendimento — no protocolo — em que foi escrita. Nenhuma
+  nota foi apagada: as antigas continuam lá, dentro do atendimento delas.
+
 ## [1.32.0] — 2026-09-19
 
 ### Adicionado
@@ -4974,7 +4986,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.1...HEAD
+[1.32.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.0...v1.32.1
 [1.32.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.1...v1.32.0
 [1.31.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.1...v1.31.0
