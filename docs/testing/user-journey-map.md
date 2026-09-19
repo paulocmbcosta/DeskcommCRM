@@ -442,15 +442,15 @@ ganha um receiver para provar o que saiu. Banco:
 |---|---|---|
 | J26.0 SEM conector ligado, o painel da conversa não tem aba a mais (`painel-aba-conector:ixc` = 0) — a organização que não usa IXC não vê nada | `[P1]` | **PASS** |
 | J26.1 Configurações › Conectores: token errado → "O sistema recusou o token." e a ficha continua DESLIGADA (salvar testa antes de gravar) | `[P1]` | **PASS** — `evidence/conector-ixc/01-token-errado-recusado.png` |
-| J26.2 Token certo → "Ligado", a tela mostra só `••••` + 4 finais, o token não aparece em lugar nenhum do texto da página, e no banco está cifrado | `[P1]` | **PASS** — `02-conector-ligado.png` |
-| J26.3 Inbox: a aba IXC aparece; o telefone da conversa identifica UM cadastro (o homônimo de outro DDD é descartado) e o vínculo é gravado como `telefone` | `[P1]` | **PASS** — `03-painel-vinculado.png` |
-| J26.4 O painel mostra nome, CPF, selo "Bloqueado" numa linha só (altura ≤ 24px, medida) com "Motivo: financeiro em atraso", contrato com endereço, **3 vencidas + 2 a vencer + "Mais 3 parcelas futuras"** (a regra do dono), total vencido R$ 389,70, conexão Online com IP, sinal "No limite" −26.10 dBm, 1 OS agendada, 1 atendimento em progresso | `[P1]` | **PASS** — `03`, `04-painel-conexao-e-os.png` |
+| J26.2 Token certo → "Ligado", a tela mostra só `••••` + 4 finais, o token não aparece em lugar nenhum do texto da página, e no banco está cifrado | `[P1]` | **PASS** — `evidence/conector-ixc/02-conector-ligado.png` |
+| J26.3 Inbox: a aba IXC aparece; o telefone da conversa identifica UM cadastro (o homônimo de outro DDD é descartado) e o vínculo é gravado como `telefone` | `[P1]` | **PASS** — `evidence/conector-ixc/03-painel-vinculado.png` |
+| J26.4 O painel mostra nome, CPF, selo "Bloqueado" numa linha só (altura ≤ 24px, medida) com "Motivo: financeiro em atraso", contrato com endereço, **3 vencidas + 2 a vencer + "Mais 3 parcelas futuras"** (a regra do dono), total vencido R$ 389,70, conexão Online com IP, sinal "No limite" −26.10 dBm, 1 OS agendada, 1 atendimento em progresso | `[P1]` | **PASS** — `evidence/conector-ixc/03-painel-vinculado.png`, `evidence/conector-ixc/04-painel-conexao-e-os.png` |
 | J26.5 **Nenhuma das 4 senhas que o IXC falso devolve (central, PPPoE, Wi-Fi, ONU) nem o token do gateway está no HTML da página** | `[P0]` | **PASS** |
 | J26.6 O painel não rola para o lado (`scrollWidth − clientWidth ≤ 1`, medido) | `[P1]` | **PASS** |
-| J26.7 Enviar fatura: 1º toque vira "Confirmar envio" e NADA sai; 2º toque envia DUAS mensagens — resumo (valor, vencimento, link) e a linha digitável sozinha; o texto é o do servidor | `[P1]` | **PASS** — `05-fatura-enviada.png` |
-| J26.8 Telefone que não está no IXC → "Não achei este telefone…", busca por CPF vincula e mostra "Liberado" e "Nenhuma fatura vencida." | `[P1]` | **PASS** — `06-nao-encontrado-busca-cpf.png` |
-| J26.9 Celular de DOIS cadastros → a tela lista os dois com documento PARCIAL (`***.995.350-**`), ninguém é vinculado sozinho; "É este" vincula | `[P1]` | **PASS** — `07-escolher-entre-dois.png` |
-| J26.10 ERP fora do ar: o painel diz o erro com "Tentar de novo", e Configurações › Conectores passa a mostrar "Com problema" — o admin vê o que o atendente viu | `[P1]` | **PASS** — `08-erp-fora-do-ar.png`, `09-admin-ve-o-erro.png` |
+| J26.7 Enviar fatura: 1º toque vira "Confirmar envio" e NADA sai; 2º toque envia DUAS mensagens — resumo (valor, vencimento, link) e a linha digitável sozinha; o texto é o do servidor | `[P1]` | **PASS** — `evidence/conector-ixc/05-fatura-enviada.png` |
+| J26.8 Telefone que não está no IXC → "Não achei este telefone…", busca por CPF vincula e mostra "Liberado" e "Nenhuma fatura vencida." | `[P1]` | **PASS** — `evidence/conector-ixc/06-nao-encontrado-busca-cpf.png` |
+| J26.9 Celular de DOIS cadastros → a tela lista os dois com documento PARCIAL (`***.995.350-**`), ninguém é vinculado sozinho; "É este" vincula | `[P1]` | **PASS** — `evidence/conector-ixc/07-escolher-entre-dois.png` |
+| J26.10 ERP fora do ar: o painel diz o erro com "Tentar de novo", e Configurações › Conectores passa a mostrar "Com problema" — o admin vê o que o atendente viu | `[P1]` | **PASS** — `evidence/conector-ixc/08-erp-fora-do-ar.png`, `evidence/conector-ixc/09-admin-ve-o-erro.png` |
 | J26.11 Auditoria: `conector.conexao_salva`, `conector.vinculo_criado`, `conector.fatura_enviada` — e a linha digitável NÃO está no metadata | `[P1]` | **PASS** |
 
 Execução (2026-09-19): `pnpm e2e:build` (produção) + `next start`, Supabase local
