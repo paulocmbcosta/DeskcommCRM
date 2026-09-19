@@ -3324,6 +3324,65 @@ export type Database = {
           },
         ]
       }
+      conector_conexoes: {
+        Row: {
+          base_url: string
+          conector: string
+          created_at: string
+          created_by: string | null
+          id: string
+          organization_id: string
+          status: string
+          status_detalhe: string | null
+          token_encrypted: string
+          token_iv: string
+          token_last4: string
+          token_tag: string
+          updated_at: string
+          verificada_em: string | null
+        }
+        Insert: {
+          base_url: string
+          conector: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id: string
+          status?: string
+          status_detalhe?: string | null
+          token_encrypted: string
+          token_iv: string
+          token_last4: string
+          token_tag: string
+          updated_at?: string
+          verificada_em?: string | null
+        }
+        Update: {
+          base_url?: string
+          conector?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id?: string
+          status?: string
+          status_detalhe?: string | null
+          token_encrypted?: string
+          token_iv?: string
+          token_last4?: string
+          token_tag?: string
+          updated_at?: string
+          verificada_em?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conector_conexoes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contact_field_proposals: {
         Row: {
           campo: string
@@ -3552,6 +3611,54 @@ export type Database = {
           },
           {
             foreignKeyName: "contacts_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      contato_vinculos_externos: {
+        Row: {
+          conector: string
+          contact_id: string
+          created_at: string
+          created_by: string | null
+          external_id: string
+          id: string
+          organization_id: string
+          verificado_por: string
+        }
+        Insert: {
+          conector: string
+          contact_id: string
+          created_at?: string
+          created_by?: string | null
+          external_id: string
+          id?: string
+          organization_id: string
+          verificado_por: string
+        }
+        Update: {
+          conector?: string
+          contact_id?: string
+          created_at?: string
+          created_by?: string | null
+          external_id?: string
+          id?: string
+          organization_id?: string
+          verificado_por?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contato_vinculos_externos_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contato_vinculos_externos_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"

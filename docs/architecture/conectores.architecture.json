@@ -1,0 +1,363 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Conectores de sistema externo — o primeiro é o IXC (migration 0271)",
+    "subtitle": "O núcleo não sabe o que é IXC: ele pergunta quais conectores a organização ligou. Identidade é REFERENCIADA (só o id do ERP); contrato, fatura, OS e conexão são lidos AO VIVO, passando por uma lista branca que descarta as senhas que o ERP devolve.",
+    "output": "conectores.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    {
+      "id": "tela",
+      "label": "Tela"
+    },
+    {
+      "id": "api",
+      "label": "API"
+    },
+    {
+      "id": "conector",
+      "label": "Conector (lib/conectores)"
+    },
+    {
+      "id": "banco",
+      "label": "Banco"
+    },
+    {
+      "id": "fora",
+      "label": "Sistema externo"
+    }
+  ],
+  "mainPath": [
+    "trilho",
+    "painel-ixc",
+    "api-painel",
+    "maquina",
+    "http-ixc",
+    "erp"
+  ],
+  "nodes": [
+    {
+      "id": "config",
+      "lane": "tela",
+      "col": 1,
+      "type": "frontend",
+      "label": "Configurações › Conectores (admin) — liga, testa, troca token, desliga; mostra o estado `erro`"
+    },
+    {
+      "id": "trilho",
+      "lane": "tela",
+      "col": 2,
+      "type": "frontend",
+      "label": "PainelDaConversa — trilho de abas; uma aba por conector LIGADO (organização sem conector não vê nada)"
+    },
+    {
+      "id": "registro-de-paineis",
+      "lane": "tela",
+      "col": 3,
+      "type": "frontend",
+      "label": "PainelDoConector — único arquivo de tela que nomeia um conector; carrega o painel sob demanda"
+    },
+    {
+      "id": "painel-ixc",
+      "lane": "tela",
+      "col": 4,
+      "type": "frontend",
+      "label": "PainelIxc — cliente, bloqueio, contrato, financeiro, conexão, sinal da ONU, OS e atendimentos; botão Enviar fatura"
+    },
+    {
+      "id": "conversa",
+      "lane": "tela",
+      "col": 5,
+      "type": "frontend",
+      "label": "Conversa — a fatura enviada é uma mensagem comum"
+    },
+    {
+      "id": "api-config",
+      "lane": "api",
+      "col": 1,
+      "type": "backend",
+      "label": "GET /conectores · PUT|DELETE /conectores/[c]/conexao · POST …/testar (admin; salvar TESTA antes de gravar)"
+    },
+    {
+      "id": "api-ativos",
+      "lane": "api",
+      "col": 2,
+      "type": "backend",
+      "label": "GET /conectores/ativos (agent+; viewer recebe [])"
+    },
+    {
+      "id": "api-painel",
+      "lane": "api",
+      "col": 4,
+      "type": "backend",
+      "label": "GET /contacts/[id]/conectores/ixc — contato lido com a SESSÃO (RLS), credencial lida com admin client filtrado por org"
+    },
+    {
+      "id": "api-vinculo",
+      "lane": "api",
+      "col": 5,
+      "type": "backend",
+      "label": "POST|DELETE …/ixc/vinculo — o id escolhido só vale se estiver entre os candidatos do telefone"
+    },
+    {
+      "id": "api-fatura",
+      "lane": "api",
+      "col": 6,
+      "type": "backend",
+      "label": "POST …/ixc/faturas/[id]/enviar — relê a fatura no ERP, confere dono, estado e conversa"
+    },
+    {
+      "id": "registro",
+      "lane": "conector",
+      "col": 1,
+      "type": "backend",
+      "label": "registro.ts — único arquivo do núcleo que importa um conector (cerca: conectores-cerca.test.ts)"
+    },
+    {
+      "id": "conexao",
+      "lane": "conector",
+      "col": 2,
+      "type": "backend",
+      "label": "conexao.ts — cifra AES-256-GCM (AI_CRED_AES_KEY); carimba ativa|erro"
+    },
+    {
+      "id": "maquina",
+      "lane": "conector",
+      "col": 4,
+      "type": "backend",
+      "label": "ixc/painel.ts — vinculado | escolher | nao_encontrado | vinculo_sem_cadastro; 1 candidato vincula sozinho"
+    },
+    {
+      "id": "identificar",
+      "lane": "conector",
+      "col": 5,
+      "type": "backend",
+      "label": "ixc/identificar.ts — 4 campos de telefone, últimos 8 na máscara, confere DDD; CPF/CNPJ na máscara"
+    },
+    {
+      "id": "resumo",
+      "lane": "conector",
+      "col": 6,
+      "type": "backend",
+      "label": "ixc/resumo.ts + faturas.ts — duas ondas em paralelo; falha por SEÇÃO; vencidas + 2 próximas"
+    },
+    {
+      "id": "http-ixc",
+      "lane": "conector",
+      "col": 7,
+      "type": "backend",
+      "label": "ixc/http.ts — POST listar; erro lido no CORPO; anti-SSRF; LISTA BRANCA de campos"
+    },
+    {
+      "id": "envio",
+      "lane": "conector",
+      "col": 8,
+      "type": "backend",
+      "label": "sendMessageHandler — a saída de sempre: fila, anti-banimento, opt-out"
+    },
+    {
+      "id": "tb-conexoes",
+      "lane": "banco",
+      "col": 2,
+      "type": "database",
+      "label": "conector_conexoes — server-side only (RLS sem policy + revoke)"
+    },
+    {
+      "id": "tb-vinculos",
+      "lane": "banco",
+      "col": 5,
+      "type": "database",
+      "label": "contato_vinculos_externos — só o id do ERP; trigger confere org; some com a anonimização"
+    },
+    {
+      "id": "contacts",
+      "lane": "banco",
+      "col": 4,
+      "type": "database",
+      "label": "contacts — phone_number é a chave de identificação"
+    },
+    {
+      "id": "audit",
+      "lane": "banco",
+      "col": 7,
+      "type": "database",
+      "label": "api_audit_log — conector.conexao_*, vinculo_*, fatura_enviada"
+    },
+    {
+      "id": "erp",
+      "lane": "fora",
+      "col": 7,
+      "type": "backend",
+      "label": "IXC do provedor — /webservice/v1/{tabela}; devolve senha em claro, que a lista branca descarta"
+    }
+  ],
+  "edges": [
+    {
+      "from": "config",
+      "to": "api-config",
+      "label": "endereço + token"
+    },
+    {
+      "from": "api-config",
+      "to": "registro",
+      "label": "testar(credencial)"
+    },
+    {
+      "from": "registro",
+      "to": "http-ixc",
+      "label": "a menor leitura que prova host e token"
+    },
+    {
+      "from": "api-config",
+      "to": "conexao",
+      "label": "só grava o que passou no teste"
+    },
+    {
+      "from": "conexao",
+      "to": "tb-conexoes",
+      "label": "token cifrado; nunca volta"
+    },
+    {
+      "from": "api-config",
+      "to": "audit",
+      "label": "conexao_salva / conexao_removida"
+    },
+    {
+      "from": "trilho",
+      "to": "api-ativos",
+      "label": "quais conectores esta organização ligou?"
+    },
+    {
+      "from": "api-ativos",
+      "to": "conexao",
+      "label": "conectoresLigados(org)"
+    },
+    {
+      "from": "trilho",
+      "to": "registro-de-paineis",
+      "label": "aba conector:<id>"
+    },
+    {
+      "from": "registro-de-paineis",
+      "to": "painel-ixc",
+      "label": "dynamic import"
+    },
+    {
+      "from": "painel-ixc",
+      "to": "api-painel",
+      "label": "estado do painel"
+    },
+    {
+      "from": "api-painel",
+      "to": "contacts",
+      "label": "client de sessão — a RLS decide se enxerga"
+    },
+    {
+      "from": "api-painel",
+      "to": "conexao",
+      "label": "lerCredencial(org da sessão)"
+    },
+    {
+      "from": "api-painel",
+      "to": "maquina",
+      "label": "telefone + vínculos"
+    },
+    {
+      "from": "maquina",
+      "to": "tb-vinculos",
+      "label": "lê; grava quando há UM candidato"
+    },
+    {
+      "from": "maquina",
+      "to": "identificar",
+      "label": "sem vínculo: procura pelo telefone"
+    },
+    {
+      "from": "maquina",
+      "to": "resumo",
+      "label": "com vínculo: vai direto pelo id"
+    },
+    {
+      "from": "identificar",
+      "to": "http-ixc",
+      "label": "cliente × 4 campos, em paralelo"
+    },
+    {
+      "from": "resumo",
+      "to": "http-ixc",
+      "label": "onda 1 (6 leituras) + onda 2 (sinal por login)"
+    },
+    {
+      "from": "http-ixc",
+      "to": "erp",
+      "label": "Basic base64(token); redirect: error"
+    },
+    {
+      "from": "api-painel",
+      "to": "conexao",
+      "label": "laço de retorno: falha carimba `erro`, sucesso limpa"
+    },
+    {
+      "from": "conexao",
+      "to": "config",
+      "label": "o admin vê aqui o que o atendente viu no painel"
+    },
+    {
+      "from": "painel-ixc",
+      "to": "api-vinculo",
+      "label": "É este / buscar por CPF / desfazer"
+    },
+    {
+      "from": "api-vinculo",
+      "to": "identificar",
+      "label": "confere no ERP antes de gravar"
+    },
+    {
+      "from": "api-vinculo",
+      "to": "tb-vinculos",
+      "label": "23505 = já vinculado"
+    },
+    {
+      "from": "api-vinculo",
+      "to": "audit",
+      "label": "vinculo_criado / vinculo_removido"
+    },
+    {
+      "from": "painel-ixc",
+      "to": "api-fatura",
+      "label": "só o id da fatura e o da conversa"
+    },
+    {
+      "from": "api-fatura",
+      "to": "http-ixc",
+      "label": "relê a fatura: dono, status A, enviável"
+    },
+    {
+      "from": "api-fatura",
+      "to": "tb-vinculos",
+      "label": "a fatura é de um cadastro VINCULADO?"
+    },
+    {
+      "from": "api-fatura",
+      "to": "envio",
+      "label": "texto composto no servidor (2 mensagens)"
+    },
+    {
+      "from": "envio",
+      "to": "conversa",
+      "label": "mensagem comum"
+    },
+    {
+      "from": "api-fatura",
+      "to": "audit",
+      "label": "fatura_enviada (id e valor; nunca a linha digitável)"
+    },
+    {
+      "from": "contacts",
+      "to": "tb-vinculos",
+      "label": "is_anonymized → apaga os vínculos (trigger local)"
+    }
+  ]
+}

@@ -3,6 +3,8 @@ import type { ComponentType } from "react";
 import { format, type Locale } from "date-fns";
 import Link from "next/link";
 
+import { PainelDoConector } from "@/components/conectores/PainelDoConector";
+import { useConectoresAtivos } from "@/hooks/conectores/useConectoresAtivos";
 import { useT } from "@/hooks/i18n/useT";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useLinhaDoTempoDaConversa } from "@/hooks/inbox/useAtendimentos";
@@ -29,6 +31,7 @@ import {
   Envelope,
   Info,
   Phone,
+  PlugsConnected,
   Pulse,
 } from "@/lib/ui/icons";
 import { rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
@@ -54,10 +57,25 @@ import { CRMSidePanel } from "./CRMSidePanel";
  * O TRILHO fica sempre à vista; o painel abre e fecha. Clicar na aba aberta a
  * fecha, e a conversa ganha a largura de volta: é o mesmo gesto do funil da
  * coluna esquerda, e pelo mesmo motivo.
+ *
+ * DEPOIS das três vêm as abas de CONECTOR — uma por sistema externo que a
+ * organização ligou (hoje: o IXC, ERP de provedor). Este arquivo não sabe o que
+ * é IXC: ele pergunta quais conectores estão ligados e entrega o corpo a
+ * `PainelDoConector`. Organização sem conector não vê aba a mais, nem a vê piscar.
  */
-export type AbaDoPainel = "detalhes" | "historico" | "linha";
+export type AbaDoPainel = "detalhes" | "historico" | "linha" | `conector:${string}`;
 
-const ABAS: { aba: AbaDoPainel; rotulo: string; Icone: ComponentType<{ size?: number; weight?: "regular" | "fill" }> }[] = [
+const PREFIXO_DE_CONECTOR = "conector:";
+
+type AbaDoTrilho = {
+  aba: AbaDoPainel;
+  rotulo: string;
+  Icone: ComponentType<{ size?: number; weight?: "regular" | "fill" }>;
+  /** Nome que veio do cadastro do conector ("IXC") — é marca, não se traduz. */
+  literal?: boolean;
+};
+
+const ABAS: AbaDoTrilho[] = [
   { aba: "detalhes", rotulo: "Detalhes", Icone: Info },
   { aba: "historico", rotulo: "Atendimentos anteriores", Icone: ClockCounterClockwise },
   { aba: "linha", rotulo: "Linha do tempo", Icone: Pulse },
@@ -156,6 +174,17 @@ export function PainelDaConversa({
   const t = useT();
   const locale = useLocaleDeData();
   const times = useTimesDoInbox();
+  const conectores = useConectoresAtivos();
+  const abas: AbaDoTrilho[] = [
+    ...ABAS,
+    ...(conectores.data ?? []).map((c) => ({
+      aba: `${PREFIXO_DE_CONECTOR}${c.id}` as AbaDoPainel,
+      rotulo: c.rotulo,
+      Icone: PlugsConnected,
+      literal: true,
+    })),
+  ];
+  const conectorAberto = aba?.startsWith(PREFIXO_DE_CONECTOR) ? aba.slice(PREFIXO_DE_CONECTOR.length) : null;
 
   const contato = conversation?.contacts ?? null;
   const nome = rotuloDoContato(contato, t);
@@ -215,15 +244,16 @@ export function PainelDaConversa({
         data-testid="painel-trilho"
         className="flex w-11 shrink-0 flex-col items-center gap-1 border-l border-border bg-surface py-2"
       >
-        {ABAS.map(({ aba: alvo, rotulo, Icone }) => {
+        {abas.map(({ aba: alvo, rotulo: rotuloCru, Icone, literal }) => {
           const ativa = aba === alvo;
+          const rotulo = literal ? rotuloCru : t(rotuloCru);
           const contador = alvo === "historico" ? outros.length : 0;
           return (
             <Tooltip key={alvo}>
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  aria-label={t(rotulo)}
+                  aria-label={rotulo}
                   aria-pressed={ativa}
                   data-testid={`painel-aba-${alvo}`}
                   disabled={!conversation}
@@ -243,7 +273,7 @@ export function PainelDaConversa({
                   )}
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="left">{t(rotulo)}</TooltipContent>
+              <TooltipContent side="left">{rotulo}</TooltipContent>
             </Tooltip>
           );
         })}
@@ -525,6 +555,10 @@ export function PainelDaConversa({
               </p>
             )}
           </div>
+        )}
+
+        {conectorAberto && (
+          <PainelDoConector conector={conectorAberto} contactId={contato?.id ?? null} conversationId={conversation.id} />
         )}
       </section>
       {trilho}
