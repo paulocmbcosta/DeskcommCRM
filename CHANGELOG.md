@@ -8,6 +8,20 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.31.1] — 2026-09-19
+
+### Corrigido
+
+- **Quem encerrou o atendimento volta a aparecer, mesmo quando o usuário não tem nome cadastrado** Em instalações cujos usuários não têm **nome** no cadastro (contas criadas por
+  versões antigas do instalador), todo atendimento encerrado pela tela saía sem
+  autor: a aba Fechadas dizia "Fechada" sem dizer por quem, e a linha do tempo
+  dizia "Conversa encerrada" sem ninguém. Agora, na falta do nome, aparece o
+  início do e-mail de quem fez — e os registros que já tinham sido gravados em
+  branco são preenchidos na atualização.
+
+  Para o nome de verdade aparecer em todas as telas, cada pessoa cadastra o seu em
+  **Configurações › Perfil**.
+
 ## [1.31.0] — 2026-09-18
 
 ### Adicionado
@@ -4931,7 +4945,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.1...HEAD
+[1.31.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.1...v1.31.0
 [1.30.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.0...v1.30.1
 [1.30.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.29.0...v1.30.0
