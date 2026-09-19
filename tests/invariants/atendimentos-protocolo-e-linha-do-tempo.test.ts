@@ -465,3 +465,122 @@ describe("isolamento entre organizações e o portão de escrita", () => {
     ).toMatch(/conversation_not_found/);
   });
 });
+
+describe("quem encerra aparece pelo nome, mesmo sem nome cadastrado (migration 0270)", () => {
+  /**
+   * O usuário que o gate NÃO tinha: sem `full_name`. Em produção (2026-09-19) os
+   * dois usuários da instalação eram assim — cadastro com `email_verified` e
+   * `locale`, nada mais —, e todo encerramento saía sem autor. Os três usuários
+   * de cima têm `full_name`, então a suíte só media o caminho feliz.
+   */
+  const CAIO = "a2660000-0000-4000-8000-0000000000a9";
+  const prepara = `
+    insert into auth.users (id, email, raw_user_meta_data) values
+      ('${CAIO}', 'caio.semnome@invariant.test', '{"email_verified":true,"locale":"pt-BR"}')
+      on conflict (id) do nothing;
+    insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+      values ('${CAIO}', '${ORG_A}', 'agent', now()) on conflict do nothing;
+  `;
+
+  it("⭐ usuário SEM full_name encerra: o atendimento e a linha do tempo dizem quem foi", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${prepara}
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${CAIO}', false)).id;
+        select '@@' || coalesce(a.closed_by_name, 'SEM_NOME') from public.atendimentos a
+         where a.conversation_id='${conv}' order by a.closed_at desc nulls last limit 1;
+        select '@@' || coalesce(e.actor_name, 'SEM_NOME') from public.conversation_events e
+         where e.conversation_id='${conv}' and e.type='closed' order by e.created_at desc limit 1;
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["caio.semnome", "caio.semnome"]);
+  });
+
+  it("CONTROLE: quem TEM nome cadastrado segue aparecendo pelo nome, não pelo e-mail", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${ANA}', false)).id;
+        select '@@' || coalesce(a.closed_by_name, 'SEM_NOME') from public.atendimentos a
+         where a.conversation_id='${conv}' order by a.closed_at desc nulls last limit 1;
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["Ana Atendente"]);
+  });
+
+  it("assumir sem nome cadastrado: o payload de 'assumida' leva o nome, e o atendimento guarda quem atendia", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${prepara}
+        update public.conversations set assigned_to_user_id='${CAIO}', assigned_to_user_name=null, status='claimed'
+         where id='${conv}';
+        select '@@' || coalesce(e.payload->>'to_user_name', 'SEM_NOME') from public.conversation_events e
+         where e.conversation_id='${conv}' and e.type='assigned' order by e.created_at desc limit 1;
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${CAIO}', false)).id;
+        select '@@' || coalesce(a.assigned_to_user_name, 'SEM_NOME') from public.atendimentos a
+         where a.conversation_id='${conv}' order by a.closed_at desc nulls last limit 1;
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["caio.semnome", "caio.semnome"]);
+  });
+
+  it("o backfill preenche o que já foi gravado em branco — e reaplicar não muda nada", () => {
+    // O bloco é LIDO da migration, não reescrito aqui: teste com SQL próprio
+    // provaria o SQL do teste.
+    const migration = readFileSync(
+      "supabase/migrations/20260919110000_0270_quem_encerra_aparece_pelo_nome.sql",
+      "utf8",
+    );
+    const backfill = migration.slice(
+      migration.indexOf("-- O que já foi gravado em branco."),
+      migration.indexOf("notify pgrst"),
+    );
+    expect(backfill).toContain("update public.conversation_events");
+
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${prepara}
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'closed', null, '${CAIO}', false)).id;
+        -- O estado que a 0266 deixou em produção: o id de quem fez, e o nome em branco.
+        update public.conversation_events set actor_name=null where conversation_id='${conv}' and actor_user_id='${CAIO}';
+        update public.atendimentos set closed_by_name=null where conversation_id='${conv}' and closed_by_user_id='${CAIO}';
+        -- CONTROLE: um nome que JÁ existe não pode ser sobrescrito pelo backfill.
+        update public.conversation_events set actor_name='Nome Que Já Estava'
+         where id = (select id from public.conversation_events where conversation_id='${conv}' and type='opened' order by created_at limit 1);
+        ${backfill}
+        select '@@' || coalesce(a.closed_by_name, 'SEM_NOME') from public.atendimentos a
+         where a.conversation_id='${conv}' and a.closed_by_user_id='${CAIO}' limit 1;
+        select '@@' || count(*) from public.conversation_events
+         where conversation_id='${conv}' and actor_user_id='${CAIO}' and actor_name is null;
+        select '@@' || count(*) from public.conversation_events where conversation_id='${conv}' and actor_name='Nome Que Já Estava';
+        -- Idempotência: a segunda passada não acha nada para mudar.
+        ${backfill}
+        select '@@' || coalesce(a.closed_by_name, 'SEM_NOME') from public.atendimentos a
+         where a.conversation_id='${conv}' and a.closed_by_user_id='${CAIO}' limit 1;
+        rollback;
+      `),
+    );
+    expect(out).toEqual(["caio.semnome", "0", "1", "caio.semnome"]);
+  });
+
+  it("a régua de nome não é executável por anon nem authenticated", () => {
+    const out = linhas(
+      sql(`
+        select '@@' || has_function_privilege('anon', p.oid, 'EXECUTE') || '|' || has_function_privilege('authenticated', p.oid, 'EXECUTE')
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname='public' and p.proname='fn_nome_do_usuario';
+      `),
+    );
+    expect(out).toEqual(["false|false"]);
+  });
+});
