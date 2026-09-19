@@ -656,7 +656,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             {motivoDaJanela && (
               <JanelaFechadaAviso
                 conversationId={selectedConversation.id}
-                provider={selectedConversation.channel_sessions?.provider ?? null}
+                channelSessionId={selectedConversation.channel_session_id ?? null}
                 motivo={motivoDaJanela}
               />
             )}

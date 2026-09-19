@@ -67,58 +67,97 @@ export const messageStatusSchema = z.enum([
   "failed",
 ]);
 
+/**
+ * O CONTEÚDO de uma mensagem, sem o destino.
+ *
+ * Separado do destino porque há dois destinos possíveis e um conteúdo só:
+ * `conversation_id` (responder numa conversa que existe) e o par
+ * contato/telefone (falar primeiro, em `iniciarConversaSchema`). Declarar os
+ * campos duas vezes faria a segunda cópia divergir no primeiro tipo novo — e
+ * `template_values` já mostrou como isso custa.
+ *
+ * `.omit()` não serve para derivar um do outro: o Zod 4 recusa em RUNTIME
+ * ("cannot be used on object schemas containing refinements") um `.omit()`
+ * sobre schema com `.refine()`, e o TypeScript aceita — o erro só aparece
+ * quando o módulo é importado. Compartilhar a forma, e não recortá-la, é o que
+ * funciona nos dois níveis.
+ */
+const camposDaMensagem = {
+  type: messageTypeSchema.default("text"),
+  body: z.string().min(1).max(4096).optional(),
+  media_url: z.string().url().optional(),
+  media_storage_path: z.string().min(1).max(500).optional(),
+  media_mime: z.string().optional(),
+  media_size_bytes: z.number().int().positive().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Só em `type: "template"`. Nome exato aprovado na Meta. */
+  template_name: z.string().min(1).max(512).optional(),
+  /** Só em `type: "template"`. `pt_BR` e `pt` são templates DISTINTOS. */
+  template_language: z.string().min(2).max(16).optional(),
+  /**
+   * Só em `type: "template"`. Valor por slot, chaveado por `slotKey`
+   * (`lib/channels/meta/build-components.ts`) — a MESMA função que o formulário
+   * da tela usa. Chave montada de outro jeito é o mismatch voltando.
+   */
+  template_values: z.record(z.string(), z.string()).optional(),
+  /**
+   * A mensagem que esta responde — o id da NOSSA linha, não o do provider.
+   *
+   * Quem envia conhece o que está na tela, e na tela está o nosso id. A
+   * tradução para o id que a plataforma entende (`wamid`) é feita no handler,
+   * lendo a linha apontada: pedir o `wamid` aqui obrigaria a tela a conhecer
+   * o vocabulário do canal, que é justamente o que o seam existe para evitar.
+   */
+  reply_to_message_id: z.string().uuid().optional(),
+};
+
+/**
+ * A regra do conteúdo mínimo: uma mensagem precisa DIZER alguma coisa.
+ *
+ * Vive à parte porque vale para os dois destinos, e uma cópia por schema
+ * deixaria de valer num deles no dia em que um tipo novo aparecesse.
+ */
+function temConteudo(d: {
+  type?: string;
+  body?: string;
+  media_url?: string;
+  media_storage_path?: string;
+  metadata?: Record<string, unknown>;
+}): boolean {
+  if (d.type === "contact") {
+    const id = d.metadata?.shared_contact_id;
+    if (typeof id === "string" && id.length > 0) return true;
+    const sc = d.metadata?.shared_contact;
+    if (sc && typeof sc === "object" && !Array.isArray(sc)) {
+      const phone = (sc as Record<string, unknown>).phone_number;
+      return typeof phone === "string" && phone.trim().length >= 8;
+    }
+    return false;
+  }
+  return !!d.body || !!d.media_url || !!d.media_storage_path;
+}
+
+const SEM_CONTEUDO = {
+  message:
+    "body, media_url, media_storage_path, metadata.shared_contact_id or metadata.shared_contact.phone_number required",
+  path: ["body"],
+};
+
 export const sendMessageSchema = z
-  .object({
-    conversation_id: z.string().uuid(),
-    type: messageTypeSchema.default("text"),
-    body: z.string().min(1).max(4096).optional(),
-    media_url: z.string().url().optional(),
-    media_storage_path: z.string().min(1).max(500).optional(),
-    media_mime: z.string().optional(),
-    media_size_bytes: z.number().int().positive().optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    /** Só em `type: "template"`. Nome exato aprovado na Meta. */
-    template_name: z.string().min(1).max(512).optional(),
-    /** Só em `type: "template"`. `pt_BR` e `pt` são templates DISTINTOS. */
-    template_language: z.string().min(2).max(16).optional(),
-    /**
-     * Só em `type: "template"`. Valor por slot, chaveado por `slotKey`
-     * (`lib/channels/meta/build-components.ts`) — a MESMA função que o formulário
-     * da tela usa. Chave montada de outro jeito é o mismatch voltando.
-     */
-    template_values: z.record(z.string(), z.string()).optional(),
-    /**
-     * A mensagem que esta responde — o id da NOSSA linha, não o do provider.
-     *
-     * Quem envia conhece o que está na tela, e na tela está o nosso id. A
-     * tradução para o id que a plataforma entende (`wamid`) é feita no handler,
-     * lendo a linha apontada: pedir o `wamid` aqui obrigaria a tela a conhecer
-     * o vocabulário do canal, que é justamente o que o seam existe para evitar.
-     */
-    reply_to_message_id: z.string().uuid().optional(),
-  })
-  .refine(
-    (d) => {
-      if (d.type === "contact") {
-        const id = d.metadata?.shared_contact_id;
-        if (typeof id === "string" && id.length > 0) return true;
-        const sc = d.metadata?.shared_contact;
-        if (sc && typeof sc === "object" && !Array.isArray(sc)) {
-          const phone = (sc as Record<string, unknown>).phone_number;
-          return typeof phone === "string" && phone.trim().length >= 8;
-        }
-        return false;
-      }
-      return !!d.body || !!d.media_url || !!d.media_storage_path;
-    },
-    {
-      message:
-        "body, media_url, media_storage_path, metadata.shared_contact_id or metadata.shared_contact.phone_number required",
-      path: ["body"],
-    },
-  );
+  .object({ conversation_id: z.string().uuid(), ...camposDaMensagem })
+  .refine(temConteudo, SEM_CONTEUDO);
 
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+/**
+ * A mesma mensagem, sem destino — para quem ainda vai abrir a conversa.
+ *
+ * Mesmos campos e MESMA regra de conteúdo: um corpo recusado ao responder é
+ * recusado ao iniciar, pelo mesmo motivo e com a mesma frase.
+ */
+export const mensagemDeAberturaSchema = z
+  .object(camposDaMensagem)
+  .refine(temConteudo, SEM_CONTEUDO);
 
 export const claimConversationSchema = z.object({
   expected_assignee: z.string().uuid().nullable().optional(),
@@ -219,7 +258,7 @@ export const iniciarConversaSchema = z
     contact_id: z.string().uuid().optional(),
     phone_number: z.string().min(8).max(32).optional(),
     name: z.string().trim().min(1).max(200).optional(),
-    mensagem: sendMessageSchema.omit({ conversation_id: true }),
+    mensagem: mensagemDeAberturaSchema,
   })
   .refine((d) => !!d.contact_id || !!d.phone_number?.trim(), {
     message: "Informe contact_id ou phone_number.",

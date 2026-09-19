@@ -12,18 +12,26 @@
  * de prospecção fria (ex.: n8n captando lead novo) que precise abrir a
  * conversa NUM canal específico não tinha ferramenta MCP para isso.
  *
- * DOUTRINA DIRC (Referenciar, não duplicar) — esta tool não reimplementa
- * nada, só compõe duas peças que já existem e já são a origem autorizada:
- *   - `openSharedContactConversation` (lib/messaging/open-shared-contact-conversation.ts),
- *     o MESMO helper que `POST /api/v1/conversations/open-with-contact` usa:
- *     acha o contato pelas grafias do telefone (`encontrarContatoPorTelefone`)
- *     ou cria um novo (`fn_upsert_wa_contact`), e abre/reabre a conversa 1:1 na
- *     sessão indicada via `ensureConversation` → `beginServiceAtOrigin` →
- *     `fn_service_begin` — a RPC cujo próprio comentário de migration diz
- *     "nova iniciativa autorizada (humano/MCP/regra), chamada NA ORIGEM".
+ * DOUTRINA DIRC (Referenciar, não duplicar) — esta tool não reimplementa nada.
+ * A composição "abrir a conversa + enviar" que morava aqui hoje vive em
+ * `lib/messaging/iniciar-conversa.ts`, extraída quando a TELA passou a precisar
+ * do mesmo ato (o diálogo "Chamar no WhatsApp"). Continua sendo, por baixo:
+ *   - `openSharedContactConversation`, o MESMO helper que
+ *     `POST /api/v1/conversations/open-with-contact` usa: acha o contato pelas
+ *     grafias do telefone (`encontrarContatoPorTelefone`) ou cria um novo
+ *     (`fn_upsert_wa_contact`), e abre/reabre a conversa 1:1 na sessão indicada
+ *     via `ensureConversation` → `beginServiceAtOrigin` → `fn_service_begin` —
+ *     a RPC cujo comentário de migration diz "nova iniciativa autorizada
+ *     (humano/MCP/regra), chamada NA ORIGEM".
  *   - `sendMessageHandler` (app/api/v1/messages/_handler.ts), o MESMO handler
  *     que `crm_send_whatsapp_message` chama — nenhum código de envio novo,
  *     mesmas guardas (bloqueio, mídia, template, boundary de atendimento).
+ *
+ * O helper devolve o desfecho do envio em vez de lançar, porque a tela precisa
+ * das duas notícias (a conversa existe; a mensagem não saiu). Aqui o contrato é
+ * outro e continua o de sempre: conversa aberta sem mensagem é FALHA, e o
+ * handler relança — a automação que chama precisa distinguir para decidir o
+ * retry.
  *
  * Idempotência: mesmo padrão de `crm_send_whatsapp_message` (tabela
  * `idempotency_keys`, TTL 24h) — a chave cobre o PAR abrir-conversa+enviar,
@@ -32,9 +40,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-import { sendMessageHandler } from "@/app/api/v1/messages/_handler";
-import { openSharedContactConversation } from "@/lib/messaging/open-shared-contact-conversation";
-import { sendMessageSchema } from "@/lib/schemas/messaging";
+import { iniciarConversaEEnviar } from "@/lib/messaging/iniciar-conversa";
+
 import type { McpToolDefinition } from "../types";
 
 const ENDPOINT_TAG = "mcp:crm_start_conversation_and_send";
@@ -57,9 +64,44 @@ const inputShape = {
   media_url: z.string().url().optional(),
   media_mime: z.string().optional(),
   type: z
-    .enum(["text", "image", "audio", "document", "sticker", "video", "location", "contact"])
+    .enum([
+      "text",
+      "image",
+      "audio",
+      "document",
+      "sticker",
+      "video",
+      "location",
+      "contact",
+      // `template` faltava, e a ausência anulava o caso de uso que o cabeçalho
+      // desta tool declara servir. Prospecção fria é falar com quem NUNCA
+      // escreveu — e num canal com hetero-restrição essa é exatamente a
+      // situação em que só modelo aprovado sai (131047). Sem este valor, a
+      // automação de prospecção funcionava só no canal que não precisa dela.
+      "template",
+    ])
     .optional()
     .default("text"),
+  template_name: z
+    .string()
+    .min(1)
+    .max(512)
+    .optional()
+    .describe("Só em type=template. Nome exato aprovado na plataforma."),
+  template_language: z
+    .string()
+    .min(2)
+    .max(16)
+    .optional()
+    .describe("Só em type=template. `pt_BR` e `pt` são modelos DISTINTOS."),
+  template_values: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Só em type=template. Valor por slot, chaveado como `slotKey` monta " +
+        "(corpo sem prefixo: '1'; cabeçalho: 'header:1'; botão: 'button0:1'). " +
+        "Peça os slots a GET /api/v1/channels/modelos em vez de montar a chave.",
+    ),
   idempotency_key: z
     .string()
     .min(1)
@@ -97,6 +139,13 @@ export const crmStartConversationAndSend: McpToolDefinition<typeof inputShape> =
       body: input.body,
       media_url: input.media_url,
       type: input.type,
+      // Entram no hash porque dois disparos do MESMO modelo com valores
+      // diferentes são duas mensagens diferentes. Fora dele, o segundo seria
+      // tratado como repetição do primeiro e devolveria a resposta dele —
+      // silenciosamente, sem nunca chegar ao cliente.
+      template_name: input.template_name,
+      template_language: input.template_language,
+      template_values: input.template_values,
     });
 
     if (input.idempotency_key) {
@@ -115,32 +164,47 @@ export const crmStartConversationAndSend: McpToolDefinition<typeof inputShape> =
       }
     }
 
-    // Referencia a mesma origem autorizada que `open-with-contact` usa —
-    // fn_service_begin decide reaproveitar a conversa aberta ou criar uma.
-    const opened = await openSharedContactConversation(ctx.supabase, ctx.organizationId, {
-      channel_session_id: input.channel_session_id,
-      contact_id: input.contact_id,
-      phone_number: input.phone_number,
-      name: input.name,
-    });
-
-    const parsed = sendMessageSchema.parse({
-      conversation_id: opened.conversation_id,
-      type: input.type,
-      body: input.body,
-      media_url: input.media_url,
-      media_mime: input.media_mime,
-    });
-
-    const message = await sendMessageHandler(
+    // `iniciarConversaEEnviar` é a MESMA composição que estava escrita aqui
+    // (abrir com `openSharedContactConversation`, enviar com
+    // `sendMessageHandler`), extraída quando a tela passou a precisar dela —
+    // ver o cabeçalho de `lib/messaging/iniciar-conversa.ts`. Nada de novo
+    // acontece por aqui; o que muda é que existe uma cópia só.
+    const resultado = await iniciarConversaEEnviar(
       ctx.supabase,
       {
         organization_id: ctx.organizationId,
         actor: ctx.actor,
         requestId: ctx.requestId,
       },
-      parsed,
+      {
+        channel_session_id: input.channel_session_id,
+        contact_id: input.contact_id,
+        phone_number: input.phone_number,
+        name: input.name,
+        mensagem: {
+          type: input.type,
+          body: input.body,
+          media_url: input.media_url,
+          media_mime: input.media_mime,
+          template_name: input.template_name,
+          template_language: input.template_language,
+          template_values: input.template_values,
+        },
+      },
     );
+
+    const opened = {
+      contact_id: resultado.contact_id,
+      conversation_id: resultado.conversation_id,
+    };
+
+    // O contrato desta tool sempre foi "deu certo ou lançou", e quem a chama é
+    // uma automação que precisa distinguir os dois para decidir o retry. O
+    // helper devolve o desfecho em vez de lançar porque a TELA precisa das duas
+    // notícias (a conversa existe, a mensagem não saiu); aqui a conversa aberta
+    // sem mensagem é falha, e dizer isso é o certo.
+    if (!resultado.envio.ok) throw new Error(resultado.envio.motivo);
+    const message = resultado.envio.message;
 
     const response = {
       contact_id: opened.contact_id,

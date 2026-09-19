@@ -81,7 +81,13 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   /** Quem vamos chamar. `contactId` ausente = contato ainda não cadastrado. */
   contactId?: string;
-  phoneNumber: string;
+  /**
+   * Opcional porque nem toda tela o tem em mãos: o dossiê de um negócio conhece
+   * o `contact_id` e não o telefone. Serve só para MOSTRAR para quem se está
+   * ligando — quem resolve o destino é o servidor, que lê o cadastro. Exigi-lo
+   * aqui obrigaria cada chamador a buscar o contato só para abrir um diálogo.
+   */
+  phoneNumber?: string;
   nome: string;
 }
 
@@ -240,7 +246,8 @@ export function ChamarNoWhatsAppDialog({
         <DialogHeader>
           <DialogTitle>{t("Chamar no WhatsApp")}</DialogTitle>
           <DialogDescription>
-            {t("Primeira mensagem para")} <strong>{nome}</strong> ({phoneNumber}).
+            {t("Primeira mensagem para")} <strong>{nome}</strong>
+            {phoneNumber ? ` (${phoneNumber})` : ""}.
           </DialogDescription>
         </DialogHeader>
 
