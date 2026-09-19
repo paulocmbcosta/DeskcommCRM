@@ -108,9 +108,22 @@ obrigatoriamente usa template.
 
 ### Peça 1 — `GET /api/v1/channels/modelos?channel_session_id=<uuid>`
 
-Rota **única e neutra** que serve os modelos aprovados de uma conexão. Resolve
-oficial vs. parceiro **no servidor**, com a mesma `fonteDeTemplates` — a tela deixa
+Rota **única e neutra** que serve os modelos aprovados de uma conexão. A tela deixa
 de precisar saber que existem duas rotas.
+
+> **Como ficou, e por que diferente do previsto aqui.** O desenho dizia "resolve
+> oficial vs. parceiro com a mesma `fonteDeTemplates`". A implementação **não usa**
+> esse mapa: os dois canais espelham na MESMA tabela (`meta_templates`), então não
+> há duas fontes a rotear — há uma consulta, e a única pergunta de canal é
+> `capabilitiesOf(provider).freeformOutsideWindow`, que vira `exige_modelo`.
+> `fonteDeTemplates` existia para escolher entre duas ROTAS nossas, e essa escolha
+> deixou de existir quando a rota virou uma. O mapa ficou sem consumidor de
+> produção (ver o final deste documento).
+>
+> A implementação também acrescentou o que o desenho não previu: a linha sem dono
+> entra na consulta (`channel_session_id` é NULL no canal oficial — o
+> `syncTemplates` não a grava). Filtrar só pela conexão escondia 100% dos modelos
+> da Meta.
 
 Devolve, por modelo: `name`, `language`, `status`, `category`, `components`,
 `contract_hash` e `slots[]` com **`chave` já montada por `slotKey`** — a tela nunca
@@ -178,6 +191,26 @@ tool `crm_start_conversation_and_send`. Conserta a metade de L5 que é de automa
 (Contatos, Leads, Inbox) — então não entra em `NAV_CATALOG`.
 
 ---
+
+## O que a implementação ensinou (escrito DEPOIS de construir)
+
+Quatro defeitos apareceram só ao executar o caminho inteiro. Nenhum era visível em
+`typecheck`, `lint` ou unitário de lógica; três teriam ido para produção com o gate
+verde, e o quarto teria dado vermelho no CI medindo o produto certo.
+
+| # | Defeito | Consequência se tivesse passado |
+|---|---|---|
+| 1 | `.omit()` em schema com `.refine()` (Zod 4) compila e falha ao IMPORTAR | 184 arquivos de teste caem em cascata |
+| 2 | Rota com client de sessão chamando `fn_service_begin`, revogada de `authenticated` | falha em **100%** das chamadas |
+| 3 | `.eq("channel_session_id", …)` com a coluna NULL no canal oficial | esconde **todos** os modelos da Meta |
+| 4 | `POST /contacts` já abre conversa quando há telefone e canal vivo | a spec e2e mediria a tela errada |
+
+O nº 4 também é um fato de PRODUTO, não só de teste: contato criado pela tela com
+telefone costuma já nascer com conversa, enquanto **o importado não** — e é o
+importado (IXC) que originou o pedido.
+
+**`templates-fonte.ts` ficou sem consumidor de produção** depois que a rota virou
+uma só; só o teste dele ainda o importa. Removê-lo é trabalho separado.
 
 ## Verificação
 
