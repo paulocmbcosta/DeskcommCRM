@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
@@ -41,6 +42,7 @@ function mensagemDoErro(err: unknown, padrao: string): string {
 
 function Ficha({ conector }: { conector: ConectorDaTela }) {
   const t = useT();
+  const tagDeIdioma = useTagDeIdioma();
   const qc = useQueryClient();
   const [editando, setEditando] = useState(false);
   const [endereco, setEndereco] = useState(conector.conexao?.base_url ?? "");
@@ -151,7 +153,7 @@ function Ficha({ conector }: { conector: ConectorDaTela }) {
           {conexao.verificada_em && (
             <>
               <dt className="text-text-muted">{t("Último teste")}</dt>
-              <dd className="tabular-nums text-text">{new Date(conexao.verificada_em).toLocaleString("pt-BR")}</dd>
+              <dd className="tabular-nums text-text">{new Date(conexao.verificada_em).toLocaleString(tagDeIdioma)}</dd>
             </>
           )}
         </dl>

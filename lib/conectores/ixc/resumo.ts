@@ -158,7 +158,7 @@ export function situacaoDoCliente(contratos: ContratoIxc[]): Leitura {
   const vigentes = contratos.filter((c) => c.vigente);
   if (vigentes.length === 0) return { rotulo: "Sem contrato ativo", tom: "neutro" };
   const bloqueado = vigentes.find((c) => c.bloqueado);
-  if (bloqueado) return { rotulo: bloqueado.acesso.rotulo, tom: "ruim" };
+  if (bloqueado) return { rotulo: bloqueado.acesso.rotulo, tom: "ruim", detalhe: bloqueado.acesso.detalhe };
   return { rotulo: "Liberado", tom: "bom" };
 }
 

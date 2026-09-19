@@ -158,8 +158,8 @@ describe("situacaoDoCliente", () => {
   });
 
   it("bloqueio em contrato VIGENTE é bloqueio", () => {
-    const s = situacaoDoCliente([contrato({ bloqueado: true, acesso: { rotulo: "Bloqueado — financeiro em atraso", tom: "ruim" } })]);
-    expect(s).toEqual({ rotulo: "Bloqueado — financeiro em atraso", tom: "ruim" });
+    const s = situacaoDoCliente([contrato({ bloqueado: true, acesso: { rotulo: "Bloqueado", tom: "ruim", detalhe: "financeiro em atraso" } })]);
+    expect(s).toEqual({ rotulo: "Bloqueado", tom: "ruim", detalhe: "financeiro em atraso" });
   });
 
   it("bloqueio em contrato CANCELADO é história, não 'cliente bloqueado'", () => {

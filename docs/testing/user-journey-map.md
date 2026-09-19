@@ -423,6 +423,57 @@ prova a tela e o invariante prova o claim, mas o caminho cron → worker → cla
 num só teste); pausa que atravessa o fim do expediente (não há encerramento automático — a
 pausa fica aberta até a pessoa voltar, e o relatório futuro vai precisar tratar isso).
 
+## J26 — O provedor liga o IXC, e o atendente atende sem abrir o ERP `[P1]` (2026-09-19)
+
+Pedido do dono (provedor de internet que opera pelo IXC): uma aba no painel da
+conversa com o que o atendente abriria o ERP para ver — cliente, bloqueio,
+contrato, faturas, OS, atendimentos, conexão e sinal da ONU — e um botão que manda
+a fatura no chat. Desenho e fatos medidos na instância real:
+`docs/superpowers/specs/2026-09-19-conector-ixc-design.md`; migration 0271.
+
+Spec: `tests/e2e/conector-ixc-no-painel.spec.ts` (organização e admin próprios). O
+"IXC" é um servidor HTTP de verdade na mesma máquina, falando o dialeto medido —
+rota por tabela, erro com HTTP 200, 401 em HTML para token errado — e devolvendo a
+LINHA INTEIRA, com `senha` em claro, como o IXC devolve. O WAHA do rig (porta 3999)
+ganha um receiver para provar o que saiu. Banco:
+`tests/invariants/conectores-sao-server-side.test.ts`.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J26.0 SEM conector ligado, o painel da conversa não tem aba a mais (`painel-aba-conector:ixc` = 0) — a organização que não usa IXC não vê nada | `[P1]` | **PASS** |
+| J26.1 Configurações › Conectores: token errado → "O sistema recusou o token." e a ficha continua DESLIGADA (salvar testa antes de gravar) | `[P1]` | **PASS** — `evidence/conector-ixc/01-token-errado-recusado.png` |
+| J26.2 Token certo → "Ligado", a tela mostra só `••••` + 4 finais, o token não aparece em lugar nenhum do texto da página, e no banco está cifrado | `[P1]` | **PASS** — `02-conector-ligado.png` |
+| J26.3 Inbox: a aba IXC aparece; o telefone da conversa identifica UM cadastro (o homônimo de outro DDD é descartado) e o vínculo é gravado como `telefone` | `[P1]` | **PASS** — `03-painel-vinculado.png` |
+| J26.4 O painel mostra nome, CPF, selo "Bloqueado" numa linha só (altura ≤ 24px, medida) com "Motivo: financeiro em atraso", contrato com endereço, **3 vencidas + 2 a vencer + "Mais 3 parcelas futuras"** (a regra do dono), total vencido R$ 389,70, conexão Online com IP, sinal "No limite" −26.10 dBm, 1 OS agendada, 1 atendimento em progresso | `[P1]` | **PASS** — `03`, `04-painel-conexao-e-os.png` |
+| J26.5 **Nenhuma das 4 senhas que o IXC falso devolve (central, PPPoE, Wi-Fi, ONU) nem o token do gateway está no HTML da página** | `[P0]` | **PASS** |
+| J26.6 O painel não rola para o lado (`scrollWidth − clientWidth ≤ 1`, medido) | `[P1]` | **PASS** |
+| J26.7 Enviar fatura: 1º toque vira "Confirmar envio" e NADA sai; 2º toque envia DUAS mensagens — resumo (valor, vencimento, link) e a linha digitável sozinha; o texto é o do servidor | `[P1]` | **PASS** — `05-fatura-enviada.png` |
+| J26.8 Telefone que não está no IXC → "Não achei este telefone…", busca por CPF vincula e mostra "Liberado" e "Nenhuma fatura vencida." | `[P1]` | **PASS** — `06-nao-encontrado-busca-cpf.png` |
+| J26.9 Celular de DOIS cadastros → a tela lista os dois com documento PARCIAL (`***.995.350-**`), ninguém é vinculado sozinho; "É este" vincula | `[P1]` | **PASS** — `07-escolher-entre-dois.png` |
+| J26.10 ERP fora do ar: o painel diz o erro com "Tentar de novo", e Configurações › Conectores passa a mostrar "Com problema" — o admin vê o que o atendente viu | `[P1]` | **PASS** — `08-erp-fora-do-ar.png`, `09-admin-ve-o-erro.png` |
+| J26.11 Auditoria: `conector.conexao_salva`, `conector.vinculo_criado`, `conector.fatura_enviada` — e a linha digitável NÃO está no metadata | `[P1]` | **PASS** |
+
+Execução (2026-09-19): `pnpm e2e:build` (produção) + `next start`, Supabase local
+próprio com o `baseline.sql` aplicado (`ON_ERROR_STOP=1`, 0 erros), Chromium real.
+1 passed (12,9 s).
+
+**Achado da execução, consertado:** o selo "Bloqueado — financeiro em atraso"
+quebrava em DUAS linhas dentro de um selo redondo e espremia o nome do cliente na
+coluna de 264px. Virou selo curto ("Bloqueado") + "Motivo: …" em linha própria, e
+a spec mede a altura do selo.
+
+**Medido contra o IXC REAL da Totus** (só leitura, só agregados — nenhum dado
+pessoal impresso): os filtros que o painel usa (`L` nos 4 campos de telefone,
+`cnpj_cpf` mascarado, `status=A` ordenado por vencimento, `status != F`,
+`su_status != S`, fibra por `id_login`), o 401 em HTML e o erro com HTTP 200.
+
+**Não medido:** a TELA contra o IXC real (a prova em tela é com o IXC falso; o
+token real foi só de sondagem e será trocado); latência a partir da VPS (medi
+~1,4 s por chamada do Mac do dono); IXC on-premise com certificado próprio; token
+de escopo mínimo (o de sondagem lia todas as tabelas); celular (o painel deslizante
+herda o mesmo componente, não foi aberto em viewport de telefone).
+
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,

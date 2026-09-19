@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import {
   useDesvincularIxc,
@@ -212,6 +213,7 @@ function CartaoDeContrato({ contrato }: { contrato: ContratoIxc }) {
         <Linha rotulo={t("Acesso")}>
           <Selo leitura={contrato.acesso} />
         </Linha>
+        {contrato.acesso.detalhe && <Linha rotulo={t("Motivo")}>{t(contrato.acesso.detalhe)}</Linha>}
         {contrato.parcelasEmAtraso > 0 && (
           <Linha rotulo={t("Parcelas em atraso")}>
             <span className="font-semibold text-error-fg">{contrato.parcelasEmAtraso}</span>
@@ -247,7 +249,7 @@ function CartaoDeConexao({ conexao }: { conexao: ConexaoIxc }) {
         {conexao.motivoDaDesconexao && <Linha rotulo={t("Motivo da queda")}>{conexao.motivoDaDesconexao}</Linha>}
       </dl>
       {conexao.sinal && (
-        <div className="mt-2 rounded bg-surface-elevated px-2 py-1.5" data-testid="ixc-sinal">
+        <div className="mt-2 rounded-md bg-surface-elevated px-2 py-1.5" data-testid="ixc-sinal">
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1 text-[11px] font-medium text-text-muted">
               <Gauge size={12} aria-hidden />
@@ -283,6 +285,7 @@ interface Props {
 
 export function PainelIxc({ contactId, conversationId }: Props) {
   const t = useT();
+  const tagDeIdioma = useTagDeIdioma();
   // Trocar de conversa não pode carregar o cadastro escolhido na anterior: quem
   // garante é a `key` por contato em `PainelDoConector`, que REMONTA este painel.
   const [cadastro, setCadastro] = useState<string | null>(null);
@@ -305,11 +308,11 @@ export function PainelIxc({ contactId, conversationId }: Props) {
         data-testid="ixc-atualizar"
         disabled={painel.isFetching}
         onClick={() => painel.refetch()}
-        className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-text-muted hover:bg-surface-elevated hover:text-text disabled:opacity-50"
+        className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-text-muted hover:bg-surface-elevated hover:text-text disabled:opacity-50"
       >
         <ArrowsClockwise size={12} className={cn(painel.isFetching && "animate-spin")} aria-hidden />
         {painel.data?.estado === "vinculado" &&
-          new Date(painel.data.resumo.lidoEm).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+          new Date(painel.data.resumo.lidoEm).toLocaleTimeString(tagDeIdioma, { hour: "2-digit", minute: "2-digit" })}
       </button>
     </div>
   );
@@ -470,6 +473,11 @@ export function PainelIxc({ contactId, conversationId }: Props) {
             <Selo leitura={resumo.situacao} />
           </span>
         </div>
+        {resumo.situacao.detalhe && (
+          <p className="mt-0.5 text-[11px] font-medium text-error-fg" data-testid="ixc-motivo-do-bloqueio">
+            {t("Motivo")}: {t(resumo.situacao.detalhe)}
+          </p>
+        )}
         <dl className="mt-1">
           {resumo.cliente.documento && (
             <Linha rotulo={resumo.cliente.pessoaJuridica ? "CNPJ" : "CPF"}>

@@ -16,11 +16,16 @@ import { carimbarEstado, lerConexaoPublica, lerCredencial } from "@/lib/conector
 import { obterConector } from "@/lib/conectores/registro";
 import { FRASE_DA_FALHA } from "@/lib/conectores/tipos";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ conector: string }> }): Promise<Response> {
+  // Carimba o estado da conexão: é escrita, e o suporte em modo leitura não escreve.
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = randomUUID();
   const authz = await requireRole("admin", { requestId, resource: "conectores" });
   if (!authz.ok) return authz.response;

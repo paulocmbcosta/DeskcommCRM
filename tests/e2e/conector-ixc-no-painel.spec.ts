@@ -279,7 +279,10 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
     await expect(painel).toHaveAttribute("data-estado", "vinculado", { timeout: 40_000 });
     await expect(painel.getByTestId("ixc-cliente")).toContainText("Maria Aparecida Conector");
     await expect(painel.getByTestId("ixc-cliente")).toContainText("529.982.247-25");
-    await expect(painel.getByTestId("ixc-situacao")).toContainText("Bloqueado — financeiro em atraso");
+    await expect(painel.getByTestId("ixc-situacao")).toHaveText("Bloqueado");
+    await expect(painel.getByTestId("ixc-motivo-do-bloqueio")).toContainText("financeiro em atraso");
+    // Medido: o selo cabe numa linha só (antes, "Bloqueado — financeiro em atraso" quebrava em duas).
+    expect((await painel.getByTestId("ixc-situacao").boundingBox())?.height ?? 99).toBeLessThanOrEqual(24);
     await expect(painel.getByTestId("ixc-contrato")).toContainText("Fibra 500 Mega");
     await expect(painel.getByTestId("ixc-contrato")).toContainText("Rua das Flores, 120 — Centro");
 

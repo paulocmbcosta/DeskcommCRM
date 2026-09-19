@@ -14,6 +14,12 @@ export type Tom = "bom" | "atencao" | "ruim" | "neutro";
 export interface Leitura {
   rotulo: string;
   tom: Tom;
+  /**
+   * O PORQUÊ, quando o rótulo sozinho não basta ("Bloqueado" — por quê?). Vai em
+   * linha própria na tela: numa coluna de 264px, "Bloqueado — financeiro em
+   * atraso" dentro de um selo quebrava em duas linhas e espremia o nome do cliente.
+   */
+  detalhe?: string;
 }
 
 function ler(mapa: Record<string, Leitura>, codigo: string): Leitura {
@@ -31,9 +37,9 @@ const STATUS_DO_CONTRATO: Record<string, Leitura> = {
 const STATUS_DO_ACESSO: Record<string, Leitura> = {
   A: { rotulo: "Liberado", tom: "bom" },
   D: { rotulo: "Desativado", tom: "neutro" },
-  CM: { rotulo: "Bloqueado — bloqueio manual", tom: "ruim" },
-  CA: { rotulo: "Bloqueado — bloqueio automático", tom: "ruim" },
-  FA: { rotulo: "Bloqueado — financeiro em atraso", tom: "ruim" },
+  CM: { rotulo: "Bloqueado", tom: "ruim", detalhe: "bloqueio manual" },
+  CA: { rotulo: "Bloqueado", tom: "ruim", detalhe: "bloqueio automático" },
+  FA: { rotulo: "Bloqueado", tom: "ruim", detalhe: "financeiro em atraso" },
   AA: { rotulo: "Aguardando assinatura", tom: "atencao" },
 };
 
