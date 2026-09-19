@@ -105,6 +105,20 @@ Regras duras:
 2. **Uma derivação, dois consumidores.** A mesma função pura alimenta (a) o formulário da
    tela e (b) o montador do payload de envio. Divergir vira impossível por construção, não
    por disciplina.
+
+   ⚠️ **O consumidor (a) não existiu por meses, e esta linha não denunciava.** De 2026-07-28
+   a 2026-09-19 `deriveTemplateContract` tinha um consumidor só — o montador. Nenhuma tela
+   coletava um único valor: o seletor da janela fechada mandava `values: {}` e apontava para
+   uma tela de administração que não envia. Como todo modelo de abertura pede ao menos o
+   nome do cliente, **começar conversa pelo canal com hetero-restrição era impossível pelo
+   produto** — e a regra aqui, lida como descrição, dizia o contrário. Regra de arquitetura
+   afirma o que DEVE valer; que ela valha é o que o teste prende
+   (`tests/unit/chamar-o-cliente-primeiro.test.ts`). Para conferir que os dois consumidores
+   continuam existindo, sem acreditar nesta linha:
+
+   ```bash
+   grep -rln "deriveTemplateContract" --include="*.ts" --include="*.tsx" app/ components/ lib/
+   ```
 3. **Header e botões contam.** O contrato cobre todos os componentes com variável, não só o
    corpo. Contar só o body é a causa nº 1 do erro em produção.
 4. **A chave é `(nome, idioma)`.** Nunca só o nome — variantes de idioma têm corpos diferentes.

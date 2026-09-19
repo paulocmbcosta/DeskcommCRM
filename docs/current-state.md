@@ -91,7 +91,12 @@ correspondentes localizados no repo):
 - **Fundação & plataforma** — auth com MFA para admin, multi-tenancy com RLS + teste de
   isolamento, RBAC de 4 papéis, audit log append-only, onboarding de tenant.
 - **Atendimento WhatsApp** — inbox de 3 painéis em tempo real, conexões WAHA multi-número,
-  mídia via Storage, anti-banimento (throttle + jitter + janela de horário), STOP detection.
+  mídia via Storage, anti-banimento (throttle + jitter + janela de horário), STOP detection,
+  e **falar primeiro** com quem nunca escreveu (`Chamar no WhatsApp`, em Contatos, no
+  dossiê do contato e no do negócio), com modelo aprovado e seus parâmetros preenchidos na
+  tela quando o canal exige. Até 2026-09-19 a última parte não existia: o backend aceitava
+  `template_values` desde julho e nenhuma tela os coletava, então iniciar conversa pelo
+  canal oficial era impossível pelo produto.
 - **CRM & pedidos** — kanban com vocabulário configurável por nicho (fractional indexing),
   customer 360, contatos, tags, Nuvemshop.
 - **IA nativa** — agentes com RAG por tenant (pgvector), sentiment, handoff IA→humano,
