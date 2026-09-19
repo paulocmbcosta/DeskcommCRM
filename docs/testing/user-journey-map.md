@@ -353,6 +353,7 @@ nunca por `update` de status.
 | 13 | A aba Fechadas lista ATENDIMENTOS: o encerrado continua lá com a conversa ABERTA de novo, marcado "o cliente voltou", com quem encerrou (sem reticências), o time do FECHAMENTO e o canal; o badge conta a mesma unidade | `lista-de-atendimentos-fechados`, `cliente-voltou`, `quem-encerrou` medido por `scrollWidth`, badge `1` | ✅ |
 | 14 | Na aba Fechadas a busca acha pelo protocolo e pelo nome, e os filtros valem contra o PostgREST de verdade (time do fechamento, número, etiqueta); a contagem com etiqueta responde 200 | `GET /atendimentos?status=closed&…` e `GET /conversations/counts?tag=` pela sessão logada | ✅ |
 | 15 | Clicar num atendimento encerrado abre AQUELE atendimento (recortado, composer travado) e a ficha mostra o time que o encerrou, não "Sem time" | `aviso-atendimento-antigo`, `ficha-da-conversa` com "Cobrança" | ✅ |
+| 16 | A NOTA INTERNA pertence ao atendimento em que foi escrita: a do primeiro não aparece no atendimento novo, a do novo não aparece ao abrir o antigo (pelo histórico e pela aba Fechadas), e "voltar ao atual" desfaz | duas notas escritas PELO COMPOSER; `chat-thread` com/sem o texto de cada uma | ✅ |
 
 **Achados desta rodada, consertados na causa:**
 
@@ -380,6 +381,14 @@ nunca por `update` de status.
   mediam o caminho feliz, que não é o de quem instalou cedo. Migration 0270: régua única
   `fn_nome_do_usuario` (nome; na falta, o início do e-mail) + backfill idempotente. O invariante
   novo cria o usuário que faltava: sem `full_name`.
+- **A nota interna atravessava os atendimentos — relatado pelo dono do produto** (2026-09-19).
+  As mensagens eram recortadas pela janela do episódio e as notas, que entram no MESMO thread,
+  vinham da conversa inteira: `useConversationNotes(conversationId)` nunca recebeu o atendimento.
+  A nota do Financeiro aparecia no atendimento novo do Suporte, e a de hoje dentro do encerrado.
+  A regra da janela saiu do handler de mensagens para `lib/atendimento/janela-do-atendimento.ts`,
+  e as duas rotas a chamam; `tests/unit/notas-internas-por-atendimento.test.ts` proíbe reescrevê-la
+  por fora e foi sabotado (a linha antiga no thread → vermelho). A spec escrevia ZERO notas: o
+  recorte era medido só com mensagens, que é a metade que funcionava.
 
 **NÃO medido:** telefone de verdade (a spec não conecta WAHA); o trilho em tela de toque
 (a dica de mouse não existe lá — o nome da aba escrito no topo é a resposta, e está medido

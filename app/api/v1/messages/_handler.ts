@@ -11,6 +11,7 @@ import { assertAgendaEffectSupabase, guardAgendaEffect } from "@/lib/agenda/efei
 import { StaleServiceBoundaryError } from "@/lib/atendimento/fronteira";
 import { assertServiceBoundarySupabase } from "@/lib/atendimento/origem";
 import { currentExecutionBoundary, guardServiceEffect } from "@/lib/atendimento/fronteira-server";
+import { janelaDoAtendimento } from "@/lib/atendimento/janela-do-atendimento";
 /**
  * Core handlers para messages (list + send).
  *
@@ -43,7 +44,6 @@ import {
   phoneToWhatsappId,
 } from "@/lib/messaging/contact-card";
 import type { ListMessagesQuery, SendMessageInput } from "@/lib/schemas";
-import { ATENDIMENTO_VIGENTE } from "@/lib/schemas/messaging";
 import { sendTemplateForSession } from "@/lib/channels/meta/send-template-for-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { Message } from "@/lib/types/messaging";
@@ -214,32 +214,16 @@ export async function listMessagesHandler(
 
   // ─── O RECORTE POR ATENDIMENTO (migration 0266) ─────────────────────────
   //
-  // A conversa é o fio do canal; o atendimento é o episódio dentro dele. A tela
-  // mostra UM episódio por vez — é o que faz o retorno do cliente parecer (e
-  // ser) um atendimento novo, com o anterior guardado no histórico.
-  //
-  // A janela é [início deste, início do próximo). Fechamento NÃO é fronteira de
-  // propósito: o que sai DEPOIS de fechar (pesquisa de satisfação, despedida)
-  // pertence ao atendimento que acabou, não ao seguinte. E o primeiro episódio
-  // não tem piso: a mensagem que abre a conversa tem `sent_at` do WhatsApp, que
-  // é ANTERIOR ao instante em que a linha da conversa nasceu aqui.
+  // A tela mostra UM episódio por vez. A regra da janela — `[início deste,
+  // início do próximo)`, sem piso no primeiro — mora em
+  // `lib/atendimento/janela-do-atendimento.ts`, porque as NOTAS INTERNAS entram
+  // no mesmo thread e têm de ser recortadas pela mesma régua.
   if (q.atendimento_id) {
-    const { data: episodios, error: erroDosEpisodios } = await supabase
-      .from("atendimentos")
-      .select("id, started_at")
-      .eq("organization_id", ctx.organization_id)
-      .eq("conversation_id", conversationId)
-      .order("started_at", { ascending: true })
-      .order("created_at", { ascending: true });
-    if (erroDosEpisodios) {
-      throw new ApiError(500, "internal_error", undefined, ctx.requestId, erroDosEpisodios.message);
-    }
-    const lista = (episodios ?? []) as Array<{ id: string; started_at: string }>;
-    const indice =
-      q.atendimento_id === ATENDIMENTO_VIGENTE
-        ? lista.length - 1
-        : lista.findIndex((a) => a.id === q.atendimento_id);
-    if (q.atendimento_id !== ATENDIMENTO_VIGENTE && indice < 0) {
+    const janela = await janelaDoAtendimento(supabase, ctx.organization_id, conversationId, q.atendimento_id);
+    if (!janela.ok) {
+      if (janela.motivo === "erro_de_leitura") {
+        throw new ApiError(500, "internal_error", undefined, ctx.requestId, janela.detalhe);
+      }
       throw new ApiError(
         404,
         "not_found",
@@ -248,14 +232,8 @@ export async function listMessagesHandler(
         traduzir("Atendimento não encontrado nesta conversa.", ctx.idioma ?? "pt-BR"),
       );
     }
-    // Sem episódio nenhum (grupo, ou conversa anterior ao backfill): não há o
-    // que recortar, e a conversa inteira é a resposta honesta.
-    if (indice >= 0) {
-      const este = lista[indice];
-      const proximo = lista[indice + 1];
-      if (indice > 0 && este) query = query.gte("sent_at", este.started_at);
-      if (proximo) query = query.lt("sent_at", proximo.started_at);
-    }
+    if (janela.desde) query = query.gte("sent_at", janela.desde);
+    if (janela.ate) query = query.lt("sent_at", janela.ate);
   }
 
   if (q.cursor) {
