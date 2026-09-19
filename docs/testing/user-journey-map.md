@@ -474,6 +474,71 @@ de escopo mínimo (o de sondagem lia todas as tabelas); celular (o painel desliz
 herda o mesmo componente, não foi aberto em viewport de telefone).
 
 
+## J27 — Chamar o cliente primeiro, com modelo aprovado `[P0]` (2026-09-19)
+
+Pedido do dono: cadastrar um cliente (à mão ou pela importação do IXC) e
+**chamá-lo no WhatsApp** antes de ele escrever — pelo modelo da Meta no canal
+oficial, e por texto livre na API não-oficial. Desenho e as cinco lacunas
+medidas: `docs/superpowers/specs/2026-09-19-chamar-o-cliente-design.md`. Sem
+migration: tudo compõe peças que já existiam.
+
+Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts` (8 casos, em `SPECS_PARTE_3`).
+
+### ⚠️ ESTADO DA PROVA: a spec está escrita e **não foi executada**
+
+**Nenhum caso abaixo tem resultado, e nenhum deve ser lido como PASS.** O
+ambiente não pôde ser montado nesta máquina: o daemon do Docker parou de baixar
+imagens durante a sessão — medido com controle, `docker pull hello-world` (13 KB)
+também não completou em 25 s, então não é o Supabase nem a rede do host. Sem
+Docker não há Postgres local, e sem ele não há `.env.e2e` nem app sob teste.
+
+Registrar a tabela sem resultado é deliberado: ela é o contrato do que precisa
+ser provado, e apagá-la faria a jornada parecer inexistente em vez de pendente.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J27.1 Contato sem conversa mostra **Chamar no WhatsApp** na lista, e o diálogo abre com o nome de quem se vai chamar | `[P0]` | **NÃO EXECUTADO** |
+| J27.2 O diálogo diz o que o canal permite **antes** de escrever — campo de texto OU aviso de modelo obrigatório, nunca os dois | `[P0]` | **NÃO EXECUTADO** |
+| J27.3 O botão de enviar fica travado sem conteúdo, destrava ao preencher e **volta a travar** ao apagar (controle positivo) | `[P0]` | **NÃO EXECUTADO** |
+| J27.4 O dossiê do contato oferece começar quando não há conversa (antes devolvia nada) | `[P1]` | **NÃO EXECUTADO** |
+| J27.5 A conversa nasce e o operador cai nela **mesmo se o envio não completar**; o motivo real volta em `erro_envio` | `[P0]` | **NÃO EXECUTADO** |
+| J27.6 Chamar duas vezes reaproveita a MESMA conversa (o índice 1-para-1 não tem filtro de status; um insert daria 23505) | `[P0]` | **NÃO EXECUTADO** |
+| J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **NÃO EXECUTADO** |
+| J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **NÃO EXECUTADO** |
+
+### O que FOI medido, e como
+
+- **`pnpm test:unit`**: 929 de 930 arquivos verdes. 21 casos novos em
+  `tests/unit/chamar-o-cliente-primeiro.test.ts`. O único vermelho é
+  `leads-import-route` (11 casos), confirmado pré-existente rodando a suíte com
+  as mudanças removidas — é o vermelho local de macOS já conhecido.
+- **Os testes vigiam de verdade, provado por sabotagem** (não por eles
+  passarem): fazer `slotKey` prefixar o corpo, zerar os valores do seletor da
+  janela fechada e trocar o filtro de conexão por `.eq()` puro reprovam,
+  respectivamente, 1, 1 e 1 caso; reverter devolve o verde.
+- **`pnpm typecheck`**, **`pnpm lint`** (0 erros), **`pnpm lint:channels`**
+  (nenhum provider nomeado fora de `lib/channels/`) e **`pnpm build`** (compilou
+  em 41 s).
+
+### Três defeitos achados na revisão, antes de sair — e o que eles ensinam
+
+Nenhum dos três aparecia em typecheck, lint ou unitário de lógica. Os três
+teriam ido para produção com o gate verde.
+
+1. **`.omit()` em schema com `.refine()`** compila e falha ao importar, no Zod 4.
+   Derrubou 184 arquivos de teste em cascata — só apareceu porque a suíte
+   inteira foi rodada, e não os gates lembrados.
+2. **Client de sessão numa rota que chama `fn_service_begin`**, que o baseline
+   revoga de `authenticated`. Teria falhado em **100%** das chamadas.
+3. **Filtro `.eq("channel_session_id", …)`** escondendo todos os modelos do canal
+   oficial, porque o `syncTemplates` grava a coluna NULL — o defeito que este
+   trabalho conserta, invertido e apontado justamente para o canal do pedido.
+
+A lição comum: **os três só eram alcançáveis executando o caminho inteiro.** É
+exatamente o argumento da doutrina de QA Visual, e é por isso que a ausência da
+execução da spec acima é uma lacuna real, não uma formalidade.
+
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,
