@@ -484,27 +484,47 @@ migration: tudo compõe peças que já existiam.
 
 Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts` (8 casos, em `SPECS_PARTE_3`).
 
-### ⚠️ ESTADO DA PROVA: a spec está escrita e **não foi executada**
+### Execução (2026-09-19): **PASS nos 8 casos**
 
-**Nenhum caso abaixo tem resultado, e nenhum deve ser lido como PASS.** O
-ambiente não pôde ser montado nesta máquina: o daemon do Docker parou de baixar
-imagens durante a sessão — medido com controle, `docker pull hello-world` (13 KB)
-também não completou em 25 s, então não é o Supabase nem a rede do host. Sem
-Docker não há Postgres local, e sem ele não há `.env.e2e` nem app sob teste.
+`e2e` no CI (`Run workflow` na branch, run 35442960641), Chromium real, Supabase
+local com o `baseline.sql` aplicado, app em produção (`next build` + `next start`).
+Parte 3: **89 passed (21,1 min)**; as três partes verdes.
 
-Registrar a tabela sem resultado é deliberado: ela é o contrato do que precisa
-ser provado, e apagá-la faria a jornada parecer inexistente em vez de pendente.
+Não rodou na máquina do autor: o daemon do Docker parou de baixar imagens no meio
+da sessão — medido com controle, `docker pull hello-world` (13 KB) também não
+completou em 25 s, então não era o Supabase nem a rede do host. O CI tem Docker
+funcional, e é por isso que o `workflow_dispatch` existe.
 
 | Caso | Prioridade | Resultado |
 |---|---|---|
-| J27.1 Contato sem conversa mostra **Chamar no WhatsApp** na lista, e o diálogo abre com o nome de quem se vai chamar | `[P0]` | **NÃO EXECUTADO** |
-| J27.2 O diálogo diz o que o canal permite **antes** de escrever — campo de texto OU aviso de modelo obrigatório, nunca os dois | `[P0]` | **NÃO EXECUTADO** |
-| J27.3 O botão de enviar fica travado sem conteúdo, destrava ao preencher e **volta a travar** ao apagar (controle positivo) | `[P0]` | **NÃO EXECUTADO** |
-| J27.4 O dossiê do contato oferece começar quando não há conversa (antes devolvia nada) | `[P1]` | **NÃO EXECUTADO** |
-| J27.5 A conversa nasce e o operador cai nela **mesmo se o envio não completar**; o motivo real volta em `erro_envio` | `[P0]` | **NÃO EXECUTADO** |
-| J27.6 Chamar duas vezes reaproveita a MESMA conversa (o índice 1-para-1 não tem filtro de status; um insert daria 23505) | `[P0]` | **NÃO EXECUTADO** |
-| J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **NÃO EXECUTADO** |
-| J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **NÃO EXECUTADO** |
+| J27.1 Contato sem conversa mostra **Chamar no WhatsApp** na lista, e o diálogo abre com o nome de quem se vai chamar | `[P0]` | **PASS** (5,3 s) |
+| J27.2 O diálogo diz o que o canal permite **antes** de escrever — campo de texto OU aviso de modelo obrigatório, nunca os dois | `[P0]` | **PASS** (12,3 s) |
+| J27.3 O botão de enviar fica travado sem conteúdo, destrava ao preencher e **volta a travar** ao apagar (controle positivo) | `[P0]` | **PASS** (29,2 s) |
+| J27.4 O dossiê do contato oferece começar quando não há conversa (antes devolvia nada) | `[P1]` | **PASS** (30,9 s) |
+| J27.5 A conversa nasce e o operador cai nela **mesmo se o envio não completar**; o motivo real volta em `erro_envio` | `[P0]` | **PASS** (30,4 s) |
+| J27.6 Chamar duas vezes reaproveita a MESMA conversa (o índice 1-para-1 não tem filtro de status; um insert daria 23505) | `[P0]` | **PASS** (27,9 s) |
+| J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **PASS** (28,5 s) |
+| J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **PASS** (29,4 s) |
+
+**A primeira execução reprovou 6 dos 8, e o defeito era do TESTE** — vale registrar
+porque é o argumento inteiro da doutrina em miniatura. `createContactHandler`
+devolve `{ contact, action }`, o helper lia `data.id`, e o `undefined` chegava ao
+`PATCH` seguinte como `invalid input syntax for type uuid` — um erro de banco, três
+camadas longe da causa. Os 2 casos que não usam o helper passaram já naquela
+rodada, e são justamente os que medem a rota nova e o isolamento entre
+organizações.
+
+Se a spec tivesse sido mesclada com o rótulo "não executada", ela entraria no
+repositório **quebrada**, e o próximo push na `main` acusaria um vermelho que se
+leria como regressão da feature.
+
+**Não medido:** envio real contra uma WABA (não há credencial neste ambiente, e o
+que a jornada prova é a decisão do operador, não o transporte); a tela em viewport
+de telefone; e o canal com hetero-restrição em tela — o ambiente E2E usa o canal de
+texto livre, então J27.2 exercitou o ramo livre e a exclusividade dos dois ramos,
+não o formulário de parâmetros renderizado. Esse formulário está preso por
+unidade (`tests/unit/chamar-o-cliente-primeiro.test.ts`, incluindo a derivação
+compartilhada com o montador do payload).
 
 ### Um fato do produto que a spec teve de contornar — e que vale saber
 
