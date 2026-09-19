@@ -95,10 +95,11 @@ const APROVADO = "APPROVED";
 /**
  * Os modelos aprovados desta conexão, com o contrato de parâmetros derivado.
  *
- * `soAprovados` existe porque as duas telas querem coisas diferentes e as duas
- * estão certas: quem vai DISPARAR agora só pode ver o que a plataforma entrega
- * (oferecer um `PENDING` é oferecer um clique que falha), enquanto quem
- * administra precisa ver os reprovados para saber por quê.
+ * Só os APROVADOS: quem vai disparar agora não pode ver um `PENDING`, porque
+ * oferecê-lo é oferecer um clique que falha. Quem administra — e precisa ver o
+ * reprovado para saber por quê — tem as telas de Conexões, que leem as rotas
+ * antigas. Um parâmetro para escolher entre os dois seria um caminho que nenhum
+ * chamador pede.
  *
  * @throws quando a conexão não é da organização. Devolver lista vazia faria
  *   "canal de outra org" e "canal sem modelo" contarem a mesma história, e só a
@@ -108,7 +109,6 @@ export async function modelosParaEnvio(
   db: SupabaseClient,
   organizationId: string,
   channelSessionId: string,
-  opcoes: { soAprovados?: boolean } = {},
 ): Promise<ModelosDaConexao> {
   const { data: sessao, error: erroSessao } = await db
     .from("channel_sessions")
@@ -177,9 +177,7 @@ export async function modelosParaEnvio(
   if (error) throw new Error(`modelos_ilegiveis: ${error.message}`);
 
   const linhas = (data ?? []) as unknown as LinhaDeModelo[];
-  const visiveis = opcoes.soAprovados === false
-    ? linhas
-    : linhas.filter((l) => (l.status ?? "").toUpperCase() === APROVADO);
+  const visiveis = linhas.filter((l) => (l.status ?? "").toUpperCase() === APROVADO);
 
   return {
     exigeModelo: true,
