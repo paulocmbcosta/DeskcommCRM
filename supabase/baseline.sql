@@ -27593,8 +27593,13 @@ grant select, insert, update, delete
   on public.conector_conexoes, public.contato_vinculos_externos
   to service_role;
 
-drop trigger if exists trg_conector_conexoes_updated_at on public.conector_conexoes;
-create trigger trg_conector_conexoes_updated_at
+-- `create or replace trigger` (pg14+; o piso é 15), e não `drop` + `create`: o
+-- `update.sh` re-aplica este bloco com o app e o worker DE PÉ, sem ON_ERROR_STOP.
+-- `drop trigger` pede ACCESS EXCLUSIVE e já deadlockou com o worker de pé (medido
+-- ao atualizar a VPS em 2026-09-18, em `job_queue`); se o `drop` passa e o `create`
+-- cai, a catraca some até a próxima atualização. Um comando só não tem esse
+-- meio-termo.
+create or replace trigger trg_conector_conexoes_updated_at
   before update on public.conector_conexoes
   for each row execute function public.fn_set_updated_at();
 
@@ -27615,8 +27620,7 @@ end;
 $$;
 revoke execute on function public.fn_vinculo_externo_confere_org() from public, anon, authenticated;
 
-drop trigger if exists trg_vinculo_externo_confere_org on public.contato_vinculos_externos;
-create trigger trg_vinculo_externo_confere_org
+create or replace trigger trg_vinculo_externo_confere_org
   before insert or update on public.contato_vinculos_externos
   for each row execute function public.fn_vinculo_externo_confere_org();
 
@@ -27634,8 +27638,7 @@ end;
 $$;
 revoke execute on function public.fn_vinculos_externos_somem_com_a_anonimizacao() from public, anon, authenticated;
 
-drop trigger if exists trg_vinculos_externos_somem_com_a_anonimizacao on public.contacts;
-create trigger trg_vinculos_externos_somem_com_a_anonimizacao
+create or replace trigger trg_vinculos_externos_somem_com_a_anonimizacao
   after update on public.contacts
   for each row
   when (new.is_anonymized is true and old.is_anonymized is distinct from true)

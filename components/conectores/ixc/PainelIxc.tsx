@@ -182,7 +182,15 @@ function LinhaDeFatura({
             enviar.mutate(
               { faturaId: fatura.id, conversationId },
               {
-                onSuccess: () => toast.success(t("Fatura enviada na conversa.")),
+                onSuccess: (res) => {
+                  // A primeira mensagem pode sair e a segunda não: dizer "enviada"
+                  // deixaria o cliente sem a linha digitável e o atendente sem saber.
+                  if (res.data.mensagens_enviadas < res.data.mensagens_previstas) {
+                    toast.warning(t("A fatura saiu incompleta: confira a conversa e envie de novo."));
+                  } else {
+                    toast.success(t("Fatura enviada na conversa."));
+                  }
+                },
                 onError: (err) =>
                   toast.error(err instanceof ApiError && err.message ? err.message : t("Não consegui enviar a fatura.")),
               },

@@ -8902,6 +8902,7 @@ export const DICIONARIO: Traducoes = {
   "Ficar indisponível": { es: "Ponerme no disponible" },
   "Indisponível você não recebe conversas novas do rodízio.": { es: "No disponible no recibes conversaciones nuevas de la rotación." },
   // ── Conectores de sistema externo — o primeiro é o IXC (migration 0271) ──
+  "A fatura saiu incompleta: confira a conversa e envie de novo.": { es: "La factura salió incompleta: revisa la conversación y envíala de nuevo." },
   "bloqueio manual": { es: "bloqueo manual" },
   "bloqueio automático": { es: "bloqueo automático" },
   "financeiro em atraso": { es: "pagos atrasados" },
