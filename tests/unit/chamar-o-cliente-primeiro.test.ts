@@ -133,6 +133,57 @@ describe("o schema de abertura é o MESMO conteúdo do de resposta", () => {
   });
 });
 
+describe("a consulta dos modelos não pode esconder o canal oficial", () => {
+  /** Client de mentira que grava a consulta montada e devolve o que se mandar. */
+  function dbFalso(linhas: unknown[]) {
+    const chamadas: { or?: string; eq: Record<string, unknown> } = { eq: {} };
+    const q: Record<string, unknown> = {};
+    const encadeia = () => q;
+    Object.assign(q, {
+      select: encadeia,
+      order: () => ({ ...q, then: undefined, data: linhas, error: null }),
+      eq: (col: string, val: unknown) => {
+        chamadas.eq[col] = val;
+        return q;
+      },
+      or: (expr: string) => {
+        chamadas.or = expr;
+        return q;
+      },
+      maybeSingle: async () => ({ data: { id: "s1", provider: "meta_cloud" }, error: null }),
+      then: (resolve: (v: unknown) => void) => resolve({ data: linhas, error: null }),
+    });
+    return {
+      chamadas,
+      db: { from: () => q } as never,
+    };
+  }
+
+  it("aceita a linha SEM dono — é assim que o sync oficial as grava", async () => {
+    // O defeito que isto prende, medido em 2026-09-19: `syncTemplates` (canal
+    // oficial) faz upsert só com as colunas que vêm da plataforma, então toda
+    // linha dele nasce com `channel_session_id` NULL. Um `.eq()` puro
+    // esconderia 100% dos modelos da Meta, e a tela diria "Nenhum modelo
+    // aprovado ainda" para uma conta cheia deles.
+    const { db, chamadas } = dbFalso([]);
+    const { modelosParaEnvio } = await import("@/lib/channels/modelos-para-envio");
+    await modelosParaEnvio(db, "org-1", "sessao-1");
+
+    expect(chamadas.or, "a consulta voltou a filtrar só pela conexão").toBeDefined();
+    expect(chamadas.or).toContain("channel_session_id.is.null");
+    expect(chamadas.or).toContain("channel_session_id.eq.sessao-1");
+  });
+
+  it("a organização é SEMPRE filtrada à mão — o client é service role", async () => {
+    // Anti-pattern 10: quem usa admin client bypassa RLS e precisa filtrar o
+    // tenant manualmente. Sem isto, os modelos de outro cliente apareceriam.
+    const { db, chamadas } = dbFalso([]);
+    const { modelosParaEnvio } = await import("@/lib/channels/modelos-para-envio");
+    await modelosParaEnvio(db, "org-1", "sessao-1");
+    expect(chamadas.eq.organization_id).toBe("org-1");
+  });
+});
+
 describe("os elos de tela que somem sem barulho", () => {
   it("a rota de modelos serve quem ATENDE, não só quem administra", () => {
     // O defeito medido: `/channels/templates` exige `admin`, então um `agent`

@@ -129,15 +129,38 @@ export async function modelosParaEnvio(
   if (!exigeModelo) return { exigeModelo: false, modelos: [] };
 
   const colunas = "name, language, status, category, parameter_format, components";
-  const porSessao = () =>
-    db
-      .from("meta_templates")
-      .select(colunas)
-      .eq("organization_id", organizationId)
-      .eq("channel_session_id", channelSessionId)
-      .order("name");
 
-  let { data, error } = await porSessao();
+  /**
+   * DA CONEXÃO **OU SEM DONO** — e o "ou" não é folga, é o caso principal.
+   *
+   * `channel_session_id` é nullable, e os dois lados a preenchem diferente:
+   * a rota do canal intermediado grava a conexão no upsert; o `syncTemplates`
+   * do canal oficial **não grava** — faz `upsert` com as colunas que vêm da
+   * plataforma e mais nada, então toda linha do canal oficial nasce com NULL.
+   * (Some também por `on delete set null` quando uma conexão é apagada.)
+   *
+   * Um `.eq()` puro esconderia **todos** os modelos do canal oficial e a tela
+   * diria "Nenhum modelo aprovado ainda" para uma conta cheia deles — que é
+   * exatamente o defeito que este módulo existe para consertar, invertido e
+   * pior, porque atingiria o canal que mais depende de modelo.
+   *
+   * O órfão é atribuído à conexão que perguntou. Com duas conexões na mesma
+   * organização, as duas veem as linhas sem dono — que é o comportamento de
+   * hoje da rota oficial (ela não filtra por conexão nenhuma), não uma
+   * regressão. Quem grava o dono passa a ser distinguido de verdade; quem não
+   * grava continua como antes, em vez de sumir.
+   *
+   * Para ver quantas linhas ainda estão sem dono numa instalação:
+   *   select channel_session_id is null as sem_dono, count(*)
+   *     from meta_templates group by 1;
+   */
+  const filtroDeSessao = `channel_session_id.eq.${channelSessionId},channel_session_id.is.null`;
+  let { data, error } = await db
+    .from("meta_templates")
+    .select(colunas)
+    .eq("organization_id", organizationId)
+    .or(filtroDeSessao)
+    .order("name");
 
   // A coluna `channel_session_id` entrou na 0144. Num clone que subiu a imagem
   // antes do baseline, filtrar por ela devolve 42703 → lista vazia → "nenhum
