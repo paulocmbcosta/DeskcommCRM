@@ -506,6 +506,23 @@ ser provado, e apagá-la faria a jornada parecer inexistente em vez de pendente.
 | J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **NÃO EXECUTADO** |
 | J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **NÃO EXECUTADO** |
 
+### Um fato do produto que a spec teve de contornar — e que vale saber
+
+**`POST /api/v1/contacts` abre a conversa sozinho** quando o corpo traz telefone e
+a organização tem um canal vivo (`_handler.ts`, o `ensureConversation` best-effort
+logo depois do insert). O `PATCH` não faz isso: só o create tem esse ramo.
+
+Consequência para o produto, não só para o teste: o contato criado **pela tela**,
+com telefone, em geral já nasce com conversa — então o botão "Chamar no WhatsApp"
+aparece pouco nesse caminho. **Quem veio da importação é outra história**, e é o
+caso que originou esta feature: o importador não chama `ensureConversation` em
+lugar nenhum, então todo contato importado nasce sem conversa e o botão aparece.
+
+A spec cria o contato em dois passos (sem telefone, depois `PATCH`) justamente para
+reproduzir o estado do importado. Criar num `POST` só daria um contato que já tem
+conversa, e os casos mediriam a tela errada — a lista mostraria "Abrir conversa"
+onde a spec procura "Chamar no WhatsApp".
+
 ### O que FOI medido, e como
 
 - **`pnpm test:unit`**: 929 de 930 arquivos verdes. 21 casos novos em

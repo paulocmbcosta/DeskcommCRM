@@ -39,17 +39,40 @@ function telefoneNovo(): string {
   return `+5511${Date.now().toString().slice(-9)}`;
 }
 
+/**
+ * Um contato COM telefone e SEM conversa — o estado que a feature atende.
+ *
+ * ⚠️ Em dois passos, e não num `POST` só, por um motivo medido: o
+ * `createContactHandler` **abre a conversa sozinho** quando o corpo traz
+ * telefone e a organização tem um canal vivo (`_handler.ts`, o
+ * `ensureConversation` best-effort logo depois do insert). Criar assim daria um
+ * contato que JÁ tem conversa, e os casos abaixo mediriam a tela errada — a
+ * lista mostraria "Abrir conversa" onde a spec procura "Chamar no WhatsApp".
+ *
+ * O `PATCH` não tem esse ramo: só o create abre conversa. Então criar sem
+ * telefone e completar depois produz exatamente o estado que interessa — que é
+ * também o estado real de **quem veio da importação**, o caso que originou esta
+ * feature: o importador de contatos não chama `ensureConversation` em lugar
+ * nenhum, então todo contato importado nasce sem conversa.
+ */
 async function criarContatoSemConversa(
   page: import("@playwright/test").Page,
   nome: string,
 ): Promise<{ id: string; telefone: string }> {
-  const telefone = telefoneNovo();
-  const r = await page.request.post("/api/v1/contacts", {
-    data: { name: nome, phone_number: telefone, source: "manual" },
+  const criado = await page.request.post("/api/v1/contacts", {
+    data: { name: nome, source: "manual" },
   });
-  expect(r.ok(), await r.text()).toBe(true);
-  const { data } = await r.json();
-  return { id: data.id as string, telefone };
+  expect(criado.ok(), await criado.text()).toBe(true);
+  const { data } = await criado.json();
+  const id = data.id as string;
+
+  const telefone = telefoneNovo();
+  const completado = await page.request.patch(`/api/v1/contacts/${id}`, {
+    data: { phone_number: telefone },
+  });
+  expect(completado.ok(), await completado.text()).toBe(true);
+
+  return { id, telefone };
 }
 
 test.beforeEach(async ({ page }) => {
