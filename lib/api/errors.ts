@@ -138,6 +138,18 @@ export const ApiErrorCodes = {
   wacalls_not_connected: "wacalls_not_connected", // 503 + Retry-After: sessão pareada cujo socket com o WhatsApp caiu por um instante (ver `wacallsSemConexao`)
   ai_provider_error: "ai_provider_error",
   nuvemshop_error: "nuvemshop_error",
+
+  // Conectores de sistema externo (migration 0271 — o primeiro é o IXC).
+  // Três respostas distintas porque pedem três consertos distintos: não existe
+  // esse conector (404), a organização não o ligou (404 — vá em Configurações),
+  // e o sistema do outro lado falhou (502 — `details.motivo` diz se foi o token,
+  // o endereço ou o próprio ERP; ver `MotivoDeFalha` em lib/conectores/tipos.ts).
+  conector_desconhecido: "conector_desconhecido",
+  conector_desligado: "conector_desligado",
+  conector_indisponivel: "conector_indisponivel",
+  // 422: a fatura existe mas não tem linha digitável nem link — o boleto ainda
+  // não foi registrado no gateway. Enviar "segue a fatura" sem nada seria pior.
+  fatura_nao_enviavel: "fatura_nao_enviavel",
 } as const;
 
 export type ApiErrorCode = (typeof ApiErrorCodes)[keyof typeof ApiErrorCodes];

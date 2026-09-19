@@ -75,6 +75,8 @@ interface Excecao {
  * linhas da OUTRA organização, não uma leitura como superusuário.
  */
 const PROVA_PROPRIA: readonly Excecao[] = [
+  { tabela: "conector_conexoes", razao: "tests/invariants/conectores-sao-server-side.test.ts — server-side only (token de ERP de terceiro): RLS ligada SEM policy, anon/authenticated sem privilégio nenhum e `permission denied` medido na leitura e na escrita; service_role como controle positivo; cascade com a organização" },
+  { tabela: "contato_vinculos_externos", razao: "tests/invariants/conectores-sao-server-side.test.ts — mesma prova da linha acima, mais as duas catracas do banco: trigger recusa vínculo da organização A com contato de B (quem grava é o service_role, que ignora RLS) e a anonimização do contato apaga o vínculo" },
   { tabela: "atendimentos", razao: "tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts — JWT do tenant B lê zero e o de A lê as suas (controle positivo); anon/authenticated/service_role sem escrita; escopo herdado da conversa" },
   { tabela: "conversation_events", razao: "tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts — mesma prova da linha acima, nos dois sentidos A/B; a porta de escrita (`fn_conversation_event_add`) recusa conversa de outra organização" },
   { tabela: "attendant_pause_log", razao: "tests/invariants/pausa-do-atendente-e-limite-por-time.test.ts — a própria pessoa e o gestor leem (controle positivo); o colega e o tenant B leem zero; anon/authenticated/service_role sem escrita; FK composta recusa pausa de quem não é da organização" },

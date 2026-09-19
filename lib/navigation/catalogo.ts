@@ -684,6 +684,20 @@ export const NAV_CATALOG = [
     section: "Dados e acesso",
     minRole: "admin",
   },
+  {
+    // Conectores de sistema externo (migration 0271 — o primeiro é o IXC, de
+    // provedor de internet). Fica em "Dados e acesso", ao lado de API Tokens e
+    // Webhooks: é a mesma conversa — outro sistema falando com o CRM — vista do
+    // lado de quem recebe um token em vez de emitir. `admin` porque a tela
+    // guarda a credencial do ERP do cliente.
+    href: "/app/settings/conectores",
+    label: "Conectores",
+    description: "Ligue o sistema que a empresa já usa (ex.: IXC) e veja os dados do cliente no atendimento.",
+    icon: "PlugsConnected",
+    group: "organizacao",
+    section: "Dados e acesso",
+    minRole: "admin",
+  },
 ] as const satisfies readonly NavMetadata[];
 
 export type NavDestinationId = (typeof NAV_CATALOG)[number]["href"];

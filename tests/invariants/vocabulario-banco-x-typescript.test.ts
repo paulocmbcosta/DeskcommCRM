@@ -49,6 +49,30 @@ const PARES: Array<{
   simbolo: string;
 }> = [
   {
+    tabela: "conector_conexoes",
+    coluna: "conector",
+    arquivo: "lib/conectores/tipos.ts",
+    simbolo: "IDS_DE_CONECTOR",
+  },
+  {
+    tabela: "contato_vinculos_externos",
+    coluna: "conector",
+    arquivo: "lib/conectores/tipos.ts",
+    simbolo: "IDS_DE_CONECTOR",
+  },
+  {
+    tabela: "conector_conexoes",
+    coluna: "status",
+    arquivo: "lib/conectores/tipos.ts",
+    simbolo: "ESTADOS_DA_CONEXAO",
+  },
+  {
+    tabela: "contato_vinculos_externos",
+    coluna: "verificado_por",
+    arquivo: "lib/conectores/tipos.ts",
+    simbolo: "FORMAS_DE_VERIFICACAO",
+  },
+  {
     tabela: "crm_lead_activities",
     coluna: "actor_kind",
     // lib/leads/activity-emitter.ts → ActivityActorKind
@@ -311,9 +335,10 @@ function desembrulha(expr: string): string {
  * e invariante que erra por motivo falso é pior que invariante nenhum, porque é
  * obedecido.
  *
- * Aceita as duas formas que DEFINEM: `col = ANY (ARRAY[...])` e a variante com
- * `col IS NULL OR ...`, que é como se escreve "opcional, mas se vier tem de ser
- * um destes".
+ * Aceita as formas que DEFINEM: `col = ANY (ARRAY[...])`, a variante com
+ * `col IS NULL OR ...` (que é como se escreve "opcional, mas se vier tem de ser
+ * um destes"), e `col = 'x'` sozinha — o conjunto de UM valor, que é como o
+ * Postgres guarda `in ('x')`.
  */
 function literaisSeDefine(def: string, coluna: string): string[] | null {
   const semCheck = desembrulha(def.trim().replace(/^CHECK\s*/i, ""));
@@ -325,8 +350,16 @@ function literaisSeDefine(def: string, coluna: string): string[] | null {
   );
 
   const m = new RegExp(`^\\(?${col}\\)?\\s*=\\s*ANY\\s*\\(ARRAY\\[(.+)\\]\\)$`, "is").exec(semNulo);
-  if (!m) return null;
-  return [...m[1]!.matchAll(/'([^']+)'::text/g)].map((x) => x[1]!).sort();
+  if (m) return [...m[1]!.matchAll(/'([^']+)'::text/g)].map((x) => x[1]!).sort();
+
+  // Vocabulário de UM valor só: `check (col in ('ixc'))` é reescrito pelo Postgres
+  // como `col = 'ixc'::text`, SEM `ANY (ARRAY[...])`. É o estado natural de um
+  // vocabulário que acabou de nascer (o primeiro conector, o primeiro provider), e
+  // sem este ramo a régua dizia "não tem CHECK de conjunto" de uma coluna que tem.
+  // Âncoras nas duas pontas: uma regra composta que só MENCIONE a igualdade
+  // (`col = 'x' AND outra IS NOT NULL`) continua não definindo nada.
+  const unico = new RegExp(`^\\(?${col}\\)?\\s*=\\s*'([^']+)'::text$`, "i").exec(semNulo);
+  return unico ? [unico[1]!] : null;
 }
 
 /**

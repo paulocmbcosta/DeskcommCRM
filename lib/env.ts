@@ -113,6 +113,15 @@ const schema = z.object({
   CPF_ENCRYPTION_KEY: required("CPF_ENCRYPTION_KEY"),
   // Opcional (template genérico) — só necessária ao ligar NUVEMSHOP_ENABLED.
   NUVEMSHOP_OAUTH_ENCRYPTION_KEY: z.string().optional().default(""),
+  /**
+   * Hosts PRIVADOS que os conectores de sistema externo podem chamar, separados
+   * por vírgula (ex.: `10.0.0.5,erp.interno`). Vazio = nenhum, que é o certo para
+   * quase toda instalação: o endereço do conector é escolhido pelo admin do
+   * tenant e chamado pelo SERVIDOR, então a guarda anti-SSRF recusa rede interna.
+   * Esta lista é a exceção que só o OPERADOR da instalação concede — ERP
+   * on-premise atrás de VPN. Quem está nela também pode usar http.
+   */
+  CONECTORES_HOSTS_PRIVADOS: z.string().optional().default(""),
   WAHA_BYO_ENCRYPTION_KEY: required("WAHA_BYO_ENCRYPTION_KEY"),
   /**
    * AES-256-GCM key (32 bytes em base64) usada pra cifrar API keys em

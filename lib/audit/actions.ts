@@ -573,6 +573,18 @@ export const AUDIT_ACTIONS = [
   // "Cliente pela agenda" ligada ou desligada (migration 0262). Ligar reescreve
   // etiquetas de toda a organização; metadata leva as contagens.
   "crm.cliente_pela_agenda_alterado",
+  // Conectores de sistema externo (migration 0271 — o primeiro é o IXC). A
+  // conexão guarda um token de ERP de terceiro: quem ligou, trocou ou desligou é
+  // a primeira pergunta depois de um incidente. O vínculo diz QUAL cadastro do
+  // ERP passou a responder por este contato — `metadata.verificado_por` separa o
+  // que o telefone provou do que uma pessoa escolheu. E a fatura enviada é uma
+  // cobrança que saiu em nome da empresa: `metadata` leva o id da fatura, nunca
+  // a linha digitável.
+  "conector.conexao_salva",
+  "conector.conexao_removida",
+  "conector.vinculo_criado",
+  "conector.vinculo_removido",
+  "conector.fatura_enviada",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */
