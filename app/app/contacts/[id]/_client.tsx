@@ -116,7 +116,12 @@ export function ContactDetailClient({ contactId }: Props) {
         )}
       </header>
 
-      <ConversaNoDossie conversa={contact.conversa} />
+      <ConversaNoDossie
+        conversa={contact.conversa}
+        contactId={contactId}
+        nome={displayName}
+        telefone={contact.phone_number}
+      />
 
       {/* ANTES das abas, e não dentro de uma delas: é o único conteúdo desta
           tela que PEDE uma ação. Enterrado numa aba, viraria pendência que só

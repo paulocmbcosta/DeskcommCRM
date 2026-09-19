@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Chamar o cliente primeiro — a conversa que começa do nosso lado",
+    "subtitle": "Nenhuma tela sabe qual é o canal: ela pergunta `exige_modelo` e recebe um fato sobre o que pode escrever. O contrato de parâmetros é DERIVADO uma vez, por função pura, e alimenta os dois lados — o campo que o operador preenche e o parâmetro que a plataforma recebe. Sem migration: tudo compõe peças que já existiam.",
+    "output": "chamar-o-cliente.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "tela", "label": "Tela" },
+    { "id": "api", "label": "API" },
+    { "id": "canal", "label": "Canal (lib/channels)" },
+    { "id": "envio", "label": "Envio (lib/messaging)" },
+    { "id": "banco", "label": "Banco" },
+    { "id": "fora", "label": "Plataforma" }
+  ],
+  "mainPath": [
+    "dialogo",
+    "api-iniciar",
+    "iniciar",
+    "handler",
+    "adapter",
+    "plataforma"
+  ],
+  "nodes": [
+    {
+      "id": "contatos",
+      "lane": "tela",
+      "col": 1,
+      "type": "frontend",
+      "label": "Contatos, dossiê do contato e dossiê do negócio — o botão `Chamar no WhatsApp` aparece só quando ainda NÃO há conversa"
+    },
+    {
+      "id": "dialogo",
+      "lane": "tela",
+      "col": 2,
+      "type": "frontend",
+      "label": "ChamarNoWhatsAppDialog — escolhe a conexão, mostra a restrição ANTES da escrita, e envia num ato"
+    },
+    {
+      "id": "campos",
+      "lane": "tela",
+      "col": 3,
+      "type": "frontend",
+      "label": "CamposDoModelo — um campo por slot, derivado no browser; preview com os valores aplicados"
+    },
+    {
+      "id": "aviso",
+      "lane": "tela",
+      "col": 2,
+      "type": "frontend",
+      "label": "JanelaFechadaAviso (inbox) — mesma coleta de valores quando a janela de 24h já fechou"
+    },
+    {
+      "id": "api-modelos",
+      "lane": "api",
+      "col": 3,
+      "type": "backend",
+      "label": "GET /channels/modelos?channel_session_id — papel `agent`; devolve `exige_modelo` + modelos aprovados com a chave de cada slot pronta"
+    },
+    {
+      "id": "api-iniciar",
+      "lane": "api",
+      "col": 4,
+      "type": "backend",
+      "label": "POST /conversations/iniciar — papel `agent`; 200 com `enviada` e `erro_envio`, porque as duas notícias podem discordar"
+    },
+    {
+      "id": "mcp",
+      "lane": "api",
+      "col": 4,
+      "type": "backend",
+      "label": "MCP crm_start_conversation_and_send — mesma composição; aceita `template` (prospecção fria em canal oficial)"
+    },
+    {
+      "id": "modelos",
+      "lane": "canal",
+      "col": 4,
+      "type": "backend",
+      "label": "modelosParaEnvio — o ÚNICO lugar que sabe qual é o canal; traduz a capability em `exigeModelo`"
+    },
+    {
+      "id": "contrato",
+      "lane": "canal",
+      "col": 5,
+      "type": "backend",
+      "label": "deriveTemplateContract + slotKey — função PURA, dois consumidores: o formulário e o montador do payload"
+    },
+    {
+      "id": "preflight",
+      "lane": "canal",
+      "col": 6,
+      "type": "backend",
+      "label": "conferirDefinicao + buildComponents — recusa valor faltando ANTES de gastar, com o endereço do slot"
+    },
+    {
+      "id": "adapter",
+      "lane": "canal",
+      "col": 7,
+      "type": "backend",
+      "label": "adapter.sendTemplate / sendTemplateForSession — credencial da SESSÃO, nunca do ambiente"
+    },
+    {
+      "id": "iniciar",
+      "lane": "envio",
+      "col": 5,
+      "type": "backend",
+      "label": "iniciarConversaEEnviar — abre e envia; o envio falho NÃO apaga a conversa"
+    },
+    {
+      "id": "abrir",
+      "lane": "envio",
+      "col": 5,
+      "type": "backend",
+      "label": "openSharedContactConversation — acha o contato pelas grafias do telefone, ou cria"
+    },
+    {
+      "id": "handler",
+      "lane": "envio",
+      "col": 6,
+      "type": "backend",
+      "label": "sendMessageHandler — o único caminho de saída; guardas de bloqueio, opt-out, janela e boundary"
+    },
+    {
+      "id": "servico",
+      "lane": "banco",
+      "col": 6,
+      "type": "database",
+      "label": "fn_service_begin — abre o atendimento e escreve na linha do tempo; é o rastro que sobrevive ao envio falho"
+    },
+    {
+      "id": "espelho",
+      "lane": "banco",
+      "col": 5,
+      "type": "database",
+      "label": "meta_templates — o espelho por conexão: nome, idioma, estado, componentes, contract_hash"
+    },
+    {
+      "id": "mensagens",
+      "lane": "banco",
+      "col": 7,
+      "type": "database",
+      "label": "conversations + messages — a conversa nasce igual à de quem escreveu primeiro"
+    },
+    {
+      "id": "plataforma",
+      "lane": "fora",
+      "col": 8,
+      "type": "backend",
+      "label": "WhatsApp (direto ou por parceiro) — recusa 131047 fora da janela e 132000 com parâmetro faltando"
+    },
+    {
+      "id": "cliente",
+      "lane": "fora",
+      "col": 9,
+      "type": "backend",
+      "label": "O cliente responde → last_inbound_at → a janela abre e o texto livre é liberado"
+    }
+  ],
+  "edges": [
+    { "from": "contatos", "to": "dialogo", "label": "sem conversa ainda" },
+    { "from": "dialogo", "to": "api-modelos", "label": "o que este canal permite?" },
+    { "from": "api-modelos", "to": "modelos", "label": "channel_session_id" },
+    { "from": "modelos", "to": "espelho", "label": "aprovados desta conexão" },
+    { "from": "modelos", "to": "contrato", "label": "deriva os slots" },
+    { "from": "api-modelos", "to": "dialogo", "label": "exige_modelo + slots com chave" },
+    { "from": "dialogo", "to": "campos", "label": "um campo por slot" },
+    { "from": "campos", "to": "dialogo", "label": "valores por slotKey" },
+    { "from": "aviso", "to": "api-modelos", "label": "mesma rota, mesma coleta" },
+    { "from": "dialogo", "to": "api-iniciar", "label": "conexão + destinatário + mensagem" },
+    { "from": "api-iniciar", "to": "iniciar", "label": "abrir e enviar" },
+    { "from": "mcp", "to": "iniciar", "label": "a mesma composição" },
+    { "from": "iniciar", "to": "abrir", "label": "contato + conexão" },
+    { "from": "abrir", "to": "servico", "label": "beginServiceAtOrigin" },
+    { "from": "servico", "to": "mensagens", "label": "conversa 1:1 (reabre se fechada)" },
+    { "from": "iniciar", "to": "handler", "label": "conversation_id resolvido" },
+    { "from": "handler", "to": "preflight", "label": "pré-voo do modelo" },
+    { "from": "preflight", "to": "contrato", "label": "a MESMA derivação" },
+    { "from": "preflight", "to": "espelho", "label": "existe? está aprovado?" },
+    { "from": "handler", "to": "adapter", "label": "template + valores" },
+    { "from": "adapter", "to": "plataforma", "label": "components[] montados" },
+    { "from": "handler", "to": "mensagens", "label": "grava o que o cliente vai ler" },
+    { "from": "iniciar", "to": "api-iniciar", "label": "conversa + desfecho do envio" },
+    { "from": "api-iniciar", "to": "dialogo", "label": "conversation_id sempre; erro_envio quando falha" },
+    { "from": "plataforma", "to": "cliente", "label": "entrega" },
+    { "from": "cliente", "to": "mensagens", "label": "a resposta reabre a janela" }
+  ]
+}

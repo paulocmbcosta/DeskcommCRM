@@ -483,6 +483,108 @@ de escopo mínimo (o de sondagem lia todas as tabelas); celular (o painel desliz
 herda o mesmo componente, não foi aberto em viewport de telefone).
 
 
+## J27 — Chamar o cliente primeiro, com modelo aprovado `[P0]` (2026-09-19)
+
+Pedido do dono: cadastrar um cliente (à mão ou pela importação do IXC) e
+**chamá-lo no WhatsApp** antes de ele escrever — pelo modelo da Meta no canal
+oficial, e por texto livre na API não-oficial. Desenho e as cinco lacunas
+medidas: `docs/superpowers/specs/2026-09-19-chamar-o-cliente-design.md`. Sem
+migration: tudo compõe peças que já existiam.
+
+Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts` (8 casos, em `SPECS_PARTE_3`).
+
+### Execução (2026-09-19): **PASS nos 8 casos**
+
+`e2e` no CI (`Run workflow` na branch, run 35442960641), Chromium real, Supabase
+local com o `baseline.sql` aplicado, app em produção (`next build` + `next start`).
+Parte 3: **89 passed (21,1 min)**; as três partes verdes.
+
+Não rodou na máquina do autor: o daemon do Docker parou de baixar imagens no meio
+da sessão — medido com controle, `docker pull hello-world` (13 KB) também não
+completou em 25 s, então não era o Supabase nem a rede do host. O CI tem Docker
+funcional, e é por isso que o `workflow_dispatch` existe.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J27.1 Contato sem conversa mostra **Chamar no WhatsApp** na lista, e o diálogo abre com o nome de quem se vai chamar | `[P0]` | **PASS** (5,3 s) |
+| J27.2 O diálogo diz o que o canal permite **antes** de escrever — campo de texto OU aviso de modelo obrigatório, nunca os dois | `[P0]` | **PASS** (12,3 s) |
+| J27.3 O botão de enviar fica travado sem conteúdo, destrava ao preencher e **volta a travar** ao apagar (controle positivo) | `[P0]` | **PASS** (29,2 s) |
+| J27.4 O dossiê do contato oferece começar quando não há conversa (antes devolvia nada) | `[P1]` | **PASS** (30,9 s) |
+| J27.5 A conversa nasce e o operador cai nela **mesmo se o envio não completar**; o motivo real volta em `erro_envio` | `[P0]` | **PASS** (30,4 s) |
+| J27.6 Chamar duas vezes reaproveita a MESMA conversa (o índice 1-para-1 não tem filtro de status; um insert daria 23505) | `[P0]` | **PASS** (27,9 s) |
+| J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **PASS** (28,5 s) |
+| J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **PASS** (29,4 s) |
+
+**A primeira execução reprovou 6 dos 8, e o defeito era do TESTE** — vale registrar
+porque é o argumento inteiro da doutrina em miniatura. `createContactHandler`
+devolve `{ contact, action }`, o helper lia `data.id`, e o `undefined` chegava ao
+`PATCH` seguinte como `invalid input syntax for type uuid` — um erro de banco, três
+camadas longe da causa. Os 2 casos que não usam o helper passaram já naquela
+rodada, e são justamente os que medem a rota nova e o isolamento entre
+organizações.
+
+Se a spec tivesse sido mesclada com o rótulo "não executada", ela entraria no
+repositório **quebrada**, e o próximo push na `main` acusaria um vermelho que se
+leria como regressão da feature.
+
+**Não medido:** envio real contra uma WABA (não há credencial neste ambiente, e o
+que a jornada prova é a decisão do operador, não o transporte); a tela em viewport
+de telefone; e o canal com hetero-restrição em tela — o ambiente E2E usa o canal de
+texto livre, então J27.2 exercitou o ramo livre e a exclusividade dos dois ramos,
+não o formulário de parâmetros renderizado. Esse formulário está preso por
+unidade (`tests/unit/chamar-o-cliente-primeiro.test.ts`, incluindo a derivação
+compartilhada com o montador do payload).
+
+### Um fato do produto que a spec teve de contornar — e que vale saber
+
+**`POST /api/v1/contacts` abre a conversa sozinho** quando o corpo traz telefone e
+a organização tem um canal vivo (`_handler.ts`, o `ensureConversation` best-effort
+logo depois do insert). O `PATCH` não faz isso: só o create tem esse ramo.
+
+Consequência para o produto, não só para o teste: o contato criado **pela tela**,
+com telefone, em geral já nasce com conversa — então o botão "Chamar no WhatsApp"
+aparece pouco nesse caminho. **Quem veio da importação é outra história**, e é o
+caso que originou esta feature: o importador não chama `ensureConversation` em
+lugar nenhum, então todo contato importado nasce sem conversa e o botão aparece.
+
+A spec cria o contato em dois passos (sem telefone, depois `PATCH`) justamente para
+reproduzir o estado do importado. Criar num `POST` só daria um contato que já tem
+conversa, e os casos mediriam a tela errada — a lista mostraria "Abrir conversa"
+onde a spec procura "Chamar no WhatsApp".
+
+### O que FOI medido, e como
+
+- **`pnpm test:unit`**: 929 de 930 arquivos verdes. 21 casos novos em
+  `tests/unit/chamar-o-cliente-primeiro.test.ts`. O único vermelho é
+  `leads-import-route` (11 casos), confirmado pré-existente rodando a suíte com
+  as mudanças removidas — é o vermelho local de macOS já conhecido.
+- **Os testes vigiam de verdade, provado por sabotagem** (não por eles
+  passarem): fazer `slotKey` prefixar o corpo, zerar os valores do seletor da
+  janela fechada e trocar o filtro de conexão por `.eq()` puro reprovam,
+  respectivamente, 1, 1 e 1 caso; reverter devolve o verde.
+- **`pnpm typecheck`**, **`pnpm lint`** (0 erros), **`pnpm lint:channels`**
+  (nenhum provider nomeado fora de `lib/channels/`) e **`pnpm build`** (compilou
+  em 41 s).
+
+### Três defeitos achados na revisão, antes de sair — e o que eles ensinam
+
+Nenhum dos três aparecia em typecheck, lint ou unitário de lógica. Os três
+teriam ido para produção com o gate verde.
+
+1. **`.omit()` em schema com `.refine()`** compila e falha ao importar, no Zod 4.
+   Derrubou 184 arquivos de teste em cascata — só apareceu porque a suíte
+   inteira foi rodada, e não os gates lembrados.
+2. **Client de sessão numa rota que chama `fn_service_begin`**, que o baseline
+   revoga de `authenticated`. Teria falhado em **100%** das chamadas.
+3. **Filtro `.eq("channel_session_id", …)`** escondendo todos os modelos do canal
+   oficial, porque o `syncTemplates` grava a coluna NULL — o defeito que este
+   trabalho conserta, invertido e apontado justamente para o canal do pedido.
+
+A lição comum: **os três só eram alcançáveis executando o caminho inteiro.** É
+exatamente o argumento da doutrina de QA Visual, e é por isso que a ausência da
+execução da spec acima é uma lacuna real, não uma formalidade.
+
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,
