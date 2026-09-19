@@ -81,7 +81,7 @@ export function JanelaFechadaAviso({
   const [escolhido, setEscolhido] = useState("");
   const [valores, setValores] = useState<Record<string, string>>({});
 
-  const { data } = useQuery({
+  const { data, isError: falhouAoPerguntar } = useQuery({
     // A chave inclui a conexão: sem isso, trocar de conversa entre canais
     // serviria a lista em cache do anterior, e o operador mandaria um modelo
     // que não existe na conta desta conversa.
@@ -146,7 +146,15 @@ export function JanelaFechadaAviso({
     <div className="border-t border-amber-300 bg-amber-50/60 px-4 py-3 dark:border-amber-800/60 dark:bg-amber-950/30">
       <p className="mb-2 text-xs text-amber-900 dark:text-amber-200">{motivo}</p>
 
-      {aprovados.length === 0 ? (
+      {falhouAoPerguntar ? (
+        // "Nenhum modelo aprovado" e "não consegui perguntar" levam a ações
+        // opostas — criar um modelo, ou tentar de novo. Colapsar as duas manda
+        // o operador criar um modelo que provavelmente já existe, que é a
+        // mesma afirmação falsa que este aviso passou a consertar.
+        <p className="text-xs text-amber-900/80 dark:text-amber-200/80">
+          {t("Não consegui carregar os modelos deste canal. Tente de novo em instantes.")}
+        </p>
+      ) : aprovados.length === 0 ? (
         // Sem modelo aprovado não há saída por aqui, e dizer isso é melhor que
         // um seletor vazio que se lê como "ainda não carregou".
         <p className="text-xs text-amber-900/80 dark:text-amber-200/80">

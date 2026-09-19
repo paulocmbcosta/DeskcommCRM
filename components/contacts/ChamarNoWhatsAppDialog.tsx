@@ -137,7 +137,11 @@ export function ChamarNoWhatsAppDialog({
     return (conexoes.find((c) => c.status === "WORKING") ?? conexoes[0]!).id;
   }, [conexaoEscolhida, conexoes]);
 
-  const { data: modelos, isLoading: carregandoModelos } = useQuery({
+  const {
+    data: modelos,
+    isLoading: carregandoModelos,
+    isError: falhouAoPerguntar,
+  } = useQuery({
     queryKey: ["modelos-para-chamar", conexaoId],
     enabled: open && !!conexaoId,
     queryFn: async () =>
@@ -149,6 +153,19 @@ export function ChamarNoWhatsAppDialog({
     staleTime: 30_000,
   });
 
+  /**
+   * ⚠️ O default do desconhecido é `false`, e por isso ele NUNCA pode ser
+   * usado sozinho.
+   *
+   * Se a pergunta "o que este canal permite?" falhar, `modelos` é `undefined`
+   * e isto vira `false` — que se lê como "pode escrever à vontade". Num canal
+   * oficial, seria a tela convidando o operador a redigir um texto livre que a
+   * plataforma vai recusar: a mesma classe de afirmação falsa que este diálogo
+   * existe para acabar, só que no outro sentido.
+   *
+   * Por isso todo ramo de render é guardado por `!falhouAoPerguntar`, e o erro
+   * tem superfície própria. Não saber não é o mesmo que poder.
+   */
   const exigeModelo = modelos?.exige_modelo ?? false;
   const disponiveis = useMemo(() => modelos?.modelos ?? [], [modelos]);
   const atual = disponiveis.find((m) => `${m.name}|${m.language}` === escolhido) ?? null;
@@ -186,9 +203,12 @@ export function ChamarNoWhatsAppDialog({
   }, [exigeModelo, texto, atual, valores]);
 
   const faltando = atual?.slots.filter((s) => !(valores[s.chave] ?? "").trim()) ?? [];
-  const podeEnviar = exigeModelo
-    ? !!atual && faltando.length === 0 && !!conexaoId
-    : texto.trim().length > 0 && !!conexaoId;
+  const podeEnviar =
+    !falhouAoPerguntar &&
+    !carregandoModelos &&
+    (exigeModelo
+      ? !!atual && faltando.length === 0 && !!conexaoId
+      : texto.trim().length > 0 && !!conexaoId);
 
   async function enviar() {
     if (!podeEnviar || enviando) return;
@@ -284,7 +304,16 @@ export function ChamarNoWhatsAppDialog({
             <p className="text-xs text-text-muted">{t("Verificando o que este canal permite…")}</p>
           )}
 
-          {!carregandoModelos && conexaoId && !exigeModelo && (
+          {falhouAoPerguntar && conexaoId && (
+            // Sem saber o que o canal permite, oferecer QUALQUER campo é um
+            // palpite — e o palpite errado manda texto livre por um canal que
+            // só aceita modelo. Melhor não oferecer nada e dizer por quê.
+            <p className="rounded-md border border-amber-300 bg-amber-50/60 px-3 py-2 text-xs text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200">
+              {t("Não consegui verificar o que este canal permite. Tente de novo em instantes.")}
+            </p>
+          )}
+
+          {!carregandoModelos && !falhouAoPerguntar && conexaoId && !exigeModelo && (
             <div className="space-y-1">
               <Label htmlFor="chamar-texto" className="text-xs">
                 {t("Mensagem")}
@@ -300,7 +329,7 @@ export function ChamarNoWhatsAppDialog({
             </div>
           )}
 
-          {!carregandoModelos && conexaoId && exigeModelo && (
+          {!carregandoModelos && !falhouAoPerguntar && conexaoId && exigeModelo && (
             <>
               <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-text-muted">
                 {t("Este canal só permite falar primeiro com um modelo aprovado. Depois que o cliente responder, a conversa fica livre por 24 horas.")}

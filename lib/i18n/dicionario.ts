@@ -6849,6 +6849,8 @@ export const DICIONARIO: Traducoes = {
   "Iniciar conversa com": { es: "Iniciar conversación con" },
   "Iniciar conversa no Inbox": { es: "Iniciar conversación en el Inbox" },
   "Chamar no WhatsApp": { es: "Llamar por WhatsApp" },
+  "Não consegui verificar o que este canal permite. Tente de novo em instantes.": { es: "No pude verificar qué permite este canal. Intente de nuevo en instantes." },
+  "Não consegui carregar os modelos deste canal. Tente de novo em instantes.": { es: "No pude cargar las plantillas de este canal. Intente de nuevo en instantes." },
   "Primeira mensagem para": { es: "Primer mensaje para" },
   "Enviar pelo número": { es: "Enviar desde el número" },
   "Nenhum número de WhatsApp conectado. Conecte um em Conexões para poder chamar clientes.": { es: "Ningún número de WhatsApp conectado. Conecte uno en Conexiones para poder llamar a clientes." },
