@@ -8,6 +8,35 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.32.0] — 2026-09-19
+
+### Adicionado
+
+- **Conectores — os dados do IXC (contrato, bloqueio, faturas, OS, conexão e sinal) aparecem ao lado da conversa** Provedor de internet que usa o **IXC** pode ligar o sistema ao CRM em
+  **Configurações › Conectores** (só administrador): informe o endereço do IXC e um
+  token de API — de preferência **só de leitura e dedicado a esta integração**. O
+  token é testado antes de ser salvo, fica cifrado e nunca volta a aparecer na tela.
+
+  Com o conector ligado, o painel direito da conversa ganha a aba **IXC**. O cliente
+  é identificado pelo telefone da conversa (e pelo CPF/CNPJ, quando ele escreve de
+  outro número), e o atendente vê, sem sair do atendimento:
+
+  - quem é o cliente e se está **bloqueado** (e por quê);
+  - o contrato, o plano e as parcelas em atraso;
+  - o **financeiro**: todas as faturas vencidas, a próxima a vencer e mais uma — com
+    o botão **Enviar**, que manda valor, vencimento, link do boleto e linha
+    digitável na conversa;
+  - a **conexão** (online/offline, IP, última queda) e o **sinal da ONU**;
+  - as **ordens de serviço** e os **atendimentos** abertos no IXC.
+
+  Nenhum dado do IXC é copiado para o CRM: tudo é lido na hora, e o CRM guarda apenas
+  qual cadastro do IXC corresponde a cada contato.
+
+  Quem não usa IXC não vê nada de novo: sem conector ligado, não há aba, chamada
+  externa nem linha no banco. ERP em rede interna (on-premise atrás de VPN) precisa
+  que o operador da instalação libere o host em `CONECTORES_HOSTS_PRIVADOS`; vazio,
+  que é o padrão, aceita só endereço público com https.
+
 ## [1.31.1] — 2026-09-19
 
 ### Corrigido
@@ -4945,7 +4974,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.0...HEAD
+[1.32.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.1...v1.32.0
 [1.31.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.1...v1.31.0
 [1.30.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.0...v1.30.1
