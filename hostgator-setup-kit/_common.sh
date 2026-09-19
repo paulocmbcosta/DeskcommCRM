@@ -579,6 +579,65 @@ pin_incompleto() {  # pin_incompleto [caminho do .env]
   printf '%s' "${faltando# }"
 }
 
+# Quais das três imagens o .env FIXA em algo que não é o alvo desta atualização?
+#
+# Existe porque "o código está na tag" não diz nada sobre o que RODA: quem roda é
+# a imagem, e a imagem é a que o `.env` manda o compose subir. Medido em produção
+# em 2026-09-19 (deploy da v1.32.0): repositório já em `v1.32.0`, `.env` fixado em
+# `:1.31.1`, e o `update.sh` respondeu "Nada a atualizar" com os três contêineres
+# na 1.31.1. A única sonda que havia era por DIGEST — o local contra o remoto da
+# MESMA referência —, e numa tag imutável isso é a imagem antiga comparada com ela
+# mesma. Só enxergava defasagem em canal móvel, que era como toda instalação
+# nascia quando a sonda foi escrita.
+#
+# Compara a REFERÊNCIA INTEIRA com a que `gravar_imagens` escreveria, e não só o
+# número depois dos dois-pontos. Motivo medido, não hipotético: uma VPS que veio
+# do repositório de origem tem `ghcr.io/<origem>/deskcommcrm:1.29.0`, e a
+# `v1.29.0` daqui é OUTRO produto (docs/runbooks/repositorio-proprio.md §5).
+# Comparar só o número responderia "em dia" com o produto alheio no ar.
+#
+# O que a versão NÃO decide, de propósito:
+#   - chave AUSENTE: vale o default do compose, que é um canal. Quem cuida dessa
+#     lacuna é `completar_pin_ausente`, com a versão que já está rodando.
+#   - canal móvel EXPLÍCITO (`latest`/`main`/`stable`, ou repositório sem tag, que
+#     é `:latest` implícito): é decisão de quem opera. E `latest` aqui é o topo da
+#     `main`, não a última release — fixá-la à força na versão da tag poderia ser
+#     um DOWNGRADE que ninguém pediu. Para canal, quem decide é o digest.
+#
+# Tudo o mais é "fixado em outra coisa" e conta — inclusive o ID de imagem LOCAL
+# que o rollback do `agent.sh` grava (`docker compose images -q`: sem repositório
+# e sem tag). Esse era o segundo estado em que o `update.sh` jurava "em dia" com o
+# app na versão anterior: o digest remoto de um ID local não existe, e sem remoto
+# a sonda antiga não forçava nada.
+#
+# Ecoa os serviços fora do alvo, separados por espaço. Vazio = a versão não acusa
+# ninguém (o que NÃO é o mesmo que "está em dia": falta o digest).
+imagens_fora_do_alvo() {  # imagens_fora_do_alvo <envfile> <versão alvo, sem o "v">
+  local envfile="${1:-.env}" alvo="${2:-}" svc chave repo img fora=""
+  [ -f "$envfile" ] || return 0
+  [ -n "$alvo" ] || return 0
+
+  for svc in app worker scheduler; do
+    # `case`, e não um mapa "CHAVE:svc:repo" partido por dois-pontos como em
+    # `completar_pin_ausente`: o repositório pode TER dois-pontos (registro com
+    # porta, num fork), e o corte devolveria metade do nome.
+    case "$svc" in
+      app)       chave=APP_IMAGE;       repo="$IMG_APP" ;;
+      worker)    chave=WORKER_IMAGE;    repo="$IMG_WORKER" ;;
+      scheduler) chave=SCHEDULER_IMAGE; repo="$IMG_SCHEDULER" ;;
+    esac
+    img="$(valor_do_env "$envfile" "$chave")"
+    if [ -z "$img" ]; then continue; fi                       # ausente: default do compose
+    if [ "$img" = "${repo}:${alvo}" ]; then continue; fi      # exatamente o que esta atualização gravaria
+    case "$(tag_da_imagem "$img")" in
+      latest|main|stable) continue ;;                         # canal escolhido: o digest decide
+      "") case "$img" in */*) continue ;; esac ;;             # repositório sem tag = :latest implícito
+    esac
+    fora="$fora $svc"
+  done
+  printf '%s' "${fora# }"
+}
+
 # Completa o pin AUSENTE no .env, com a versão que a imagem EM EXECUÇÃO declara.
 #
 # A regra que torna isto seguro: **só preenche lacuna, nunca sobrescreve valor

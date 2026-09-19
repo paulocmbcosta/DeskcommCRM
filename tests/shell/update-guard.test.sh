@@ -22,6 +22,16 @@
 #      agent.sh que podem acendê-lo (CONTIDA=2 vindo do `is_already_in_head`,
 #      e o fallback de "nenhuma tag conhecida + fetch falhou") — casos 8 e 9
 #      isolam cada uma, provado por sabotagem cirúrgica de cada linha.
+#   7. Código JÁ na tag nova + `.env` fixado na versão anterior NÃO é "nada a
+#      atualizar" (caso 12). Medido em produção em 2026-09-19: a sonda por digest
+#      compara a imagem fixada com ela mesma. O caso traz o próprio CONTROLE
+#      (12b), porque o dublê de `docker` calado faria a prova passar por
+#      vacuidade; e cinco sabotagens com previsão, uma por linha da regra:
+#        sem o 1º critério ............ 12a×4 12c×4 12d×2
+#        conferindo só o app .......... 12a×1 12c×4 12g×1
+#        comparando só o número ....... 12d×2
+#        canal móvel contando ......... 12e×2 12g×1
+#        sem o 2º critério (digest) ... 12f×2
 set -uo pipefail
 
 # O namespace das imagens publicadas, lido da FONTE (hostgator-setup-kit/_common.sh)
@@ -83,6 +93,24 @@ case " $* " in
   # devolver algo: com PREV_IMAGE vazio o rollback nem seria tentado, e o teste
   # do agente passaria mesmo com o defeito de volta.
   *" images "*) printf 'sha256:deadbeef\n' ;;
+  # O par que `image_desatualizada` compara: digest LOCAL e digest REMOTO de uma
+  # referência. Calado por padrão — é o que os casos 1 a 11 sempre viram, e sem
+  # digest local o script conclui "nem baixada ainda → atualizar". Esse silêncio
+  # é o motivo de o caso 12 precisar deste ramo: com ele, `image_desatualizada`
+  # responde "desatualizada" SEMPRE, e uma prova de "não pode dizer 'nada a
+  # atualizar'" ficaria verde por vacuidade, com ou sem a correção.
+  #
+  #   iguais     → local == remoto. NÃO é atalho do dublê: é o que o registro
+  #                responde DE VERDADE para uma tag imutável já baixada — a
+  #                imagem comparada com ela mesma, que é o defeito do caso 12.
+  #   diferentes → o remoto andou (canal móvel, ou republicação sem commit).
+  *" image inspect "*RepoDigests*)
+    [ -n "${DUBLE_DIGESTS:-}" ] && printf '%s@sha256:%s\n' "${3%:*}" "$(printf '%s' "$3" | cksum | cut -d' ' -f1)" ;;
+  *" buildx imagetools inspect "*)
+    case "${DUBLE_DIGESTS:-}" in
+      iguais)     printf 'Name: %s\nDigest: sha256:%s\n' "$4" "$(printf '%s' "$4" | cksum | cut -d' ' -f1)" ;;
+      diferentes) printf 'Name: %s\nDigest: sha256:republicada\n' "$4" ;;
+    esac ;;
 esac
 exit 0
 STUB
@@ -481,6 +509,144 @@ R="$( printf "APP_IMAGE=${NS}/deskcommcrm:1.3.0\n" > "$PIN_DIR/.env"
       cd "$PIN_DIR" && PATH="$PIN_DIR/bin:$PATH" DUBLE_VERSION="<no value>" bash -c \
         ". '$KIT_DIR_TESTE/_common.sh'; completar_pin_ausente .env" 2>/dev/null || true )"
 check "imagem sem label de versão → não inventa pin" test -z "$R"
+
+echo "── 12. Código já na tag nova + .env fixado na versão anterior: NÃO é 'nada a atualizar'"
+# Medido em produção em 2026-09-19, no deploy da v1.32.0: com o repositório já em
+# `git checkout v1.32.0` e o `.env` fixado em `:1.31.1` (pull_policy=missing), o
+# `update.sh` respondeu "Você já está na versão mais recente. Nada a atualizar." e
+# saiu com 0 — com os três contêineres na 1.31.1.
+#
+# A causa: `image_desatualizada` comparava o digest LOCAL de `$APP_IMAGE` com o
+# digest REMOTO da MESMA referência. Isso só enxerga defasagem em tag MÓVEL. Desde
+# que a instalação nasce fixada em número de versão, a comparação é a imagem
+# antiga contra ela mesma — sempre "em dia". O caso que a função existe para
+# cobrir (repositório novo, imagem velha) tinha deixado de ser coberto.
+#
+#
+# `set +e` de propósito. O caso 10 faz `source` do `_common.sh` DENTRO deste
+# shell, e ele abre com `set -euo pipefail` — a partir dali o `-e` vale aqui
+# também. Os casos 10 e 11 não executam o `update.sh`; este executa. Com o `-e`
+# ligado, um `update.sh` que saísse != 0 encerraria este arquivo na linha do
+# `run_update`, ANTES do veredito: sem "FALHOU", sem contagem, só um exit code.
+set +e
+
+# Fixture própria, com o `.env` FORA do git: o `$PROJ` lá de cima versiona o
+# `.env`, e cada `git checkout` dele troca o arquivo por baixo do caso.
+PINADA="$WORK/pinada"
+mkdir -p "$PINADA/supabase"
+cp -R "$PROJ/hostgator-setup-kit" "$PINADA/"
+printf 'select 1;\n' > "$PINADA/supabase/baseline.sql"
+# shellcheck disable=SC2016  # o ${APP_IMAGE} é literal DENTRO do compose
+printf 'services:\n  app:\n    image: ${APP_IMAGE:-x}\n' > "$PINADA/docker-compose.prod.yml"
+printf '.env\n' > "$PINADA/.gitignore"
+cd "$PINADA" || exit 1
+git init --quiet; git config user.email t@t.t; git config user.name t
+git add -A; git commit --quiet -m "v1.1.0"; git tag v1.1.0
+echo nova > nova.txt; git add -A; git commit --quiet -m "v1.2.0"; git tag v1.2.0
+# O que o operador fez à mão ANTES de rodar o update.sh.
+git -c advice.detachedHead=false checkout --quiet v1.2.0
+
+env_das_tres() {  # env_das_tres <app> <worker> <scheduler> — referências INTEIRAS; vazio = chave ausente
+  {
+    [ -n "$1" ] && printf 'APP_IMAGE=%s\nAPP_PULL_POLICY=missing\n' "$1"
+    [ -n "$2" ] && printf 'WORKER_IMAGE=%s\nWORKER_PULL_POLICY=missing\n' "$2"
+    [ -n "$3" ] && printf 'SCHEDULER_IMAGE=%s\nSCHEDULER_PULL_POLICY=missing\n' "$3"
+    printf 'SUPABASE_DB_URL=postgresql://x/y\nNEXT_PUBLIC_APP_URL=https://crm.exemplo.com.br\n'
+    printf 'INTERNAL_SECRET=segredo\nNUVEMSHOP_OAUTH_ENCRYPTION_KEY=chave\n'
+  } > .env
+  chmod 600 .env
+}
+tres_em() {  # tres_em <versão> → as três chaves do .env estão nessa versão, no namespace NOSSO
+  grep -q "^APP_IMAGE=${NS}/deskcommcrm:$1$" .env \
+    && grep -q "^WORKER_IMAGE=${NS}/deskcomm-worker:$1$" .env \
+    && grep -q "^SCHEDULER_IMAGE=${NS}/deskcomm-scheduler:$1$" .env
+}
+nada_a_atualizar() { grep -q "Nada a atualizar" "$OUTFILE"; }
+nao_disse_nada_a_atualizar() { ! nada_a_atualizar; }
+
+# Em TODO este bloco o registro responde: digest local == digest remoto. É o que
+# ele responde de verdade para uma tag imutável já baixada.
+export DUBLE_DIGESTS=iguais
+
+echo "   12a. o caso da produção: as três na versão anterior"
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+check "fixture: o código JÁ está na tag nova" test "$(git describe --tags --exact-match HEAD)" = "v1.2.0"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "foi adiante: rodou o backup" test -f "$BACKUP_MARK"
+check "termina com sucesso" test "$RC" -eq 0
+check "as três imagens do .env foram para a versão do código" tres_em 1.2.0
+check "diz QUAL imagem estava para trás, em vez de um 'imagem antiga' genérico" \
+  grep -q "app worker scheduler" "$OUTFILE"
+
+echo "   12b. CONTROLE: com as três na versão certa, o MESMO dublê diz 'nada a atualizar'"
+# Sem este controle o 12a não prova nada: bastaria o dublê de digest estar mudo
+# (ou quebrado) para `image_desatualizada` responder "desatualizada" sempre, e o
+# 12a passar com o defeito de volta. Aqui o `.env` é o que o 12a acabou de gravar.
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "sai com 0" test "$RC" -eq 0
+check "e não rodou backup nenhum" test ! -f "$BACKUP_MARK"
+
+echo "   12c. só UMA das três para trás já basta (o app na versão certa não absolve o worker)"
+env_das_tres "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.2.0"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "foi adiante: rodou o backup" test -f "$BACKUP_MARK"
+check "o worker alcançou as outras duas" tres_em 1.2.0
+check "nomeia só quem estava para trás" grep -q "outra imagem: worker\." "$OUTFILE"
+
+echo "   12d. mesmo NÚMERO de versão em OUTRO namespace não é a nossa imagem"
+# O caso de docs/runbooks/repositorio-proprio.md §5: a VPS que veio do repositório
+# de origem tem `ghcr.io/<origem>/deskcommcrm:1.29.0`, e a `v1.29.0` daqui é outro
+# produto. Comparar só o número responderia "em dia" com o produto alheio no ar.
+env_das_tres "ghcr.io/outro-dono/deskcommcrm:1.2.0" "ghcr.io/outro-dono/deskcomm-worker:1.2.0" "ghcr.io/outro-dono/deskcomm-scheduler:1.2.0"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "regrava as três no namespace deste repositório" tres_em 1.2.0
+
+echo "   12e. quem segue um CANAL de propósito não é fixado à força"
+# `latest` é o topo da `main`, não a última release: fixar essa instalação na
+# versão da tag poderia ser um DOWNGRADE que ninguém pediu. Para canal móvel a
+# versão não decide nada — quem decide é o digest, como sempre foi.
+env_das_tres "${NS}/deskcommcrm:latest" "${NS}/deskcomm-worker:latest" "${NS}/deskcomm-scheduler:latest"
+run_update
+check "com o digest em dia, responde 'Nada a atualizar'" nada_a_atualizar
+check "e o canal escolhido continua no .env, intacto" grep -q "^APP_IMAGE=${NS}/deskcommcrm:latest$" .env
+
+echo "   12f. o segundo critério sobrevive: canal móvel cujo digest andou ainda atualiza"
+export DUBLE_DIGESTS=diferentes
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "foi adiante: rodou o backup" test -f "$BACKUP_MARK"
+unset DUBLE_DIGESTS
+
+echo "   12g. a regra, isolada do resto do script"
+# shellcheck source=/dev/null
+command -v imagens_fora_do_alvo >/dev/null || { echo "  ✗ imagens_fora_do_alvo não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+fora_caso() {  # fora_caso <descrição> <alvo> <esperado> <app> <worker> <scheduler>
+  local r
+  env_das_tres "$4" "$5" "$6"
+  r="$(imagens_fora_do_alvo .env "$2" || true)"
+  check "$1" test "$r" = "$3"
+}
+fora_caso "as três no alvo → silêncio" 1.2.0 "" \
+  "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+fora_caso "as três na versão anterior → acusa as três" 1.2.0 "app worker scheduler" \
+  "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+fora_caso "1.2.0 não é prefixo de 1.2.01: compara a referência, não um pedaço dela" 1.2.0 "app" \
+  "${NS}/deskcommcrm:1.2.01" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+# O que o rollback do agent.sh deixa: `docker compose images -q` devolve o ID da
+# imagem LOCAL, sem repositório e sem tag. Não é canal e não é o alvo — é o app
+# rodando a versão anterior com o código na nova, e antes a resposta era "em dia".
+fora_caso "ID local deixado por um rollback → acusa (não é canal, nem é o alvo)" 1.2.0 "app" \
+  "0f3a9c1d5e7b" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+fora_caso "chave AUSENTE → a versão não decide (vale o default do compose, que é canal)" 1.2.0 "" \
+  "${NS}/deskcommcrm:1.2.0" "" ""
+fora_caso "canal móvel explícito (:stable) → a versão não decide" 1.2.0 "" \
+  "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:stable" "${NS}/deskcomm-scheduler:stable"
+fora_caso "repositório SEM tag é :latest implícito → canal, a versão não decide" 1.2.0 "" \
+  "${NS}/deskcommcrm" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
 
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi
 exit $((FAILS > 0))

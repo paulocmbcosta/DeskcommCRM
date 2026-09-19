@@ -56,7 +56,30 @@ CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 # Também cobre imagem republicada sem commit novo (rebuild de segurança).
 # (Veio da `main`; a versão por tag cai exatamente na mesma armadilha, porque a
 # comparação de tags também fica satisfeita com a imagem velha no lugar.)
+#
+# DOIS critérios, nesta ordem, porque cada um é cego onde o outro enxerga:
+#
+#  1. O que o `.env` FIXA (`imagens_fora_do_alvo`, em _common.sh). É o critério
+#     que vale para a instalação de hoje, que nasce e permanece fixada em número
+#     de versão. Sem rede, sem registro: lê o arquivo que o compose vai ler.
+#  2. O DIGEST, local contra remoto. É o critério de canal móvel e de imagem
+#     republicada sem commit novo — casos em que a referência é a mesma e só o
+#     conteúdo mudou.
+#
+# Até 2026-09-19 só existia o segundo, e ele compara `$APP_IMAGE` com ELA MESMA:
+# local e remoto da mesma referência. Numa tag imutável os dois são iguais por
+# definição, então o caso que este bloco existe para cobrir — repositório novo,
+# imagem velha — respondia "Nada a atualizar" e saía com 0. Medido no deploy da
+# v1.32.0: código em `v1.32.0`, `.env` em `:1.31.1`, três contêineres na 1.31.1.
+# Quem vigia: tests/shell/update-guard.test.sh, caso 12.
+IMAGENS_FORA_DO_ALVO=""
 image_desatualizada() {
+  # 1º critério. Guardado numa global porque é com ela que a mensagem lá embaixo
+  # diz QUAL imagem ficou para trás, em vez de um "imagem antiga" genérico.
+  IMAGENS_FORA_DO_ALVO="$(imagens_fora_do_alvo .env "${TARGET_TAG#v}")"
+  if [ -n "$IMAGENS_FORA_DO_ALVO" ]; then return 0; fi
+
+  # 2º critério.
   # O fallback vem de `IMG_APP` (_common.sh, sourceado no topo deste arquivo) e não de
   # um literal: num fork com namespace próprio, o literal apontava para a
   # imagem do UPSTREAM, e um `.env` sem APP_IMAGE comparava o digest local
@@ -103,7 +126,10 @@ if [ -z "$FORCE" ] && [ -z "$MESMA_TAG" ]; then
        bash hostgator-setup-kit/update.sh --to $TARGET_TAG --force" ;;
   esac
 fi
-if [ -n "$MESMA_TAG" ]; then
+if [ -n "$MESMA_TAG" ] && [ -n "$IMAGENS_FORA_DO_ALVO" ]; then
+  c_ylw "O código já está na $TARGET_TAG, mas o .env ainda manda rodar outra imagem: ${IMAGENS_FORA_DO_ALVO}."
+  c_ylw "Vou trazer as três para a ${TARGET_TAG#v}."
+elif [ -n "$MESMA_TAG" ]; then
   c_ylw "O código já está na $TARGET_TAG, mas o app está rodando uma imagem antiga. Vou atualizar a imagem."
 else
   c_ylw "Vou atualizar para a versão $TARGET_TAG com segurança."
