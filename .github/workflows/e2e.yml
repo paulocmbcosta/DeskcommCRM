@@ -667,6 +667,7 @@ jobs:
         qa-equipe-pinta-na-hora.spec.ts
         qa-sugestao-rejeitada-e-motivo.spec.ts
         times-de-atendimento.spec.ts
+        chamar-o-cliente-primeiro.spec.ts
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts
