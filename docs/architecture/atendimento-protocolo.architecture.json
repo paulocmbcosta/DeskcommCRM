@@ -36,7 +36,9 @@
     { "id": "followup-retomado", "lane": "entrada", "col": 4, "type": "backend", "label": "Follow-up em paused_handoff — consumidor de ai.handoff_resolved" },
     { "id": "api-fechados", "lane": "api", "col": 5, "type": "backend", "label": "GET /atendimentos?status=closed — a lista da aba Fechadas (e a contagem dela em /conversations/counts)" },
     { "id": "aba-fechadas", "lane": "tela", "col": 4, "type": "frontend", "label": "AtendimentosFechadosList — a aba Fechadas lista ATENDIMENTOS, com a marca 'o cliente voltou'" },
-    { "id": "nome-do-usuario", "lane": "banco", "col": 9, "type": "backend", "label": "fn_nome_do_usuario (0270) — o nome cadastrado; na falta, o início do e-mail" }
+    { "id": "nome-do-usuario", "lane": "banco", "col": 9, "type": "backend", "label": "fn_nome_do_usuario (0270) — o nome cadastrado; na falta, o início do e-mail" },
+    { "id": "janela", "lane": "api", "col": 6, "type": "backend", "label": "lib/atendimento/janela-do-atendimento.ts — a régua ÚNICA: [início deste, início do próximo)" },
+    { "id": "api-notas", "lane": "api", "col": 7, "type": "backend", "label": "GET /conversations/[id]/notes?atendimento_id= — a nota pertence ao atendimento em que foi escrita" }
   ],
   "edges": [
     { "from": "ingestao", "to": "conversa", "label": "nasce ou reabre (fn_service_inbound)" },
@@ -71,6 +73,10 @@
     { "from": "aba-fechadas", "to": "thread", "label": "clicar abre AQUELE atendimento, recortado e travado" },
     { "from": "nome-do-usuario", "to": "trigger", "label": "autor do evento, quem atendia ao fechar, e os nomes do payload de assumida/liberada" },
     { "from": "nome-do-usuario", "to": "atendimentos", "label": "backfill idempotente de closed_by_name e assigned_to_user_name gravados em branco" },
-    { "from": "nome-do-usuario", "to": "eventos", "label": "backfill idempotente de actor_name gravado em branco" }
+    { "from": "nome-do-usuario", "to": "eventos", "label": "backfill idempotente de actor_name gravado em branco" },
+    { "from": "atendimentos", "to": "janela", "label": "started_at de cada episódio da conversa" },
+    { "from": "janela", "to": "api-mensagens", "label": "recorta por sent_at" },
+    { "from": "janela", "to": "api-notas", "label": "recorta por created_at — a mesma janela" },
+    { "from": "api-notas", "to": "thread", "label": "notas do episódio, intercaladas com as mensagens dele" }
   ]
 }

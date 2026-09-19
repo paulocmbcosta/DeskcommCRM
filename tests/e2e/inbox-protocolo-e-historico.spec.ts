@@ -24,7 +24,10 @@
  *      passa pela triagem de novo, em vez de cair na fila da Cobrança;
  *   6. a aba Fechadas lista ATENDIMENTOS: o que foi encerrado continua lá depois
  *      que o cliente volta e a conversa reabre — contra o PostgREST de verdade,
- *      que é onde os filtros embutidos (`conversations.tags`) podem falhar.
+ *      que é onde os filtros embutidos (`conversations.tags`) podem falhar;
+ *   7. a NOTA INTERNA pertence ao atendimento em que foi escrita: a do primeiro
+ *      não aparece no atendimento novo, e a do novo não aparece ao abrir o
+ *      antigo — as duas escritas PELO COMPOSER, como o atendente faz.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -59,6 +62,18 @@ async function sql(texto: string, valores: unknown[] = []): Promise<void> {
   } finally {
     await cliente.end();
   }
+}
+
+const NOTA_DO_PRIMEIRO = "Nota do financeiro: enviada a segunda via por e-mail";
+const NOTA_DO_SEGUNDO = "Nota do suporte: técnico agendado para quinta";
+
+/** Escreve uma nota interna PELO COMPOSER — o caminho de quem atende, não o da API. */
+async function escreverNotaInterna(page: Page, texto: string): Promise<void> {
+  await page.getByRole("button", { name: "Nota interna", exact: true }).click();
+  const campo = page.getByLabel("Mensagem", { exact: true });
+  await campo.fill(texto);
+  await campo.press("Enter");
+  await expect(page.getByTestId("chat-thread")).toContainText(texto);
 }
 
 async function login(page: Page, email: string, password: string): Promise<void> {
@@ -228,6 +243,7 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     // ─── 3. Assumir e fechar; a linha do tempo conta, com autor ─────────────
     await page.getByRole("button", { name: "Assumir", exact: true }).click();
     await expect(page.getByTestId("comando-da-conversa")).toContainText("Juliana Teste");
+    await escreverNotaInterna(page, NOTA_DO_PRIMEIRO);
     page.once("dialog", (d) => void d.accept());
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
     await expect(page.getByRole("button", { name: "Reabrir" })).toBeVisible();
@@ -287,6 +303,12 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     const thread = page.getByTestId("chat-thread");
     await expect(thread).toContainText("Voltei, agora é sobre a instalação");
     await expect(thread).not.toContainText("Quero a segunda via do boleto");
+    // A NOTA INTERNA segue a mesma janela das mensagens: a que o Financeiro
+    // escreveu no atendimento anterior não entra no atendimento novo. Era o
+    // defeito: as mensagens sumiam e a nota ficava, contando a história velha.
+    await expect(thread).not.toContainText(NOTA_DO_PRIMEIRO);
+    await escreverNotaInterna(page, NOTA_DO_SEGUNDO);
+    await page.screenshot({ path: `${evidence}/04c-nota-so-do-atendimento-novo.png` });
 
     // ─── 5. O histórico: abrir o atendimento anterior ───────────────────────
     await page.getByTestId("painel-aba-historico").click();
@@ -306,6 +328,9 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await expect(aviso).toContainText(primeiro);
     await expect(thread).toContainText("Quero a segunda via do boleto");
     await expect(thread).not.toContainText("Voltei, agora é sobre a instalação");
+    // …e as notas viram junto: a do atendimento antigo aparece, a de hoje não.
+    await expect(thread).toContainText(NOTA_DO_PRIMEIRO);
+    await expect(thread).not.toContainText(NOTA_DO_SEGUNDO);
     // As ações agem sobre a conversa de HOJE: em cima de um atendimento antigo
     // elas somem, para ninguém fechar o atual achando que mexia no anterior.
     await expect(page.getByTestId("acoes-da-conversa")).toBeHidden();
@@ -316,6 +341,8 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await aviso.getByRole("button", { name: "Voltar ao atendimento atual" }).click();
     await expect(aviso).toHaveCount(0);
     await expect(thread).toContainText("Voltei, agora é sobre a instalação");
+    await expect(thread).toContainText(NOTA_DO_SEGUNDO);
+    await expect(thread).not.toContainText(NOTA_DO_PRIMEIRO);
 
     // ─── 6. A busca pelo protocolo ANTIGO, de outra aba ─────────────────────
     await page.goto("/app/inbox?filter=mine");
@@ -387,6 +414,8 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await expect(page.getByTestId("aviso-atendimento-antigo")).toContainText(primeiro);
     await expect(page.getByTestId("chat-thread")).toContainText("Quero a segunda via do boleto");
     await expect(page.getByTestId("chat-thread")).not.toContainText("Voltei, agora é sobre a instalação");
+    await expect(page.getByTestId("chat-thread")).toContainText(NOTA_DO_PRIMEIRO);
+    await expect(page.getByTestId("chat-thread")).not.toContainText(NOTA_DO_SEGUNDO);
     await expect(encerrado).toHaveAttribute("aria-current", "true");
     // A ficha é a do atendimento que está na tela: o time é o da Cobrança, que o
     // encerrou — a conversa, hoje, está sem time, e não é dela que a ficha fala.
