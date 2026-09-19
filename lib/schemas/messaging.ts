@@ -199,6 +199,36 @@ export const openConversationWithContactSchema = z
 export type OpenConversationWithContactInput = z.infer<typeof openConversationWithContactSchema>;
 
 /**
+ * POST /conversations/iniciar — falar primeiro com quem nunca escreveu.
+ *
+ * Reusa `sendMessageSchema` para a mensagem, sem o `conversation_id`: ela ainda
+ * não existe, e é justamente isso que esta rota resolve. Repetir os campos aqui
+ * faria a segunda declaração divergir da primeira no primeiro tipo novo — que é
+ * o defeito que `template_values` já custou uma vez.
+ *
+ * `channel_session_id` é OBRIGATÓRIO aqui, ao contrário de `open-with-contact`.
+ * A diferença é de propósito: ali a conexão vem do cartão que originou o
+ * contato, e há uma resposta certa; aqui quem fala primeiro ESCOLHE por qual
+ * número o cliente vai ver a mensagem chegar. Deixar o sistema escolher
+ * (`sessaoProntaParaEnvio` pega "qualquer uma viva") faria a apresentação sair
+ * por um número desconhecido — e o cliente não tem como saber quem é.
+ */
+export const iniciarConversaSchema = z
+  .object({
+    channel_session_id: z.string().uuid(),
+    contact_id: z.string().uuid().optional(),
+    phone_number: z.string().min(8).max(32).optional(),
+    name: z.string().trim().min(1).max(200).optional(),
+    mensagem: sendMessageSchema.omit({ conversation_id: true }),
+  })
+  .refine((d) => !!d.contact_id || !!d.phone_number?.trim(), {
+    message: "Informe contact_id ou phone_number.",
+    path: ["contact_id"],
+  });
+
+export type IniciarConversaRequest = z.infer<typeof iniciarConversaSchema>;
+
+/**
  * Estados TERMINAIS: atendimento encerrado; nova entrada válida pode reabrir.
  *
  * Vive aqui, e não espalhado em cada `.not(...)`, porque "acabou" é uma decisão
