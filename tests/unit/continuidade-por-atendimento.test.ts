@@ -23,11 +23,17 @@
  * ─── Por que os chamados seguem o CHAMADO, e não o horário do evento ────────
  *
  * Um chamado aberto na segunda pode ser respondido na quarta. O produto já
- * decidiu o que isso significa: `app/api/v1/ai/cases/[id]/reply/route.ts`
- * registra a resposta como `service_stale` — "fica registrada, mas não altera o
- * atendimento novo" — e abre aviso na Central. Recortar o EVENTO pelo horário
- * dele poria essa mesma resposta no resumo, contradizendo a regra que já existe.
- * O chamado pertence ao atendimento em que foi ABERTO; os eventos vão com ele.
+ * decidiu o PRINCÍPIO: `app/api/v1/ai/cases/[id]/reply/route.ts` registra essa
+ * resposta como `service_stale` — "fica registrada, mas não altera o atendimento
+ * novo" — e abre aviso na Central. Recortar o EVENTO pelo horário dele poria essa
+ * mesma resposta no resumo. O chamado pertence ao atendimento em que foi ABERTO;
+ * os eventos vão com ele.
+ *
+ * É o mesmo princípio, NÃO a mesma régua: a rota mede por fronteira de serviço
+ * (`service_revision` + demanda), que também muda DENTRO de um atendimento — troca
+ * de demanda, "Reabrir" pelo atendente. Nesses casos a resposta é `service_stale`
+ * para a rota e segue no resumo, porque o atendimento é o mesmo. Aqui vale a
+ * janela do atendimento, que é a unidade de "começa do zero".
  *
  * ─── O dublê APLICA os filtros ──────────────────────────────────────────────
  *
@@ -227,6 +233,8 @@ describe("devolvida na quarta, a IA lê a quarta — o atendimento novo começa 
     expect(c.houveAtendimentoHumano).toBe(false);
     expect(c.resumo).toBe("");
     expect(c.pendenciaComOCliente).toBeNull();
+    // Aqui a leitura FUNCIONOU e não havia nada: não é o mesmo que janela ilegível.
+    expect(c.leituraFalhou).toBe(false);
   });
 });
 
@@ -261,8 +269,19 @@ describe("as guardas", () => {
     expect(c.houveAtendimentoHumano).toBe(false);
     expect(c.resumo).toBe("");
     expect(c.notas).toEqual([]);
+    // "Não li" e "não havia nada" são respostas diferentes — quem chama grava
+    // isso no audit, em vez de registrar como fato que a equipe não fez nada.
+    expect(c.leituraFalhou).toBe(true);
     expect(erroLogado).toHaveBeenCalledTimes(1);
     expect(erroLogado.mock.calls[0]?.[1]).toMatchObject({ conversation_id: CONV, motivo: "erro_de_leitura" });
+  });
+
+  it("o vazio devolvido é de quem o recebe — mexer nele não contamina a próxima leitura", async () => {
+    const banco = () => bancoEmMemoria(semanaInteira(), { erroEm: "atendimentos" });
+    const primeira = await lerContinuidadeHumana(banco(), ORG, CONV);
+    primeira.notas.push({ autor: null, texto: "intrusa", quando: QUA });
+
+    expect((await lerContinuidadeHumana(banco(), ORG, CONV)).notas).toEqual([]);
   });
 
   it("o recorte não afrouxa o isolamento: nota de OUTRA organização, dentro da janela, não entra", async () => {

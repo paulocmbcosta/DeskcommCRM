@@ -136,8 +136,11 @@ export const crmGetHumanCase: McpToolDefinition<typeof chamadoInputShape> = {
   name: "crm_get_human_case",
   description:
     "Detalhe de um caso humano + timeline completa (eventos com actor_kind, human_action e o " +
-    "texto escrito). Inclui `human_continuity`: o resumo pronto do que a pessoa decidiu nesta " +
-    "conversa — use ele para retomar sem pedir de novo o que já foi combinado.",
+    "texto escrito). Inclui `human_continuity`: o resumo pronto do que a pessoa decidiu NO " +
+    "ATENDIMENTO EM CURSO desta conversa — use ele para retomar sem pedir de novo o que já foi " +
+    "combinado. Atendimento novo começa do zero: se o caso pedido é de um atendimento anterior, a " +
+    "timeline dele vem completa, mas `human_continuity` não o inclui. `read_failed: true` = o " +
+    "resumo não pôde ser lido (não é o mesmo que não haver registro).",
   inputSchema: chamadoInputShape,
   category: "read",
   requiresRole: "agent",
@@ -158,6 +161,7 @@ export const crmGetHumanCase: McpToolDefinition<typeof chamadoInputShape> = {
         summary: continuidade.resumo,
         pending_with_customer: continuidade.pendenciaComOCliente,
         decisions: continuidade.decisoes,
+        read_failed: continuidade.leituraFalhou,
       },
     };
   },
@@ -326,10 +330,13 @@ export const crmResumeAiAttendance: McpToolDefinition<typeof retomarInputShape> 
         pending_with_customer: resultado.continuidade.pendenciaComOCliente,
         decisions: resultado.continuidade.decisoes,
         notes: resultado.continuidade.notas,
+        read_failed: resultado.continuidade.leituraFalhou,
       },
       next_action: resultado.continuidade.houveAtendimentoHumano
         ? "Retome citando o que a pessoa combinou com o cliente — o resumo já está no contexto do próximo turno."
-        : "Atendimento devolvido; não houve registro humano nesta conversa.",
+        : resultado.continuidade.leituraFalhou
+          ? "Atendimento devolvido, mas o registro humano deste atendimento NÃO pôde ser lido — não conclua que não houve; consulte crm_get_human_case."
+          : "Atendimento devolvido; não houve registro humano neste atendimento.",
     };
   },
 };

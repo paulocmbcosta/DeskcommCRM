@@ -37,6 +37,12 @@
  *     (`app/api/v1/ai/cases/[id]/reply/route.ts`): "fica registrada, mas não
  *     altera o atendimento novo". Recortar o evento pelo horário dele poria no
  *     resumo a resposta que aquela regra decidiu não repassar.
+ *
+ * É o mesmo PRINCÍPIO daquela rota, não a mesma régua. Ela mede por fronteira de
+ * serviço (`service_revision` + demanda), que também muda DENTRO de um
+ * atendimento — troca de demanda, "Reabrir" pelo atendente. Nesses casos a
+ * resposta é `service_stale` lá e segue no resumo aqui, porque o atendimento é o
+ * mesmo. A unidade de "começa do zero" é o atendimento; por isso a janela.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -84,6 +90,12 @@ export interface ContinuidadeHumana {
   pendenciaComOCliente: string | null;
   /** O texto que o agente lê. Vazio quando não houve atendimento humano. */
   resumo: string;
+  /**
+   * true = a janela do atendimento não pôde ser lida e NADA foi consultado.
+   * "Não li" e "não havia nada" devolvem os mesmos campos vazios; sem isto, quem
+   * chama grava no audit, como fato, que a equipe não registrou nada.
+   */
+  leituraFalhou: boolean;
 }
 
 /** Teto por superfície: o resumo entra num prompt, e prompt tem orçamento. */
@@ -95,14 +107,20 @@ const ACAO_LEGIVEL: Record<string, string> = {
   escalate: "escalou para outra pessoa",
 };
 
-export const CONTINUIDADE_VAZIA: ContinuidadeHumana = {
-  houveAtendimentoHumano: false,
-  decisoes: [],
-  notas: [],
-  chamados: [],
-  pendenciaComOCliente: null,
-  resumo: "",
-};
+/** Sempre um objeto NOVO: devolver uma constante entregaria arrays compartilhados a quem chama. */
+function continuidadeVazia(leituraFalhou: boolean): ContinuidadeHumana {
+  return {
+    houveAtendimentoHumano: false,
+    decisoes: [],
+    notas: [],
+    chamados: [],
+    pendenciaComOCliente: null,
+    resumo: "",
+    leituraFalhou,
+  };
+}
+
+export const CONTINUIDADE_VAZIA: ContinuidadeHumana = continuidadeVazia(false);
 
 interface CaseRow {
   id: string;
@@ -151,7 +169,7 @@ export async function lerContinuidadeHumana(
       motivo: janela.motivo,
       ...(janela.motivo === "erro_de_leitura" ? { detalhe: janela.detalhe } : {}),
     });
-    return CONTINUIDADE_VAZIA;
+    return continuidadeVazia(true);
   }
 
   let chamadosDaJanela = supabase
@@ -229,6 +247,7 @@ export async function lerContinuidadeHumana(
     resumo: houveAtendimentoHumano
       ? montarResumo({ decisoes, notas, pendenciaComOCliente })
       : "",
+    leituraFalhou: false,
   };
 }
 

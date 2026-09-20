@@ -225,6 +225,9 @@ export async function devolverAtendimentoAoAgente(
       houve_atendimento_humano: continuidade.houveAtendimentoHumano,
       decisoes: continuidade.decisoes.length,
       notas: continuidade.notas.length,
+      // "Não li" ≠ "não havia nada": sem isto o audit afirmaria, como fato, que a
+      // equipe não registrou nada — quando a janela do atendimento é que não abriu.
+      continuidade_ilegivel: continuidade.leituraFalhou,
     },
   });
 

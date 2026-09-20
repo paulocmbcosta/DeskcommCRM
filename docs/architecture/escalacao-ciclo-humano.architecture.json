@@ -882,8 +882,8 @@
       "items": [
         "a conversa é UMA por cliente e canal; o atendimento é o episódio dentro dela (0266). `lerContinuidadeHumana` lia a conversa INTEIRA: a nota 'enviei a 2ª via do boleto', do Financeiro encerrado na segunda, entrava como 'o que o cliente já considera combinado' na devolução do Suporte da quarta",
         "o pior vazamento era a PENDÊNCIA: o último `need_lead_info` da conversa vira `next_action` do checkpoint — o agente AGIRIA sobre um pedido de outro protocolo",
-        "a decisão segue o CHAMADO, não o próprio horário: chamado da segunda respondido na quarta já é `service_stale` em `app/api/v1/ai/cases/[id]/reply/route.ts` ('fica registrada, mas não altera o atendimento novo'). Recortar o evento pelo horário dele poria no resumo a resposta que aquela regra decidiu não repassar",
-        "janela ilegível = continuidade VAZIA + `logger.error`. Cair em 'sem recorte' entregaria à IA exatamente o que o recorte segura; voltar sem o rastro é degradação DITA, não silêncio",
+        "a decisão segue o CHAMADO, não o próprio horário: chamado da segunda respondido na quarta já é `service_stale` em `app/api/v1/ai/cases/[id]/reply/route.ts` ('fica registrada, mas não altera o atendimento novo'). Recortar o evento pelo horário dele poria no resumo a resposta que aquela regra decidiu não repassar. É o mesmo PRINCÍPIO, não a mesma régua: a rota mede por fronteira de serviço (`service_revision` + demanda), que também muda DENTRO de um atendimento (troca de demanda, 'Reabrir' pelo atendente) — aí a resposta é stale lá e segue no resumo aqui, porque o atendimento é o mesmo",
+        "janela ilegível = continuidade VAZIA com `leituraFalhou: true` + `logger.error`. Cair em 'sem recorte' entregaria à IA exatamente o que o recorte segura; e 'não li' não pode se passar por 'não havia nada' — a retomada grava `continuidade_ilegivel` no audit e as tools MCP devolvem `read_failed`",
         "guardado por `tests/unit/continuidade-por-atendimento.test.ts`, que também reprova quem ler `atendimentos` por fora da régua"
       ]
     }

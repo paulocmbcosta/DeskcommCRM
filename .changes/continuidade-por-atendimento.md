@@ -26,6 +26,8 @@ linha do tempo completa.
 
 Para quem automatiza: o campo `human_continuity` de `crm_get_human_case` e de
 `crm_resume_ai_attendance` passa a trazer só o atendimento em curso. O detalhe do
-chamado pedido continua vindo completo, seja de que atendimento for.
+chamado pedido continua vindo completo, seja de que atendimento for. O campo ganha
+também `read_failed`: quando é `true`, o resumo não pôde ser lido — o que não é o
+mesmo que a equipe não ter registrado nada.
 
 Nada a configurar.
