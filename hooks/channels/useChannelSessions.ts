@@ -21,6 +21,29 @@ export interface ChannelSession {
   daily_message_limit: number;
   is_warmup_complete: boolean | null;
   created_at: string;
+  /**
+   * Por onde o cliente fala: `whatsapp` ou `site_chat`. Não é o provider — três
+   * transportes diferentes respondem `whatsapp` aqui. Opcional porque uma
+   * resposta em cache de antes desta coluna não o traz; ausente lê-se como
+   * WhatsApp, que era o único meio que existia.
+   */
+  meio?: "whatsapp" | "site_chat" | null;
+  /** Ver `canalIniciaConversa`. */
+  fala_primeiro?: boolean;
+}
+
+/**
+ * Dá para INICIAR conversa por este canal? `false` = só responde quem já
+ * escreveu (o chat do site). Ausente lê-se como `true`: é o que valia para todo
+ * canal antes de a coluna existir.
+ */
+export function canalIniciaConversa(c: Pick<ChannelSession, "fala_primeiro">): boolean {
+  return c.fala_primeiro !== false;
+}
+
+/** O canal é um chat de site (e não um número de WhatsApp)? */
+export function ehChatDoSite(c: Pick<ChannelSession, "meio">): boolean {
+  return c.meio === "site_chat";
 }
 
 export type ConnectionHealth = "connected" | "connecting" | "down" | "none" | "unknown";
