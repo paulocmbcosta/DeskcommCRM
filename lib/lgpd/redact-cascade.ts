@@ -16,6 +16,7 @@
  * organization_id check). The admin client bypasses RLS.
  */
 
+import { revogarAcessoDoVisitante } from "@/lib/channels/chat-do-site/revogar";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface CascadeResult {
@@ -102,6 +103,19 @@ export async function cascadeRedactContact(args: CascadeArgs): Promise<CascadeRe
       .eq("id", args.contactId)
       .eq("organization_id", args.organizationId);
   }
+
+  // CHAT DO SITE — o navegador do visitante perde o acesso ANTES da cascata.
+  //
+  // É o único canal em que o titular lê a conversa através de uma rota NOSSA
+  // (token → histórico). Anonimizar sem revogar deixaria o histórico redigido
+  // legível por fora e a conversa aberta para escrita. Falha fechada pelo mesmo
+  // motivo do avatar acima: melhor abortar e reprocessar do que anonimizar pela
+  // metade. Idempotente — na segunda execução não há thread para apagar.
+  // No app, e não na função SQL, pela razão já registrada acima.
+  await revogarAcessoDoVisitante(admin, {
+    organizationId: args.organizationId,
+    contactId: args.contactId,
+  });
 
   const { data, error } = await admin.rpc("fn_lgpd_cascade_redact_contact" as never, {
     p_organization_id: args.organizationId,

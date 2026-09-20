@@ -34,6 +34,10 @@ describe("capabilities do canal intermediado", () => {
       voiceNote: "opus-only",
       groups: "limited",
       costPerMessage: true,
+      // Entrou com o chat do site (migration 0272), o primeiro canal que NÃO
+      // fala primeiro. Este fala — com modelo aprovado, que é `requiresTemplates`
+      // quem diz; `outboundFirst` só responde se DÁ.
+      outboundFirst: true,
     });
   });
 
