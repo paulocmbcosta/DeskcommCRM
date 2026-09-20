@@ -1,0 +1,453 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Chat do site — o primeiro canal que não é WhatsApp",
+    "subtitle": "O transporte somos nós: a resposta do atendente é a própria linha de `messages`, e o navegador do visitante a busca. Provider (`site_widget`) é transporte e só vive em lib/channels; MEIO (`site_chat`) é o que a feature pode ler. A única restrição física do canal é `outboundFirst: false` — quem nunca escreveu não tem endereço. Migration 0272.",
+    "output": "chat-do-site.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    {
+      "id": "site",
+      "label": "Site do cliente (terceiro)"
+    },
+    {
+      "id": "publica",
+      "label": "API pública (sem login)"
+    },
+    {
+      "id": "canal",
+      "label": "Canal (lib/channels)"
+    },
+    {
+      "id": "produto",
+      "label": "Produto (o que já existia)"
+    },
+    {
+      "id": "tela",
+      "label": "Tela"
+    },
+    {
+      "id": "banco",
+      "label": "Banco"
+    }
+  ],
+  "mainPath": [
+    "snippet",
+    "widget",
+    "rota_msgs",
+    "entrada",
+    "pos_entrada",
+    "handler_envio",
+    "adapter",
+    "leitura"
+  ],
+  "nodes": [
+    {
+      "id": "snippet",
+      "lane": "site",
+      "col": 1,
+      "type": "external",
+      "label": "O trecho `<script async src=…/site-chat/widget.js data-widget-key=wc_…>` que o dono cola antes de `</body>` — vem PRONTO do servidor, nunca montado no navegador"
+    },
+    {
+      "id": "widget",
+      "lane": "site",
+      "col": 2,
+      "type": "frontend",
+      "label": "`public/site-chat/widget.js` — JS puro em Shadow DOM, sem iframe (o CRM responde X-Frame-Options: DENY) e sem innerHTML; título, cor e textos vêm da configuração"
+    },
+    {
+      "id": "guarda",
+      "lane": "site",
+      "col": 3,
+      "type": "external",
+      "label": "localStorage do SITE (primeira parte): guarda o token do visitante em claro — a única cópia em claro que existe"
+    },
+    {
+      "id": "rota_config",
+      "lane": "publica",
+      "col": 1,
+      "type": "backend",
+      "label": "GET /api/v1/site-chat/[chave]/config — entrega a versão PÚBLICA da configuração (sem a lista de sites do dono) e carimba onde o widget foi visto"
+    },
+    {
+      "id": "rota_msgs",
+      "lane": "publica",
+      "col": 2,
+      "type": "backend",
+      "label": "GET|POST /api/v1/site-chat/[chave]/messages — POST sem token ABRE conversa e devolve o token UMA vez; GET sonda o que há de novo"
+    },
+    {
+      "id": "casca",
+      "lane": "publica",
+      "col": 3,
+      "type": "backend",
+      "label": "`chat-do-site/http.ts` — CORS `*` sem credenciais, chave do path → organização, `origemPermitida`, rate limit em dois baldes (IP quando há, widget sempre), campo-isca"
+    },
+    {
+      "id": "public_paths",
+      "lane": "publica",
+      "col": 4,
+      "type": "backend",
+      "label": "`lib/auth/public-paths.ts` — libera SÓ `config` e `messages`, ancorados; a administração continua atrás da sessão"
+    },
+    {
+      "id": "identidade",
+      "lane": "canal",
+      "col": 1,
+      "type": "backend",
+      "label": "`identidade.ts` — chave pública `wc_…` e token `wv_…` de 256 bits; o banco guarda só o SHA-256 (`threadDoVisitante`)"
+    },
+    {
+      "id": "entrada",
+      "lane": "canal",
+      "col": 2,
+      "type": "backend",
+      "label": "`entrada.ts` — visitante novo é SEMPRE contato novo (telefone digitado não é identidade); a thread é a prova de quem volta"
+    },
+    {
+      "id": "leitura",
+      "lane": "canal",
+      "col": 3,
+      "type": "backend",
+      "label": "`leitura.ts` — lista branca do que um anônimo lê; é onde `sent` vira `delivered`"
+    },
+    {
+      "id": "adapter",
+      "lane": "canal",
+      "col": 4,
+      "type": "backend",
+      "label": "`adapters/site-widget.ts` — enviar é não fazer nada: a mensagem JÁ é a linha de `messages`; devolve destinatário para contato sem telefone"
+    },
+    {
+      "id": "capacidades",
+      "lane": "canal",
+      "col": 5,
+      "type": "backend",
+      "label": "`capabilities.ts` — linha nova na matriz: sem janela, sem modelo, sem ban; `outboundFirst: false` (não fala primeiro) e `meioDoCanal` → `site_chat`"
+    },
+    {
+      "id": "config",
+      "lane": "canal",
+      "col": 6,
+      "type": "backend",
+      "label": "`config.ts` — schema Zod central do jsonb: tolerante na leitura (nunca lança), estrito na escrita; cor do texto CALCULADA por contraste"
+    },
+    {
+      "id": "canal_linha",
+      "lane": "canal",
+      "col": 7,
+      "type": "backend",
+      "label": "`canal.ts` — cria/lista/edita a linha em `channel_sessions`; `canalPelaChave` é a única consulta sem `organization_id`, sustentada por índice único sem recorte"
+    },
+    {
+      "id": "revogar",
+      "lane": "canal",
+      "col": 8,
+      "type": "backend",
+      "label": "`revogar.ts` — apaga a thread: o token deixa de abrir a conversa"
+    },
+    {
+      "id": "pos_entrada",
+      "lane": "produto",
+      "col": 1,
+      "type": "backend",
+      "label": "`aplicarEfeitosPosEntrada` — opt-out → lead → despacho do agente, o MESMO passo dos canais de WhatsApp"
+    },
+    {
+      "id": "handler_envio",
+      "lane": "produto",
+      "col": 2,
+      "type": "backend",
+      "label": "`sendMessageHandler` — composer humano, agente de IA e follow-up respondem por aqui; pede o adapter pelo provider da conversa"
+    },
+    {
+      "id": "abrir_conversa",
+      "lane": "produto",
+      "col": 3,
+      "type": "backend",
+      "label": "`openSharedContactConversation` + `sessaoProntaParaEnvio` — quem INICIA conversa pergunta `canalFalaPrimeiro` e recusa este canal com 422"
+    },
+    {
+      "id": "lgpd",
+      "lane": "produto",
+      "col": 4,
+      "type": "backend",
+      "label": "`cascadeRedactContact` — a anonimização revoga o acesso do navegador ANTES da cascata (falha fechada)"
+    },
+    {
+      "id": "excluir",
+      "lane": "produto",
+      "col": 5,
+      "type": "backend",
+      "label": "DELETE /api/v1/channel-sessions/[id] — o caminho único de exclusão de canal (com preflight de impacto); o widget some na hora"
+    },
+    {
+      "id": "aba",
+      "lane": "tela",
+      "col": 1,
+      "type": "frontend",
+      "label": "Conexões › Chat do site (`ChatDoSiteClient`) — criar, personalizar com PRÉVIA ao vivo, copiar o código, ver o sinal de instalação, abrir a IA ao público"
+    },
+    {
+      "id": "rota_admin",
+      "lane": "tela",
+      "col": 2,
+      "type": "backend",
+      "label": "GET|POST /api/v1/channels/site-chat e PATCH …/[id] — admin; auditam `channel.site_chat_created` / `_updated`"
+    },
+    {
+      "id": "inbox",
+      "lane": "tela",
+      "col": 3,
+      "type": "frontend",
+      "label": "Inbox — a conversa aparece como qualquer outra; o card troca o ícone de telefone por globo quando `conversations.channel = site_chat`"
+    },
+    {
+      "id": "seletores",
+      "lane": "tela",
+      "col": 4,
+      "type": "frontend",
+      "label": "Seletores de canal — agente e roteador de IA enxergam o chat do site; `Chamar no WhatsApp` e as ações de automação filtram por `fala_primeiro`"
+    },
+    {
+      "id": "t_sessions",
+      "lane": "banco",
+      "col": 1,
+      "type": "database",
+      "label": "`channel_sessions` — provider `site_widget`, `site_widget_key` (única entre TODAS as linhas), `site_widget_config`, `site_widget_seen_at/host` (migration 0272)"
+    },
+    {
+      "id": "t_conversations",
+      "lane": "banco",
+      "col": 2,
+      "type": "database",
+      "label": "`conversations` — `channel = 'site_chat'` (o MEIO, não o provider) e `provider_conversation_id` = hash do token"
+    },
+    {
+      "id": "t_messages",
+      "lane": "banco",
+      "col": 3,
+      "type": "database",
+      "label": "`messages` — entrada com `external_id = site:<uuid do widget>` (idempotência) e `sent_via = external_device`; os triggers de atendimento abrem protocolo"
+    },
+    {
+      "id": "t_contacts",
+      "lane": "banco",
+      "col": 4,
+      "type": "database",
+      "label": "`contacts` — `source = site_chat`; telefone/e-mail já de outro contato vão para `source_metadata` como informados e NÃO verificados"
+    },
+    {
+      "id": "t_audit",
+      "lane": "banco",
+      "col": 5,
+      "type": "database",
+      "label": "`api_audit_log` — criar e editar o widget; a mensagem do visitante NÃO audita (é dado do canal, como a do WhatsApp)"
+    }
+  ],
+  "edges": [
+    {
+      "from": "aba",
+      "to": "rota_admin",
+      "label": "cria e salva"
+    },
+    {
+      "from": "rota_admin",
+      "to": "canal_linha",
+      "label": "casca fina"
+    },
+    {
+      "from": "rota_admin",
+      "to": "config",
+      "label": "valida (estrito)"
+    },
+    {
+      "from": "rota_admin",
+      "to": "t_audit",
+      "label": "channel.site_chat_created / _updated"
+    },
+    {
+      "from": "canal_linha",
+      "to": "identidade",
+      "label": "gera a chave pública"
+    },
+    {
+      "from": "canal_linha",
+      "to": "t_sessions",
+      "label": "insert/update com organization_id da SESSÃO"
+    },
+    {
+      "from": "rota_admin",
+      "to": "snippet",
+      "label": "devolve o trecho pronto (endereço resolvido em runtime)"
+    },
+    {
+      "from": "snippet",
+      "to": "widget",
+      "label": "o site carrega o script"
+    },
+    {
+      "from": "widget",
+      "to": "rota_config",
+      "label": "GET ao abrir a página"
+    },
+    {
+      "from": "widget",
+      "to": "rota_msgs",
+      "label": "POST envia · GET sonda (3s aberto, 15s fechado)"
+    },
+    {
+      "from": "widget",
+      "to": "guarda",
+      "label": "token em claro, só aqui"
+    },
+    {
+      "from": "public_paths",
+      "to": "rota_config",
+      "label": "atravessa o proxy sem cookie"
+    },
+    {
+      "from": "public_paths",
+      "to": "rota_msgs",
+      "label": "atravessa o proxy sem cookie"
+    },
+    {
+      "from": "rota_config",
+      "to": "casca",
+      "label": "resolve chave → organização"
+    },
+    {
+      "from": "rota_msgs",
+      "to": "casca",
+      "label": "resolve chave, token e limites"
+    },
+    {
+      "from": "casca",
+      "to": "canal_linha",
+      "label": "canalPelaChave"
+    },
+    {
+      "from": "casca",
+      "to": "config",
+      "label": "origemPermitida"
+    },
+    {
+      "from": "rota_config",
+      "to": "canal_linha",
+      "label": "registrarSinalDoWidget (≤1 escrita / 5 min)"
+    },
+    {
+      "from": "rota_msgs",
+      "to": "entrada",
+      "label": "POST"
+    },
+    {
+      "from": "rota_msgs",
+      "to": "leitura",
+      "label": "GET"
+    },
+    {
+      "from": "entrada",
+      "to": "identidade",
+      "label": "token novo → hash"
+    },
+    {
+      "from": "entrada",
+      "to": "t_contacts",
+      "label": "contato NOVO, sempre"
+    },
+    {
+      "from": "entrada",
+      "to": "t_conversations",
+      "label": "channel = site_chat + thread"
+    },
+    {
+      "from": "entrada",
+      "to": "t_messages",
+      "label": "inbound, idempotente por external_id"
+    },
+    {
+      "from": "entrada",
+      "to": "pos_entrada",
+      "label": "opt-out → lead → agente"
+    },
+    {
+      "from": "pos_entrada",
+      "to": "handler_envio",
+      "label": "o agente responde pelo mesmo caminho do humano"
+    },
+    {
+      "from": "inbox",
+      "to": "handler_envio",
+      "label": "o atendente responde"
+    },
+    {
+      "from": "handler_envio",
+      "to": "capacidades",
+      "label": "before_send: janela e anti-ban → skipped: not_applicable"
+    },
+    {
+      "from": "handler_envio",
+      "to": "adapter",
+      "label": "getAdapter(provider)"
+    },
+    {
+      "from": "adapter",
+      "to": "t_messages",
+      "label": "a linha `sent` É a entrega"
+    },
+    {
+      "from": "leitura",
+      "to": "t_messages",
+      "label": "lê a lista branca · promove sent → delivered"
+    },
+    {
+      "from": "t_messages",
+      "to": "inbox",
+      "label": "Realtime: o tique de entregue diz se o visitante ainda está lá"
+    },
+    {
+      "from": "t_conversations",
+      "to": "inbox",
+      "label": "`channel` decide o ícone do card"
+    },
+    {
+      "from": "capacidades",
+      "to": "abrir_conversa",
+      "label": "canalFalaPrimeiro = false → 422"
+    },
+    {
+      "from": "capacidades",
+      "to": "seletores",
+      "label": "`meio` e `fala_primeiro` na listagem de canais — nunca o provider"
+    },
+    {
+      "from": "lgpd",
+      "to": "revogar",
+      "label": "antes da cascata"
+    },
+    {
+      "from": "revogar",
+      "to": "t_conversations",
+      "label": "provider_conversation_id = null"
+    },
+    {
+      "from": "aba",
+      "to": "excluir",
+      "label": "Excluir chat (com confirmação que nomeia o alvo)"
+    },
+    {
+      "from": "excluir",
+      "to": "t_sessions",
+      "label": "archived_at → canalPelaChave deixa de enxergar"
+    },
+    {
+      "from": "t_sessions",
+      "to": "aba",
+      "label": "`site_widget_seen_*` vira “Instalado · exemplo.com · há 2 min”"
+    }
+  ]
+}

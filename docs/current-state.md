@@ -97,6 +97,15 @@ correspondentes localizados no repo):
   tela quando o canal exige. Até 2026-09-19 a última parte não existia: o backend aceitava
   `template_values` desde julho e nenhuma tela os coletava, então iniciar conversa pelo
   canal oficial era impossível pelo produto.
+- **Chat do site** (2026-09-20, migration 0272) — o primeiro canal que não é WhatsApp: um
+  widget que o dono cola no próprio site (`Conexões › Chat do site`: cor, textos, formulário
+  inicial, prévia ao vivo, código de uma linha e o sinal "Instalado · exemplo.com"). Quem
+  escreve ali vira conversa no Inbox com lead, atendente e agente de IA, pelo mesmo
+  `aplicarEfeitosPosEntrada` dos outros canais. **Incompleto, e declarado:** o visitante só
+  manda TEXTO (o atendente manda mídia e ela chega); não há "digitando…" no widget; e pelo
+  chat do site não se fala primeiro (`outboundFirst: false`), então automação de envio e
+  lembrete de agenda — que exigem telefone — não alcançam o visitante que não deixou um.
+  Mapa: `docs/architecture/chat-do-site.architecture.json`.
 - **CRM & pedidos** — kanban com vocabulário configurável por nicho (fractional indexing),
   customer 360, contatos, tags, Nuvemshop.
 - **IA nativa** — agentes com RAG por tenant (pgvector), sentiment, handoff IA→humano,

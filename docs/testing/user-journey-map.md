@@ -585,6 +585,100 @@ exatamente o argumento da doutrina de QA Visual, e é por isso que a ausência d
 execução da spec acima é uma lacuna real, não uma formalidade.
 
 
+## J28 — Chat do site: o dono cola um código, o visitante escreve, o atendente responde `[P0]` (2026-09-20)
+
+Pedido do dono: uma **caixa de entrada nova**, além do WhatsApp — um widget de chat
+para colocar no site (no dele e no de qualquer cliente), com **cores e textos
+configuráveis**, que gere um **código para colar** e faça a conversa do visitante
+nascer no atendimento. É o primeiro canal do produto que não é WhatsApp (migration
+0272); mapa em `docs/architecture/chat-do-site.architecture.json`.
+
+`[P0]` porque é primeira impressão **duas vezes**: a do dono, que cola o código e
+espera ver um balão; e a do visitante do site do cliente dele, que é o público
+final de todo mundo.
+
+Spec: `tests/e2e/chat-do-site.spec.ts` (9 casos, em `SPECS_PARTE_3`), em **dois
+navegadores** — o do dono e o do visitante, sem cookie compartilhado — e com o site
+do cliente numa **origem diferente de verdade** (`http://site-do-cliente.test`),
+para o `fetch` do widget atravessar CORS real contra o servidor real.
+
+### Execução (2026-09-20): **PASS nos 9 casos**, na máquina do autor
+
+Chromium real, Supabase local **pg15** com o `baseline.sql` aplicado em modo install
+**e** update (as duas passadas com `ON_ERROR_STOP=1`, zero erro), Realtime reiniciado
+depois do baseline, app em produção (`next build` + `next start`). **Sem Redis** — o
+env opcional ausente, que é o estado de um primeiro deploy: o rate limit caiu no
+contador em memória e a jornada inteira passou assim.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J28.1 O dono cria o chat, troca a cor e **vê a cor na prévia antes de salvar** (`background-color` medido por `getComputedStyle`); o código nasce com o endereço do servidor, nunca o placeholder do build | `[P0]` | **PASS** (1,2 s) |
+| J28.2 Num site de **outra origem**, o balão aparece com a cor configurada — 56×56 px, a 20 px da borda direita (medido por `boundingBox`) | `[P0]` | **PASS** (0,1 s) |
+| J28.3 O formulário **inteiro** cabe no painel sem rolar; enviar sem o nome obrigatório NÃO abre conversa; preenchido, a mensagem sai e o token fica no `localStorage` do site | `[P0]` | **PASS** (0,4 s) |
+| J28.4 A conversa nasce no Inbox **marcada como vinda do site** (`data-meio="site_chat"`, ícone de globo) e o atendente responde pelo composer | `[P0]` | **PASS** (1,1 s) |
+| J28.5 A resposta chega ao balão do visitante — e a mensagem vira **`delivered`** no CRM (o laço de retorno: foi o navegador buscar que a promoveu) | `[P0]` | **PASS** (0,9 s) |
+| J28.6 Recarregar o site **não perde** a conversa, e quem já conversou não vê o formulário de novo | `[P0]` | **PASS** (0,1 s) |
+| J28.7 Conexões passa a dizer **onde** o chat está instalado: `Instalado · site-do-cliente.test` | `[P1]` | **PASS** (0,3 s) |
+| J28.8 Site fora da lista do dono: o balão **não aparece** e o site do cliente segue intacto (com controle positivo: o script CARREGOU) | `[P1]` | **PASS** (2,6 s) |
+| J28.9 Excluir pede confirmação **nomeando o chat**; Cancelar não exclui; confirmado, o balão sai do ar na hora com o código ainda colado — e a conversa recebida continua no Inbox | `[P0]` | **PASS** (3,6 s) |
+
+Evidência visual em `.superpowers/evidence/chat-do-site/` (9 imagens: a tela vazia, a
+tela com prévia, o balão, o formulário, a conversa, o Inbox, "Instalado", telefone
+390 px e notebook de 640 px de altura).
+
+### O defeito que SÓ a imagem pegou — e que a spec deixou passar verde
+
+Na primeira execução completa a spec deu **9/9**, e o produto estava quebrado na
+primeira tela do visitante: no formulário, **telefone, mensagem e o botão "Iniciar
+conversa" ficavam fora da vista**. A causa: a área de conversa "escondida" (`hidden`)
+tinha `display:flex` no CSS do widget, e `display:flex` **vence** o atributo `hidden`
+— ela seguia ocupando metade do painel e espremia o formulário, que rolava por dentro.
+
+A spec passava porque **o Playwright rola até o elemento antes de clicar**. Uma pessoa
+não sabe que há o que rolar. Quem achou foi abrir o PNG do formulário e ver meio
+painel em branco.
+
+Conserto na causa: uma regra só, `[hidden]{display:none !important}`, em vez de um
+`[hidden]` por classe — a lista por classe é justamente a que alguém esquece de
+completar (eu esqueci a `.corpo`). Junto: painel de 600 px, formulário mais compacto e
+o botão **grudado no pé** (`position: sticky`), para que em tela baixa o formulário
+role mas a única ação da tela nunca saia da vista. Medido depois:
+
+| Viewport | Painel | Botão inteiro na vista |
+|---|---|---|
+| 1280×720 (spec) | 380×600 | sim — `toBeInViewport({ ratio: 1 })`, que considera o recorte dos ancestrais com rolagem |
+| 1366×640 (notebook com barra de favoritos) | 380×528 | sim |
+| 390×844 (telefone) | tela cheia, 390×844 | sim |
+
+**A spec agora prende isso**, e a guarda foi sabotada para provar que morde: devolvendo
+o CSS antigo, o J28.3 reprova em 136 ms.
+
+### O que o laboratório exigiu, e que NÃO é do produto
+
+O Chromium barra pedido de uma origem "pública" para `localhost` (*Local Network
+Access*), e o ambiente E2E é exatamente isso. Medido pelo console da página antes de
+mexer: *"The request client is not a secure context and the resource is in
+more-private address space `local`"*. A spec desliga essa checagem (`test.use`, com o
+motivo escrito); o CORS continua de pé — o preflight do POST acontece contra o servidor
+real. Em produção o CRM está num domínio público com https, e de público para público a
+regra não se aplica.
+
+### Não medido
+
+- **O agente de IA respondendo um visitante.** O canal nasce com a IA em modo de teste
+  e o ambiente não tem credencial de modelo; o que está provado é que a entrada emite
+  `ai_agent.dispatch_requested` pelo MESMO passo dos outros canais
+  (`tests/unit/chat-do-site-entrada.test.ts`) e que o envio passa pelo MESMO handler.
+- **Mídia** do atendente para o visitante (imagem, áudio, arquivo): a leitura assina o
+  link do nosso bucket e o widget sabe desenhar — preso por unidade, não por tela.
+- **Um site de verdade com CSP restritiva**: o dono desse site precisa liberar o domínio
+  do CRM em `script-src` e `connect-src`. Não há o que o widget faça por ele.
+- **Safari/Firefox**: a spec roda em Chromium.
+- **Carga**: os limites de `lib/channels/chat-do-site/http.ts` estão presos por valor no
+  teste da rota, mas ninguém martelou a rota de verdade.
+
+---
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,
