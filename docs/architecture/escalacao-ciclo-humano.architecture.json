@@ -120,7 +120,23 @@
       "col": 3,
       "type": "service",
       "label": "lib/escalacao/continuidade.ts",
-      "sublabel": "o que a pessoa fez, em texto que o modelo lê"
+      "sublabel": "o que a pessoa fez NESTE atendimento, em texto que o modelo lê"
+    },
+    {
+      "id": "janela",
+      "lane": "regra",
+      "col": 4,
+      "type": "service",
+      "label": "lib/atendimento/janela-do-atendimento.ts",
+      "sublabel": "a régua ÚNICA de 'o que pertence a este episódio' — a mesma das mensagens e das notas na tela"
+    },
+    {
+      "id": "atendimentos",
+      "lane": "dados",
+      "col": 7,
+      "type": "database",
+      "label": "atendimentos (0266)",
+      "sublabel": "o episódio dentro da conversa, com protocolo próprio — o started_at é o piso do que a IA lê"
     },
     {
       "id": "chamadosLib",
@@ -466,13 +482,13 @@
       "id": "e12",
       "from": "continuidade",
       "to": "casos",
-      "label": "eventos kind='human_replied' com human_action + texto"
+      "label": "eventos kind='human_replied' com human_action + texto — só dos chamados ABERTOS no atendimento vigente (a decisão segue o chamado, não o próprio horário)"
     },
     {
       "id": "e13",
       "from": "continuidade",
       "to": "notas",
-      "label": "as notas internas do episódio"
+      "label": "as notas internas ESCRITAS no atendimento vigente (created_at dentro da janela)"
     },
     {
       "id": "e14",
@@ -809,6 +825,24 @@
       "from": "novoAtendimento",
       "to": "evento",
       "label": "emite ai.handoff_resolved — só quando havia passagem a encerrar"
+    },
+    {
+      "id": "e70",
+      "from": "continuidade",
+      "to": "janela",
+      "label": "pergunta pelo VIGENTE antes de ler qualquer rastro — janela ilegível = continuidade vazia + erro no log, nunca a conversa inteira"
+    },
+    {
+      "id": "e71",
+      "from": "janela",
+      "to": "atendimentos",
+      "label": "[início deste, início do próximo) — fechamento NÃO é fronteira; o primeiro episódio não tem piso"
+    },
+    {
+      "id": "e72",
+      "from": "novoAtendimento",
+      "to": "atendimentos",
+      "label": "reabrir a conversa dispara o trigger da 0266: episódio novo, protocolo novo — é onde 'começa do zero' ganha data"
     }
   ],
   "cards": [
@@ -840,6 +874,17 @@
         "crm_resume_ai_attendance exige papel de gestor e é capacidade de risco CRÍTICO: nunca entra ligada por pacote. Reativar automação para um cliente que pediu uma pessoa é decisão do humano",
         "a superfície do agente NÃO recebe e-mail nem telefone de atendente — o roster compartilhado (e25) devolve os dois campos e quem os expõe é só a rota da tela",
         "a atividade da volta NÃO é escrita quando o contato tem dois negócios abertos empatados: `resolveActiveLeadForContact` recusa, e mover o card do cliente errado é pior que não registrar"
+      ]
+    },
+    {
+      "dot": "sky",
+      "title": "O atendimento novo começa do zero — também para o que a IA lê",
+      "items": [
+        "a conversa é UMA por cliente e canal; o atendimento é o episódio dentro dela (0266). `lerContinuidadeHumana` lia a conversa INTEIRA: a nota 'enviei a 2ª via do boleto', do Financeiro encerrado na segunda, entrava como 'o que o cliente já considera combinado' na devolução do Suporte da quarta",
+        "o pior vazamento era a PENDÊNCIA: o último `need_lead_info` da conversa vira `next_action` do checkpoint — o agente AGIRIA sobre um pedido de outro protocolo",
+        "a decisão segue o CHAMADO, não o próprio horário: chamado da segunda respondido na quarta já é `service_stale` em `app/api/v1/ai/cases/[id]/reply/route.ts` ('fica registrada, mas não altera o atendimento novo'). Recortar o evento pelo horário dele poria no resumo a resposta que aquela regra decidiu não repassar",
+        "janela ilegível = continuidade VAZIA + `logger.error`. Cair em 'sem recorte' entregaria à IA exatamente o que o recorte segura; voltar sem o rastro é degradação DITA, não silêncio",
+        "guardado por `tests/unit/continuidade-por-atendimento.test.ts`, que também reprova quem ler `atendimentos` por fora da régua"
       ]
     }
   ]

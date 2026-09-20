@@ -38,7 +38,8 @@
     { "id": "aba-fechadas", "lane": "tela", "col": 4, "type": "frontend", "label": "AtendimentosFechadosList — a aba Fechadas lista ATENDIMENTOS, com a marca 'o cliente voltou'" },
     { "id": "nome-do-usuario", "lane": "banco", "col": 9, "type": "backend", "label": "fn_nome_do_usuario (0270) — o nome cadastrado; na falta, o início do e-mail" },
     { "id": "janela", "lane": "api", "col": 6, "type": "backend", "label": "lib/atendimento/janela-do-atendimento.ts — a régua ÚNICA: [início deste, início do próximo)" },
-    { "id": "api-notas", "lane": "api", "col": 7, "type": "backend", "label": "GET /conversations/[id]/notes?atendimento_id= — a nota pertence ao atendimento em que foi escrita" }
+    { "id": "api-notas", "lane": "api", "col": 7, "type": "backend", "label": "GET /conversations/[id]/notes?atendimento_id= — a nota pertence ao atendimento em que foi escrita" },
+    { "id": "continuidade-ia", "lane": "api", "col": 8, "type": "backend", "label": "lib/escalacao/continuidade.ts — o que a IA lê em 'Devolver ao automático': só o rastro humano do atendimento vigente" }
   ],
   "edges": [
     { "from": "ingestao", "to": "conversa", "label": "nasce ou reabre (fn_service_inbound)" },
@@ -77,6 +78,8 @@
     { "from": "atendimentos", "to": "janela", "label": "started_at de cada episódio da conversa" },
     { "from": "janela", "to": "api-mensagens", "label": "recorta por sent_at" },
     { "from": "janela", "to": "api-notas", "label": "recorta por created_at — a mesma janela" },
-    { "from": "api-notas", "to": "thread", "label": "notas do episódio, intercaladas com as mensagens dele" }
+    { "from": "api-notas", "to": "thread", "label": "notas do episódio, intercaladas com as mensagens dele" },
+    { "from": "janela", "to": "continuidade-ia", "label": "o VIGENTE: notas por created_at, chamados por opened_at — a mesma janela" },
+    { "from": "rotas-de-comando", "to": "continuidade-ia", "label": "'Devolver ao automático' (reactivate-bot) lê o rastro humano ANTES de soltar as travas" }
   ]
 }
