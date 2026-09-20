@@ -9382,24 +9382,33 @@ alter table public.channel_sessions
   add column if not exists wacalls_jid text,
   add column if not exists wacalls_paired_at timestamptz;
 
+-- site_widget (migration 0272, chat do site) — a coluna de ref do quinto
+-- provider, que precisa existir antes das constraints abaixo referenciá-la. As
+-- demais colunas do canal e o racional inteiro estão no bloco da 0272, no fim
+-- deste arquivo.
+alter table public.channel_sessions
+  add column if not exists site_widget_key text;
+
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_check;
 
 alter table public.channel_sessions
   add constraint channel_sessions_provider_check
-  -- 'wacalls' (migration 0233, chamada de voz) somado aqui — UM bloco só por
-  -- constraint, doutrina de baseline (não duplicar drop+add por migration).
-  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'wacalls'::text]));
+  -- 'wacalls' (migration 0233, chamada de voz) e 'site_widget' (migration 0272,
+  -- chat do site) somados aqui — UM bloco só por constraint, doutrina de
+  -- baseline (não duplicar drop+add por migration).
+  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'wacalls'::text, 'site_widget'::text]));
 
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_ref_check;
 
 alter table public.channel_sessions
   add constraint channel_sessions_provider_ref_check check (
-    (provider = 'waha'       and waha_session_name    is not null) or
-    (provider = 'meta_cloud' and meta_phone_number_id is not null) or
-    (provider = 'zernio'     and zernio_account_id    is not null) or
-    (provider = 'wacalls'    and wacalls_session_id    is not null)
+    (provider = 'waha'        and waha_session_name    is not null) or
+    (provider = 'meta_cloud'  and meta_phone_number_id is not null) or
+    (provider = 'zernio'      and zernio_account_id    is not null) or
+    (provider = 'wacalls'     and wacalls_session_id   is not null) or
+    (provider = 'site_widget' and site_widget_key      is not null)
   );
 
 comment on column public.channel_sessions.zernio_account_id is
@@ -27643,6 +27652,59 @@ create or replace trigger trg_vinculos_externos_somem_com_a_anonimizacao
   for each row
   when (new.is_anonymized is true and old.is_anonymized is distinct from true)
   execute function public.fn_vinculos_externos_somem_com_a_anonimizacao();
+
+notify pgrst, 'reload schema';
+
+-- ---- canal "chat do site": o widget que o dono cola no próprio site (migration 0272) ----
+-- Espelho idempotente da 0272. Racional completo no arquivo da migration.
+--
+-- O primeiro canal que NÃO é WhatsApp. `site_widget_key` é o identificador
+-- PÚBLICO do widget (vai no snippet colado no HTML do cliente e resolve a
+-- organização na rota pública) — a coluna e os dois CHECKs de provider já foram
+-- estendidos no bloco ÚNICO deles, lá em cima (doutrina "uma constraint, um
+-- bloco" — tests/unit/baseline-constraint-reconstruida.test.ts). Aqui ficam o
+-- que é só deste canal: a configuração, o sinal de instalação, o índice da
+-- chave e o meio novo da conversa.
+--
+-- Auto-curativo para o `update.sh`: colunas nullable com `if not exists`, índice
+-- com `if not exists`, e o CHECK de `conversations.channel` só AMPLIA — toda
+-- linha existente grava 'whatsapp' e já satisfaz a versão nova, então não há
+-- dado a corrigir antes da constraint.
+alter table public.channel_sessions
+  add column if not exists site_widget_key text,
+  add column if not exists site_widget_config jsonb,
+  add column if not exists site_widget_seen_at timestamptz,
+  add column if not exists site_widget_seen_host text;
+
+-- ÚNICO entre TODAS as linhas, inclusive as arquivadas (a 0165 recorta
+-- `archived_at is null` para identificador de provider EXTERNO, que pode ser
+-- reconectado). A chave de um widget fica colada em site de terceiro: se uma
+-- arquivada pudesse renascer noutra linha, o snippet esquecido de um cliente
+-- abriria conversa na organização de outro.
+create unique index if not exists channel_sessions_site_widget_key_unique
+  on public.channel_sessions (site_widget_key)
+  where site_widget_key is not null;
+
+comment on column public.channel_sessions.site_widget_key is
+  'Identificador PÚBLICO do widget de chat do site — vai no snippet colado no HTML do cliente e resolve a organização na rota pública. Único entre todas as linhas (inclusive arquivadas): chave reaproveitada faria o snippet antigo de um cliente abrir conversa na organização de outro. Espelhado em lib/channels/session-ref.ts.';
+
+comment on column public.channel_sessions.site_widget_config is
+  'Aparência e comportamento do widget (título, cor, boas-vindas, posição, formulário inicial, domínios permitidos). Schema central em lib/channels/chat-do-site/config.ts; NULL em canal que não é chat do site.';
+
+comment on column public.channel_sessions.site_widget_seen_at is
+  'Última vez que o widget foi carregado num site (rota pública de configuração, no máximo uma escrita a cada 5 min). NULL = o snippet ainda não foi visto em lugar nenhum — é o que a tela de Conexões mostra como "ainda não instalado".';
+
+comment on column public.channel_sessions.site_widget_seen_host is
+  'hostname do site que carregou o widget por último (do header Origin). Só o host: caminho e query de site alheio não são nossos para guardar.';
+
+-- `conversations.channel` é o MEIO pelo qual a pessoa fala, não o provider: três
+-- transportes diferentes gravam 'whatsapp' aqui. 'site_chat' é o segundo meio.
+alter table public.conversations
+  drop constraint if exists conversations_channel_check;
+
+alter table public.conversations
+  add constraint conversations_channel_check
+  check (channel = any (array['whatsapp'::text, 'site_chat'::text]));
 
 notify pgrst, 'reload schema';
 
