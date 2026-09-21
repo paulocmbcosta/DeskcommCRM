@@ -80,6 +80,16 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // O widget do chat do site é carregado por TODA página do site de cada
+        // cliente. O padrão do Next para `public/` é `max-age=0` — uma revalidação
+        // por visualização de página alheia, batendo na VPS de quem instalou. Cinco
+        // minutos tiram essa carga e ainda deixam uma atualização do CRM chegar
+        // aos sites no mesmo dia; `stale-while-revalidate` evita que o visitante
+        // espere a revalidação para ver o balão.
+        source: "/site-chat/widget.js",
+        headers: [{ key: "Cache-Control", value: "public, max-age=300, stale-while-revalidate=86400" }],
+      },
+      {
         source: "/(.*)",
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },

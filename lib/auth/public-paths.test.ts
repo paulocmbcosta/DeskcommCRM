@@ -42,6 +42,25 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/legal/privacy")).toBe(true);
   });
 
+  /**
+   * O chat do site é chamado pelo `widget.js` no site de um terceiro — sem
+   * cookie por construção. Fora daqui o proxy responde 401 antes de a rota
+   * existir, e o balão aparece no site do cliente sem nunca conseguir enviar.
+   */
+  it("libera os dois recursos do chat do site — quem chama é o site de um terceiro", () => {
+    expect(isPublicPath("/api/v1/site-chat/wc_abcdefghijklmnopqrstuvwx/config")).toBe(true);
+    expect(isPublicPath("/api/v1/site-chat/wc_abcdefghijklmnopqrstuvwx/messages")).toBe(true);
+  });
+
+  it("e só esses dois: a administração do chat do site exige sessão", () => {
+    expect(isPublicPath("/api/v1/site-chat")).toBe(false);
+    expect(isPublicPath("/api/v1/site-chat/wc_abc/config/extra")).toBe(false);
+    expect(isPublicPath("/api/v1/site-chat/wc_abc/qualquer-outra")).toBe(false);
+    // A rota de ADMINISTRAÇÃO mora noutro prefixo e nunca pode pegar carona.
+    expect(isPublicPath("/api/v1/channels/site-chat")).toBe(false);
+    expect(isPublicPath("/api/v1/channels/site-chat/123")).toBe(false);
+  });
+
   it("e só esses dois: /legal não é um portão aberto", () => {
     // Entrada larga aqui é furo de auth em toda a aplicação, não só nesta tela.
     expect(isPublicPath("/legal")).toBe(false);

@@ -17,7 +17,7 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
 import { requireRole } from "@/lib/auth/require-role";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
-import { PROVIDERS_DE_MENSAGEM } from "@/lib/channels/capabilities";
+import { PROVIDERS_DE_MENSAGEM, canalFalaPrimeiro, meioDoCanal } from "@/lib/channels/capabilities";
 import { createChannelSchema } from "@/lib/schemas/channels";
 import { createClient } from "@/lib/supabase/server";
 import { getWahaClient } from "@/lib/waha/client";
@@ -39,7 +39,10 @@ export async function GET(): Promise<Response> {
   const base = () =>
     supabase
       .from("channel_sessions")
-      .select(CHANNEL_COLUMNS)
+      // `provider` entra no SELECT e NÃO sai na resposta: ele vira `meio` logo
+      // abaixo. A tela precisa saber se o canal é WhatsApp ou chat do site (o
+      // ícone e os botões mudam); não precisa — nem pode — saber o transporte.
+      .select(`${CHANNEL_COLUMNS}, provider`)
       .eq("organization_id", activeOrg.orgId)
       // Só canal de MENSAGEM. A linha de chamada de voz (spec 18) mora na mesma
       // tabela, tem card próprio em Conexões e não tem `waha_session_name` nem
@@ -60,7 +63,17 @@ export async function GET(): Promise<Response> {
   );
   if (error) return fail("internal_error", error.message, 500, { requestId });
 
-  return ok(data ?? [], {
+  const canais = ((data ?? []) as unknown as Array<Record<string, unknown> & { provider?: string | null }>).map(
+    ({ provider, ...resto }) => ({
+      ...resto,
+      meio: meioDoCanal(provider),
+      // Capacidade, não identidade: quem monta seletor de "por onde INICIAR
+      // conversa" pergunta isto, e não "qual canal é".
+      fala_primeiro: canalFalaPrimeiro(provider),
+    }),
+  );
+
+  return ok(canais, {
     requestId,
     ...(schemaOutdated ? { meta: { schema_outdated: true } } : {}),
   });

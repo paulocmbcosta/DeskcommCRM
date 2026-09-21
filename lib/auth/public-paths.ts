@@ -15,6 +15,16 @@ export const PUBLIC_PATHS: RegExp[] = [
   /^\/api\/v1\/health$/,
   /^\/api\/v1\/webhooks\//,
   /^\/api\/v1\/cron\//,
+  // CHAT DO SITE. Quem chama é o `widget.js` rodando no site de um TERCEIRO: não
+  // há cookie de sessão (e nem deve haver — `credentials: "omit"`). A autorização
+  // é da própria rota: chave pública do widget no path (resolve a organização) +
+  // token do visitante em header (abre UMA conversa). Rate limit por IP, por
+  // widget e por token em `lib/channels/chat-do-site/http.ts`.
+  //
+  // Ancorada nos DOIS recursos que existem, e não no prefixo: um `/site-chat/`
+  // solto daria carona a qualquer rota futura criada debaixo dele — inclusive
+  // uma que presuma login.
+  /^\/api\/v1\/site-chat\/[^/]+\/(config|messages)$/,
   // Heartbeat do agente do host (bearer INTERNAL_SECRET/INTERNAL_CRON_SECRET,
   // checado dentro da própria rota) — sem cookie de sessão, igual /cron/.
   /^\/api\/v1\/system\/agent$/,

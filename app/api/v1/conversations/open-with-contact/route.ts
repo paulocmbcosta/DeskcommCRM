@@ -11,7 +11,10 @@ import { type NextRequest } from "next/server";
 import { resolveAuthDual } from "@/lib/api/auth-dual";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
-import { openSharedContactConversation } from "@/lib/messaging/open-shared-contact-conversation";
+import {
+  CANAL_NAO_FALA_PRIMEIRO,
+  openSharedContactConversation,
+} from "@/lib/messaging/open-shared-contact-conversation";
 import { openConversationWithContactSchema, validateRequest } from "@/lib/schemas";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -64,6 +67,14 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
     if (msg === "invalid_phone") {
       return fail("validation_error", t("Telefone inválido."), 422, { requestId });
+    }
+    if (msg === CANAL_NAO_FALA_PRIMEIRO) {
+      return fail(
+        CANAL_NAO_FALA_PRIMEIRO,
+        t("Por esta conexão só dá para responder quem já escreveu. Escolha um número de WhatsApp para chamar o cliente."),
+        422,
+        { requestId },
+      );
     }
     return fail("internal_error", msg, 500, { requestId });
   }

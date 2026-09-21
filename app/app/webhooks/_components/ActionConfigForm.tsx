@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { usePipelines, usePipelineStages } from "@/hooks/webhooks/useWebhookSources";
 import { useAgentsList } from "@/hooks/ai/useAgents";
-import { channelLabel, useChannelSessions } from "@/hooks/channels/useChannelSessions";
+import { canalIniciaConversa, channelLabel, useChannelSessions } from "@/hooks/channels/useChannelSessions";
 import { useAssignableMembers } from "@/hooks/inbox/useAssignableMembers";
 import { apiClient } from "@/lib/api/client";
 import type { FollowupFlowPointerRow } from "@/hooks/followup/useFollowupFlows";
@@ -155,7 +155,7 @@ function SendWhatsappForm({
             <SelectValue placeholder={t("Escolha o número")} />
           </SelectTrigger>
           <SelectContent>
-            {(sessions ?? []).map((s) => (
+            {(sessions ?? []).filter(canalIniciaConversa).map((s) => (
               <SelectItem key={s.id} value={s.id} disabled={s.status !== "WORKING"}>
                 {channelLabel(s) + (s.status !== "WORKING" ? " — desconectado" : "")}
               </SelectItem>
@@ -260,7 +260,7 @@ function SendAiMessageForm({
             <SelectValue placeholder={t("Escolha o número")} />
           </SelectTrigger>
           <SelectContent>
-            {(sessions ?? []).map((s) => (
+            {(sessions ?? []).filter(canalIniciaConversa).map((s) => (
               <SelectItem key={s.id} value={s.id} disabled={s.status !== "WORKING"}>
                 {channelLabel(s) + (s.status !== "WORKING" ? " — desconectado" : "")}
               </SelectItem>

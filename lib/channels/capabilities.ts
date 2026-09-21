@@ -29,6 +29,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "server-convert",
     groups: "full",
     costPerMessage: false,
+    outboundFirst: true,
   },
   // Hetero-restrição: não me banem, mas a Meta me proíbe e me cobra.
   meta_cloud: {
@@ -42,6 +43,9 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "opus-only",
     groups: "limited",
     costPerMessage: true,
+    // Fala primeiro, mas só com definição aprovada — é `requiresTemplates` que
+    // diz COMO; esta diz que DÁ.
+    outboundFirst: true,
   },
   // Mesma hetero-restrição do canal oficial, por baixo: é um BSP: a WABA é da
   // Meta, os templates são aprovados pela Meta e a janela de 24h é da Meta. O
@@ -75,6 +79,35 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "opus-only",
     groups: "limited",
     costPerMessage: true,
+    // Fala primeiro, mas só com definição aprovada — é `requiresTemplates` que
+    // diz COMO; esta diz que DÁ.
+    outboundFirst: true,
+  },
+  // O primeiro canal que NÃO é WhatsApp: o widget de chat que o dono cola no
+  // próprio site. O transporte somos nós — a mensagem do atendente é gravada e o
+  // navegador do visitante a busca —, então não existe plataforma no meio para
+  // banir, cobrar, exigir modelo ou fechar janela. Quase tudo aqui é "sem
+  // restrição", e é por isso que a linha precisa existir: pelo invariante 4 da
+  // doutrina, gate que não se aplica responde `skipped: 'not_applicable'` a
+  // partir DESTA matriz, em vez de sumir da cadeia.
+  //
+  //  - `voiceNote: "server-convert"`. Quem toca o áudio é o `<audio>` do
+  //    navegador do visitante, que aceita o que o gravador do composer produz;
+  //    não há plataforma exigindo ogg/opus.
+  //  - `groups: "none"`. Uma conversa do site é sempre uma pessoa.
+  //  - `outboundFirst: false` é A restrição deste canal, e ela é física, não
+  //    política: o endereço do visitante é um token que nasce no navegador dele.
+  //    Quem nunca escreveu não tem endereço.
+  site_widget: {
+    freeformOutsideWindow: true,
+    requiresTemplates: false,
+    canManageTemplates: false,
+    banRisk: false,
+    minIntervalMs: null,
+    voiceNote: "server-convert",
+    groups: "none",
+    costPerMessage: false,
+    outboundFirst: false,
   },
 };
 
@@ -97,6 +130,8 @@ export const DEFAULT_CHANNEL_PROVIDER: ChannelProvider = "waha";
 export const CHANNEL_PROVIDER_WAHA: ChannelProvider = "waha";
 export const CHANNEL_PROVIDER_META: ChannelProvider = "meta_cloud";
 export const CHANNEL_PROVIDER_ZERNIO: ChannelProvider = "zernio";
+/** Chat do site (migration 0272) — o widget embutido no site do cliente. */
+export const CHANNEL_PROVIDER_SITE_WIDGET: ChannelProvider = "site_widget";
 /** Chamada de voz WhatsApp (spec 18). Não transporta mensagem — ver abaixo. */
 export const CHANNEL_PROVIDER_WACALLS: ChannelProvider = "wacalls";
 
@@ -119,7 +154,29 @@ export const PROVIDERS_DE_MENSAGEM = [
   "waha",
   "meta_cloud",
   "zernio",
+  "site_widget",
 ] as const satisfies readonly ProviderDeMensagem[];
+
+/**
+ * Os canais por onde dá para FALAR PRIMEIRO — o recorte de
+ * `PROVIDERS_DE_MENSAGEM` que serve a quem INICIA conversa (automação, o botão
+ * de chamar o cliente, o retorno do follow-up).
+ *
+ * Derivada da matriz, e não uma terceira lista escrita à mão: canal novo que
+ * declare `outboundFirst` entra ou sai daqui sozinho, e a lista não tem como
+ * discordar da capability.
+ */
+export const PROVIDERS_QUE_FALAM_PRIMEIRO: readonly ProviderDeMensagem[] =
+  PROVIDERS_DE_MENSAGEM.filter((p) => CHANNEL_CAPABILITIES[p].outboundFirst);
+
+/**
+ * `true` quando dá para abrir conversa por este canal com quem nunca escreveu.
+ * Provider desconhecido ou que não transporta mensagem responde `false` — o
+ * mesmo falhar-fechado de `transportaMensagem`.
+ */
+export function canalFalaPrimeiro(provider: string | null | undefined): boolean {
+  return (PROVIDERS_QUE_FALAM_PRIMEIRO as readonly string[]).includes(provider ?? "");
+}
 
 /**
  * `true` quando a linha de `channel_sessions` é um canal de mensagem.
@@ -134,6 +191,32 @@ export const PROVIDERS_DE_MENSAGEM = [
  */
 export function transportaMensagem(provider: string | null | undefined): boolean {
   return (PROVIDERS_DE_MENSAGEM as readonly string[]).includes(provider ?? "");
+}
+
+/**
+ * O MEIO pelo qual a pessoa fala — o vocabulário que a FEATURE pode usar.
+ *
+ * Provider é transporte (com quem o CRM fala); meio é o que o cliente usa (por
+ * onde ELE fala). Três providers diferentes são o mesmo meio, `whatsapp`, e é
+ * por isso que a tela nunca precisou saber qual deles estava por trás. Com o
+ * chat do site apareceu o segundo meio, e a tela passou a precisar de UMA
+ * distinção legítima: ícone de telefone não serve para uma conversa que veio de
+ * um site. Ela pergunta o meio — que é o mesmo valor de `conversations.channel`
+ * — e continua sem saber o provider.
+ */
+export const MEIOS_DE_CANAL = ["whatsapp", "site_chat"] as const;
+export type MeioDeCanal = (typeof MEIOS_DE_CANAL)[number];
+
+const MEIO_DO_PROVIDER: Record<ProviderDeMensagem, MeioDeCanal> = {
+  waha: "whatsapp",
+  meta_cloud: "whatsapp",
+  zernio: "whatsapp",
+  site_widget: "site_chat",
+};
+
+/** `null` para quem não transporta mensagem (voz) ou para provider que esta imagem não conhece. */
+export function meioDoCanal(provider: string | null | undefined): MeioDeCanal | null {
+  return MEIO_DO_PROVIDER[provider as ProviderDeMensagem] ?? null;
 }
 
 /**

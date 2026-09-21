@@ -51,6 +51,12 @@ describe("fronteira do padrão de nome de provider", () => {
     ["import { x } from '@/lib/waha/client'", "caminho de import"],
     ["meta_cloud", "outro provider do vocabulário"],
     ["graph.facebook.com", "host de provider"],
+    // O quarto provider — o primeiro que não é WhatsApp. Entrou na catraca no
+    // mesmo commit do canal, como o cabeçalho do padrão manda.
+    ["site_widget", "o provider do chat do site"],
+    ["site_widget_key", "coluna de banco do provider novo"],
+    ["CHANNEL_PROVIDER_SITE_WIDGET", "constante em caixa alta"],
+    ["SiteWidgetAdapter", "identificador PascalCase do provider novo"],
   ])("reconhece %s (%s)", (texto) => {
     expect(nomeiaProvider(texto)).toBe(true);
   });
@@ -61,6 +67,11 @@ describe("fronteira do padrão de nome de provider", () => {
     ["wahalla", "palavra que apenas começa igual"],
     ["Wahalla", "idem, em PascalCase — `Waha` seguido de minúscula não é segmento"],
     ["metacloud", "sem o separador, não é o termo do vocabulário"],
+    // O MEIO não é o provider: feature precisa poder dizer "chat do site".
+    ["site_chat", "o meio da conversa — vocabulário que a feature PODE usar"],
+    ["site-chat", "caminho de rota e de componente"],
+    ["SiteChat", "identificador do meio, não do transporte"],
+    ["widget", "palavra comum — sozinha não nomeia provider nenhum"],
     ["graphxfacebookxcom", "o ponto do host é literal, não coringa"],
   ])("NÃO reconhece %s (%s)", (texto) => {
     expect(nomeiaProvider(texto)).toBe(false);

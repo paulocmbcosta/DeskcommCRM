@@ -13,7 +13,7 @@ import { beginServiceAtOrigin } from "@/lib/atendimento/origem";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
-import { PROVIDERS_DE_MENSAGEM } from "@/lib/channels/capabilities";
+import { PROVIDERS_QUE_FALAM_PRIMEIRO } from "@/lib/channels/capabilities";
 
 
 /** Sessão viva da org: WORKING primeiro; senão qualquer uma não arquivada. */
@@ -28,7 +28,12 @@ export async function sessaoProntaParaEnvio(
       .eq("organization_id", organizationId);
     // Voz não manda texto: escolher a linha de chamada aqui faria a automação
     // "enviar" por um canal sem transporte de mensagem (spec 18).
-    q = q.in("provider", [...PROVIDERS_DE_MENSAGEM]);
+    //
+    // E quem chama esta função vai INICIAR conversa, então só serve canal que
+    // fala primeiro. O chat do site é canal de mensagem e não fala primeiro: o
+    // endereço do visitante nasce no navegador dele. Escolhê-lo aqui gravaria a
+    // mensagem como enviada numa conversa que ninguém jamais abriria.
+    q = q.in("provider", [...PROVIDERS_QUE_FALAM_PRIMEIRO]);
     if (soWorking) q = q.eq("status", "WORKING");
     if (ignorarArquivadas) q = q.is(ARCHIVED_AT, null);
     return q.order("created_at", { ascending: true }).limit(1);

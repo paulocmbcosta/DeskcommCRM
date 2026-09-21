@@ -14,7 +14,8 @@
 export type ChannelSessionRef =
   | { provider: "waha"; waha_session_name: string }
   | { provider: "meta_cloud"; meta_phone_number_id: string }
-  | { provider: "zernio"; zernio_account_id: string };
+  | { provider: "zernio"; zernio_account_id: string }
+  | { provider: "site_widget"; site_widget_key: string };
 
 /**
  * Colunas que um `select` do PostgREST precisa trazer para `resolveSessionRef`
@@ -22,7 +23,7 @@ export type ChannelSessionRef =
  * nomeia coluna de provider, e ela some da feature junto com a decisão.
  */
 export const CHANNEL_SESSION_REF_COLUMNS =
-  "provider, waha_session_name, meta_phone_number_id, zernio_account_id";
+  "provider, waha_session_name, meta_phone_number_id, zernio_account_id, site_widget_key";
 
 export function resolveSessionRef(session: ChannelSessionRef): string {
   switch (session.provider) {
@@ -35,5 +36,10 @@ export function resolveSessionRef(session: ChannelSessionRef): string {
     // endereça pelo id dele. Mandar o id da Meta aqui responde 404.
     case "zernio":
       return session.zernio_account_id;
+    // A chave PÚBLICA do widget. Não endereça envio nenhum (o transporte deste
+    // canal é o nosso próprio banco) — é o que identifica a linha, e é o que a
+    // rota pública recebe no path para descobrir a organização.
+    case "site_widget":
+      return session.site_widget_key;
   }
 }

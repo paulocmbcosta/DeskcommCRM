@@ -14,6 +14,7 @@ import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import {
   channelLabel,
+  ehChatDoSite,
   useChannelSessions,
   type ChannelSession,
 } from "@/hooks/channels/useChannelSessions";
@@ -222,7 +223,10 @@ export function ConnectionsClient({ wahaConfigured }: { wahaConfigured: boolean 
     invalidate();
   }, [invalidate, t]);
 
-  const list = sessions ?? [];
+  // O chat do site é canal de mensagem e vem na mesma lista (é ela que alimenta o
+  // filtro do inbox), mas mora na aba própria: aqui os cartões falam de QR,
+  // aparelho e limite diário de envio — nada disso existe num widget de site.
+  const list = (sessions ?? []).filter((c) => !ehChatDoSite(c));
 
   return (
     <div className="flex flex-col gap-4">

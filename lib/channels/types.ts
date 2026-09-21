@@ -9,7 +9,7 @@ import type { OutboundMedia } from "@/lib/waha/media-send";
 
 export type { OutboundMedia };
 
-export type ChannelProvider = "waha" | "meta_cloud" | "zernio" | "wacalls";
+export type ChannelProvider = "waha" | "meta_cloud" | "zernio" | "wacalls" | "site_widget";
 
 /**
  * Os providers que transportam MENSAGEM — o subconjunto sobre o qual a matriz
@@ -54,6 +54,20 @@ export interface ChannelCapabilities {
   groups: "full" | "limited" | "none";
   /** Mensagem entregue gera custo → decisões de envio precisam considerar orçamento. */
   costPerMessage: boolean;
+  /**
+   * O canal consegue falar PRIMEIRO com quem nunca escreveu?
+   *
+   * `false` = só existe conversa que o CLIENTE abriu: não há endereço para
+   * alcançar alguém de fora da thread. É o caso do chat do site — o "endereço"
+   * do visitante é um token que nasce no navegador dele, na primeira mensagem.
+   *
+   * Sem esta pergunta, quem escolhe "um canal qualquer para iniciar conversa"
+   * (automação, o botão de chamar o cliente) escolheria este, gravaria a
+   * mensagem como enviada e ninguém jamais a leria — falha-em-verde. Distinta
+   * de `requiresTemplates`: o canal oficial exige modelo para falar primeiro,
+   * mas FALA; este não tem como.
+   */
+  outboundFirst: boolean;
 }
 
 /**
