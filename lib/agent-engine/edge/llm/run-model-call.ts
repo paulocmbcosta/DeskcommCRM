@@ -36,6 +36,7 @@ import {
   SQL_ORCAMENTO,
   type ChaveDeOrcamento,
 } from './orcamento';
+import { serializarEnvios } from './fila-de-envio';
 import { costCents } from './pricing';
 import { createDefaultRegistry, type ProviderRegistry } from './providers';
 import { buildStablePrefix } from './stable-prefix';
@@ -411,6 +412,17 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     cacheTtl: cfg.cacheTtl ?? '1h',
   });
 
+  // As ferramentas de envio entram numa fila POR CHAMADA, e a fila é a camada
+  // mais externa — por cima da guarda de fronteira. O SDK executa as tool calls
+  // de um step em paralelo; a fila faz as mensagens saírem na ordem da resposta
+  // do modelo (defeito medido: quatro `send_message` num step, saindo na ordem
+  // de conclusão). Ela precisa tomar a vez ANTES de qualquer `await`, e
+  // `guardServiceTools` espera uma consulta ao banco antes de chamar o que ela
+  // envolve — por isso a ordem das duas chamadas abaixo é o conserto, não estilo.
+  // Detalhes em `fila-de-envio.ts`.
+  const toolsGuardadas = guardServiceTools(prefix.tools);
+  const tools = toolsGuardadas === undefined ? undefined : serializarEnvios(toolsGuardadas);
+
   const startedAt = Date.now();
   let result: Awaited<ReturnType<typeof generateText>>;
   try {
@@ -423,7 +435,7 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       model: factory(config.apiKey, model, decisao.baseUrl ?? undefined),
       system: prefix.system,
       messages: input.messages,
-      tools: guardServiceTools(prefix.tools),
+      tools,
       stopWhen: input.maxSteps === undefined ? undefined : stepCountIs(input.maxSteps),
       temperature,
       topP,

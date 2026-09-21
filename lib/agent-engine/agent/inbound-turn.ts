@@ -3476,6 +3476,11 @@ async function executarTurnoDoAgente(
             }),
           )
         : rawTools;
+    // A ORDEM dos envios de um mesmo step não é garantida aqui: o SDK executa as
+    // tool calls em paralelo, e quem as põe em fila é o seam (`runModelCall`, ver
+    // `edge/llm/fila-de-envio.ts`) — por fora da guarda de fronteira, que espera
+    // o banco antes de chamar este conjunto. Uma fila aqui dentro tomaria a vez na
+    // ordem em que aquela consulta volta.
     const tools = wrapToolsWithBreaker(previewTools, {
       thresholds: deps.knobs.breaker,
       readOnlyTools: READ_ONLY_TOOLS,
@@ -3556,9 +3561,20 @@ async function executarTurnoDoAgente(
     // Sufixos por-lead (situacionais, voláteis — depois do prefixo cacheável F2-17): corpos de
     // skill casadas (F3-09) + hint do classificador (F3-11) + instrução de split (F4-xx, quando
     // split_messages está on — Onda 4). Vazios são omitidos.
+    //
+    // O split pede UM `send_message`. A versão anterior dizia "prefira várias mensagens
+    // curtas a um texto único e longo", e o modelo a lia como várias CHAMADAS — medido em
+    // 21/09/2026, quatro `send_message` num step só, que o SDK executa em paralelo e que
+    // chegavam fora de ordem. Quem divide em mensagens é `sendInBubbles`, e ele só
+    // funciona sobre UM corpo: a instrução antiga empurrava o modelo justamente para o
+    // caminho em que a ordem dependia de corrida. A fila de envio (`fila-de-envio.ts`) conserta a
+    // ordem; esta frase tira o motivo de o modelo picotar. Sem "bolha" nem "split" no
+    // texto: o que está no prompt o modelo pode repetir ao cliente.
     const splitHint =
       (agentConfig?.splitMessages ?? false)
-        ? 'Responda em mensagens curtas e naturais, uma ideia por mensagem — como uma pessoa digitando no WhatsApp. Prefira várias mensagens curtas a um texto único e longo.'
+        ? 'Escreva como uma pessoa no WhatsApp: frases curtas, uma ideia por parágrafo, com uma linha em branco entre os parágrafos. ' +
+          'Mande a resposta inteira numa ÚNICA chamada de send_message — o sistema já divide um texto longo em mensagens menores e as entrega na ordem. ' +
+          'Não faça uma chamada de send_message para cada parágrafo.'
         : '';
     // Spec 15: o `case_id` real do caso 'awaiting_lead' desta conversa, se houver — sem
     // isso o modelo nunca consegue chamar provide_case_update quando o lead simplesmente
