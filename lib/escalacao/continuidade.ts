@@ -16,8 +16,39 @@
  * E devolve DUAS coisas de propósito diferentes: os campos estruturados (para
  * quem for programar em cima) e `resumo`, um texto em português corrido — é o
  * `resumo` que entra no ritual de abertura do turno, porque é lá que o modelo lê.
+ *
+ * ─── Só o atendimento VIGENTE ───────────────────────────────────────────────
+ *
+ * A conversa é UMA por cliente e canal; o atendimento é o episódio dentro dela
+ * (migration 0266), e o atendimento novo COMEÇA DO ZERO (decisão do dono do
+ * produto, 2026-09-19). Este módulo lia a conversa inteira: a nota "enviei a 2ª
+ * via do boleto", do Financeiro encerrado na segunda, entrava como "o que o
+ * cliente já considera combinado" na devolução do Suporte da quarta — e o
+ * comprovante que o Financeiro pediu virava o `next_action` do checkpoint de
+ * retomada, o campo que existe para o agente AGIR.
+ *
+ * O recorte vem de `janelaDoAtendimento` — a régua ÚNICA, a mesma das mensagens
+ * e das notas na tela. Nada aqui lê `atendimentos` por conta própria.
+ *
+ *   · notas     → pelo horário em que foram ESCRITAS (`created_at`);
+ *   · chamados  → pelo horário em que foram ABERTOS (`opened_at`);
+ *   · decisões  → seguem o CHAMADO, não o próprio horário. Chamado da segunda
+ *     respondido na quarta já é `service_stale` para a rota de resposta
+ *     (`app/api/v1/ai/cases/[id]/reply/route.ts`): "fica registrada, mas não
+ *     altera o atendimento novo". Recortar o evento pelo horário dele poria no
+ *     resumo a resposta que aquela regra decidiu não repassar.
+ *
+ * É o mesmo PRINCÍPIO daquela rota, não a mesma régua. Ela mede por fronteira de
+ * serviço (`service_revision` + demanda), que também muda DENTRO de um
+ * atendimento — troca de demanda, "Reabrir" pelo atendente. Nesses casos a
+ * resposta é `service_stale` lá e segue no resumo aqui, porque o atendimento é o
+ * mesmo. A unidade de "começa do zero" é o atendimento; por isso a janela.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { janelaDoAtendimento } from "@/lib/atendimento/janela-do-atendimento";
+import { logger } from "@/lib/logger";
+import { ATENDIMENTO_VIGENTE } from "@/lib/schemas/messaging";
 
 /** O que a pessoa decidiu num chamado, na linguagem de quem vai ler. */
 export interface DecisaoHumana {
@@ -59,6 +90,12 @@ export interface ContinuidadeHumana {
   pendenciaComOCliente: string | null;
   /** O texto que o agente lê. Vazio quando não houve atendimento humano. */
   resumo: string;
+  /**
+   * true = a janela do atendimento não pôde ser lida e NADA foi consultado.
+   * "Não li" e "não havia nada" devolvem os mesmos campos vazios; sem isto, quem
+   * chama grava no audit, como fato, que a equipe não registrou nada.
+   */
+  leituraFalhou: boolean;
 }
 
 /** Teto por superfície: o resumo entra num prompt, e prompt tem orçamento. */
@@ -70,14 +107,20 @@ const ACAO_LEGIVEL: Record<string, string> = {
   escalate: "escalou para outra pessoa",
 };
 
-export const CONTINUIDADE_VAZIA: ContinuidadeHumana = {
-  houveAtendimentoHumano: false,
-  decisoes: [],
-  notas: [],
-  chamados: [],
-  pendenciaComOCliente: null,
-  resumo: "",
-};
+/** Sempre um objeto NOVO: devolver uma constante entregaria arrays compartilhados a quem chama. */
+function continuidadeVazia(leituraFalhou: boolean): ContinuidadeHumana {
+  return {
+    houveAtendimentoHumano: false,
+    decisoes: [],
+    notas: [],
+    chamados: [],
+    pendenciaComOCliente: null,
+    resumo: "",
+    leituraFalhou,
+  };
+}
+
+export const CONTINUIDADE_VAZIA: ContinuidadeHumana = continuidadeVazia(false);
 
 interface CaseRow {
   id: string;
@@ -101,7 +144,7 @@ interface NoteRow {
 }
 
 /**
- * Lê o rastro humano de UMA conversa.
+ * Lê o rastro humano do atendimento VIGENTE de uma conversa.
  *
  * Service role bypassa RLS, então `organization_id` entra explícito em toda
  * query — nunca vem do input do modelo.
@@ -111,11 +154,32 @@ export async function lerContinuidadeHumana(
   organizationId: string,
   conversationId: string,
 ): Promise<ContinuidadeHumana> {
-  const { data: casesData } = await supabase
+  const janela = await janelaDoAtendimento(
+    supabase,
+    organizationId,
+    conversationId,
+    ATENDIMENTO_VIGENTE,
+  );
+  if (!janela.ok) {
+    // Cair em "sem recorte" entregaria ao agente exatamente o que o recorte
+    // existe para segurar. Voltar sem o rastro é degradação — e fica DITA aqui,
+    // porque silenciar reproduziria o agente cego que este módulo conserta.
+    logger.error("[escalacao.continuidade] janela do atendimento ilegível — o agente retoma sem o rastro humano", {
+      conversation_id: conversationId,
+      motivo: janela.motivo,
+      ...(janela.motivo === "erro_de_leitura" ? { detalhe: janela.detalhe } : {}),
+    });
+    return continuidadeVazia(true);
+  }
+
+  let chamadosDaJanela = supabase
     .from("agent_cases")
     .select("id, title, status, opened_at, closed_at")
     .eq("organization_id", organizationId)
-    .eq("conversation_id", conversationId)
+    .eq("conversation_id", conversationId);
+  if (janela.desde) chamadosDaJanela = chamadosDaJanela.gte("opened_at", janela.desde);
+  if (janela.ate) chamadosDaJanela = chamadosDaJanela.lt("opened_at", janela.ate);
+  const { data: casesData } = await chamadosDaJanela
     .order("opened_at", { ascending: false })
     .limit(LIMITE_POR_SUPERFICIE);
   const cases = (casesData ?? []) as CaseRow[];
@@ -136,11 +200,14 @@ export async function lerContinuidadeHumana(
     eventos = ((eventsData ?? []) as CaseEventRow[]).slice(-LIMITE_POR_SUPERFICIE);
   }
 
-  const { data: notesData } = await supabase
+  let notasDaJanela = supabase
     .from("conversation_notes")
     .select("body, created_by_name, created_at")
     .eq("organization_id", organizationId)
-    .eq("conversation_id", conversationId)
+    .eq("conversation_id", conversationId);
+  if (janela.desde) notasDaJanela = notasDaJanela.gte("created_at", janela.desde);
+  if (janela.ate) notasDaJanela = notasDaJanela.lt("created_at", janela.ate);
+  const { data: notesData } = await notasDaJanela
     .order("created_at", { ascending: false })
     .limit(LIMITE_POR_SUPERFICIE);
   const notas = ((notesData ?? []) as NoteRow[])
@@ -180,6 +247,7 @@ export async function lerContinuidadeHumana(
     resumo: houveAtendimentoHumano
       ? montarResumo({ decisoes, notas, pendenciaComOCliente })
       : "",
+    leituraFalhou: false,
   };
 }
 
