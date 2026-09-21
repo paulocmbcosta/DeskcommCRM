@@ -1,6 +1,6 @@
 ---
 name: deskcomm-cliente-novo
-description: Guia para montar um cliente novo no DeskcommCRM por nicho — clínica, imobiliária, serviços/agência, curso/infoproduto, loja — criando os agentes de IA, roteadores, follow-ups, base de conhecimento, memória e funil, na ordem certa e pela tela. Use SEMPRE que alguém quiser "configurar o CRM para um cliente", "criar o agente da clínica", "montar o atendimento", "que prompt eu uso", "como faço o roteador/follow-up", "subir a base de conhecimento", ou terminou o onboarding e pergunta "e agora?" — inclusive agências implantando para terceiros. Faz a triagem, monta o pacote do nicho como texto pronto para colar e conduz tela a tela até o teste.
+description: Guia para montar um cliente novo no DeskcommCRM por nicho — clínica, imobiliária, provedor de internet, serviços/agência, curso/infoproduto, loja — criando agentes de IA, setores (times), roteadores, follow-ups, base de conhecimento, memória e funil, e ligando o ERP (IXC), na ordem certa e pela tela. Use SEMPRE que alguém quiser "configurar o CRM para um cliente", "criar o agente", "montar o atendimento", "que prompt eu uso", "como faço o roteador/follow-up/setores", "subir a base de conhecimento", "migrar o agente de outra plataforma", ou terminou o onboarding e pergunta "e agora?" — inclusive agências implantando para terceiros. Faz a triagem, monta o pacote do nicho como texto pronto para colar e conduz tela a tela até o teste.
 metadata:
   publico: leigo, agência, implantador
   ponto-de-partida: depois do onboarding (o wizard para no funil e nos convites)
@@ -35,10 +35,14 @@ tem. Um usuário pediu exatamente isto na discussão #673 do repositório.
 
 Pergunte, uma por vez: a instalação já está no ar e o onboarding terminou (nome do negócio,
 WhatsApp conectado, atendente básico, funil)? É para o próprio negócio ou para um cliente? Qual o
-nicho — clínica/consultório, imobiliária, serviços/agência/obra, curso/mentoria/infoproduto, loja?
+nicho — clínica/consultório, imobiliária, provedor de internet, serviços/agência/obra,
+curso/mentoria/infoproduto, loja? Já existe um agente em outra plataforma que atende hoje?
 
 Sem instalação: guia `deskcomm-instalar`. Sem WhatsApp conectado: nada publica — o agente exige um
-número com status WORKING. Nicho fora dos cinco: use o pacote genérico e adapte com a triagem.
+número com status WORKING. Nicho fora dos seis: use o pacote genérico e adapte com a triagem. Agente
+em outra plataforma: leia a configuração dele (só leitura) e traduza com
+`references/migrar-de-outra-plataforma.md` — não recomece do zero. Se a pessoa disse que mandou o
+documento do agente, **confira que o arquivo é mesmo esse** antes de construir em cima dele.
 
 ## Passo 1 — a triagem
 
@@ -48,7 +52,7 @@ para áudio e base de conhecimento), o funil (etapas com uma "ganhou" e uma "per
 os agentes (um ou vários? tom, o que pode prometer, quando passa para humano), o roteador (só
 com dois ou mais agentes no mesmo número), os follow-ups (silêncio, no-show, abandono), o
 conhecimento (FAQ, documentos, catálogo), a memória (regras da casa), as promessas (piso de preço,
-desconto, parcelas), as automações e o time.
+desconto, parcelas), as automações, o sistema que a empresa já usa (ERP) e os setores do time.
 
 Registre as respostas num arquivo `pacote-<cliente>.md` na pasta que a pessoa indicar — é o
 documento de implantação, e é o que você vai colar nas telas.
@@ -67,32 +71,41 @@ gerente Fulano" para tudo que não souber — isso faz o modelo parar de usar a 
 A ordem importa porque cada peça exige a anterior. Tela a tela, com os campos e o que cada um
 faz: `references/pela-tela.md`.
 
-1. **Conexões** — o número precisa estar WORKING (o onboarding já fez).
+1. **Conexões** — o número precisa estar WORKING (o onboarding já fez). Veja se o canal está em
+   **modo de teste** e quais números estão na lista: é o que decide quem a IA responde depois de
+   publicada.
 2. **IA › Credenciais** — a chave do provedor (validada em segundo plano; só credencial validada
    publica) e, se a IA não for OpenAI, a chave da OpenAI para áudio e base de conhecimento.
 3. **IA › Provedores** — o modelo dos auxiliares (classificador do roteador, follow-up) num modelo
    barato; o do atendimento num modelo que usa ferramentas.
-4. **Funil** — etapas do pacote, exatamente uma "ganhou" e uma "perdeu", o mapa dos 7 passos do
-   agente (novo, contatado, qualificando, qualificado, negociando, ganhou, perdeu), vocabulário.
+4. **Funil** — **Tornar padrão** o funil do nicho (é onde nasce toda conversa nova); etapas do
+   pacote, exatamente uma "ganhou" e uma "perdeu", o mapa dos 7 passos do agente (etapa ou "não
+   mover"), vocabulário e motivos de perda.
+4b. **Configurações › Times** — um time por setor, com "quando usar", horário e quem atende.
+4c. **Configurações › Conectores** — se a empresa usa um ERP com conector (IXC); o token é da pessoa.
 5. **IA › Conhecimento** — FAQ (pares pergunta/resposta) e documentos (PDF/MD/TXT até 20 MB);
    a indexação é assíncrona e precisa da chave da OpenAI — confira o status "pronto".
 6. **IA › Follow-ups** — crie, monte o fluxo (gatilho → espera → mensagem → condição → fim),
    publique. Fluxo não publicado não roda.
 7. **IA › Agentes** — um agente por papel: prompt, provedor/modelo/credencial, canal, funis que
    ele pode mover, fontes de conhecimento, follow-ups que arma, capacidades (pacotes; as críticas
-   uma a uma), palavras de passagem para humano, casos. Salve como rascunho.
+   uma a uma), palavras de passagem para humano, casos. Salve como rascunho. Com setores, ligue o
+   pacote **Passar para um humano** — é ele que dá ao agente a lista de setores.
 8. **Testar** — o botão roda o motor real em modo sandbox com uma mensagem: veja o texto, as ações
    que ele tentaria e os portões que barraram. Roteiro de 5 mensagens do nicho em
-   `references/nichos.md`.
+   `references/nichos.md`. Confira nas **ações** (não no texto) se a transferência levou o setor, e
+   leia a ordem das mensagens.
 9. **Publicar** — a pessoa clica. Só depois: **IA › Roteadores** (dois ou mais agentes no mesmo
    número: intenções com descrição e exemplos, fallback), **IA › Memória** (regras da casa),
    **IA › Skills** (instalar `agendamento` e `objecao-preco` se for personalizar), automações,
-   convites do time.
+   convites do time. **Conexões › lista de teste**: o número de quem vai testar entra na lista; abrir
+   o canal para todos é a última decisão, dela.
 
 ## Passo 4 — entregue
 
-Checklist final, medido na tela: agente publicado com o número certo; roteador ativo com todos
-os membros publicados; follow-ups ativos; base com status "pronto"; memória publicada; um teste
+Checklist final, medido na tela: agente publicado com o número certo; canal em modo de teste com
+os números de quem testa (ou aberto, se a pessoa decidiu); setores com gente e horário; funil do
+nicho como padrão; roteador ativo com todos os membros publicados; follow-ups ativos; base com status "pronto"; memória publicada; um teste
 de cada situação do roteiro respondido como esperado; a pessoa sabe onde muda cada coisa. Se algo
 ficou de fora (sem chave da OpenAI, sem documentos), escreva no `pacote-<cliente>.md` o que falta e
 o que acontece enquanto falta — não deixe a lacuna invisível.
@@ -107,3 +120,6 @@ o que acontece enquanto falta — não deixe a lacuna invisível.
   motor veta resposta com jargão, e o prompt vira a origem do veto.
 - Não instala uma skill do produto ou liga uma capacidade "crítica" (enviar mensagem avulsa,
   cancelar agenda, fechar caso) sem dizer o que ela permite ao agente fazer sozinho.
+- Não nomeia setor no prompt (o agente os descobre pelo "quando usar") e não abre o canal para
+  todos sem a pessoa decidir — num número que também é pessoal, a IA responderia a amigos e família.
+- Não digita credencial de ninguém: chave de IA e token de ERP são colados pela pessoa.

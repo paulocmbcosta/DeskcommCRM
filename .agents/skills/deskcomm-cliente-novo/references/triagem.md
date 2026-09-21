@@ -17,6 +17,7 @@ o "por quê" está ao lado para você explicar quando a pessoa hesitar. Registre
 | pergunta | por quê |
 |---|---|
 | Qual número de WhatsApp vai atender (já conectado?) | o agente exige um número com status WORKING para publicar |
+| Esse número é só do negócio, ou também tem conversa pessoal/de fornecedor? E de que celular você vai testar? | o canal nasce em **modo de teste**: a IA só responde aos números da lista de teste. Número misto fica em teste até a pessoa decidir abrir |
 | Horário em que o agente responde (dias, início, fim) | fora da janela o turno é **adiado**, não perdido — mas a pessoa precisa saber que o cliente das 23h só recebe resposta de manhã |
 | Quantas mensagens por dia esse número aguenta? (número novo = aquecimento) | limite diário e aquecimento evitam bloqueio do WhatsApp |
 
@@ -85,10 +86,25 @@ só se a tabela existir.
 Formulário do site, anúncios (Meta), loja (Nuvemshop), agenda (Google): o que entra no funil e o que
 o agente faz quando entra.
 
-## 12. O time
+**Sistema que a empresa já usa (ERP)**: provedor de internet costuma ter IXC; se houver conector
+para ele, peça a quem administra o ERP um token **dedicado e só de leitura** — a pessoa cadastra em
+Configurações › Conectores, você não digita credencial. Pergunte também **o que a IA pode dizer
+sobre dinheiro e para quem** (ver "identidade antes de dado financeiro" no pacote de provedor).
+
+**Veio de outra plataforma?** Peça acesso só de leitura à configuração antiga e siga
+`migrar-de-outra-plataforma.md` — não recomece do zero.
+
+## 12. O time e os setores
 
 Quem atende quando a IA passa, com que e-mail e papel (atendente, gerente, admin); como as
 conversas se distribuem (manual ou rodízio).
+
+| pergunta | por quê |
+|---|---|
+| Para quais setores a IA passa conversa? (vendas, financeiro, suporte, cancelamento…) | cada setor vira um time; o agente escolhe o time pelo assunto |
+| Que assuntos vão para cada setor, dito como o cliente fala? | é o "quando usar" do time — o texto que o agente lê para decidir |
+| Horário de cada setor (pode ser diferente do geral) | fora do horário a conversa espera na fila do time, e o agente avisa o cliente |
+| Quem está em cada setor? | só quem já foi convidado; para o primeiro teste, o próprio dono em todos basta |
 
 ## O que você não pergunta
 
