@@ -51,11 +51,19 @@
  *
  * Nada dentro do envio: guarda de fronteira, breaker, teto por turno, cadeia de
  * guardrails, bolhas e prévia rodam como antes — só que um de cada vez, como
- * rodariam se o modelo tivesse chamado uma ferramenta por step. Uma consequência
- * é deliberada e vale dizer: o teto de envios por turno (`maxSendsPerTurn`) é
- * checado no começo do `execute`, e com os envios paralelos todos o checavam com
- * o contador ainda em zero. Serializado, o quarto envio de um step vê os três
- * anteriores — que é o que o teto sempre disse fazer.
+ * rodariam se o modelo tivesse chamado uma ferramenta por step. Duas
+ * consequências são deliberadas e valem dizer:
+ *
+ * - O teto de envios por turno (`maxSendsPerTurn`) é checado no começo do
+ *   `execute`. Em paralelo, quem o encontrava estourado era quem chegava por
+ *   último — medido no invariante de turno, sem a fila, a mensagem cortada foi a
+ *   PRIMEIRA, a saudação, porque era a mais lenta. Em fila, o que fica de fora é
+ *   o fim da resposta.
+ * - Em paralelo, cada envio segurava uma conexão do pool esperando o advisory
+ *   lock por número, e quem tinha o lock precisava de OUTRA para gravar o trace
+ *   (`persistTrace` escreve pelo pool, fora da transação). Medido: quatro envios
+ *   num step, com um pool de quatro conexões, travaram o turno até o timeout.
+ *   Em fila, um turno segura no máximo um envio por vez.
  *
  * Erro de um envio não trava os seguintes: a corrente segue, e o erro volta a
  * quem chamou (o SDK o entrega ao modelo como resultado da tool, como antes).

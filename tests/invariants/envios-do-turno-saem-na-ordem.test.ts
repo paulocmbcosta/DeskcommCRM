@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
 
 import type * as InboundTurn from "@/lib/agent-engine/agent/inbound-turn";
@@ -109,7 +109,12 @@ interface OpcoesDoModelo {
  * que o Sonnet fez na medição); depois, encerra. Chamada sem ferramenta é o
  * classificador de promessa (quando a prévia o liga) ou o fechamento do turno.
  */
-function modeloDasDuasMensagens(opts: { aoEmitir?: () => void; classificadorLento?: boolean }) {
+function modeloDasDuasMensagens(opts: {
+  aoEmitir?: () => void;
+  classificadorLento?: boolean;
+  corpos?: string[];
+}) {
+  const corpos = opts.corpos ?? [SAUDACAO, PERGUNTA];
   let emitiu = false;
   return async (o: OpcoesDoModelo) => {
     const texto = JSON.stringify(o.prompt ?? "");
@@ -128,7 +133,7 @@ function modeloDasDuasMensagens(opts: { aoEmitir?: () => void; classificadorLent
       emitiu = true;
       opts.aoEmitir?.();
       return {
-        content: [SAUDACAO, PERGUNTA].map((body, i) => ({
+        content: corpos.map((body, i) => ({
           type: "tool-call" as const,
           toolCallId: `c${i + 1}`,
           toolName: "send_message",
@@ -204,100 +209,122 @@ beforeAll(async () => {
   );
 });
 
-describe("turno real (withServiceJob, como o worker) — duas mensagens no mesmo step", () => {
-  let enviados: string[] = [];
-  beforeEach(() => {
-    enviados = [];
+/**
+ * Roda um turno real dentro de `withServiceJob`, como o worker. O banco da GUARDA de
+ * fronteira é o mesmo pool, com a 1ª consulta depois da resposta do modelo atrasada
+ * — só as consultas da guarda passam por ele (é o `db` do escopo de
+ * `withServiceJob`). Devolve os corpos na ordem em que chegaram ao canal.
+ */
+async function rodaTurnoReal(opts: {
+  corpos?: string[];
+  maxSendsPerTurn?: number;
+}): Promise<{ enviados: string[]; atrasoConsumido: boolean }> {
+  const enviados: string[] = [];
+  let armado = false;
+  const bancoDaGuarda: Queue.Queryable = {
+    query: (async (texto: string, valores?: unknown[]) => {
+      if (armado) {
+        armado = false;
+        await dorme(ATRASO_MS);
+      }
+      return pool.query(texto, valores);
+    }) as Queue.Queryable["query"],
+  };
+
+  const handler = m.createInboundTurnHandler({
+    crmCfg: { supabase: {} as never },
+    llmCfg: { anthropicApiKey: "fake" } as never,
+    knobs: {
+      historyLimit: 10,
+      maxContextTokens: 1000,
+      notesIndexMaxTokens: 500,
+      maxSteps: 6,
+      ...(opts.maxSendsPerTurn !== undefined ? { maxSendsPerTurn: opts.maxSendsPerTurn } : {}),
+      queuedRetryDelayMs: 1000,
+      breaker: {
+        exactFailureWarn: 2,
+        exactFailureBlock: 5,
+        sameToolFailureWarn: 3,
+        sameToolFailureHalt: 8,
+        noProgressWarn: 3,
+        noProgressBlock: 5,
+      },
+    },
+    log: m.createLogger(),
+    registry: m.createFakeRegistry(
+      modeloDasDuasMensagens({
+        aoEmitir: () => (armado = true),
+        ...(opts.corpos !== undefined ? { corpos: opts.corpos } : {}),
+      }) as never,
+    ),
+    channel: () =>
+      ({
+        channel: "captura",
+        send: async (i: { body: string }) => {
+          enviados.push(i.body);
+          return {
+            kind: "sent" as const,
+            idempotencyKey: `k${enviados.length}`,
+            messageId: `m${enviados.length}`,
+          };
+        },
+        sessionHealth: async () => ({ healthy: true, status: "WORKING" }),
+        capabilities: () => ({ freeform: true, media: true, audio: true }),
+        costPerMessage: () => ({ currency: "BRL", cents: 0 }),
+      }) as never,
+    // Terça, 15h BRT: dentro da janela anti-ban — sem isto o `pacing` vetaria
+    // por horário e o teste mediria o motivo errado.
+    clock: () => new Date("2026-07-28T18:00:00Z"),
+    sleep: async () => {},
   });
 
+  await pool.query("update job_queue set status = 'done' where status = 'pending'");
+  const fronteira = (
+    await pool.query(
+      "select fn_service_boundary($1,$2)-'status'-'demanda_fechada_em'-'service_started_at' as b",
+      [ORG, CONV],
+    )
+  ).rows[0].b;
+  const { job } = await m.queue.enqueueJob(pool, ORG, {
+    kind: "inbound_turn",
+    leadId: CONTACT,
+    payload: {
+      conversation_id: CONV,
+      contact_id: CONTACT,
+      channel_session_id: SESSION,
+      inbound_message_id: MSG,
+      crm_event_id: randomUUID(),
+      service_boundary: fronteira,
+    },
+    maxAttempts: 1,
+  });
+  const [claimed] = await m.queue.claimJobs(pool, { workerId: "envios-em-ordem", maxConcurrency: 1 });
+  expect(claimed?.id).toBe(job.id);
+
+  await m.withServiceJob(bancoDaGuarda, claimed!, () =>
+    handler(claimed!, pool, { workerId: "envios-em-ordem" }),
+  );
+  await m.queue.completeJob(pool, claimed!.id, "envios-em-ordem");
+  return { enviados, atrasoConsumido: !armado };
+}
+
+describe("turno real (withServiceJob, como o worker) — várias mensagens no mesmo step", () => {
   it("saem na ordem da resposta, mesmo com a 1ª atrasada antes do lock", async () => {
-    // O banco da GUARDA de fronteira: o mesmo pool, com a 1ª consulta depois da
-    // resposta do modelo atrasada. Só as consultas da guarda passam por ele — é o
-    // `db` do escopo de `withServiceJob`, como no worker.
-    let armado = false;
-    const bancoDaGuarda: Queue.Queryable = {
-      query: (async (texto: string, valores?: unknown[]) => {
-        if (armado) {
-          armado = false;
-          await dorme(ATRASO_MS);
-        }
-        return pool.query(texto, valores);
-      }) as Queue.Queryable["query"],
-    };
-
-    const handler = m.createInboundTurnHandler({
-      crmCfg: { supabase: {} as never },
-      llmCfg: { anthropicApiKey: "fake" } as never,
-      knobs: {
-        historyLimit: 10,
-        maxContextTokens: 1000,
-        notesIndexMaxTokens: 500,
-        maxSteps: 6,
-        queuedRetryDelayMs: 1000,
-        breaker: {
-          exactFailureWarn: 2,
-          exactFailureBlock: 5,
-          sameToolFailureWarn: 3,
-          sameToolFailureHalt: 8,
-          noProgressWarn: 3,
-          noProgressBlock: 5,
-        },
-      },
-      log: m.createLogger(),
-      registry: m.createFakeRegistry(
-        modeloDasDuasMensagens({ aoEmitir: () => (armado = true) }) as never,
-      ),
-      channel: () =>
-        ({
-          channel: "captura",
-          send: async (i: { body: string }) => {
-            enviados.push(i.body);
-            return {
-              kind: "sent" as const,
-              idempotencyKey: `k${enviados.length}`,
-              messageId: `m${enviados.length}`,
-            };
-          },
-          sessionHealth: async () => ({ healthy: true, status: "WORKING" }),
-          capabilities: () => ({ freeform: true, media: true, audio: true }),
-          costPerMessage: () => ({ currency: "BRL", cents: 0 }),
-        }) as never,
-      // Terça, 15h BRT: dentro da janela anti-ban — sem isto o `pacing` vetaria
-      // por horário e o teste mediria o motivo errado.
-      clock: () => new Date("2026-07-28T18:00:00Z"),
-      sleep: async () => {},
-    });
-
-    const fronteira = (
-      await pool.query(
-        "select fn_service_boundary($1,$2)-'status'-'demanda_fechada_em'-'service_started_at' as b",
-        [ORG, CONV],
-      )
-    ).rows[0].b;
-    const { job } = await m.queue.enqueueJob(pool, ORG, {
-      kind: "inbound_turn",
-      leadId: CONTACT,
-      payload: {
-        conversation_id: CONV,
-        contact_id: CONTACT,
-        channel_session_id: SESSION,
-        inbound_message_id: MSG,
-        crm_event_id: randomUUID(),
-        service_boundary: fronteira,
-      },
-      maxAttempts: 1,
-    });
-    const [claimed] = await m.queue.claimJobs(pool, { workerId: "envios-em-ordem", maxConcurrency: 1 });
-    expect(claimed?.id).toBe(job.id);
-
-    await m.withServiceJob(bancoDaGuarda, claimed!, () =>
-      handler(claimed!, pool, { workerId: "envios-em-ordem" }),
-    );
-    await m.queue.completeJob(pool, claimed!.id, "envios-em-ordem");
-
+    const { enviados, atrasoConsumido } = await rodaTurnoReal({});
     // Guarda de vacuidade: o atraso foi consumido — senão a corrida nem aconteceu.
-    expect(armado).toBe(false);
+    expect(atrasoConsumido).toBe(true);
     expect(enviados).toEqual([SAUDACAO, PERGUNTA]);
+  });
+
+  it("o teto de envios por turno vale dentro do step — e corta o FIM da resposta", async () => {
+    // O teto é checado no começo do `execute`. Em paralelo, quem o encontrava
+    // estourado era quem chegava por último: medido com a fila sabotada, a cortada
+    // foi "teto: primeira" — a atrasada na guarda. Em fila, o quarto vê os três
+    // anteriores, e o que fica de fora é o FIM da resposta. Corpos próprios: o gate
+    // `spinning` veta corpo repetido entre turnos da mesma sessão.
+    const corpos = ["teto: primeira", "teto: segunda", "teto: terceira", "teto: quarta"];
+    const { enviados } = await rodaTurnoReal({ corpos, maxSendsPerTurn: 3 });
+    expect(enviados).toEqual(corpos.slice(0, 3));
   });
 });
 
