@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api/client";
+import type { FormaDeCobranca } from "@/lib/conectores/ixc/faturas";
 import type { EstadoDoPainelIxc } from "@/lib/conectores/ixc/painel";
 
 /**
@@ -54,13 +55,19 @@ export function useDesvincularIxc(contactId: string | null) {
   });
 }
 
+/**
+ * O prazo de ENVIAR é maior que o de ler: relê a fatura, baixa o PDF (ou o Pix)
+ * do IXC, sobe o arquivo e manda duas mensagens pelo canal, uma depois da outra.
+ */
+const PRAZO_DE_ENVIAR_MS = 60_000;
+
 export function useEnviarFaturaIxc(contactId: string | null) {
   return useMutation({
-    mutationFn: ({ faturaId, conversationId }: { faturaId: string; conversationId: string }) =>
-      apiClient.post<{ data: { mensagens_enviadas: number; mensagens_previstas: number } }>(
+    mutationFn: ({ faturaId, conversationId, forma }: { faturaId: string; conversationId: string; forma: FormaDeCobranca }) =>
+      apiClient.post<{ data: { forma: FormaDeCobranca; mensagens_enviadas: number; mensagens_previstas: number } }>(
         `/api/v1/contacts/${contactId}/conectores/ixc/faturas/${encodeURIComponent(faturaId)}/enviar`,
-        { conversation_id: conversationId },
-        { timeoutMs: PRAZO_DO_ERP_MS },
+        { conversation_id: conversationId, forma },
+        { timeoutMs: PRAZO_DE_ENVIAR_MS },
       ),
   });
 }

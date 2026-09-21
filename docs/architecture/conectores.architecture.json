@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Conectores de sistema externo — o primeiro é o IXC (migration 0271)",
-    "subtitle": "O núcleo não sabe o que é IXC: ele pergunta quais conectores a organização ligou. Identidade é REFERENCIADA (só o id do ERP); contrato, fatura, OS e conexão são lidos AO VIVO, passando por uma lista branca que descarta as senhas que o ERP devolve.",
+    "subtitle": "O núcleo não sabe o que é IXC: ele pergunta quais conectores a organização ligou. Identidade é REFERENCIADA (só o id do ERP); contrato, fatura, OS e conexão são lidos AO VIVO, passando por uma lista branca que descarta as senhas que o ERP devolve. A cobrança (boleto em PDF ou Pix com QR code) sai por UMA função, que o botão usa hoje e a IA vai usar amanhã.",
     "output": "conectores.html",
     "quality_profile": "standard"
   },
@@ -64,7 +64,7 @@
       "lane": "tela",
       "col": 4,
       "type": "frontend",
-      "label": "PainelIxc — cliente, bloqueio, contrato, financeiro, conexão, sinal da ONU, OS e atendimentos; botão Enviar fatura"
+      "label": "PainelIxc — cliente, bloqueio, contrato, financeiro, conexão, sinal da ONU, OS e atendimentos; Enviar abre a escolha Boleto | Pix"
     },
     {
       "id": "conversa",
@@ -106,7 +106,7 @@
       "lane": "api",
       "col": 6,
       "type": "backend",
-      "label": "POST …/ixc/faturas/[id]/enviar — relê a fatura no ERP, confere dono, estado e conversa"
+      "label": "POST …/ixc/faturas/[id]/enviar {forma: boleto|pix} — confere a conversa e entrega as portas (guardar arquivo, enviar mensagem)"
     },
     {
       "id": "registro",
@@ -148,7 +148,7 @@
       "lane": "conector",
       "col": 7,
       "type": "backend",
-      "label": "ixc/http.ts — POST listar; erro lido no CORPO; anti-SSRF; LISTA BRANCA de campos"
+      "label": "ixc/http.ts — POST listar · get_boleto (PDF base64) · get_pix (3 campos); erro lido no CORPO; anti-SSRF; LISTA BRANCA"
     },
     {
       "id": "envio",
@@ -191,6 +191,27 @@
       "col": 7,
       "type": "backend",
       "label": "IXC do provedor — /webservice/v1/{tabela}; devolve senha em claro, que a lista branca descarta"
+    },
+    {
+      "id": "enviar-cobranca",
+      "lane": "conector",
+      "col": 9,
+      "type": "backend",
+      "label": "ixc/enviar-cobranca.ts — a ÚNICA função que envia cobrança (botão hoje, IA amanhã): relê, confere dono/estado/forma, %PDF, CRC16 e Pix ATIVA"
+    },
+    {
+      "id": "pix",
+      "lane": "conector",
+      "col": 10,
+      "type": "backend",
+      "label": "ixc/pix.ts — CRC16 do BR Code e QR code PNG gerado do copia-e-cola conferido"
+    },
+    {
+      "id": "storage",
+      "lane": "banco",
+      "col": 9,
+      "type": "database",
+      "label": "Storage whatsapp-media — <org>/<conversa>/boleto-DD-MM-AAAA.pdf | pix-….png (storage-first)"
     }
   ],
   "edges": [
@@ -330,21 +351,6 @@
       "label": "só o id da fatura e o da conversa"
     },
     {
-      "from": "api-fatura",
-      "to": "http-ixc",
-      "label": "relê a fatura: dono, status A, enviável"
-    },
-    {
-      "from": "api-fatura",
-      "to": "tb-vinculos",
-      "label": "a fatura é de um cadastro VINCULADO?"
-    },
-    {
-      "from": "api-fatura",
-      "to": "envio",
-      "label": "texto composto no servidor (2 mensagens)"
-    },
-    {
       "from": "envio",
       "to": "conversa",
       "label": "mensagem comum"
@@ -358,6 +364,41 @@
       "from": "contacts",
       "to": "tb-vinculos",
       "label": "is_anonymized → apaga os vínculos (trigger local)"
+    },
+    {
+      "from": "api-fatura",
+      "to": "tb-vinculos",
+      "label": "os cadastros vinculados a ESTE contato"
+    },
+    {
+      "from": "api-fatura",
+      "to": "enviar-cobranca",
+      "label": "id da fatura + forma + duas portas"
+    },
+    {
+      "from": "enviar-cobranca",
+      "to": "http-ixc",
+      "label": "relê a fatura; get_boleto OU get_pix — só a forma escolhida"
+    },
+    {
+      "from": "enviar-cobranca",
+      "to": "pix",
+      "label": "copia-e-cola → CRC16 confere? → QR code"
+    },
+    {
+      "from": "enviar-cobranca",
+      "to": "storage",
+      "label": "porta guardarArquivo: PDF ou PNG"
+    },
+    {
+      "from": "enviar-cobranca",
+      "to": "envio",
+      "label": "porta enviar: arquivo com legenda, depois o código SOZINHO"
+    },
+    {
+      "from": "storage",
+      "to": "envio",
+      "label": "signed URL curta para o canal baixar"
     }
   ]
 }

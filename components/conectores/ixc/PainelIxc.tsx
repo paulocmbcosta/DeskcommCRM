@@ -14,7 +14,7 @@ import {
   useVincularIxc,
 } from "@/hooks/conectores/ixc/usePainelIxc";
 import { ApiError } from "@/lib/api/types";
-import type { Fatura } from "@/lib/conectores/ixc/faturas";
+import type { Fatura, FormaDeCobranca } from "@/lib/conectores/ixc/faturas";
 import type { ConexaoIxc, ContratoIxc, Secao } from "@/lib/conectores/ixc/resumo";
 import type { Leitura, Tom } from "@/lib/conectores/ixc/vocabulario";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -27,9 +27,11 @@ import {
   FileText,
   Gauge,
   PaperPlaneTilt,
+  QrCode,
   Receipt,
   Warning,
   WifiHigh,
+  X,
 } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 
@@ -138,72 +140,114 @@ function LinhaDeFatura({
   const t = useT();
   const enviar = useEnviarFaturaIxc(contactId);
   // Dois toques: mandar mensagem a uma pessoa é irreversível, e o botão mora
-  // numa coluna estreita, ao lado de outros iguais.
-  const [confirmando, setConfirmando] = useState(false);
+  // numa coluna estreita, ao lado de outros iguais. O primeiro abre a ESCOLHA
+  // (boleto ou Pix); o segundo, que escolhe, é o que envia.
+  const [escolhendo, setEscolhendo] = useState(false);
   useEffect(() => {
-    if (!confirmando) return;
-    const id = window.setTimeout(() => setConfirmando(false), 5_000);
+    if (!escolhendo) return;
+    const id = window.setTimeout(() => setEscolhendo(false), 8_000);
     return () => window.clearTimeout(id);
-  }, [confirmando]);
+  }, [escolhendo]);
+
+  const mandar = (forma: FormaDeCobranca) => {
+    if (!conversationId) return;
+    setEscolhendo(false);
+    enviar.mutate(
+      { faturaId: fatura.id, conversationId, forma },
+      {
+        onSuccess: (res) => {
+          // O arquivo pode sair e o código não: dizer "enviado" deixaria o cliente
+          // sem a linha digitável (ou o copia-e-cola) e o atendente sem saber.
+          if (res.data.mensagens_enviadas < res.data.mensagens_previstas) {
+            toast.warning(t("A cobrança saiu incompleta: confira a conversa e envie de novo."));
+          } else {
+            toast.success(forma === "pix" ? t("Pix enviado na conversa.") : t("Boleto enviado na conversa."));
+          }
+        },
+        onError: (err) =>
+          toast.error(err instanceof ApiError && err.message ? err.message : t("Não consegui enviar a cobrança.")),
+      },
+    );
+  };
 
   const vencida = fatura.situacao === "vencida";
   return (
-    <li className="flex items-center gap-2 py-1.5" data-testid={vencida ? "ixc-fatura-vencida" : "ixc-fatura-a-vencer"}>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className="text-xs font-semibold tabular-nums text-text">{reais(fatura.valorCents)}</span>
-          <span className={cn("text-[11px] tabular-nums", vencida ? "text-error-fg" : "text-text-muted")}>
-            {dataDoIxc(fatura.vencimento)}
-          </span>
+    <li className="py-1.5" data-testid={vencida ? "ixc-fatura-vencida" : "ixc-fatura-a-vencer"}>
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-xs font-semibold tabular-nums text-text">{reais(fatura.valorCents)}</span>
+            <span className={cn("text-[11px] tabular-nums", vencida ? "text-error-fg" : "text-text-muted")}>
+              {dataDoIxc(fatura.vencimento)}
+            </span>
+          </div>
+          <p className="text-[11px] text-text-subtle">
+            {vencida
+              ? fatura.diasDeAtraso === 1
+                ? t("vencida há 1 dia")
+                : `${t("vencida há")} ${fatura.diasDeAtraso} ${t("dias")}`
+              : t("a vencer")}
+            {!fatura.enviavel && ` · ${t("cobrança ainda não gerada")}`}
+          </p>
         </div>
-        <p className="text-[11px] text-text-subtle">
-          {vencida
-            ? fatura.diasDeAtraso === 1
-              ? t("vencida há 1 dia")
-              : `${t("vencida há")} ${fatura.diasDeAtraso} ${t("dias")}`
-            : t("a vencer")}
-          {!fatura.enviavel && ` · ${t("boleto ainda não gerado")}`}
-        </p>
+        {fatura.enviavel && !escolhendo && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+            disabled={!conversationId || enviar.isPending}
+            data-testid="ixc-enviar-fatura"
+            onClick={() => setEscolhendo(true)}
+          >
+            {enviar.isPending ? (
+              <CircleNotch size={12} className="animate-spin" aria-hidden />
+            ) : (
+              <PaperPlaneTilt size={12} aria-hidden />
+            )}
+            {enviar.isPending ? t("Enviando…") : t("Enviar")}
+          </Button>
+        )}
       </div>
-      {fatura.enviavel && (
-        <Button
-          size="sm"
-          variant={confirmando ? "default" : "outline"}
-          className="h-7 shrink-0 gap-1 px-2 text-[11px]"
-          disabled={!conversationId || enviar.isPending}
-          data-testid="ixc-enviar-fatura"
-          onClick={() => {
-            if (!conversationId) return;
-            if (!confirmando) {
-              setConfirmando(true);
-              return;
-            }
-            setConfirmando(false);
-            enviar.mutate(
-              { faturaId: fatura.id, conversationId },
-              {
-                onSuccess: (res) => {
-                  // A primeira mensagem pode sair e a segunda não: dizer "enviada"
-                  // deixaria o cliente sem a linha digitável e o atendente sem saber.
-                  if (res.data.mensagens_enviadas < res.data.mensagens_previstas) {
-                    toast.warning(t("A fatura saiu incompleta: confira a conversa e envie de novo."));
-                  } else {
-                    toast.success(t("Fatura enviada na conversa."));
-                  }
-                },
-                onError: (err) =>
-                  toast.error(err instanceof ApiError && err.message ? err.message : t("Não consegui enviar a fatura.")),
-              },
-            );
-          }}
+      {escolhendo && (
+        <div
+          className="mt-1.5 flex items-center gap-1.5 rounded-md bg-surface-elevated px-2 py-1.5"
+          role="group"
+          aria-label={t("Como enviar esta fatura")}
+          data-testid="ixc-escolher-forma"
         >
-          {enviar.isPending ? (
-            <CircleNotch size={12} className="animate-spin" aria-hidden />
-          ) : (
-            <PaperPlaneTilt size={12} aria-hidden />
-          )}
-          {confirmando ? t("Confirmar envio") : t("Enviar")}
-        </Button>
+          <span className="min-w-0 flex-1 text-[11px] text-text-muted">{t("Enviar como")}</span>
+          <Button
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+            disabled={!fatura.temBoleto}
+            title={fatura.temBoleto ? undefined : t("O IXC ainda não gerou o boleto desta fatura.")}
+            data-testid="ixc-enviar-boleto"
+            onClick={() => mandar("boleto")}
+          >
+            <FileText size={12} aria-hidden />
+            {t("Boleto")}
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+            disabled={!fatura.temPix}
+            title={fatura.temPix ? undefined : t("O IXC ainda não gerou o Pix desta fatura.")}
+            data-testid="ixc-enviar-pix"
+            onClick={() => mandar("pix")}
+          >
+            <QrCode size={12} aria-hidden />
+            {t("Pix")}
+          </Button>
+          <button
+            type="button"
+            aria-label={t("Cancelar")}
+            title={t("Cancelar")}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-subtle hover:bg-surface hover:text-text"
+            onClick={() => setEscolhendo(false)}
+          >
+            <X size={12} aria-hidden />
+          </button>
+        </div>
       )}
     </li>
   );

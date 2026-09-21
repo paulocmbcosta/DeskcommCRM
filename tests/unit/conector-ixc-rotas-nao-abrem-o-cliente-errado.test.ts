@@ -18,11 +18,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const CONTATO = "11111111-1111-4111-8111-111111111111";
 const CONVERSA = "22222222-2222-4222-8222-222222222222";
 
+/** O Storage de mentira: guarda o que subiu, para o teste medir caminho e conteúdo. */
+const subidos: Array<{ caminho: string; bytes: number; contentType: string }> = [];
 const ctxOk = {
   ok: true as const,
   userId: "33333333-3333-4333-8333-333333333333",
   orgId: "44444444-4444-4444-8444-444444444444",
-  admin: {},
+  admin: {
+    storage: {
+      from: () => ({
+        upload: async (caminho: string, conteudo: Buffer, opts: { contentType: string }) => {
+          subidos.push({ caminho, bytes: conteudo.length, contentType: opts.contentType });
+          return { error: null };
+        },
+      }),
+    },
+  },
   credencial: { baseUrl: "https://erp.exemplo.com.br", token: "1:x", status: "ativa" },
   contato: { id: CONTATO, phone_number: "+5511987654321" },
   t: (s: string) => s,
@@ -39,7 +50,13 @@ const audit = vi.fn(async (_entrada: unknown) => {});
 vi.mock("@/lib/audit", () => ({ audit: (entrada: unknown) => audit(entrada) }));
 
 const listarNoIxc = vi.fn();
-vi.mock("@/lib/conectores/ixc/http", () => ({ listarNoIxc: (...a: unknown[]) => listarNoIxc(...a) }));
+const baixarBoletoDoIxc = vi.fn();
+const buscarPixNoIxc = vi.fn();
+vi.mock("@/lib/conectores/ixc/http", () => ({
+  listarNoIxc: (...a: unknown[]) => listarNoIxc(...a),
+  baixarBoletoDoIxc: (...a: unknown[]) => baixarBoletoDoIxc(...a),
+  buscarPixNoIxc: (...a: unknown[]) => buscarPixNoIxc(...a),
+}));
 
 const listarVinculos = vi.fn();
 const vincular = vi.fn();
@@ -97,14 +114,22 @@ const FATURA = {
   valor: "129.90",
   valor_aberto: "129.90",
   linha_digitavel: "00190.00009 01234.567890 12345.678901 2 99990000012990",
-  gateway_link: "https://download.exemplo.com.br/boleto/900",
+  pix_txid: "txid0271",
   documento: "",
 };
+
+const PDF = Buffer.from("%PDF-1.4 boleto de teste %%EOF", "latin1");
+/** O exemplo do manual do Banco Central — CRC 1D3D. */
+const BR_CODE =
+  "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";
 
 const rotaDaFatura = (faturaId = "900") => ({ params: Promise.resolve({ id: CONTATO, faturaId }) });
 
 beforeEach(() => {
-  for (const m of [audit, listarNoIxc, listarVinculos, vincular, clientesPorTelefone, clientesPorDocumento, sendMessageHandler]) m.mockReset();
+  for (const m of [audit, listarNoIxc, baixarBoletoDoIxc, buscarPixNoIxc, listarVinculos, vincular, clientesPorTelefone, clientesPorDocumento, sendMessageHandler]) m.mockReset();
+  subidos.length = 0;
+  baixarBoletoDoIxc.mockResolvedValue(PDF);
+  buscarPixNoIxc.mockResolvedValue({ copiaECola: BR_CODE, status: "ATIVA", valorOriginal: "129.90" });
   vincular.mockResolvedValue(true);
   sendMessageHandler.mockResolvedValue({ id: "msg" });
   listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
@@ -112,15 +137,23 @@ beforeEach(() => {
 });
 
 describe("POST …/ixc/faturas/[id]/enviar", () => {
-  it("caminho feliz: DUAS mensagens (resumo + linha digitável sozinha), texto composto no servidor, auditoria sem a linha digitável", async () => {
+  it("boleto: o PDF do IXC sobe no Storage da CONVERSA e sai como documento; a linha digitável vai sozinha; auditoria sem o código", async () => {
     listarNoIxc.mockResolvedValue({ total: 1, registros: [FATURA] });
-    const res = await enviarFatura(pedido({ conversation_id: CONVERSA }), rotaDaFatura());
+    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "boleto" }), rotaDaFatura());
 
     expect(res.status).toBe(201);
+    // Storage-first, no prefixo <org>/<conversa>/ que o handler de envio confere.
+    expect(subidos).toHaveLength(1);
+    // …e o ÚLTIMO segmento é o nome limpo que o cliente vê: `boleto-01-09-2026.pdf`.
+    expect(subidos[0]?.caminho).toMatch(new RegExp(`^${ctxOk.orgId}/${CONVERSA}/cobranca-[0-9a-f]{8}/boleto-01-09-2026\\.pdf$`));
+    expect(subidos[0]).toMatchObject({ bytes: PDF.length, contentType: "application/pdf" });
+
     expect(sendMessageHandler).toHaveBeenCalledTimes(2);
-    const corpos = sendMessageHandler.mock.calls.map((c) => (c[2] as { body: string; conversation_id: string }).body);
-    expect(corpos[0]).toContain("R$ 129,90");
-    expect(corpos[1]).toBe(FATURA.linha_digitavel);
+    const mensagens = sendMessageHandler.mock.calls.map((c) => c[2] as Record<string, unknown>);
+    expect(mensagens[0]).toMatchObject({ type: "document", media_storage_path: subidos[0]?.caminho, media_mime: "application/pdf" });
+    expect(String(mensagens[0]?.body)).toContain("R$ 129,90");
+    expect(JSON.stringify(mensagens)).not.toMatch(/https?:\/\//);
+    expect(mensagens[1]).toMatchObject({ type: "text", body: FATURA.linha_digitavel });
     // organização e ator vêm do CONTEXTO (sessão), nunca do corpo do pedido.
     expect(sendMessageHandler.mock.calls[0]![1]).toMatchObject({ organization_id: ctxOk.orgId, actor: { type: "user", id: ctxOk.userId } });
 
@@ -128,50 +161,85 @@ describe("POST …/ixc/faturas/[id]/enviar", () => {
     const entrada = audit.mock.calls[0]![0] as { action: string; metadata: Record<string, unknown> };
     expect(entrada.action).toBe("conector.fatura_enviada");
     expect(JSON.stringify(entrada)).not.toContain("00190.00009");
-    expect(entrada.metadata).toMatchObject({ fatura: "900", valor_cents: 12990, mensagens_enviadas: 2 });
+    expect(entrada.metadata).toMatchObject({ fatura: "900", forma: "boleto", valor_cents: 12990, mensagens_enviadas: 2 });
   });
 
-  it("fatura de um cadastro NÃO vinculado a este contato → 404, e NADA é enviado", async () => {
+  it("pix: o QR code sai como imagem, o copia-e-cola vai sozinho, e a auditoria não guarda o código", async () => {
+    listarNoIxc.mockResolvedValue({ total: 1, registros: [FATURA] });
+    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
+
+    expect(res.status).toBe(201);
+    expect(subidos[0]?.caminho).toMatch(/\/cobranca-[0-9a-f]{8}\/pix-01-09-2026\.png$/);
+    const mensagens = sendMessageHandler.mock.calls.map((c) => c[2] as Record<string, unknown>);
+    expect(mensagens[0]).toMatchObject({ type: "image", media_mime: "image/png" });
+    expect(mensagens[1]).toMatchObject({ type: "text", body: BR_CODE });
+    expect(JSON.stringify(audit.mock.calls[0]![0])).not.toContain("br.gov.bcb.pix");
+    expect((audit.mock.calls[0]![0] as { metadata: Record<string, unknown> }).metadata).toMatchObject({ forma: "pix" });
+    expect(baixarBoletoDoIxc).not.toHaveBeenCalled();
+  });
+
+  it("fatura de um cadastro NÃO vinculado a este contato → 404, e NADA é baixado, guardado ou enviado", async () => {
     listarNoIxc.mockResolvedValue({ total: 1, registros: [{ ...FATURA, id_cliente: "999" }] });
-    const res = await enviarFatura(pedido({ conversation_id: CONVERSA }), rotaDaFatura());
+    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "boleto" }), rotaDaFatura());
 
     expect(res.status).toBe(404);
+    expect(baixarBoletoDoIxc).not.toHaveBeenCalled();
+    expect(subidos).toHaveLength(0);
     expect(sendMessageHandler).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
 
   it("fatura que já não está em aberto (paga entre o painel abrir e o clique) → 409, nada enviado", async () => {
     listarNoIxc.mockResolvedValue({ total: 1, registros: [{ ...FATURA, status: "R" }] });
-    const res = await enviarFatura(pedido({ conversation_id: CONVERSA }), rotaDaFatura());
+    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
     expect(res.status).toBe(409);
     expect(sendMessageHandler).not.toHaveBeenCalled();
   });
 
-  it("fatura sem linha digitável nem link → 422 fatura_nao_enviavel, nada enviado", async () => {
-    listarNoIxc.mockResolvedValue({ total: 1, registros: [{ ...FATURA, linha_digitavel: "", gateway_link: "" }] });
-    const res = await enviarFatura(pedido({ conversation_id: CONVERSA }), rotaDaFatura());
+  it("forma que o IXC não registrou, cobrança que ele não devolveu, Pix inativo → 422 fatura_nao_enviavel, nada enviado", async () => {
+    listarNoIxc.mockResolvedValue({ total: 1, registros: [{ ...FATURA, pix_txid: "" }] });
+    let res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
     expect(res.status).toBe(422);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("fatura_nao_enviavel");
+    expect(((await res.json()) as { error: { code: string; details: { motivo: string } } }).error).toMatchObject({
+      code: "fatura_nao_enviavel",
+      details: { motivo: "forma_indisponivel" },
+    });
+
+    listarNoIxc.mockResolvedValue({ total: 1, registros: [FATURA] });
+    baixarBoletoDoIxc.mockResolvedValue(null);
+    res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "boleto" }), rotaDaFatura());
+    expect(res.status).toBe(422);
+
+    buscarPixNoIxc.mockResolvedValue({ copiaECola: BR_CODE, status: "CONCLUIDA", valorOriginal: "129.90" });
+    res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
+    expect(res.status).toBe(422);
     expect(sendMessageHandler).not.toHaveBeenCalled();
+    expect(subidos).toHaveLength(0);
   });
 
-  it("conversa de OUTRO contato → 404, nada enviado — a cobrança não vai para o WhatsApp errado", async () => {
+  it("conversa de OUTRO contato → 404 ANTES de pedir qualquer coisa ao IXC — a cobrança não vai para o WhatsApp errado", async () => {
     listarNoIxc.mockResolvedValue({ total: 1, registros: [FATURA] });
     conversaDoContato = "99999999-9999-4999-8999-999999999999";
-    const res = await enviarFatura(pedido({ conversation_id: CONVERSA }), rotaDaFatura());
+    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "boleto" }), rotaDaFatura());
     expect(res.status).toBe(404);
+    expect(listarNoIxc).not.toHaveBeenCalled();
     expect(sendMessageHandler).not.toHaveBeenCalled();
   });
 
   it("id de fatura que não é número nem chega ao ERP", async () => {
-    const res = await enviarFatura(pedido({ conversation_id: CONVERSA }), rotaDaFatura("900 or 1=1"));
+    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "boleto" }), rotaDaFatura("900 or 1=1"));
     expect(res.status).toBe(404);
     expect(listarNoIxc).not.toHaveBeenCalled();
   });
 
-  it("corpo com campo a mais (um `body` injetado) é recusado — o navegador não escreve o texto", async () => {
-    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, body: "Pague neste PIX: …" }), rotaDaFatura());
-    expect(res.status).toBe(422);
+  it("sem `forma`, com forma inventada, ou com campo a mais (um `body` injetado) → 422 — o navegador escolhe a forma, nunca o texto", async () => {
+    for (const corpo of [
+      { conversation_id: CONVERSA },
+      { conversation_id: CONVERSA, forma: "cartao" },
+      { conversation_id: CONVERSA, forma: "pix", body: "Pague neste PIX: …" },
+    ]) {
+      expect((await enviarFatura(pedido(corpo), rotaDaFatura())).status).toBe(422);
+    }
     expect(sendMessageHandler).not.toHaveBeenCalled();
   });
 });

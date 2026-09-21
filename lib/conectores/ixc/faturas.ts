@@ -28,11 +28,21 @@ export interface Fatura {
   diasDeAtraso: number;
   /** Vazio quando o boleto ainda não foi registrado no gateway. */
   linhaDigitavel: string;
-  /** Só https — o link vai para o WhatsApp do cliente. */
-  link: string;
-  /** Tem o que enviar? Sem linha digitável E sem link, a fatura é só uma linha. */
+  /**
+   * As FORMAS que o IXC já tem prontas para esta fatura. Parcela futura costuma
+   * não ter nenhuma: o carnê é gerado com meses de antecedência e o registro no
+   * gateway só acontece perto do vencimento. Pedir `get_boleto`/`get_pix` de uma
+   * fatura sem registro faria o IXC registrar a cobrança — efeito que ninguém
+   * pediu —, então a tela só oferece o que já existe.
+   */
+  temBoleto: boolean;
+  temPix: boolean;
+  /** Tem o que enviar? Sem boleto E sem Pix registrados, a fatura é só uma linha. */
   enviavel: boolean;
 }
+
+export const FORMAS_DE_COBRANCA = ["boleto", "pix"] as const;
+export type FormaDeCobranca = (typeof FORMAS_DE_COBRANCA)[number];
 
 export interface RecorteDeFaturas {
   vencidas: Fatura[];
@@ -68,15 +78,6 @@ function diasEntre(deYmd: string, ateYmd: string): number {
   return Math.round((ate - de) / 86_400_000);
 }
 
-function linkSeguro(bruto: string): string {
-  try {
-    const u = new URL(bruto.trim());
-    return u.protocol === "https:" ? u.toString() : "";
-  } catch {
-    return "";
-  }
-}
-
 export function lerFatura(registro: Record<string, string>, hoje: string): Fatura | null {
   const vencimento = (registro.data_vencimento ?? "").slice(0, 10);
   // `0000-00-00` é o "nunca" do IXC: tem forma de data, ordena antes de qualquer
@@ -88,7 +89,8 @@ export function lerFatura(registro: Record<string, string>, hoje: string): Fatur
   const valorCents = aberto > 0 ? aberto : reaisParaCents(registro.valor ?? "");
   const vencida = vencimento < hoje;
   const linhaDigitavel = (registro.linha_digitavel ?? "").trim();
-  const link = linkSeguro(registro.gateway_link ?? "");
+  const temBoleto = linhaDigitavel !== "";
+  const temPix = (registro.pix_txid ?? "").trim() !== "";
   return {
     id: registro.id,
     idContrato: registro.id_contrato ?? "",
@@ -97,8 +99,9 @@ export function lerFatura(registro: Record<string, string>, hoje: string): Fatur
     situacao: vencida ? "vencida" : "a_vencer",
     diasDeAtraso: vencida ? diasEntre(vencimento, hoje) : 0,
     linhaDigitavel,
-    link,
-    enviavel: linhaDigitavel !== "" || link !== "",
+    temBoleto,
+    temPix,
+    enviavel: temBoleto || temPix,
   };
 }
 
