@@ -302,11 +302,24 @@ Regra no banco: `tests/invariants/comando-cala-o-automatico.test.ts` (6 casos).
 | J11.5 | Existe caminho para DESLIGAR pela tela | botão "Pausar o automático" — antes só existia o de ligar | PASS |
 | J11.6 | A volta existe e limpa o silêncio | "Devolver ao automático" → `bot_silenced_until` nulo | PASS |
 | J11.7 | A troca de comando aparece na linha do tempo | "Assumiu a conversa" com o NOME de quem agiu, não "Você/time" | PASS |
-| J11.8 | O rodízio NÃO cala o automático | `reason='routing'` não mexe no silêncio — senão uma org em round_robin perde a IA inteira | PASS (invariante) |
+| J11.8 | O rodízio NÃO cala o automático | o rodízio não ENTREGA a ninguém a conversa que a IA automática do canal vai atender — senão uma org em round_robin perde a IA inteira | FAIL → PASS (`lib/routing/worker-respeita-a-ia.test.ts` + invariante `rodizio-respeita-a-ia`) |
+| J11.8b | A conversa que SAI da IA entra no rodízio do time | a transferência grava o time e só depois pede o rodízio; o drain devolve à fila a conversa que a IA recusa (agente pausado, fora da lista de teste) | PASS (`human-handoff.test.ts`, `drain.test.ts`) |
 | J11.9 | Fechar devolve o comando | o silêncio é limpo ao fechar, senão vaza para o próximo episódio (a ingestão reusa a MESMA linha de conversa) | PASS (invariante) |
 
 | J11.10 | A conversa que o automático ESCALOU aparece na Fila | `status='pending'` sem dono entra na aba e é contada pelo badge | FAIL → PASS |
 | J11.11 | O número da fila é o MESMO para o cliente e para a equipe | `getQueuePosition` (o "você é o 5º" que o cliente ouve) e `getQueuePositions` (o "3º" da tela) contam os mesmos estados | FAIL → PASS |
+
+**J11.8 estava PASS medindo a coluna errada (2026-09-21).** O caso só conferia que
+`reason='routing'` não mexe em `bot_silenced_until` — e não mexe. Mas o rodízio grava
+`assignee_kind='user'`, e a trava de elegibilidade que entrou em 27/08 (`gate.ts`) veta
+conversa com dono humano. Medido em produção (v1.34.1, org em `round_robin`, agente no
+canal oficial): o cliente escreveu, o cron entregou a conversa ao atendente online em 2 s,
+o motor pulou o turno por `conversa_de_humano`; soltar a conversa não adiantou, o rodízio
+reatribuiu em menos de um minuto. A IA não respondia ninguém enquanto houvesse alguém
+online — com o teste verde. O conserto (migration 0273) não mexe na trava: o rodízio passa
+a PERGUNTAR se a IA vai atender (`fn_ia_automatica_no_canal` + a mesma trava do motor)
+antes de distribuir, e quem tira a conversa da IA pede o rodízio de novo. A régua agora
+mede o comportamento (houve atribuição?), não a coluna.
 
 **O achado que esta jornada abriu, e como ele cresceu.** A primeira rodada
 registrou aqui "a conversa escalada não aparece em aba nenhuma" como pendência de

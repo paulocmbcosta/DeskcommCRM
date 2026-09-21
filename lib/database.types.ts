@@ -8601,6 +8601,10 @@ export type Database = {
         Returns: number
       }
       fn_gasto_de_ia_do_mes: { Args: { p_org: string }; Returns: number }
+      fn_ia_automatica_no_canal: {
+        Args: { p_channel: string; p_org: string }
+        Returns: boolean
+      }
       fn_is_platform_admin: { Args: never; Returns: boolean }
       fn_lgpd_anonymize_contact: {
         Args: { p_contact_id: string; p_organization_id: string }

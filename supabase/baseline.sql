@@ -27708,6 +27708,55 @@ alter table public.conversations
 
 notify pgrst, 'reload schema';
 
+-- ---- o rodízio respeita a IA que está atendendo (migration 0273) ----
+-- O cron de roteamento entregava ao atendente online a conversa que a IA ia
+-- atender (medido em produção em 2026-09-21: com alguém online, a IA não respondia
+-- ninguém). Antes de distribuir, `lib/routing/worker.ts` pergunta se há IA
+-- automática no ar no canal (esta função) e se a conversa passa na trava de
+-- elegibilidade do motor. Racional completo no cabeçalho da migration 0273.
+create or replace function public.fn_ia_automatica_no_canal(p_org uuid, p_channel uuid)
+returns boolean
+language sql
+stable
+set search_path = public
+as $$
+  with no_ar as (
+    select a.id, a.operation_mode, v.channel_session_id
+      from public.ai_agents a
+      join public.ai_agent_versions v
+        on v.id = a.published_version_id and v.organization_id = a.organization_id
+     where a.organization_id = p_org
+       and a.archived_at is null
+       and a.paused_at is null
+       and v.status = 'published'
+  ),
+  alcanca_o_canal as (
+    select n.operation_mode
+      from no_ar n
+     where n.channel_session_id = p_channel
+        or exists (
+             select 1
+               from public.ai_routers r
+              where r.organization_id = p_org
+                and r.channel_session_id = p_channel
+                and r.is_active
+                and (r.fallback_agent_id = n.id
+                     or exists (select 1 from public.ai_router_members m
+                                 where m.router_id = r.id and m.agent_id = n.id))
+           )
+  )
+  select exists (select 1 from alcanca_o_canal where operation_mode = 'automatic')
+     and not exists (select 1 from alcanca_o_canal where operation_mode = 'assisted');
+$$;
+
+comment on function public.fn_ia_automatica_no_canal(uuid, uuid) is
+  'O rodízio pergunta antes de distribuir: há IA automática no ar neste canal? Sim + conversa elegível (gate.ts) ⇒ a IA atende e ninguém recebe a conversa (migration 0273).';
+
+revoke execute on function public.fn_ia_automatica_no_canal(uuid, uuid) from public, anon, authenticated;
+grant  execute on function public.fn_ia_automatica_no_canal(uuid, uuid) to service_role;
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

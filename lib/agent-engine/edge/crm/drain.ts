@@ -15,6 +15,7 @@
 import { z } from 'zod';
 import type pg from 'pg';
 
+import { pedirRodizioDaFilaHumana } from '../../agent/rodizio';
 import { insertInboxItem } from '../../db/repository';
 import type { Logger } from '../../obs/logger';
 import { enqueueJob } from '../../queue/queue';
@@ -305,6 +306,17 @@ async function processEvent(
       event_id: event.id,
       channel_session_id: p.channel_session_id,
     });
+    // Ninguém automático vai atender: a conversa vai para a fila humana. O rodízio
+    // não distribui o que a IA atende (migration 0273), então quando a IA deixa de
+    // atender — agente pausado depois que a conversa nasceu — é AQUI que a
+    // conversa volta a ele. Sem isto, "pausei o agente" deixaria o cliente falando
+    // sozinho, sem IA e sem fila.
+    await pedirRodizioDaFilaHumana(
+      pool,
+      { organizationId: event.organization_id, conversationId: p.conversation_id },
+      log,
+      'drain_sem_agente',
+    );
     return 'processado';
   }
 
@@ -378,6 +390,16 @@ async function processEvent(
         conversation_id: p.conversation_id,
         motivo: elegib.motivo,
       });
+      // A IA não vai responder esta conversa (fora da lista de teste, sem
+      // autorização, passagem para humano): ela vai para a fila humana. Mesmo
+      // racional do ramo "sem agente" acima; conversa que já tem dono é no-op
+      // dentro de `fn_request_channel_routing`.
+      await pedirRodizioDaFilaHumana(
+        pool,
+        { organizationId: event.organization_id, conversationId: p.conversation_id },
+        log,
+        `drain_${elegib.motivo}`,
+      );
       return 'processado';
     }
   } catch (err) {

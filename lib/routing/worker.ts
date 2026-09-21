@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logger } from "@/lib/logger";
 import { decideRouting } from "@/lib/routing/decide";
+import { iaAtendeAConversa } from "@/lib/routing/ia-atende";
 import { loadEligibleAttendants, InvalidRoutingChannel } from "@/lib/routing/eligibles";
 import { routingConfigSchema } from "@/lib/schemas/routing";
 
@@ -28,6 +29,8 @@ export type RoutingOutcome =
   | "assigned"
   | "skipped_manual"
   | "skipped_already_assigned"
+  /** A IA automática do canal vai atender a conversa — quem a tirar da IA pede o rodízio de novo. */
+  | "skipped_ai_attending"
   | "skipped_unsupported_mode"
   | "requeued_no_eligible"
   | "skipped_invalid_channel"
@@ -56,6 +59,7 @@ const EMPTY_OUTCOMES = (): Record<RoutingOutcome, number> => ({
   assigned: 0,
   skipped_manual: 0,
   skipped_already_assigned: 0,
+  skipped_ai_attending: 0,
   skipped_unsupported_mode: 0,
   requeued_no_eligible: 0,
   skipped_invalid_channel: 0,
@@ -168,6 +172,23 @@ async function processEvent(event: EventRow, now: Date): Promise<RoutingOutcome>
   const alreadyAssigned = Boolean(conv.assigned_to_user_id);
   let eligibles: Awaited<ReturnType<typeof loadEligibleAttendants>> = [];
   if (!alreadyAssigned && config.mode === "round_robin") {
+    // A IA ATENDE PRIMEIRO. Sem esta pergunta, o rodízio entregava ao atendente
+    // online a conversa que a IA ia atender — `fn_channel_routing_claim` grava
+    // `assignee_kind='user'` e o motor pula o turno por `conversa_de_humano`.
+    // Medido em produção em 2026-09-21: com alguém online, a IA não respondia
+    // ninguém. O evento fecha; quem tirar a conversa da IA pede outro — a
+    // transferência (`performHumanHandoff`) e o drain quando recusa o turno.
+    if (
+      await iaAtendeAConversa(admin, {
+        organizationId: orgId,
+        conversationId,
+        channelSessionId: conv.channel_session_id,
+        agora: now,
+      })
+    ) {
+      await markDone(event, "skipped_ai_attending");
+      return "skipped_ai_attending";
+    }
     try {
       eligibles = await loadEligibleAttendants(admin, orgId, now, {
         kind: "conversation_channel",

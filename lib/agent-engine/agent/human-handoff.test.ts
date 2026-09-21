@@ -184,3 +184,68 @@ describe('applyRequestHumanHandoff · destino de time', () => {
     expect(mutacoes(chamadas)).toEqual([]);
   });
 });
+
+/**
+ * A PASSAGEM PEDE O RODÍZIO — e só depois de o destino estar gravado.
+ *
+ * O rodízio (`lib/routing/worker.ts`) deixou de tirar da IA a conversa que ela
+ * atende (medido em produção em 2026-09-21: com atendente online a IA não
+ * respondia ninguém). Com isso, o pedido de rodízio que nasce junto com a
+ * conversa fecha como `skipped_ai_attending` — e a conversa só volta a ser
+ * distribuída se QUEM a tira da IA pedir de novo. A transferência feita por uma
+ * pessoa (`fn_conversation_set_team`) já pedia; a do motor não pedia, e só
+ * funcionava porque o pedido da entrada ficava pendurado esperando atendente.
+ *
+ * A ordem é a regra: pedir o rodízio ANTES de gravar o time deixaria uma janela
+ * em que o cron distribui para a organização inteira — o cancelamento caindo no
+ * comercial.
+ */
+describe('performHumanHandoff · pede o rodízio da fila humana', () => {
+  const pedidoDeRodizio = (c: { sql: string }) => /fn_request_channel_routing/i.test(c.sql);
+
+  it('com time: grava o time e SÓ DEPOIS pede o rodízio, para aquela conversa', async () => {
+    const { pool, chamadas } = poolFalso();
+
+    const res = await applyRequestHumanHandoff(pool, IDS, opts(), { team: 'suporte' });
+
+    expect(res.ok).toBe(true);
+    const iTime = chamadas.findIndex((c) => /update conversations set team_id/i.test(c.sql));
+    const iRodizio = chamadas.findIndex(pedidoDeRodizio);
+    expect(iTime, 'o time não foi gravado').toBeGreaterThanOrEqual(0);
+    expect(iRodizio, 'a passagem não pediu o rodízio — a conversa fica sem ninguém').toBeGreaterThanOrEqual(0);
+    expect(iRodizio, 'rodízio pedido antes do time: distribuiria fora do setor').toBeGreaterThan(iTime);
+    expect(chamadas[iRodizio]?.params).toEqual([ORG, CONVERSA]);
+    // E depois do silêncio da IA: o rodízio só pode ver uma conversa que já saiu dela.
+    const iSilencio = chamadas.findIndex((c) => /bot_silenced_until = \$3/i.test(c.sql));
+    expect(iRodizio).toBeGreaterThan(iSilencio);
+  });
+
+  it('sem time: a passagem pede o rodízio da fila geral', async () => {
+    const { pool, chamadas } = poolFalso();
+
+    const res = await applyRequestHumanHandoff(pool, IDS, opts(), { reason: 'quer falar com alguém' });
+
+    expect(res.ok).toBe(true);
+    expect(chamadas.filter(pedidoDeRodizio)).toHaveLength(1);
+  });
+
+  it('o pedido de rodízio que falha NÃO desfaz a passagem — vira aviso no log', async () => {
+    const { pool, query } = poolFalso();
+    const log = logFalso() as unknown as { warn: ReturnType<typeof vi.fn> };
+    const original = query.getMockImplementation();
+    query.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (/fn_request_channel_routing/i.test(sql)) throw new Error('rpc caiu');
+      return original!(sql, params);
+    });
+
+    const res = await applyRequestHumanHandoff(
+      pool,
+      IDS,
+      { conversationSummary: 'resumo qualquer', log: log as never },
+      { team: 'suporte' },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(log.warn).toHaveBeenCalled();
+  });
+});
