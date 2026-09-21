@@ -159,3 +159,46 @@ na listagem) · PDF como anexo.
 
 Latência a partir da VPS (medi do Mac do dono) · instância IXC on-premise com
 certificado próprio · comportamento com token de escopo mínimo (o token de teste lia tudo).
+
+## 10. Revisão de 2026-09-21 — a cobrança sai como BOLETO EM PDF ou como PIX
+
+Pedido do dono, depois de usar em produção: o que ia no chat era o `gateway_link` (o
+boleto no site do banco), e não é esse o documento que o cliente reconhece. O que se
+envia é **o PDF que o próprio IXC emite**, e o atendente **escolhe a forma** — boleto
+ou Pix. Substitui o §5 no que diz "texto da fatura" e o §8 no que adiava o Pix.
+
+**Medido na instância real (só forma, tamanhos e conferências; nenhum conteúdo):**
+
+| Ação | Pedido | Resposta |
+|---|---|---|
+| `POST /webservice/v1/get_boleto` | `{boletos, juro:"N", multa:"N", atualiza_boleto:"N", tipo_boleto:"arquivo", base64:"S"}` | o PDF em base64 como **texto puro** (`text/html`, sem JSON em volta); ~45 KB. Fatura inexistente → **corpo vazio**, HTTP 200 |
+| `POST /webservice/v1/get_pix` | `{id_areceber}` | `{type, gateway, pix:{dadosPix, qrCode}}`. `qrCode.qrcode` = `dadosPix.pixCopiaECola` (BR Code de 194 chars, CRC16 confere); `dadosPix.status = "ATIVA"`; `valor.original` = `valor_aberto` da fatura. Fatura inexistente → **HTTP 500** |
+
+`juro`, `multa` e `atualiza_boleto` vão `N` de propósito: `S` recalcula e regrava a
+cobrança, e este conector só lê. **Não medido:** o que `get_boleto`/`get_pix` fazem com
+fatura SEM registro no gateway (parcela futura) — a suspeita é que registrem a
+cobrança. Por isso a tela só oferece a forma que o IXC JÁ registrou
+(`linha_digitavel` → boleto; `pix_txid` → Pix), e a função recusa
+(`forma_indisponivel`) antes de pedir.
+
+**Desenho.** `lib/conectores/ixc/enviar-cobranca.ts` — `enviarCobrancaIxc()` — é a
+ÚNICA função que envia cobrança, sem HTTP e sem sessão: recebe a credencial, os
+cadastros vinculados, o id da fatura, a forma e duas portas (guardar arquivo, enviar
+mensagem). Hoje quem a chama é a rota do botão; **a ferramenta da IA vai chamar a
+mesma**, com o ator dela. O que ela garante, venha o pedido de quem vier: fatura relida
+e de cadastro vinculado; em aberto; forma registrada; PDF começa com `%PDF`;
+copia-e-cola fecha o CRC16 e o Pix está `ATIVA`. Cada cobrança são duas mensagens — o
+arquivo com a legenda (documento PDF ou imagem do QR code), e o código SOZINHO (linha
+digitável ou copia-e-cola), para copiar com um toque.
+
+- **QR code gerado aqui** (`lib/conectores/ixc/pix.ts`, lib `qrcode`, 600px, margem 4),
+  a partir do copia-e-cola CONFERIDO — a câmera e o copiar-e-colar pagam a mesma coisa.
+  A imagem que o IXC devolve é pequena e é um segundo dado.
+- **Lista branca também na ação:** de `get_pix` saem três campos (copia-e-cola, status,
+  valor). CPF e nome do devedor, chave e txid ficam na borda.
+- **Storage-first:** o arquivo sobe em `whatsapp-media/<org>/<conversa>/boleto-DD-MM-AAAA-<8hex>.pdf`
+  — o último segmento é o nome que o cliente vê no WhatsApp.
+- `gateway_link` saiu da lista branca; `pix_txid` entrou (só para saber SE há Pix).
+- Tela: "Enviar" abre a escolha [Boleto] [Pix]; escolher é o segundo toque (envio é
+  irreversível). Forma não registrada fica desligada, com o porquê no `title`.
+

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Fatura } from "./faturas";
-import { mensagensDaFatura } from "./mensagem-fatura";
+import { legendaDoBoleto, legendaDoPix, nomeDoArquivo } from "./mensagem-fatura";
 
 const FATURA: Fatura = {
   id: "900",
@@ -11,34 +11,48 @@ const FATURA: Fatura = {
   situacao: "vencida",
   diasDeAtraso: 9,
   linhaDigitavel: "00190.00009 01234.567890 12345.678901 2 99990000012990",
-  link: "https://download.exemplo.com.br/boleto/900",
+  temBoleto: true,
+  temPix: true,
   enviavel: true,
 };
 
-describe("mensagensDaFatura", () => {
-  it("a linha digitável vai SOZINHA na segunda mensagem — no WhatsApp copia-se a mensagem inteira", () => {
-    const [resumo, linha, ...resto] = mensagensDaFatura(FATURA);
-    expect(resto).toEqual([]);
-    expect(linha).toBe(FATURA.linhaDigitavel);
-    expect(resumo).not.toContain(FATURA.linhaDigitavel);
+describe("legendaDoBoleto", () => {
+  it("traz valor em reais, vencimento em dd/mm/aaaa e o atraso — e NÃO traz a linha digitável (ela vai sozinha)", () => {
+    const legenda = legendaDoBoleto(FATURA);
+    expect(legenda).toContain("R$ 129,90");
+    expect(legenda).toContain("10/09/2026");
+    expect(legenda).toContain("vencida há 9 dias");
+    expect(legenda).not.toContain(FATURA.linhaDigitavel);
+    expect(legenda).not.toMatch(/https?:\/\//);
   });
 
-  it("o resumo traz valor em reais, vencimento em dd/mm/aaaa, o atraso e o link", () => {
-    const [resumo] = mensagensDaFatura(FATURA);
-    expect(resumo).toContain("R$ 129,90");
-    expect(resumo).toContain("10/09/2026");
-    expect(resumo).toContain("vencida há 9 dias");
-    expect(resumo).toContain(FATURA.link);
+  it("só promete a próxima mensagem quando ela vai existir", () => {
+    expect(legendaDoBoleto(FATURA)).toContain("próxima mensagem");
+    expect(legendaDoBoleto({ ...FATURA, linhaDigitavel: "" })).not.toContain("próxima mensagem");
   });
 
   it("fatura a vencer não fala em atraso; 1 dia é singular", () => {
-    expect(mensagensDaFatura({ ...FATURA, situacao: "a_vencer", diasDeAtraso: 0 })[0]).not.toContain("vencida");
-    expect(mensagensDaFatura({ ...FATURA, diasDeAtraso: 1 })[0]).toContain("vencida há 1 dia)");
+    expect(legendaDoBoleto({ ...FATURA, situacao: "a_vencer", diasDeAtraso: 0 })).not.toContain("vencida");
+    expect(legendaDoBoleto({ ...FATURA, diasDeAtraso: 1 })).toContain("vencida há 1 dia)");
+  });
+});
+
+describe("legendaDoPix", () => {
+  it("mostra o valor que o QR de fato cobra (o do Pix), e cai no da fatura quando ele não vem", () => {
+    expect(legendaDoPix(FATURA, 11400)).toContain("R$ 114,00");
+    expect(legendaDoPix(FATURA)).toContain("R$ 129,90");
   });
 
-  it("sem linha digitável é UMA mensagem, e ela não promete a segunda", () => {
-    const mensagens = mensagensDaFatura({ ...FATURA, linhaDigitavel: "" });
-    expect(mensagens).toHaveLength(1);
-    expect(mensagens[0]).not.toContain("próxima mensagem");
+  it("explica os dois jeitos de pagar: a câmera e o copia e cola", () => {
+    const legenda = legendaDoPix(FATURA);
+    expect(legenda).toContain("QR code");
+    expect(legenda).toContain("copia e cola");
+  });
+});
+
+describe("nomeDoArquivo — é o nome que o cliente vê no WhatsApp", () => {
+  it("diz o que é e de quando é, sem barra (barra viraria pasta no Storage)", () => {
+    expect(nomeDoArquivo("boleto", FATURA)).toBe("boleto-10-09-2026");
+    expect(nomeDoArquivo("pix", FATURA)).toBe("pix-10-09-2026");
   });
 });

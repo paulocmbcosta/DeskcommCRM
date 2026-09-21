@@ -7,7 +7,7 @@ vi.mock("@/lib/automation/outbound-ip", () => ({
   assertDestinoResolvidoSeguro: (host: string) => resolvido(host),
 }));
 
-import { hostLiberadoPeloOperador, listarNoIxc, normalizarBaseUrl } from "./http";
+import { baixarBoletoDoIxc, buscarPixNoIxc, hostLiberadoPeloOperador, listarNoIxc, normalizarBaseUrl } from "./http";
 
 const CRED = { baseUrl: "https://erp.exemplo.com.br", token: "53:abc" };
 const PEDIDO = {
@@ -160,3 +160,87 @@ describe("normalizarBaseUrl", () => {
     expect(normalizarBaseUrl(entrada)).toBe(esperado);
   });
 });
+
+const PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n", "latin1");
+
+describe("baixarBoletoDoIxc — o PDF vem em base64 como TEXTO PURO, e só sai daqui se for PDF", () => {
+  it("pede o arquivo SEM atualizar, sem juro e sem multa — este conector só lê", async () => {
+    fetchFalso.mockResolvedValue(responder(PDF.toString("base64"), { tipo: "text/html; charset=ISO-8859-1" }));
+    const pdf = await baixarBoletoDoIxc(CRED, "900");
+
+    expect(pdf?.equals(PDF)).toBe(true);
+    const [url, init] = fetchFalso.mock.calls[0]!;
+    expect(url).toBe("https://erp.exemplo.com.br/webservice/v1/get_boleto");
+    expect(JSON.parse(String(init.body))).toEqual({
+      boletos: "900",
+      juro: "N",
+      multa: "N",
+      atualiza_boleto: "N",
+      tipo_boleto: "arquivo",
+      base64: "S",
+    });
+  });
+
+  it.each([
+    ["corpo vazio (fatura que não existe — medido)", ""],
+    ["JSON de erro", JSON.stringify({ type: "error", message: "Boleto não encontrado" })],
+    ["página HTML", "<html>login</html>"],
+    ["base64 válido que NÃO é PDF", Buffer.from("isto nao e um pdf").toString("base64")],
+  ])("%s → null, nunca um arquivo qualquer para o WhatsApp do cliente", async (_caso, corpo) => {
+    fetchFalso.mockResolvedValue(responder(corpo, { tipo: "text/html" }));
+    expect(await baixarBoletoDoIxc(CRED, "900")).toBeNull();
+  });
+
+  it("token recusado continua sendo credencial recusada, não 'sem boleto'", async () => {
+    fetchFalso.mockResolvedValue(responder("<html>401</html>", { status: 401, tipo: "text/html" }));
+    expect(await motivoDe(baixarBoletoDoIxc(CRED, "900"))).toBe("credencial_recusada");
+  });
+});
+
+describe("buscarPixNoIxc — da resposta inteira saem TRÊS campos", () => {
+  const RESPOSTA = {
+    type: "success",
+    gateway: "gerencianet",
+    pix: {
+      dadosPix: {
+        status: "ATIVA",
+        txid: "txid-que-nao-sai",
+        chave: "chave-que-nao-sai",
+        devedor: { cpf: "52998224725", nome: "Maria Que Nao Sai" },
+        valor: { original: "114.00" },
+        pixCopiaECola: "000201-COPIA-E-COLA",
+      },
+      qrCode: { qrcode: "000201-COPIA-E-COLA", imagemQrcode: "iVBORw0-imagem-que-nao-sai", imagemSrc: "https://x/y.png" },
+    },
+  };
+
+  it("devolve copia-e-cola, status e valor — e NADA do devedor, da chave ou do txid", async () => {
+    fetchFalso.mockResolvedValue(responder(JSON.stringify(RESPOSTA)));
+    const pix = await buscarPixNoIxc(CRED, "900");
+
+    expect(pix).toEqual({ copiaECola: "000201-COPIA-E-COLA", status: "ATIVA", valorOriginal: "114.00" });
+    expect(JSON.stringify(pix)).not.toMatch(/52998224725|Maria|txid|chave|iVBORw0/);
+    expect(JSON.parse(String(fetchFalso.mock.calls[0]![1].body))).toEqual({ id_areceber: "900" });
+  });
+
+  it("fatura sem Pix responde HTTP 500 (medido) → null", async () => {
+    fetchFalso.mockResolvedValue(responder("", { status: 500, tipo: "text/html" }));
+    expect(await buscarPixNoIxc(CRED, "999999999")).toBeNull();
+  });
+
+  it.each([
+    ["JSON sem `pix`", JSON.stringify({ type: "error", message: "x" })],
+    ["copia-e-cola vazio", JSON.stringify({ pix: { qrCode: { qrcode: "  " }, dadosPix: {} } })],
+    ["não-JSON", "<html>erro</html>"],
+  ])("%s → null", async (_caso, corpo) => {
+    fetchFalso.mockResolvedValue(responder(corpo));
+    expect(await buscarPixNoIxc(CRED, "900")).toBeNull();
+  });
+
+  it("as duas ações passam pela MESMA guarda anti-SSRF da listagem", async () => {
+    expect(await motivoDe(baixarBoletoDoIxc({ ...CRED, baseUrl: "https://10.0.0.5" }, "900"))).toBe("url_insegura");
+    expect(await motivoDe(buscarPixNoIxc({ ...CRED, baseUrl: "https://169.254.169.254" }, "900"))).toBe("url_insegura");
+    expect(fetchFalso).not.toHaveBeenCalled();
+  });
+});
+

@@ -49,7 +49,10 @@ export const CAMPOS_DA_FATURA = [
   "valor",
   "valor_aberto",
   "linha_digitavel",
-  "gateway_link",
+  // Só para saber SE a fatura tem Pix registrado — o copia-e-cola vem de
+  // `get_pix`, na hora de enviar. (`gateway_link` saiu: era o boleto no site do
+  // banco, e o que se envia é o PDF do próprio IXC.)
+  "pix_txid",
   "documento",
 ] as const;
 

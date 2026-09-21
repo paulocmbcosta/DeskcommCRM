@@ -1,20 +1,18 @@
 /**
  * POST /api/v1/contacts/[id]/conectores/ixc/faturas/[faturaId]/enviar
  *
- * Manda a fatura no chat. O navegador envia SÓ o id da fatura e o da conversa:
- * valor, vencimento e linha digitável são relidos do IXC aqui, e o texto é
- * composto por `mensagensDaFatura`. Um dígito errado nesses números custa
- * dinheiro de alguém — então ninguém os digita, nem a tela, nem (depois) a IA.
+ * Manda a cobrança de uma fatura no chat, do jeito que o atendente escolheu:
+ * **boleto** (o PDF baixado do IXC + a linha digitável) ou **Pix** (o QR code +
+ * o copia-e-cola).
  *
- * Quatro conferências antes de sair qualquer mensagem, todas no servidor:
- *   1. a fatura existe e é de um cadastro VINCULADO a este contato — senão um
- *      `agent` mandaria a cobrança de um cliente para o WhatsApp de outro;
- *   2. ainda está em aberto (o cliente pode ter pago entre o painel abrir e o clique);
- *   3. tem o que enviar (linha digitável ou link https);
- *   4. a conversa é DESTE contato, nesta organização.
+ * O navegador envia SÓ três coisas: o id da fatura, o da conversa e a forma.
+ * Tudo o que sai para o cliente é relido do IXC e conferido em
+ * `enviarCobrancaIxc` (lib/conectores/ixc/enviar-cobranca.ts) — a mesma função
+ * que a ferramenta da IA vai chamar. Aqui ficam o que é de HTTP: sessão, a
+ * conversa ser DESTE contato, onde o arquivo é guardado, e a auditoria.
  *
  * A saída é o `sendMessageHandler` de sempre: mesma fila, mesmo anti-banimento,
- * mesmo opt-out. A fatura enviada é uma mensagem comum na conversa.
+ * mesmo opt-out, storage-first. O boleto enviado é uma mensagem comum na conversa.
  */
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
@@ -24,10 +22,8 @@ import { sendMessageHandler } from "@/app/api/v1/messages/_handler";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
-import { CAMPOS_DA_FATURA } from "@/lib/conectores/ixc/campos";
-import { hojeEmSaoPaulo, lerFatura } from "@/lib/conectores/ixc/faturas";
-import { listarNoIxc } from "@/lib/conectores/ixc/http";
-import { mensagensDaFatura } from "@/lib/conectores/ixc/mensagem-fatura";
+import { enviarCobrancaIxc, type MotivoDaRecusa } from "@/lib/conectores/ixc/enviar-cobranca";
+import { FORMAS_DE_COBRANCA } from "@/lib/conectores/ixc/faturas";
 import { listarVinculos } from "@/lib/conectores/vinculos";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { sendMessageSchema } from "@/lib/schemas";
@@ -36,9 +32,35 @@ import { createClient } from "@/lib/supabase/server";
 import { contextoIxc, respostaDaFalha } from "../../../_contexto";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 40;
+export const maxDuration = 60;
 
-const corpoSchema = z.object({ conversation_id: z.string().uuid() }).strict();
+const corpoSchema = z.object({ conversation_id: z.string().uuid(), forma: z.enum(FORMAS_DE_COBRANCA) }).strict();
+
+/** Cada recusa pede um conserto diferente de quem está na tela — por isso cada uma tem a sua frase. */
+const RECUSAS: Record<MotivoDaRecusa, { codigo: string; status: number; frase: string }> = {
+  fatura_nao_encontrada: { codigo: "not_found", status: 404, frase: "Fatura não encontrada." },
+  fatura_fechada: { codigo: "state_conflict", status: 409, frase: "Esta fatura não está mais em aberto. Atualize o painel." },
+  forma_indisponivel: {
+    codigo: "fatura_nao_enviavel",
+    status: 422,
+    frase: "O IXC ainda não gerou esta forma de pagamento para a fatura. Escolha a outra ou gere por lá.",
+  },
+  cobranca_indisponivel: {
+    codigo: "fatura_nao_enviavel",
+    status: 422,
+    frase: "O IXC não devolveu a cobrança desta fatura. Tente de novo; se insistir, gere por lá.",
+  },
+  pix_inativo: {
+    codigo: "fatura_nao_enviavel",
+    status: 422,
+    frase: "O Pix desta fatura não está mais ativo no IXC. Envie o boleto ou gere um Pix novo por lá.",
+  },
+  pix_corrompido: {
+    codigo: "fatura_nao_enviavel",
+    status: 422,
+    frase: "O código Pix que o IXC devolveu não passou na conferência, e por isso não foi enviado.",
+  },
+};
 
 export async function POST(
   req: NextRequest,
@@ -65,39 +87,10 @@ export async function POST(
   if (!parsed.success) {
     return fail("validation_failed", ctx.t("Campos inválidos."), 422, { requestId, details: parsed.error.flatten() });
   }
-  const conversationId = parsed.data.conversation_id;
+  const { conversation_id: conversationId, forma } = parsed.data;
 
-  let fatura;
-  try {
-    const vinculados = new Set((await listarVinculos(ctx.admin, ctx.orgId, ctx.contato.id, "ixc")).map((v) => v.external_id));
-    const { registros } = await listarNoIxc(ctx.credencial, {
-      tabela: "fn_areceber",
-      filtro: { campo: "fn_areceber.id", operador: "=", valor: faturaId },
-      campos: CAMPOS_DA_FATURA,
-      limite: 1,
-    });
-    const registro = registros.find((r) => r.id === faturaId);
-    // A MESMA resposta para "não existe" e "é de outro cliente": dizer qual dos
-    // dois seria confirmar a um curioso que o id é de alguém.
-    if (!registro || !vinculados.has(registro.id_cliente ?? "")) {
-      return fail("not_found", ctx.t("Fatura não encontrada."), 404, { requestId });
-    }
-    if (registro.status !== "A") {
-      return fail("state_conflict", ctx.t("Esta fatura não está mais em aberto. Atualize o painel."), 409, { requestId });
-    }
-    fatura = lerFatura(registro, hojeEmSaoPaulo());
-    if (!fatura || !fatura.enviavel) {
-      return fail(
-        "fatura_nao_enviavel",
-        ctx.t("O boleto desta fatura ainda não foi gerado no IXC. Gere por lá ou fale com o financeiro."),
-        422,
-        { requestId },
-      );
-    }
-  } catch (err) {
-    return respostaDaFalha(err, ctx, requestId);
-  }
-
+  // A conversa vem do navegador: tem de ser DESTE contato, nesta organização —
+  // conferido ANTES de pedir qualquer coisa ao IXC.
   const supabase = await createClient();
   const { data: conversa, error: erroDaConversa } = await supabase
     .from("conversations")
@@ -109,23 +102,45 @@ export async function POST(
   if (erroDaConversa) return fail("internal_error", erroDaConversa.message, 500, { requestId });
   if (!conversa) return fail("not_found", ctx.t("Conversa não encontrada."), 404, { requestId });
 
-  const textos = mensagensDaFatura(fatura);
-  let enviadas = 0;
+  let resultado;
   try {
-    for (const body of textos) {
-      await sendMessageHandler(
-        supabase,
-        { organization_id: ctx.orgId, actor: { type: "user", id: ctx.userId }, requestId, idioma: ctx.idioma },
-        sendMessageSchema.parse({ conversation_id: conversationId, body }),
-      );
-      enviadas += 1;
-    }
+    const vinculos = await listarVinculos(ctx.admin, ctx.orgId, ctx.contato.id, "ixc");
+    resultado = await enviarCobrancaIxc({
+      credencial: ctx.credencial,
+      cadastrosVinculados: new Set(vinculos.map((v) => v.external_id)),
+      faturaId,
+      forma,
+      portas: {
+        // Storage-first, no MESMO prefixo que o handler de envio confere
+        // (`<org>/<conversa>/…`). O ÚLTIMO segmento é o nome que o cliente vê no
+        // WhatsApp — por isso o pedaço aleatório (que evita colisão entre dois
+        // envios da mesma fatura) vai numa pasta, e o arquivo chama
+        // `boleto-10-09-2026.pdf`, não `boleto-10-09-2026-3f2a1b9c.pdf`.
+        guardarArquivo: async (arquivo) => {
+          const caminho = `${ctx.orgId}/${conversationId}/cobranca-${randomUUID().slice(0, 8)}/${arquivo.nome}.${arquivo.extensao}`;
+          const { error } = await ctx.admin.storage
+            .from("whatsapp-media")
+            .upload(caminho, arquivo.conteudo, { contentType: arquivo.mime, upsert: false });
+          if (error) throw new ApiError(500, "internal_error", undefined, requestId, "Erro ao guardar o arquivo da cobrança.");
+          return caminho;
+        },
+        enviar: async (mensagem) => {
+          await sendMessageHandler(
+            supabase,
+            { organization_id: ctx.orgId, actor: { type: "user", id: ctx.userId }, requestId, idioma: ctx.idioma },
+            sendMessageSchema.parse({ conversation_id: conversationId, ...mensagem }),
+          );
+        },
+      },
+    });
   } catch (err) {
-    // A primeira pode ter saído e a segunda não: o audit abaixo diz quantas.
-    if (enviadas === 0) {
-      if (err instanceof ApiError) return fail(err.code, err.message, err.status, { requestId });
-      return fail("internal_error", "Erro ao enviar a fatura.", 500, { requestId });
-    }
+    if (err instanceof ApiError) return fail(err.code, err.message, err.status, { requestId });
+    return respostaDaFalha(err, ctx, requestId);
+  }
+
+  if (!resultado.ok) {
+    const recusa = RECUSAS[resultado.motivo];
+    return fail(recusa.codigo, ctx.t(recusa.frase), recusa.status, { requestId, details: { motivo: resultado.motivo } });
   }
 
   void audit({
@@ -134,17 +149,21 @@ export async function POST(
     organizationId: ctx.orgId,
     resourceType: "conversation",
     resourceId: conversationId,
-    // O id da fatura e o valor — nunca a linha digitável nem o link.
+    // O id, a forma e o valor — nunca a linha digitável nem o copia-e-cola.
     metadata: {
       conector: "ixc",
-      fatura: fatura.id,
-      vencimento: fatura.vencimento,
-      valor_cents: fatura.valorCents,
-      mensagens_enviadas: enviadas,
-      mensagens_previstas: textos.length,
+      fatura: resultado.fatura.id,
+      forma: resultado.forma,
+      vencimento: resultado.fatura.vencimento,
+      valor_cents: resultado.fatura.valorCents,
+      mensagens_enviadas: resultado.enviadas,
+      mensagens_previstas: resultado.previstas,
     },
     requestId,
   });
 
-  return ok({ mensagens_enviadas: enviadas, mensagens_previstas: textos.length }, { status: 201, requestId });
+  return ok(
+    { forma: resultado.forma, mensagens_enviadas: resultado.enviadas, mensagens_previstas: resultado.previstas },
+    { status: 201, requestId },
+  );
 }

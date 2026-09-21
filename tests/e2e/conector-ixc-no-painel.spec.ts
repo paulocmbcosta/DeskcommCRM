@@ -16,11 +16,12 @@
  * em instalação normal a lista é vazia e a guarda anti-SSRF recusaria este host.
  *
  * O WAHA do rig aponta para 127.0.0.1:3999. Esta spec sobe um receiver lá para
- * PROVAR o que saiu quando o atendente clica em "Enviar" — mock não estressaria
- * a saída de verdade.
+ * PROVAR o que saiu quando o atendente escolhe Boleto ou Pix — mock não
+ * estressaria a saída de verdade. O boleto é o PDF que o IXC devolve em
+ * `get_boleto`; o Pix é o copia-e-cola de `get_pix`, com o QR code gerado aqui.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 
 import { createClient } from "@supabase/supabase-js";
@@ -35,6 +36,16 @@ const evidence = ".superpowers/evidence/conector-ixc";
 const PORTA_DO_IXC = 39271;
 const TOKEN_CERTO = "53:token-de-teste-do-rig-0271";
 const SENHAS = ["senha-da-central-0271", "pppoe-0271-secreta", "wifi-da-maria-0271", "onu-0271-secreta"];
+
+/** Um PDF mínimo, mas PDF: é o que `get_boleto` devolve (em base64, como texto puro). */
+const PDF_DO_BOLETO = Buffer.from(
+  "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+  "latin1",
+);
+/** O BR Code do manual do Banco Central — CRC 1D3D. É o "copia e cola" que `get_pix` devolve. */
+const COPIA_E_COLA =
+  "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";
+const DEVEDOR_QUE_NAO_SAI = "Devedor Que Nao Sai 0271";
 
 type Linha = Record<string, string>;
 const HOJE = new Date();
@@ -54,9 +65,12 @@ const TABELAS: Record<string, Linha[]> = {
     { id: "701", id_cliente: "20", contrato: "Fibra 300 Mega", status: "A", status_internet: "A", data_ativacao: "2025-01-05", num_parcelas_atraso: "0", endereco: "", numero: "", bairro: "", desbloqueio_confianca_ativo: "N" },
   ],
   fn_areceber: [
-    ...[-70, -40, -9].map((d, i) => ({ id: String(900 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: `00190.00009 01234.567890 12345.678901 2 9999000001299${i}`, gateway_link: `https://download.exemplo.com.br/boleto/${900 + i}`, gerencianet_token: "tok-secreto" })),
-    ...[20, 50, 80, 110, 140].map((d, i) => ({ id: String(950 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: i === 0 ? "00190.00009 01234.567890 12345.678901 2 99990000012999" : "", gateway_link: "" })),
-    { id: "990", id_cliente: "10", id_contrato: "700", status: "R", data_vencimento: dia(-100), valor: "129.90", valor_aberto: "0.00", linha_digitavel: "", gateway_link: "" },
+    // As vencidas têm boleto E Pix registrados — menos a terceira, que só tem boleto
+    // (é o caso que prova o botão de Pix desligado). `gateway_link` continua vindo do
+    // IXC, como na instância real: o conector é que não o pede mais.
+    ...[-70, -40, -9].map((d, i) => ({ id: String(900 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: `00190.00009 01234.567890 12345.678901 2 9999000001299${i}`, pix_txid: i === 2 ? "" : `txid0271${i}`, gateway_link: `https://download.exemplo.com.br/boleto/${900 + i}`, gerencianet_token: "tok-secreto" })),
+    ...[20, 50, 80, 110, 140].map((d, i) => ({ id: String(950 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: i === 0 ? "00190.00009 01234.567890 12345.678901 2 99990000012999" : "", pix_txid: i === 0 ? "txid0271a" : "", gateway_link: "" })),
+    { id: "990", id_cliente: "10", id_contrato: "700", status: "R", data_vencimento: dia(-100), valor: "129.90", valor_aberto: "0.00", linha_digitavel: "", pix_txid: "", gateway_link: "" },
   ],
   radusuarios: [
     { id: "5", id_cliente: "10", id_contrato: "700", login: "maria.conector", ativo: "S", online: "S", ip: "100.64.10.27", mac: "AA:BB:CC:DD:EE:FF", ultima_conexao_inicial: "2026-09-18 07:12:00", ultima_conexao_final: "2026-09-18 07:10:00", motivo_desconexao: "Lost-Carrier", senha: SENHAS[1]!, senha_rede_sem_fio: SENHAS[2]! },
@@ -73,6 +87,9 @@ const TABELAS: Record<string, Linha[]> = {
     { id: "8000", id_cliente: "10", protocolo: "20260701000001", titulo: "Troca de vencimento", su_status: "S", prioridade: "M", data_criacao: "2026-07-01 10:00:00" },
   ],
 };
+
+/** O que o conector PEDIU às ações de cobrança — para provar que ele não pede o que não foi escolhido. */
+const acoesPedidas: string[] = [];
 
 interface Filtro {
   campo: string;
@@ -104,6 +121,40 @@ function subirIxcFalso(): Promise<Server> {
       return;
     }
     const tabela = (req.url ?? "").replace("/webservice/v1/", "");
+
+    // As duas AÇÕES de cobrança, no dialeto medido em 2026-09-21: `get_boleto`
+    // devolve o PDF em base64 como TEXTO PURO (corpo vazio se a fatura não
+    // existe); `get_pix` devolve JSON — com o CPF e o nome do devedor junto, que o
+    // conector tem de descartar — e HTTP 500 se a fatura não tem Pix.
+    if (tabela === "get_boleto" || tabela === "get_pix") {
+      const pedidoDaAcao = JSON.parse(await corpoDe(req)) as Record<string, string>;
+      const id = tabela === "get_boleto" ? pedidoDaAcao.boletos : pedidoDaAcao.id_areceber;
+      const fatura = TABELAS.fn_areceber!.find((f) => f.id === id);
+      acoesPedidas.push(`${tabela}:${id}`);
+      if (tabela === "get_boleto") {
+        res.writeHead(200, { "content-type": "text/html; charset=ISO-8859-1" });
+        res.end(fatura?.linha_digitavel ? PDF_DO_BOLETO.toString("base64") : "");
+        return;
+      }
+      if (!fatura?.pix_txid) {
+        res.writeHead(500, { "content-type": "text/html" });
+        res.end("");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/x-json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          type: "success",
+          gateway: "gerencianet",
+          pix: {
+            dadosPix: { status: "ATIVA", txid: fatura.pix_txid, devedor: { cpf: "52998224725", nome: DEVEDOR_QUE_NAO_SAI }, valor: { original: fatura.valor_aberto }, pixCopiaECola: COPIA_E_COLA },
+            qrCode: { qrcode: COPIA_E_COLA, imagemQrcode: "iVBORw0KGgo-imagem-do-ixc-que-nao-usamos", imagemSrc: "https://pix.exemplo/qr.png" },
+          },
+        }),
+      );
+      return;
+    }
+
     const linhas = TABELAS[tabela];
     if (req.headers.ixcsoft !== "listar" || !linhas) {
       // O dialeto real: HTTP 200, text/html, JSON de erro.
@@ -317,33 +368,97 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
     const { data: vinculos } = await db.from("contato_vinculos_externos").select("external_id, verificado_por").eq("contact_id", maria.contato);
     expect(vinculos).toEqual([{ external_id: "10", verificado_por: "telefone" }]);
 
-    // ── 3. Enviar fatura: dois toques, e o que SAI é composto no servidor ──────
+    // ── 3. Enviar a cobrança: escolher a FORMA é o segundo toque ───────────────
     await painel.getByTestId("ixc-financeiro").scrollIntoViewIfNeeded();
-    const enviar = painel.getByTestId("ixc-fatura-vencida").first().getByTestId("ixc-enviar-fatura");
-    await enviar.click();
-    await expect(enviar).toContainText("Confirmar envio");
-    expect(await db.from("messages").select("id", { count: "exact", head: true }).eq("conversation_id", maria.conversa).eq("direction", "outbound").then((r) => r.count)).toBe(0);
-    await enviar.click();
-    await expect(page.getByText("Fatura enviada na conversa.")).toBeVisible({ timeout: 40_000 });
+    const vencidas = painel.getByTestId("ixc-fatura-vencida");
+    const saidas = async () =>
+      (
+        await db
+          .from("messages")
+          .select("type, body, media_storage_path, media_mime")
+          .eq("conversation_id", maria.conversa)
+          .eq("direction", "outbound")
+          .order("created_at", { ascending: true })
+      ).data ?? [];
 
-    const { data: saidas } = await db
-      .from("messages")
-      .select("body")
-      .eq("conversation_id", maria.conversa)
-      .eq("direction", "outbound")
-      .order("created_at", { ascending: true });
-    expect(saidas?.length).toBe(2);
-    expect(saidas?.[0]?.body).toContain("R$ 129,90");
-    expect(saidas?.[0]?.body).toContain("https://download.exemplo.com.br/boleto/900");
-    expect(saidas?.[1]?.body).toBe("00190.00009 01234.567890 12345.678901 2 99990000012990");
-    await expect(page.getByTestId("chat-thread")).toContainText("Segue a sua fatura");
-    await page.screenshot({ path: `${evidence}/05-fatura-enviada.png` });
+    // 3a. BOLETO — o PDF baixado do IXC, como documento; a linha digitável sozinha.
+    await vencidas.nth(0).getByTestId("ixc-enviar-fatura").click();
+    const escolha = vencidas.nth(0).getByTestId("ixc-escolher-forma");
+    await expect(escolha).toBeVisible();
+    await expect(escolha.getByTestId("ixc-enviar-boleto")).toBeEnabled();
+    await expect(escolha.getByTestId("ixc-enviar-pix")).toBeEnabled();
+    // O primeiro toque só ABRE a escolha: nada saiu, e nada foi pedido ao IXC.
+    expect(await saidas()).toHaveLength(0);
+    expect(acoesPedidas).toEqual([]);
+    // Medido: a escolha cabe na coluna, sem empurrar nada para o lado.
+    expect(await painel.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: `${evidence}/05-escolher-boleto-ou-pix.png` });
+
+    await escolha.getByTestId("ixc-enviar-boleto").click();
+    await expect(page.getByText("Boleto enviado na conversa.")).toBeVisible({ timeout: 60_000 });
+
+    let mensagens = await saidas();
+    expect(mensagens).toHaveLength(2);
+    expect(mensagens[0]).toMatchObject({ type: "document", media_mime: "application/pdf" });
+    // O último segmento é o nome que o cliente vê no WhatsApp: limpo, sem sufixo aleatório.
+    expect(mensagens[0]?.media_storage_path).toMatch(new RegExp(`^${org}/${maria.conversa}/cobranca-[0-9a-f]{8}/boleto-\\d{2}-\\d{2}-\\d{4}\\.pdf$`));
+    expect(mensagens[0]?.body).toContain("R$ 129,90");
+    // O link do boleto no site do banco NÃO sai mais — nem link nenhum.
+    expect(JSON.stringify(mensagens)).not.toMatch(/https?:\/\//);
+    expect(mensagens[1]).toMatchObject({ type: "text", body: "00190.00009 01234.567890 12345.678901 2 99990000012990" });
+    // O que ficou guardado É o PDF que o IXC devolveu, byte a byte.
+    const pdfGuardado = await db.storage.from("whatsapp-media").download(String(mensagens[0]?.media_storage_path));
+    expect(pdfGuardado.error).toBeNull();
+    expect(Buffer.from(await pdfGuardado.data!.arrayBuffer()).equals(PDF_DO_BOLETO)).toBe(true);
+    // Escolheu boleto: o conector pediu o boleto, e NÃO o Pix.
+    expect(acoesPedidas).toEqual(["get_boleto:900"]);
+    await expect(page.getByTestId("chat-thread")).toContainText("Segue o boleto da sua fatura");
+    await page.screenshot({ path: `${evidence}/06-boleto-em-pdf-enviado.png` });
+
+    // 3b. PIX — o QR code como imagem; o copia-e-cola sozinho.
+    await vencidas.nth(1).getByTestId("ixc-enviar-fatura").click();
+    await vencidas.nth(1).getByTestId("ixc-enviar-pix").click();
+    await expect(page.getByText("Pix enviado na conversa.")).toBeVisible({ timeout: 60_000 });
+
+    mensagens = await saidas();
+    expect(mensagens).toHaveLength(4);
+    expect(mensagens[2]).toMatchObject({ type: "image", media_mime: "image/png" });
+    expect(mensagens[2]?.media_storage_path).toMatch(/\/cobranca-[0-9a-f]{8}\/pix-\d{2}-\d{2}-\d{4}\.png$/);
+    expect(mensagens[3]).toMatchObject({ type: "text", body: COPIA_E_COLA });
+    const qrGuardado = await db.storage.from("whatsapp-media").download(String(mensagens[2]?.media_storage_path));
+    const qrPng = Buffer.from(await qrGuardado.data!.arrayBuffer());
+    expect(qrPng.subarray(1, 4).toString("latin1")).toBe("PNG");
+    // O QR code que foi para o cliente, como arquivo — para quem valida apontar a câmera.
+    writeFileSync(`${evidence}/07b-qr-code-que-foi-para-o-cliente.png`, qrPng);
+    expect(acoesPedidas).toEqual(["get_boleto:900", "get_pix:901"]);
+    await expect(page.getByTestId("chat-thread")).toContainText("Segue o Pix da sua fatura");
+    // A evidência é o QR NA TELA, não a bolha ainda carregando.
+    const imagemDoQr = page.getByTestId("chat-thread").locator("img").last();
+    await expect(imagemDoQr).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => imagemDoQr.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    await imagemDoQr.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${evidence}/07-pix-com-qr-code-enviado.png` });
+
+    // 3c. Fatura que só tem boleto registrado: o Pix fica DESLIGADO — pedir ao IXC
+    // o que ele não registrou faria ele registrar a cobrança.
+    await vencidas.nth(2).getByTestId("ixc-enviar-fatura").click();
+    await expect(vencidas.nth(2).getByTestId("ixc-enviar-boleto")).toBeEnabled();
+    await expect(vencidas.nth(2).getByTestId("ixc-enviar-pix")).toBeDisabled();
+    // E parcela futura sem registro nenhum nem oferece o botão.
+    const semRegistro = painel.getByTestId("ixc-fatura-a-vencer").nth(1);
+    await expect(semRegistro).toContainText("cobrança ainda não gerada");
+    await expect(semRegistro.getByTestId("ixc-enviar-fatura")).toHaveCount(0);
+
+    // O canal recebeu os dois ARQUIVOS (receiver real na porta do WAHA), e o
+    // nome/CPF do devedor que `get_pix` devolve não chegou a lugar nenhum.
+    expect(enviadasAoWaha.filter((r) => /sendFile|sendImage/i.test(r)).length).toBeGreaterThanOrEqual(2);
+    expect(await page.content()).not.toContain(DEVEDOR_QUE_NAO_SAI);
 
     // ── 4. Telefone que não está no IXC → CPF ─────────────────────────────────
     await page.locator(`[data-conversation-id="${desconhecido.conversa}"]`).click();
     await expect(painel).toHaveAttribute("data-estado", "nao_encontrado", { timeout: 40_000 });
     await painel.getByLabel("Buscar pelo CPF ou CNPJ do cliente").fill("111.444.777-35");
-    await page.screenshot({ path: `${evidence}/06-nao-encontrado-busca-cpf.png` });
+    await page.screenshot({ path: `${evidence}/08-nao-encontrado-busca-cpf.png` });
     await painel.getByRole("button", { name: "Buscar" }).click();
     await expect(painel).toHaveAttribute("data-estado", "vinculado", { timeout: 40_000 });
     await expect(painel.getByTestId("ixc-cliente")).toContainText("José Outro Número");
@@ -357,7 +472,7 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
     // Documento PARCIAL: o candidato ainda não é o cliente da conversa.
     await expect(painel).not.toContainText("168.995.350-09");
     await expect(painel).toContainText("***.995.350-**");
-    await page.screenshot({ path: `${evidence}/07-escolher-entre-dois.png` });
+    await page.screenshot({ path: `${evidence}/09-escolher-entre-dois.png` });
     await painel.getByTestId("ixc-candidato").filter({ hasText: "Ana Divide Celular" }).getByRole("button", { name: "É este" }).click();
     await expect(painel).toHaveAttribute("data-estado", "vinculado", { timeout: 40_000 });
     await expect(painel.getByTestId("ixc-cliente")).toContainText("Ana Divide Celular");
@@ -367,11 +482,11 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
     await page.locator(`[data-conversation-id="${maria.conversa}"]`).click();
     await painel.getByTestId("ixc-atualizar").click();
     await expect(painel).toHaveAttribute("data-estado", "erro", { timeout: 40_000 });
-    await page.screenshot({ path: `${evidence}/08-erp-fora-do-ar.png` });
+    await page.screenshot({ path: `${evidence}/10-erp-fora-do-ar.png` });
     await page.goto("/app/settings/conectores");
     await expect(page.getByTestId("conector-ixc")).toHaveAttribute("data-estado", "erro", { timeout: 20_000 });
     await expect(page.getByTestId("conector-erro")).toBeVisible();
-    await page.screenshot({ path: `${evidence}/09-admin-ve-o-erro.png` });
+    await page.screenshot({ path: `${evidence}/11-admin-ve-o-erro.png` });
 
     // A auditoria registrou conexão, vínculos e fatura — sem linha digitável.
     await expect
@@ -381,7 +496,10 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
       }, { timeout: 20_000 })
       .toEqual(expect.arrayContaining(["conector.conexao_salva", "conector.fatura_enviada", "conector.vinculo_criado"]));
     const { data: trilha } = await db.from("api_audit_log").select("metadata").eq("organization_id", org).eq("action", "conector.fatura_enviada");
+    expect(trilha).toHaveLength(2);
     expect(JSON.stringify(trilha)).not.toContain("00190.00009");
+    expect(JSON.stringify(trilha)).not.toContain("br.gov.bcb.pix");
+    expect((trilha ?? []).map((l) => (l.metadata as { forma?: string }).forma).sort()).toEqual(["boleto", "pix"]);
   } finally {
     await new Promise<void>((r) => (ixc.listening ? ixc.close(() => r()) : r()));
     await new Promise<void>((r) => waha.close(() => r()));

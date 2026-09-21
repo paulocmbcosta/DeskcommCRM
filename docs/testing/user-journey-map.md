@@ -469,15 +469,26 @@ ganha um receiver para provar o que saiu. Banco:
 | J26.4 O painel mostra nome, CPF, selo "Bloqueado" numa linha só (altura ≤ 24px, medida) com "Motivo: financeiro em atraso", contrato com endereço, **3 vencidas + 2 a vencer + "Mais 3 parcelas futuras"** (a regra do dono), total vencido R$ 389,70, conexão Online com IP, sinal "No limite" −26.10 dBm, 1 OS agendada, 1 atendimento em progresso | `[P1]` | **PASS** — `evidence/conector-ixc/03-painel-vinculado.png`, `evidence/conector-ixc/04-painel-conexao-e-os.png` |
 | J26.5 **Nenhuma das 4 senhas que o IXC falso devolve (central, PPPoE, Wi-Fi, ONU) nem o token do gateway está no HTML da página** | `[P0]` | **PASS** |
 | J26.6 O painel não rola para o lado (`scrollWidth − clientWidth ≤ 1`, medido) | `[P1]` | **PASS** |
-| J26.7 Enviar fatura: 1º toque vira "Confirmar envio" e NADA sai; 2º toque envia DUAS mensagens — resumo (valor, vencimento, link) e a linha digitável sozinha; o texto é o do servidor | `[P1]` | **PASS** — `evidence/conector-ixc/05-fatura-enviada.png` |
-| J26.8 Telefone que não está no IXC → "Não achei este telefone…", busca por CPF vincula e mostra "Liberado" e "Nenhuma fatura vencida." | `[P1]` | **PASS** — `evidence/conector-ixc/06-nao-encontrado-busca-cpf.png` |
-| J26.9 Celular de DOIS cadastros → a tela lista os dois com documento PARCIAL (`***.995.350-**`), ninguém é vinculado sozinho; "É este" vincula | `[P1]` | **PASS** — `evidence/conector-ixc/07-escolher-entre-dois.png` |
-| J26.10 ERP fora do ar: o painel diz o erro com "Tentar de novo", e Configurações › Conectores passa a mostrar "Com problema" — o admin vê o que o atendente viu | `[P1]` | **PASS** — `evidence/conector-ixc/08-erp-fora-do-ar.png`, `evidence/conector-ixc/09-admin-ve-o-erro.png` |
-| J26.11 Auditoria: `conector.conexao_salva`, `conector.vinculo_criado`, `conector.fatura_enviada` — e a linha digitável NÃO está no metadata | `[P1]` | **PASS** |
+| J26.7 Enviar a cobrança — **Boleto**: "Enviar" só ABRE a escolha [Boleto] [Pix] (nada sai e nada é pedido ao IXC); escolher Boleto manda o **PDF que o IXC devolve em `get_boleto`** como documento, com valor e vencimento na legenda, e a linha digitável sozinha em seguida. O PDF guardado no Storage é o do IXC **byte a byte**; nenhum link sai; o conector pediu `get_boleto` e NÃO `get_pix` | `[P1]` | **PASS** — `evidence/conector-ixc/05-escolher-boleto-ou-pix.png`, `evidence/conector-ixc/06-boleto-em-pdf-enviado.png` |
+| J26.7b **Pix**: manda o **QR code** (PNG gerado aqui a partir do copia-e-cola de `get_pix`, CRC conferido) como imagem, e o copia-e-cola sozinho em seguida; a imagem aparece carregada na conversa | `[P1]` | **PASS** — `evidence/conector-ixc/07-pix-com-qr-code-enviado.png`, `evidence/conector-ixc/07b-qr-code-que-foi-para-o-cliente.png` |
+| J26.7c Fatura que só tem boleto registrado: o botão **Pix fica desligado**; parcela futura sem registro nenhum diz "cobrança ainda não gerada" e não oferece Enviar. O canal (receiver real na porta do WAHA) recebeu os dois arquivos; o nome e o CPF do devedor que `get_pix` devolve não chegam à página | `[P1]` | **PASS** |
+| J26.8 Telefone que não está no IXC → "Não achei este telefone…", busca por CPF vincula e mostra "Liberado" e "Nenhuma fatura vencida." | `[P1]` | **PASS** — `evidence/conector-ixc/08-nao-encontrado-busca-cpf.png` |
+| J26.9 Celular de DOIS cadastros → a tela lista os dois com documento PARCIAL (`***.995.350-**`), ninguém é vinculado sozinho; "É este" vincula | `[P1]` | **PASS** — `evidence/conector-ixc/09-escolher-entre-dois.png` |
+| J26.10 ERP fora do ar: o painel diz o erro com "Tentar de novo", e Configurações › Conectores passa a mostrar "Com problema" — o admin vê o que o atendente viu | `[P1]` | **PASS** — `evidence/conector-ixc/10-erp-fora-do-ar.png`, `evidence/conector-ixc/11-admin-ve-o-erro.png` |
+| J26.11 Auditoria: `conector.conexao_salva`, `conector.vinculo_criado`, e DUAS `conector.fatura_enviada` (`forma: boleto` e `forma: pix`) — sem a linha digitável e sem o copia-e-cola no metadata | `[P1]` | **PASS** |
 
 Execução (2026-09-19): `pnpm e2e:build` (produção) + `next start`, Supabase local
 próprio com o `baseline.sql` aplicado (`ON_ERROR_STOP=1`, 0 erros), Chromium real.
 1 passed (12,9 s).
+
+**Revisão de 2026-09-21 (pedido do dono, depois de usar em produção):** o que ia no
+chat era o link do boleto no site do banco; passou a ir **o PDF do próprio IXC**, e o
+atendente **escolhe Boleto ou Pix**. Os casos J26.7–J26.7c substituem o antigo J26.7, e as
+evidências 05–11 foram refeitas. `get_boleto` e `get_pix` foram medidos na instância real
+(só forma, tamanhos e conferências): PDF de ~45 KB que começa com `%PDF`; copia-e-cola de
+194 caracteres com **CRC16 conferido**, Pix `ATIVA`, valor igual ao `valor_aberto`.
+Execução: build de produção + `next start`, Supabase local com o `baseline.sql` de
+2026-09-21 (`ON_ERROR_STOP=1`, 0 erros), Chromium real — 1 passed.
 
 **Achado da execução, consertado:** o selo "Bloqueado — financeiro em atraso"
 quebrava em DUAS linhas dentro de um selo redondo e espremia o nome do cliente na
@@ -489,7 +500,7 @@ pessoal impresso): os filtros que o painel usa (`L` nos 4 campos de telefone,
 `cnpj_cpf` mascarado, `status=A` ordenado por vencimento, `status != F`,
 `su_status != S`, fibra por `id_login`), o 401 em HTML e o erro com HTTP 200.
 
-**Não medido:** a TELA contra o IXC real (a prova em tela é com o IXC falso; o
+**Não medido:** o ENVIO de boleto/Pix contra o IXC real numa conversa de verdade (em tela, só com o IXC falso); o que `get_boleto`/`get_pix` fazem com fatura SEM registro no gateway (por isso a tela não oferece); a TELA contra o IXC real (a prova em tela é com o IXC falso; o
 token real foi só de sondagem e será trocado); latência a partir da VPS (medi
 ~1,4 s por chamada do Mac do dono); IXC on-premise com certificado próprio; token
 de escopo mínimo (o de sondagem lia todas as tabelas); celular (o painel deslizante

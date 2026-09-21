@@ -13,7 +13,7 @@ function fatura(id: string, vencimento: string, extra: Record<string, string> = 
     valor: "99.90",
     valor_aberto: "99.90",
     linha_digitavel: "00190.00009 01234.567890 12345.678901 2 99990000009990",
-    gateway_link: "https://download.exemplo.com.br/boleto/1",
+    pix_txid: "txid0271",
     ...extra,
   };
 }
@@ -75,16 +75,22 @@ describe("lerFatura", () => {
     expect(lerFatura(fatura("1", "2026-09-01", { valor: "100.00", valor_aberto: "" }), HOJE)?.valorCents).toBe(10000);
   });
 
-  it("link que não é https NÃO sai — ele vai para o WhatsApp do cliente", () => {
-    const f = lerFatura(fatura("1", "2026-09-01", { gateway_link: "http://inseguro.exemplo/boleto" }), HOJE);
-    expect(f?.link).toBe("");
-    const g = lerFatura(fatura("1", "2026-09-01", { gateway_link: "javascript:alert(1)" }), HOJE);
-    expect(g?.link).toBe("");
+  it("as formas disponíveis saem do que o IXC JÁ registrou: linha digitável = boleto, pix_txid = Pix", () => {
+    const soBoleto = lerFatura(fatura("1", "2026-09-01", { pix_txid: "" }), HOJE);
+    expect([soBoleto?.temBoleto, soBoleto?.temPix, soBoleto?.enviavel]).toEqual([true, false, true]);
+
+    const soPix = lerFatura(fatura("1", "2026-09-01", { linha_digitavel: "", pix_txid: "abc123" }), HOJE);
+    expect([soPix?.temBoleto, soPix?.temPix, soPix?.enviavel]).toEqual([false, true, true]);
   });
 
-  it("sem linha digitável E sem link, a fatura existe mas não é enviável", () => {
-    const f = lerFatura(fatura("1", "2026-09-01", { linha_digitavel: "", gateway_link: "" }), HOJE);
-    expect(f?.enviavel).toBe(false);
+  it("parcela futura sem registro no gateway existe, mas não é enviável — pedir a cobrança faria o IXC registrá-la", () => {
+    const f = lerFatura(fatura("1", "2026-12-01", { linha_digitavel: "", pix_txid: "  " }), HOJE);
+    expect([f?.temBoleto, f?.temPix, f?.enviavel]).toEqual([false, false, false]);
+  });
+
+  it("o link do boleto no site do banco NÃO faz mais parte da fatura — o que se envia é o PDF do IXC", () => {
+    const f = lerFatura(fatura("1", "2026-09-01", { gateway_link: "https://banco.exemplo/boleto/1" }), HOJE);
+    expect(JSON.stringify(f)).not.toContain("banco.exemplo");
   });
 });
 
