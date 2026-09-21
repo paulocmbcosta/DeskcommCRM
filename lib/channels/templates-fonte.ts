@@ -43,6 +43,8 @@ const FONTE: Record<ProviderDeMensagem, FonteDeTemplates | null> = {
   waha: null,
   meta_cloud: "oficial",
   zernio: "parceiro",
+  // Sem plataforma no meio, não existe definição a aprovar: texto livre sempre.
+  site_widget: null,
 };
 
 /** `null` quando este canal não trabalha com definições aprovadas. */

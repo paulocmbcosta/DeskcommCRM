@@ -353,6 +353,7 @@ nunca por `update` de status.
 | 13 | A aba Fechadas lista ATENDIMENTOS: o encerrado continua lá com a conversa ABERTA de novo, marcado "o cliente voltou", com quem encerrou (sem reticências), o time do FECHAMENTO e o canal; o badge conta a mesma unidade | `lista-de-atendimentos-fechados`, `cliente-voltou`, `quem-encerrou` medido por `scrollWidth`, badge `1` | ✅ |
 | 14 | Na aba Fechadas a busca acha pelo protocolo e pelo nome, e os filtros valem contra o PostgREST de verdade (time do fechamento, número, etiqueta); a contagem com etiqueta responde 200 | `GET /atendimentos?status=closed&…` e `GET /conversations/counts?tag=` pela sessão logada | ✅ |
 | 15 | Clicar num atendimento encerrado abre AQUELE atendimento (recortado, composer travado) e a ficha mostra o time que o encerrou, não "Sem time" | `aviso-atendimento-antigo`, `ficha-da-conversa` com "Cobrança" | ✅ |
+| 16 | A NOTA INTERNA pertence ao atendimento em que foi escrita: a do primeiro não aparece no atendimento novo, a do novo não aparece ao abrir o antigo (pelo histórico e pela aba Fechadas), e "voltar ao atual" desfaz | duas notas escritas PELO COMPOSER; `chat-thread` com/sem o texto de cada uma | ✅ |
 
 **Achados desta rodada, consertados na causa:**
 
@@ -380,6 +381,14 @@ nunca por `update` de status.
   mediam o caminho feliz, que não é o de quem instalou cedo. Migration 0270: régua única
   `fn_nome_do_usuario` (nome; na falta, o início do e-mail) + backfill idempotente. O invariante
   novo cria o usuário que faltava: sem `full_name`.
+- **A nota interna atravessava os atendimentos — relatado pelo dono do produto** (2026-09-19).
+  As mensagens eram recortadas pela janela do episódio e as notas, que entram no MESMO thread,
+  vinham da conversa inteira: `useConversationNotes(conversationId)` nunca recebeu o atendimento.
+  A nota do Financeiro aparecia no atendimento novo do Suporte, e a de hoje dentro do encerrado.
+  A regra da janela saiu do handler de mensagens para `lib/atendimento/janela-do-atendimento.ts`,
+  e as duas rotas a chamam; `tests/unit/notas-internas-por-atendimento.test.ts` proíbe reescrevê-la
+  por fora e foi sabotado (a linha antiga no thread → vermelho). A spec escrevia ZERO notas: o
+  recorte era medido só com mensagens, que é a metade que funcionava.
 
 **NÃO medido:** telefone de verdade (a spec não conecta WAHA); o trilho em tela de toque
 (a dica de mouse não existe lá — o nome da aba escrito no topo é a resposta, e está medido
@@ -473,6 +482,244 @@ token real foi só de sondagem e será trocado); latência a partir da VPS (medi
 de escopo mínimo (o de sondagem lia todas as tabelas); celular (o painel deslizante
 herda o mesmo componente, não foi aberto em viewport de telefone).
 
+
+## J27 — Chamar o cliente primeiro, com modelo aprovado `[P0]` (2026-09-19)
+
+Pedido do dono: cadastrar um cliente (à mão ou pela importação do IXC) e
+**chamá-lo no WhatsApp** antes de ele escrever — pelo modelo da Meta no canal
+oficial, e por texto livre na API não-oficial. Desenho e as cinco lacunas
+medidas: `docs/superpowers/specs/2026-09-19-chamar-o-cliente-design.md`. Sem
+migration: tudo compõe peças que já existiam.
+
+Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts` (8 casos, em `SPECS_PARTE_3`).
+
+### Execução (2026-09-19): **PASS nos 8 casos**
+
+`e2e` no CI (`Run workflow` na branch, run 35442960641), Chromium real, Supabase
+local com o `baseline.sql` aplicado, app em produção (`next build` + `next start`).
+Parte 3: **89 passed (21,1 min)**; as três partes verdes.
+
+Não rodou na máquina do autor: o daemon do Docker parou de baixar imagens no meio
+da sessão — medido com controle, `docker pull hello-world` (13 KB) também não
+completou em 25 s, então não era o Supabase nem a rede do host. O CI tem Docker
+funcional, e é por isso que o `workflow_dispatch` existe.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J27.1 Contato sem conversa mostra **Chamar no WhatsApp** na lista, e o diálogo abre com o nome de quem se vai chamar | `[P0]` | **PASS** (5,3 s) |
+| J27.2 O diálogo diz o que o canal permite **antes** de escrever — campo de texto OU aviso de modelo obrigatório, nunca os dois | `[P0]` | **PASS** (12,3 s) |
+| J27.3 O botão de enviar fica travado sem conteúdo, destrava ao preencher e **volta a travar** ao apagar (controle positivo) | `[P0]` | **PASS** (29,2 s) |
+| J27.4 O dossiê do contato oferece começar quando não há conversa (antes devolvia nada) | `[P1]` | **PASS** (30,9 s) |
+| J27.5 A conversa nasce e o operador cai nela **mesmo se o envio não completar**; o motivo real volta em `erro_envio` | `[P0]` | **PASS** (30,4 s) |
+| J27.6 Chamar duas vezes reaproveita a MESMA conversa (o índice 1-para-1 não tem filtro de status; um insert daria 23505) | `[P0]` | **PASS** (27,9 s) |
+| J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **PASS** (28,5 s) |
+| J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **PASS** (29,4 s) |
+
+**A primeira execução reprovou 6 dos 8, e o defeito era do TESTE** — vale registrar
+porque é o argumento inteiro da doutrina em miniatura. `createContactHandler`
+devolve `{ contact, action }`, o helper lia `data.id`, e o `undefined` chegava ao
+`PATCH` seguinte como `invalid input syntax for type uuid` — um erro de banco, três
+camadas longe da causa. Os 2 casos que não usam o helper passaram já naquela
+rodada, e são justamente os que medem a rota nova e o isolamento entre
+organizações.
+
+Se a spec tivesse sido mesclada com o rótulo "não executada", ela entraria no
+repositório **quebrada**, e o próximo push na `main` acusaria um vermelho que se
+leria como regressão da feature.
+
+**Não medido:** envio real contra uma WABA (não há credencial neste ambiente, e o
+que a jornada prova é a decisão do operador, não o transporte); a tela em viewport
+de telefone; e o canal com hetero-restrição em tela — o ambiente E2E usa o canal de
+texto livre, então J27.2 exercitou o ramo livre e a exclusividade dos dois ramos,
+não o formulário de parâmetros renderizado. Esse formulário está preso por
+unidade (`tests/unit/chamar-o-cliente-primeiro.test.ts`, incluindo a derivação
+compartilhada com o montador do payload).
+
+### Um fato do produto que a spec teve de contornar — e que vale saber
+
+**`POST /api/v1/contacts` abre a conversa sozinho** quando o corpo traz telefone e
+a organização tem um canal vivo (`_handler.ts`, o `ensureConversation` best-effort
+logo depois do insert). O `PATCH` não faz isso: só o create tem esse ramo.
+
+Consequência para o produto, não só para o teste: o contato criado **pela tela**,
+com telefone, em geral já nasce com conversa — então o botão "Chamar no WhatsApp"
+aparece pouco nesse caminho. **Quem veio da importação é outra história**, e é o
+caso que originou esta feature: o importador não chama `ensureConversation` em
+lugar nenhum, então todo contato importado nasce sem conversa e o botão aparece.
+
+A spec cria o contato em dois passos (sem telefone, depois `PATCH`) justamente para
+reproduzir o estado do importado. Criar num `POST` só daria um contato que já tem
+conversa, e os casos mediriam a tela errada — a lista mostraria "Abrir conversa"
+onde a spec procura "Chamar no WhatsApp".
+
+### O que FOI medido, e como
+
+- **`pnpm test:unit`**: 929 de 930 arquivos verdes. 21 casos novos em
+  `tests/unit/chamar-o-cliente-primeiro.test.ts`. O único vermelho é
+  `leads-import-route` (11 casos), confirmado pré-existente rodando a suíte com
+  as mudanças removidas — é o vermelho local de macOS já conhecido.
+- **Os testes vigiam de verdade, provado por sabotagem** (não por eles
+  passarem): fazer `slotKey` prefixar o corpo, zerar os valores do seletor da
+  janela fechada e trocar o filtro de conexão por `.eq()` puro reprovam,
+  respectivamente, 1, 1 e 1 caso; reverter devolve o verde.
+- **`pnpm typecheck`**, **`pnpm lint`** (0 erros), **`pnpm lint:channels`**
+  (nenhum provider nomeado fora de `lib/channels/`) e **`pnpm build`** (compilou
+  em 41 s).
+
+### Três defeitos achados na revisão, antes de sair — e o que eles ensinam
+
+Nenhum dos três aparecia em typecheck, lint ou unitário de lógica. Os três
+teriam ido para produção com o gate verde.
+
+1. **`.omit()` em schema com `.refine()`** compila e falha ao importar, no Zod 4.
+   Derrubou 184 arquivos de teste em cascata — só apareceu porque a suíte
+   inteira foi rodada, e não os gates lembrados.
+2. **Client de sessão numa rota que chama `fn_service_begin`**, que o baseline
+   revoga de `authenticated`. Teria falhado em **100%** das chamadas.
+3. **Filtro `.eq("channel_session_id", …)`** escondendo todos os modelos do canal
+   oficial, porque o `syncTemplates` grava a coluna NULL — o defeito que este
+   trabalho conserta, invertido e apontado justamente para o canal do pedido.
+
+A lição comum: **os três só eram alcançáveis executando o caminho inteiro.** É
+exatamente o argumento da doutrina de QA Visual, e é por isso que a ausência da
+execução da spec acima é uma lacuna real, não uma formalidade.
+
+
+## J28 — Chat do site: o dono cola um código, o visitante escreve, o atendente responde `[P0]` (2026-09-20)
+
+Pedido do dono: uma **caixa de entrada nova**, além do WhatsApp — um widget de chat
+para colocar no site (no dele e no de qualquer cliente), com **cores e textos
+configuráveis**, que gere um **código para colar** e faça a conversa do visitante
+nascer no atendimento. É o primeiro canal do produto que não é WhatsApp (migration
+0272); mapa em `docs/architecture/chat-do-site.architecture.json`.
+
+`[P0]` porque é primeira impressão **duas vezes**: a do dono, que cola o código e
+espera ver um balão; e a do visitante do site do cliente dele, que é o público
+final de todo mundo.
+
+Spec: `tests/e2e/chat-do-site.spec.ts` (9 casos, em `SPECS_PARTE_3`), em **dois
+navegadores** — o do dono e o do visitante, sem cookie compartilhado — e com o site
+do cliente numa **origem diferente de verdade** (`http://site-do-cliente.test`),
+para o `fetch` do widget atravessar CORS real contra o servidor real.
+
+### Execução (2026-09-20): **PASS nos 9 casos**, na máquina do autor
+
+Chromium real, Supabase local **pg15** com o `baseline.sql` aplicado em modo install
+**e** update (as duas passadas com `ON_ERROR_STOP=1`, zero erro), Realtime reiniciado
+depois do baseline, app em produção (`next build` + `next start`). **Sem Redis** — o
+env opcional ausente, que é o estado de um primeiro deploy: o rate limit caiu no
+contador em memória e a jornada inteira passou assim.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J28.1 O dono cria o chat, troca a cor e **vê a cor na prévia antes de salvar** (`background-color` medido por `getComputedStyle`); o código nasce com o endereço do servidor, nunca o placeholder do build | `[P0]` | **PASS** (1,2 s) |
+| J28.2 Num site de **outra origem**, o balão aparece com a cor configurada — 56×56 px, a 20 px da borda direita (medido por `boundingBox`) | `[P0]` | **PASS** (0,1 s) |
+| J28.3 O formulário **inteiro** cabe no painel sem rolar; enviar sem o nome obrigatório NÃO abre conversa; preenchido, a mensagem sai e o token fica no `localStorage` do site | `[P0]` | **PASS** (0,4 s) |
+| J28.4 A conversa nasce no Inbox **marcada como vinda do site** (`data-meio="site_chat"`, ícone de globo) e o atendente responde pelo composer | `[P0]` | **PASS** (1,1 s) |
+| J28.5 A resposta chega ao balão do visitante — e a mensagem vira **`delivered`** no CRM (o laço de retorno: foi o navegador buscar que a promoveu) | `[P0]` | **PASS** (0,9 s) |
+| J28.6 Recarregar o site **não perde** a conversa, e quem já conversou não vê o formulário de novo | `[P0]` | **PASS** (0,1 s) |
+| J28.7 Conexões passa a dizer **onde** o chat está instalado: `Instalado · site-do-cliente.test` | `[P1]` | **PASS** (0,3 s) |
+| J28.8 Site fora da lista do dono: o balão **não aparece** e o site do cliente segue intacto (com controle positivo: o script CARREGOU) | `[P1]` | **PASS** (2,6 s) |
+| J28.9 Excluir pede confirmação **nomeando o chat**; Cancelar não exclui; confirmado, o balão sai do ar na hora com o código ainda colado — e a conversa recebida continua no Inbox | `[P0]` | **PASS** (3,6 s) |
+
+Evidência visual em `.superpowers/evidence/chat-do-site/` (9 imagens: a tela vazia, a
+tela com prévia, o balão, o formulário, a conversa, o Inbox, "Instalado", telefone
+390 px e notebook de 640 px de altura).
+
+### O defeito que SÓ a imagem pegou — e que a spec deixou passar verde
+
+Na primeira execução completa a spec deu **9/9**, e o produto estava quebrado na
+primeira tela do visitante: no formulário, **telefone, mensagem e o botão "Iniciar
+conversa" ficavam fora da vista**. A causa: a área de conversa "escondida" (`hidden`)
+tinha `display:flex` no CSS do widget, e `display:flex` **vence** o atributo `hidden`
+— ela seguia ocupando metade do painel e espremia o formulário, que rolava por dentro.
+
+A spec passava porque **o Playwright rola até o elemento antes de clicar**. Uma pessoa
+não sabe que há o que rolar. Quem achou foi abrir o PNG do formulário e ver meio
+painel em branco.
+
+Conserto na causa: uma regra só, `[hidden]{display:none !important}`, em vez de um
+`[hidden]` por classe — a lista por classe é justamente a que alguém esquece de
+completar (eu esqueci a `.corpo`). Junto: painel de 600 px, formulário mais compacto e
+o botão **grudado no pé** (`position: sticky`), para que em tela baixa o formulário
+role mas a única ação da tela nunca saia da vista. Medido depois:
+
+| Viewport | Painel | Botão inteiro na vista |
+|---|---|---|
+| 1280×720 (spec) | 380×600 | sim — `toBeInViewport({ ratio: 1 })`, que considera o recorte dos ancestrais com rolagem |
+| 1366×640 (notebook com barra de favoritos) | 380×528 | sim |
+| 390×844 (telefone) | tela cheia, 390×844 | sim |
+
+**A spec agora prende isso**, e a guarda foi sabotada para provar que morde: devolvendo
+o CSS antigo, o J28.3 reprova em 136 ms.
+
+### O CI reprovou duas vezes — e as duas causas eram minhas, não do produto
+
+**1. A spec presumia a ABA.** Na primeira rodada do `e2e` no CI (run 35528903796) o
+J28.4 reprovou: o card do visitante não apareceu no Inbox em 30 s. O produto estava
+certo — o J28.3 tinha passado (o POST de outra origem deu 201) e a sondagem seguia com
+o token. O screenshot da falha explicou: o Inbox abriu na aba **Fila** com 2 conversas,
+e as outras abas mostravam 7, 1 e 4. No CI o banco é compartilhado com ~38 specs que
+rodam antes e deixam rodízio e times configurados; a conversa nova é **atribuída** a
+alguém e sai da Fila. Na minha máquina o banco era fresco e ela ficava lá.
+
+Presumir a aba era medir o ambiente. A spec agora acha a conversa pela **busca da API**
+(alcança o nome do contato, não depende de aba), confere o **meio** (`channel =
+site_chat`) no mesmo payload que o card lê, e abre por link direto. O desenho do ícone
+foi para `tests/unit/inbox-por-onde-entrou.test.tsx`, que não depende de banco nenhum —
+com o controle: conversa de WhatsApp continua com telefone.
+
+**2. `verify` reprovou com a suíte VERDE na minha máquina.**
+`tests/unit/rotulo-do-contato.test.ts` proíbe remontar à mão a cadeia
+`display_name || …`, e `canal.ts` tinha duas. Não apareceu local porque a varredura
+lista arquivos com **`git ls-files`** — e eu rodei a suíte com os arquivos novos ainda
+**não rastreados**: para ela, eles não existiam. Vale como regra de método: *arquivo
+novo só é medido por esse tipo de varredura depois do `git add`*. O conserto foi usar a
+regra única de nome de canal (`nomeDoCanal`, de `lib/channels/estado.ts`) — que é
+também o certo por produto: a tela de Conexões e o Inbox chamam o canal do mesmo jeito.
+
+### Endurecimento da rota pública, depois de uma revisão de segurança feita à mão
+
+(A revisão por agente independente foi disparada duas vezes e morreu nas duas por limite
+de uso, sem produzir achado — então a passada foi minha, e o que ela NÃO cobre está em
+"Não medido".) Três mudanças, todas com teste em
+`tests/unit/chat-do-site-rota-publica.test.ts`:
+
+- **URL da página só `http(s)`.** Ela vem de um anônimo e é gravada em `metadata`; um
+  `javascript:` guardado ali seria XSS armazenado esperando o primeiro `<a href>` de uma
+  tela futura. Descartada na entrada — sem perder a mensagem.
+- **Corpo acima de 32 KB: 413 antes de parsear.**
+- **Teto por widget de 60 → 30 conversas novas / 10 min.** O balde por IP sai de
+  `x-forwarded-for`, que quem não é navegador escreve como quiser; o que segura de
+  verdade é o balde por widget.
+
+### O que o laboratório exigiu, e que NÃO é do produto
+
+O Chromium barra pedido de uma origem "pública" para `localhost` (*Local Network
+Access*), e o ambiente E2E é exatamente isso. Medido pelo console da página antes de
+mexer: *"The request client is not a secure context and the resource is in
+more-private address space `local`"*. A spec desliga essa checagem (`test.use`, com o
+motivo escrito); o CORS continua de pé — o preflight do POST acontece contra o servidor
+real. Em produção o CRM está num domínio público com https, e de público para público a
+regra não se aplica.
+
+### Não medido
+
+- **O agente de IA respondendo um visitante.** O canal nasce com a IA em modo de teste
+  e o ambiente não tem credencial de modelo; o que está provado é que a entrada emite
+  `ai_agent.dispatch_requested` pelo MESMO passo dos outros canais
+  (`tests/unit/chat-do-site-entrada.test.ts`) e que o envio passa pelo MESMO handler.
+- **Mídia** do atendente para o visitante (imagem, áudio, arquivo): a leitura assina o
+  link do nosso bucket e o widget sabe desenhar — preso por unidade, não por tela.
+- **Um site de verdade com CSP restritiva**: o dono desse site precisa liberar o domínio
+  do CRM em `script-src` e `connect-src`. Não há o que o widget faça por ele.
+- **Safari/Firefox**: a spec roda em Chromium.
+- **Carga**: os limites de `lib/channels/chat-do-site/http.ts` estão presos por valor no
+  teste da rota, mas ninguém martelou a rota de verdade.
+- **Revisão de segurança por um segundo par de olhos.** A superfície pública foi revisada
+  só por quem a escreveu. É o item desta lista que mais merece ser refeito.
+
+---
 
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 

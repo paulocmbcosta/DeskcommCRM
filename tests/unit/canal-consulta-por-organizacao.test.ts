@@ -50,6 +50,30 @@ const COLUNAS_DE_REF = CHANNEL_SESSION_REF_COLUMNS.split(",")
   .map((c) => c.trim())
   .filter((c) => c !== "provider");
 
+/**
+ * Colunas de ref ÚNICAS POR CONSTRUÇÃO — a exceção à regra do `organization_id`,
+ * com a prova anexada.
+ *
+ * A regra existe porque identificador de provider EXTERNO não é único por si só
+ * (issue #236): duas organizações podem conectar a mesma conta, `maybeSingle()`
+ * vê duas linhas e o erro descartado vira fallback do `.env`. Isso não vale para
+ * uma coluna que o BANCO garante única entre todas as linhas — o mesmo critério
+ * que o cabeçalho deste arquivo já aplica a `webhook_path_token`.
+ *
+ * `site_widget_key` é o caso: a chave pública do chat do site é gerada por nós,
+ * e a rota ANÔNIMA que a recebe não tem outra fonte de onde tirar a organização
+ * — a chave É a fonte. Exigir `organization_id` ali seria exigir o dado que a
+ * consulta existe para descobrir.
+ *
+ * O valor é o nome do índice que SUSTENTA a exceção, e o caso abaixo confere no
+ * `baseline.sql` que ele existe, é único e NÃO recorta arquivadas. Exceção sem a
+ * trava que a justifica reprova — a lista não é um lugar para pendurar consulta
+ * que alguém teve preguiça de escopar.
+ */
+const UNICAS_POR_CONSTRUCAO: Record<string, string> = {
+  site_widget_key: "channel_sessions_site_widget_key_unique",
+};
+
 function arquivosTs(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const p = path.join(dir, e.name);
@@ -131,7 +155,10 @@ describe("lib/channels: consulta a channel_sessions por identificador do provide
   it("quem filtra por identificador do provider filtra organization_id também", () => {
     const faltando = TODAS.filter(
       (c) =>
-        c.filtros.some((f) => COLUNAS_DE_REF.includes(f)) &&
+        // Só conta a coluna de ref que NÃO é única por construção: para essas o
+        // banco já garante uma linha só, e é a própria consulta que descobre a
+        // organização (ver `UNICAS_POR_CONSTRUCAO`).
+        c.filtros.some((f) => COLUNAS_DE_REF.includes(f) && !(f in UNICAS_POR_CONSTRUCAO)) &&
         !c.filtros.includes("organization_id"),
     ).map((c) => `${c.arquivo}:${c.linha} (filtros: ${c.filtros.join(", ") || "nenhum"})`);
 
@@ -143,6 +170,28 @@ describe("lib/channels: consulta a channel_sessions por identificador do provide
         "de outra instalação (issue #236). Resolva o organization_id de fonte " +
         "confiável (sessão, linha já escopada, token do webhook), NUNCA do corpo.",
     ).toEqual([]);
+  });
+
+  it("toda exceção de unicidade é sustentada por um índice único SEM recorte no baseline", () => {
+    const baseline = fs.readFileSync(path.join(RAIZ, "supabase/baseline.sql"), "utf8");
+    for (const [coluna, indice] of Object.entries(UNICAS_POR_CONSTRUCAO)) {
+      expect(COLUNAS_DE_REF, `${coluna} saiu de CHANNEL_SESSION_REF_COLUMNS — a exceção virou peso morto`).toContain(coluna);
+      const ddl = baseline.match(new RegExp(`create unique index if not exists ${indice}[\\s\\S]*?;`))?.[0];
+      expect(ddl, `índice ${indice} não existe no baseline — a exceção de ${coluna} não tem o que a sustente`).toBeDefined();
+      expect(ddl).toContain(`(${coluna})`);
+      // Único só entre ATIVOS deixaria duas linhas (uma arquivada) com a mesma
+      // chave, e a consulta sem `organization_id` voltaria a poder casar duas.
+      expect(ddl).not.toContain("archived_at");
+    }
+  });
+
+  it("a exceção é usada por UMA consulta só — a resolução pública da chave", () => {
+    const semOrg = TODAS.filter(
+      (c) => c.filtros.some((f) => f in UNICAS_POR_CONSTRUCAO) && !c.filtros.includes("organization_id"),
+    ).map((c) => c.arquivo);
+    // Se uma segunda consulta passar a depender da exceção, alguém precisa olhar:
+    // o caminho AUTENTICADO tem organização na sessão e não tem desculpa.
+    expect(semOrg).toEqual(["lib/channels/chat-do-site/canal.ts"]);
   });
 
   it("quem filtra por identificador do provider recorta os ATIVOS", () => {

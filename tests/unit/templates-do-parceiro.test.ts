@@ -64,16 +64,29 @@ describe("de onde vêm as definições", () => {
 
 describe("os elos que somem sem barulho", () => {
   it("a tela do inbox NÃO decide pelo nome do provider", () => {
+    // O INVARIANTE não mudou; a régua mudou, porque a tela ficou ainda mais
+    // burra. Ela decidia a rota com `fonteDeTemplates` (um mapa que traduz
+    // provider → rota) e hoje não decide nada: pede à rota única, pela
+    // CONEXÃO, e o servidor resolve. Exigir `fonteDeTemplates` aqui passou a
+    // cobrar da tela um conhecimento que ela deixou de ter — e cobrar o mapa
+    // mediria a implementação, quando o que importa é a ignorância.
     const fonte = readFileSync("components/inbox/JanelaFechadaAviso.tsx", "utf8");
-    expect(fonte).toMatch(/fonteDeTemplates/);
     expect(fonte, "a tela está nomeando provider").not.toMatch(/"zernio"|"meta_cloud"|"waha"/);
+    expect(fonte, "a tela deve pedir as definições POR CONEXÃO").toMatch(
+      /channel_session_id=\$\{channelSessionId\}/,
+    );
   });
 
-  it("o cache é POR FONTE — senão a lista de uma conta vaza para a outra", () => {
+  it("o cache é POR CONEXÃO — senão a lista de uma conta vaza para a outra", () => {
     // Trocar de conversa entre canais com a mesma chave serviria o cache do
     // anterior, e o operador mandaria um modelo que não existe nesta conta.
+    //
+    // A chave era a FONTE (oficial/parceiro) e hoje é a CONEXÃO, que é mais
+    // fina e fecha um vazamento que a anterior deixava passar: duas conexões
+    // do MESMO tipo — dois números oficiais, duas WABAs — compartilhavam a
+    // mesma chave e, portanto, a mesma lista.
     const fonte = readFileSync("components/inbox/JanelaFechadaAviso.tsx", "utf8");
-    expect(fonte).toMatch(/queryKey: \["templates-da-conversa", fonte\]/);
+    expect(fonte).toMatch(/queryKey: \["modelos-da-conversa", channelSessionId\]/);
   });
 
   it("a aba existe dentro do canal do parceiro", () => {

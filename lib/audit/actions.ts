@@ -213,6 +213,13 @@ export const AUDIT_ACTIONS = [
   // `lib/channels/reactivate.ts` — o único caminho de volta, e é o que faz a
   // frase acima valer para os DOIS casos em vez de para o que lembraram.
   "channel.reactivated",
+  // Chat do site (migration 0272): o widget embutido no site do cliente. Criar
+  // abre uma porta PÚBLICA para dentro do atendimento; editar muda o que o
+  // visitante vê e de quais domínios o widget aceita pedido — as duas são
+  // decisões de dono, e a trilha precisa dizer quem tomou. Excluir já é
+  // `channel.archived`/`channel.deleted`, pela rota única de exclusão de canal.
+  "channel.site_chat_created",
+  "channel.site_chat_updated",
   // Chamada de voz WhatsApp (WaCalls, spec 18) — pareamento do segundo
   // dispositivo vinculado, opt-in por org. Admin only.
   //

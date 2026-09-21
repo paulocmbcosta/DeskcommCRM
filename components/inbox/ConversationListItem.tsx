@@ -5,7 +5,7 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import type { Locale } from "date-fns";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
-import { Clock, Phone, Robot, UsersThree } from "@/lib/ui/icons";
+import { Clock, Globe, Phone, Robot, UsersThree } from "@/lib/ui/icons";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { OwnerBadge } from "@/components/kanban/OwnerBadge";
@@ -184,6 +184,7 @@ export function ConversationListItem({
   // O `title` diz o NÚMERO inteiro: o rótulo abrevia, e quem precisa conferir
   // por qual linha a pessoa entrou não deveria ter de abrir a conversa.
   const canalPorExtenso = canalInteiro(canal);
+  const veioDoSite = conversation.channel === "site_chat";
 
   const temSelos =
     visibleTags.length > 0 ||
@@ -352,9 +353,21 @@ export function ConversationListItem({
             {mostrarCanal && rotuloCanal !== null && (
               <span
                 className="flex min-w-0 items-center gap-1"
-                title={`${t("Entrou por")} ${canalPorExtenso ?? rotuloCanal}`}
+                title={
+                  veioDoSite
+                    ? `${t("Entrou pelo chat do site")} · ${rotuloCanal}`
+                    : `${t("Entrou por")} ${canalPorExtenso ?? rotuloCanal}`
+                }
+                data-meio={veioDoSite ? "site_chat" : "whatsapp"}
               >
-                <Phone size={12} weight="regular" className="shrink-0" aria-hidden />
+                {/* O ícone acompanha o MEIO (`conversations.channel`), não o
+                    provider: telefone numa conversa que veio de um site diz ao
+                    atendente para procurar um número que não existe. */}
+                {veioDoSite ? (
+                  <Globe size={12} weight="regular" className="shrink-0" aria-hidden />
+                ) : (
+                  <Phone size={12} weight="regular" className="shrink-0" aria-hidden />
+                )}
                 <span className="truncate">{rotuloCanal}</span>
               </span>
             )}

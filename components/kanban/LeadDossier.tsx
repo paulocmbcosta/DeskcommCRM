@@ -130,7 +130,17 @@ export function LeadDossier({
           </p>
         )}
 
-        <ConversaNoDossie conversa={lead.conversa} />
+        {/*
+          `title` e não um nome de contato: o dossiê do negócio não carrega o
+          cadastro, só o `contact_id`. O título é como a equipe já chama este
+          negócio, e é o rótulo certo para "chamar no WhatsApp" — quem resolve o
+          destinatário de verdade é o servidor, pelo contato.
+        */}
+        <ConversaNoDossie
+          conversa={lead.conversa}
+          contactId={lead.contact_id}
+          nome={lead.title}
+        />
 
         {/* ② timeline */}
         <section className="flex-1 py-3">

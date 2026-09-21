@@ -7,8 +7,6 @@ import type { Locale } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
 import { format, formatRelative, isToday, isYesterday } from "date-fns";
 import { toast } from "sonner";
 import { CaretDown, CaretUp, ChatCircle, Trash } from "@/lib/ui/icons";
@@ -22,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ChamarNoWhatsAppDialog } from "@/components/contacts/ChamarNoWhatsAppDialog";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -112,34 +111,14 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
   const clientesLigado = useActiveOrg()?.cliente_pela_agenda === true;
   const del = useDeleteContact();
   const [alvo, setAlvo] = useState<Contact | null>(null);
-  const [abrindo, setAbrindo] = useState<string | null>(null);
-  const router = useRouter();
-  const qc = useQueryClient();
-
-  async function iniciarConversa(c: Contact) {
-    if (!c.phone_number || abrindo) return;
-    setAbrindo(c.id);
-    try {
-      const res = await fetch("/api/v1/conversations/open-with-contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contact_id: c.id, phone_number: c.phone_number }),
-      });
-      const json = (await res.json()) as {
-        data?: { conversation_id: string };
-        error?: { message?: string };
-      };
-      if (!res.ok || !json.data?.conversation_id) {
-        throw new Error(json.error?.message ?? t("Não foi possível abrir a conversa."));
-      }
-      await qc.invalidateQueries({ queryKey: ["contacts"] });
-      router.push(`/app/inbox?id=${json.data.conversation_id}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? t(err.message) : t("Não foi possível abrir a conversa."));
-    } finally {
-      setAbrindo(null);
-    }
-  }
+  /**
+   * Quem vamos chamar. Antes este ícone navegava direto para o inbox com uma
+   * conversa vazia — o que funciona no canal de texto livre e falha no oficial,
+   * onde a janela nasce fechada e só modelo sai. A restrição aparecia DEPOIS da
+   * navegação, e a saída (preencher os parâmetros do modelo) não existia em
+   * tela nenhuma. Agora a decisão inteira cabe num diálogo.
+   */
+  const [chamando, setChamando] = useState<Contact | null>(null);
 
   async function confirmarExclusao() {
     if (!alvo) return;
@@ -259,10 +238,9 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
-                    title={t("Iniciar conversa no Inbox")}
-                    aria-label={`${t("Iniciar conversa com")} ${displayName(c, t)} ${t("no Inbox")}`}
-                    disabled={abrindo === c.id}
-                    onClick={() => void iniciarConversa(c)}
+                    title={t("Chamar no WhatsApp")}
+                    aria-label={`${t("Chamar no WhatsApp")} ${displayName(c, t)}`}
+                    onClick={() => setChamando(c)}
                   >
                     <ChatCircle size={16} weight="regular" aria-hidden />
                   </Button>
@@ -283,6 +261,20 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
         ))}
       </TableBody>
     </Table>
+
+    {chamando?.phone_number && (
+      <ChamarNoWhatsAppDialog
+        // Remonta a cada contato: o diálogo guarda modelo escolhido e valores
+        // preenchidos em estado próprio, e reaproveitar a instância levaria o
+        // nome do cliente anterior para dentro do modelo do próximo.
+        key={chamando.id}
+        open
+        onOpenChange={(v) => { if (!v) setChamando(null); }}
+        contactId={chamando.id}
+        phoneNumber={chamando.phone_number}
+        nome={displayName(chamando, t)}
+      />
+    )}
 
     <AlertDialog open={alvo !== null} onOpenChange={(open) => { if (!open) setAlvo(null); }}>
       <AlertDialogContent>

@@ -8,6 +8,123 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.34.0] — 2026-09-21
+
+### Adicionado
+
+- **Chat do site — um balão de conversa no seu site que cai direto no Inbox** Agora dá para atender **quem está no seu site**, além de quem chama no WhatsApp.
+  Em **Conexões → Chat do site** você cria um chat, ajusta a aparência e recebe um
+  **código de uma linha** para colar no site. Um balão passa a aparecer no canto da
+  página; quem escrever ali vira uma **conversa nova no Inbox**, como qualquer
+  outra — com negócio no funil, atendente, e o agente de IA, se você quiser.
+
+  **O que você configura, com a prévia ao lado:**
+
+  - título, frase de apoio e mensagem de boas-vindas;
+  - **a cor** do chat — o texto sobre ela é escolhido sozinho (preto ou branco)
+    para nunca ficar ilegível;
+  - de que lado da tela o balão fica, e o idioma dos botões (português, espanhol
+    ou inglês);
+  - o que pedir antes de começar: **nome, e-mail e telefone**, cada um como *não
+    pedir*, *pedir sem obrigar* ou *obrigatório*. Vale a pena pedir ao menos um
+    contato: quem fecha a aba do site some, e é o telefone ou o e-mail que deixa o
+    atendente e o follow-up continuarem a conversa depois;
+  - em quais sites o chat pode aparecer (em branco, funciona em qualquer site onde
+    o código for colado).
+
+  **Como instalar.** Copie o código da tela e cole em todas as páginas do site,
+  logo antes de `</body>` — em WordPress, Wix, Nuvemshop e parecidos, procure por
+  "código personalizado" ou "scripts do rodapé". Depois de abrir o site, a própria
+  tela de Conexões passa a mostrar **"Instalado"** com o endereço onde o chat
+  apareceu. Enquanto mostrar "Ainda não instalado", o código não está no ar.
+
+  **Como responder.** Pelo Inbox, igual ao WhatsApp — texto, imagem, áudio e
+  arquivo. No card da conversa, um **globo** no lugar do telefone mostra que ela
+  veio do site. O tique duplo aparece quando a mensagem **chegou ao navegador**
+  do visitante; se ficar em um tique só, ele já fechou a página — é a hora de
+  continuar pelo telefone ou e-mail que ele deixou.
+
+  **O agente de IA.** Como todo canal novo, o chat do site nasce com a IA em
+  **modo de teste**. Para ela responder os visitantes, abra-a ao público em
+  *Configurar acesso da IA*, dentro do próprio chat, e publique um agente apontando
+  para ele.
+
+  **Três coisas que é bom saber:**
+
+  - **Quem escreve pelo site é sempre um contato novo**, mesmo que informe um
+    telefone que já está cadastrado. É de propósito: telefone digitado num
+    formulário aberto não prova que a pessoa é quem diz ser, e juntar
+    automaticamente mostraria a ficha (e o histórico) de um cliente a quem só
+    sabia o número dele. O telefone informado fica registrado no contato como *não
+    verificado*; se for mesmo a mesma pessoa, junte os dois pela tela de
+    duplicados.
+  - **Pelo chat do site não dá para falar primeiro.** Só existe conversa que o
+    visitante abriu. Por isso ele não aparece em *Chamar no WhatsApp* nem nas
+    automações que iniciam conversa.
+  - **Excluir o chat tira o balão do ar na hora**, mesmo com o código ainda colado
+    no site. As conversas já recebidas continuam no Inbox.
+
+## [1.33.0] — 2026-09-19
+
+### Adicionado
+
+- **Dá para chamar o cliente primeiro no WhatsApp — com modelo aprovado e os campos preenchidos na tela** Agora dá para **começar a conversa** com um cliente que nunca escreveu — o que
+  você acabou de cadastrar, ou o que veio da importação do IXC. O botão aparece na
+  lista de **Contatos**, no cadastro do contato e no dossiê do negócio, sempre com
+  o mesmo nome: **Chamar no WhatsApp**.
+
+  O diálogo pergunta por qual número enviar (quando há mais de um) e
+  **diz o que aquele canal permite antes de você escrever**:
+
+  - no WhatsApp comum, você escreve a mensagem à mão;
+  - no WhatsApp oficial (e no canal por parceiro), o WhatsApp só deixa falar
+    primeiro com um **modelo aprovado** — então a tela mostra os modelos
+    aprovados daquele número, com **um campo para cada informação pedida**
+    (o nome do cliente, o valor, o link) e o texto final do jeito que o cliente
+    vai receber. O botão de enviar só libera quando não falta nada.
+
+  Depois de enviar, a conversa abre no Inbox como qualquer outra. Quando o cliente
+  responde, a janela de 24 horas abre e a conversa fica livre.
+
+  **O que isso conserta.** Modelo com informação variável — que é a maioria, já
+  que quase todo modelo de abertura traz o nome do cliente — **não era enviável.**
+  Quem tentava pelo aviso de janela fechada, no Inbox, era
+  mandado para *Conexões → Templates*, que só lista e mostra os modelos: não envia.
+  Na prática, começar conversa pelo WhatsApp oficial não era possível pelo produto.
+  Esse aviso no Inbox agora traz os mesmos campos e resolve ali mesmo.
+
+  Dois consertos silenciosos vêm junto:
+
+  - **Quem atende voltou a enxergar os modelos.** A lista do canal oficial só era
+    liberada para administrador; um atendente recebia "Nenhum modelo aprovado
+    ainda" mesmo com a conta cheia deles.
+  - **Aviso de quantos campos o modelo pede** também no canal por parceiro, onde
+    essa informação nunca chegava à tela.
+
+  Se o envio não completar (modelo recusado pela plataforma, canal sem credencial),
+  **a conversa não se perde**: ela abre assim mesmo, o motivo real aparece na tela,
+  e você tenta de novo de dentro dela.
+
+  Para quem automatiza: a ferramenta `crm_start_conversation_and_send` passa a
+  aceitar `type: "template"` com os valores dos campos — antes ela só servia ao
+  canal que não exige modelo, que é justamente o que não precisa dela.
+
+  Nada muda para quem já usa o WhatsApp comum, e nada precisa ser configurado:
+  quem tem modelos aprovados os vê na hora; quem não tem continua escrevendo
+  normalmente.
+
+## [1.32.1] — 2026-09-19
+
+### Corrigido
+
+- **A nota interna aparece só no atendimento em que foi escrita** As notas internas atravessavam os atendimentos: a nota escrita num atendimento
+  já encerrado continuava aparecendo no atendimento novo do mesmo cliente, e a
+  nota de hoje aparecia ao abrir um atendimento antigo pelo histórico ou pela aba
+  Fechadas. As mensagens já eram separadas por atendimento; as notas não.
+
+  Agora cada nota fica no atendimento — no protocolo — em que foi escrita. Nenhuma
+  nota foi apagada: as antigas continuam lá, dentro do atendimento delas.
+
 ## [1.32.0] — 2026-09-19
 
 ### Adicionado
@@ -4974,7 +5091,10 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.0...HEAD
+[1.34.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.33.0...v1.34.0
+[1.33.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.1...v1.33.0
+[1.32.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.0...v1.32.1
 [1.32.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.1...v1.32.0
 [1.31.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.30.1...v1.31.0

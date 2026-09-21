@@ -8,11 +8,14 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
  */
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
+import { z } from "zod";
 
 import { audit } from "@/lib/audit";
 import { fail, ok } from "@/lib/api/wrappers";
+import { janelaDoAtendimento } from "@/lib/atendimento/janela-do-atendimento";
 import { requireRole } from "@/lib/auth/require-role";
 import { mencaoAtingeUsuario, tokensDeMencao } from "@/lib/notifications/mentions";
+import { ATENDIMENTO_VIGENTE } from "@/lib/schemas/messaging";
 import { createNoteSchema } from "@/lib/schemas/notes";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -25,7 +28,16 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-export async function GET(_req: NextRequest, { params }: RouteParams): Promise<Response> {
+/**
+ * `?atendimento_id=vigente|<uuid>` recorta as notas no MESMO episódio que a rota
+ * de mensagens recorta — as duas entram intercaladas no mesmo thread. Ausente,
+ * devolve a conversa inteira (o contrato de antes, que a API versionada mantém).
+ */
+const consultaDasNotas = z.object({
+  atendimento_id: z.union([z.literal(ATENDIMENTO_VIGENTE), z.string().uuid()]).optional(),
+});
+
+export async function GET(req: NextRequest, { params }: RouteParams): Promise<Response> {
   const requestId = randomUUID();
   const authz = await requireRole("agent", { requestId, resource: "conversation_notes" });
   if (!authz.ok) return authz.response;
@@ -42,12 +54,33 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<R
     .maybeSingle();
   if (!conversation) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
 
-  const { data, error } = await supabase
+  const consulta = consultaDasNotas.safeParse({
+    atendimento_id: new URL(req.url).searchParams.get("atendimento_id") ?? undefined,
+  });
+  if (!consulta.success) return fail("validation_failed", t("Query inválida."), 422, { requestId });
+
+  let notas = supabase
     .from("conversation_notes")
     .select(COLS)
     .eq("conversation_id", id)
     .eq("organization_id", org.orgId)
     .order("created_at", { ascending: true });
+
+  // A nota pertence ao atendimento em que foi ESCRITA. Sem este recorte, a nota
+  // do Financeiro aparecia dentro do atendimento novo do Suporte — e a de hoje,
+  // dentro do atendimento encerrado na semana passada.
+  if (consulta.data.atendimento_id) {
+    const janela = await janelaDoAtendimento(supabase, org.orgId, id, consulta.data.atendimento_id);
+    if (!janela.ok) {
+      return janela.motivo === "atendimento_nao_encontrado"
+        ? fail("not_found", t("Atendimento não encontrado nesta conversa."), 404, { requestId })
+        : fail("internal_error", "Erro ao listar notas.", 500, { requestId });
+    }
+    if (janela.desde) notas = notas.gte("created_at", janela.desde);
+    if (janela.ate) notas = notas.lt("created_at", janela.ate);
+  }
+
+  const { data, error } = await notas;
   if (error) return fail("internal_error", "Erro ao listar notas.", 500, { requestId });
   return ok(data ?? [], { requestId });
 }

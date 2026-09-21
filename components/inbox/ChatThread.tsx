@@ -53,7 +53,8 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder }
   const localeDaData = useLocaleDeData();
   const t = useT();
   const q = useMessagesRealtime(conversationId, atendimentoId);
-  const notes = useConversationNotes(conversationId);
+  // O MESMO episódio das mensagens: as duas listas se intercalam por horário.
+  const notes = useConversationNotes(conversationId, atendimentoId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const paginasVistas = useRef(0);

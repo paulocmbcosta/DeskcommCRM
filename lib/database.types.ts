@@ -3234,6 +3234,10 @@ export type Database = {
           organization_id: string
           phone_number: string | null
           provider: string
+          site_widget_config: Json | null
+          site_widget_key: string | null
+          site_widget_seen_at: string | null
+          site_widget_seen_host: string | null
           status: string
           status_reason: string | null
           updated_at: string
@@ -3267,6 +3271,10 @@ export type Database = {
           organization_id: string
           phone_number?: string | null
           provider?: string
+          site_widget_config?: Json | null
+          site_widget_key?: string | null
+          site_widget_seen_at?: string | null
+          site_widget_seen_host?: string | null
           status?: string
           status_reason?: string | null
           updated_at?: string
@@ -3300,6 +3308,10 @@ export type Database = {
           organization_id?: string
           phone_number?: string | null
           provider?: string
+          site_widget_config?: Json | null
+          site_widget_key?: string | null
+          site_widget_seen_at?: string | null
+          site_widget_seen_host?: string | null
           status?: string
           status_reason?: string | null
           updated_at?: string

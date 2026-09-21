@@ -105,6 +105,20 @@ Regras duras:
 2. **Uma derivação, dois consumidores.** A mesma função pura alimenta (a) o formulário da
    tela e (b) o montador do payload de envio. Divergir vira impossível por construção, não
    por disciplina.
+
+   ⚠️ **O consumidor (a) não existiu por meses, e esta linha não denunciava.** De 2026-07-28
+   a 2026-09-19 `deriveTemplateContract` tinha um consumidor só — o montador. Nenhuma tela
+   coletava um único valor: o seletor da janela fechada mandava `values: {}` e apontava para
+   uma tela de administração que não envia. Como todo modelo de abertura pede ao menos o
+   nome do cliente, **começar conversa pelo canal com hetero-restrição era impossível pelo
+   produto** — e a regra aqui, lida como descrição, dizia o contrário. Regra de arquitetura
+   afirma o que DEVE valer; que ela valha é o que o teste prende
+   (`tests/unit/chamar-o-cliente-primeiro.test.ts`). Para conferir que os dois consumidores
+   continuam existindo, sem acreditar nesta linha:
+
+   ```bash
+   grep -rln "deriveTemplateContract" --include="*.ts" --include="*.tsx" app/ components/ lib/
+   ```
 3. **Header e botões contam.** O contrato cobre todos os componentes com variável, não só o
    corpo. Contar só o body é a causa nº 1 do erro em produção.
 4. **A chave é `(nome, idioma)`.** Nunca só o nome — variantes de idioma têm corpos diferentes.
@@ -131,7 +145,7 @@ transporte externo. Reportar venda para a plataforma que trouxe o lead é o segu
 | O que faz | entrega MENSAGEM a um contato | devolve um FATO sobre um contato |
 | Tem destinatário | sim | não |
 | Física que o governa | janela de 24h, template, ban, intervalo | idade do evento, dedup, formato de identidade |
-| Capabilities | as sete de `capabilities.ts` | nenhuma delas se aplica |
+| Capabilities | as de `capabilities.ts` (conte com `sed -n '/^export interface ChannelCapabilities/,/^}/p' lib/channels/types.ts \| grep -cE '^  [a-zA-Z]+: '` — esta célula dizia "sete" quando já eram oito) | nenhuma delas se aplica |
 
 Uma linha em `CHANNEL_CAPABILITIES` respondendo "não se aplica" às sete colunas afirmaria
 que isto é canal quando não é, e transformaria o invariante 2 em formulário preenchido com
@@ -193,6 +207,51 @@ ver, tela para mudar, e caminho visível de falha.**
 | Invariante | varredura de `lib/channels/` em `tests/unit/canal-consulta-por-organizacao.test.ts` | consulta a `channel_sessions` por identificador de provider sem `organization_id` reprova |
 | Trava no banco | índices únicos parciais da migration 0165 | dois canais ativos com o mesmo identificador de provider são recusados pelo Postgres |
 | Gate de sessão | item no Living System Checklist (`sistema-vivo.md`) | nenhuma task de canal fecha sem responder |
+
+---
+
+## Provider não é meio — e o canal que não fala primeiro
+
+Registrado em 2026-09-20, ao nascer o chat do site (migration 0272) — o primeiro canal que
+não é WhatsApp.
+
+Até aqui o invariante 1 nunca precisou distinguir duas coisas que sempre andaram juntas:
+
+| | **Provider** | **Meio** |
+|---|---|---|
+| O que é | o TRANSPORTE — com quem o CRM fala | por onde o CLIENTE fala |
+| Onde mora | `channel_sessions.provider` | `conversations.channel` |
+| Exemplos | três transportes diferentes… | …que são todos `whatsapp` |
+| Quem pode nomear | só `lib/channels/` | qualquer feature |
+
+Três providers gravavam o mesmo meio, então a tela nunca precisou saber nada além de "é
+uma conversa". Com o chat do site apareceu o segundo meio (`site_chat`), e com ele UMA
+pergunta legítima de tela: ícone de telefone não serve numa conversa que veio de um site.
+A resposta é `meioDoCanal()` — a feature lê o **meio**, e o `lint:channels` continua
+reprovando o **provider** (`site_widget`) fora da fronteira. Não é afrouxamento: o que o
+invariante 1 proíbe é o `if` sobre *com quem falamos*, e o meio não diz isso.
+
+O nome do provider foi escolhido com `_` no meio de propósito. O guardrail de vocabulário
+interno (`lib/agent-engine/guardrails/vazamento-interno.ts`) barra TODO nome de provider na
+fala do agente, derivando desta mesma lista; um nome em linguagem natural barraria uma
+resposta legítima justamente no canal que é um chat de site.
+
+**A capability que nasceu de uma ausência.** `outboundFirst` é a primeira que existe
+porque um canal NÃO consegue algo que todos os outros conseguem: o "endereço" do visitante
+é um token que nasce no navegador dele, então quem nunca escreveu não tem endereço. É
+restrição FÍSICA — nem auto nem hetero: ninguém a impõe, e não há o que adiar nem forma de
+mensagem a trocar. O que fazer quando ela barra é **recusar antes**, em quem escolhe o
+canal: `sessaoProntaParaEnvio` (automação) filtra por `PROVIDERS_QUE_FALAM_PRIMEIRO`, e
+`openSharedContactConversation` — o funil único de quem abre conversa — devolve
+`channel_cannot_start_conversation` (422). Sem ela, o chat do site seria escolhido como
+"um canal qualquer", a mensagem seria gravada como enviada, e ninguém jamais a leria.
+
+**O transporte somos nós.** O adapter deste canal não chama ninguém: a resposta do
+atendente É a linha de `messages`, e o navegador a busca. Por isso `sent` aqui significa
+"na caixa de saída", e é a LEITURA que promove a `delivered`
+(`lib/channels/chat-do-site/leitura.ts`). O invariante 4 vale igual — janela de 24h e
+anti-ban respondem `skipped: 'not_applicable'` a partir da matriz, em vez de sumirem da
+cadeia — e a cortesia (invariante 3) continua armada: `banRisk: false` não desarma horário.
 
 ---
 
