@@ -52,7 +52,7 @@ beforeEach(() => {
   for (const m of [listar, baixarBoleto, buscarPix, portas.guardarArquivo, portas.enviar]) m.mockClear();
   listar.mockResolvedValue({ total: 1, registros: [FATURA] });
   baixarBoleto.mockResolvedValue(PDF);
-  buscarPix.mockResolvedValue({ copiaECola: BR_CODE, status: "ATIVA", valorOriginal: "114.00" });
+  buscarPix.mockResolvedValue({ ok: true, pix: { copiaECola: BR_CODE, status: "ATIVA", valorOriginal: "114.00" } });
   portas.enviar.mockImplementation(async (m: MensagemDaCobranca) => {
     enviadas.push(m);
   });
@@ -94,14 +94,14 @@ describe("enviarCobrancaIxc — Pix", () => {
   });
 
   it("Pix que não está ATIVO (pago, expirado) NÃO é enviado — o banco do cliente recusaria", async () => {
-    buscarPix.mockResolvedValue({ copiaECola: BR_CODE, status: "CONCLUIDA", valorOriginal: "114.00" });
+    buscarPix.mockResolvedValue({ ok: true, pix: { copiaECola: BR_CODE, status: "CONCLUIDA", valorOriginal: "114.00" } });
     expect(await pedido("pix")).toEqual({ ok: false, motivo: "pix_inativo" });
     expect(portas.guardarArquivo).not.toHaveBeenCalled();
     expect(portas.enviar).not.toHaveBeenCalled();
   });
 
   it("copia-e-cola que não fecha o CRC NÃO é enviado — é dinheiro, e ninguém conferiria depois", async () => {
-    buscarPix.mockResolvedValue({ copiaECola: BR_CODE.replace("Fulano", "Fulana"), status: "ATIVA", valorOriginal: "114.00" });
+    buscarPix.mockResolvedValue({ ok: true, pix: { copiaECola: BR_CODE.replace("Fulano", "Fulana"), status: "ATIVA", valorOriginal: "114.00" } });
     expect(await pedido("pix")).toEqual({ ok: false, motivo: "pix_corrompido" });
     expect(portas.enviar).not.toHaveBeenCalled();
   });
@@ -124,21 +124,36 @@ describe("enviarCobrancaIxc — o que vale para as duas formas, venha o pedido d
     expect(portas.enviar).not.toHaveBeenCalled();
   });
 
-  it("forma que o IXC ainda não registrou NÃO é pedida a ele — pedir faria o IXC registrar a cobrança", async () => {
+  it("Pix AINDA NÃO gerado (o caso de produção): escolher Pix É pedir que o IXC o gere — e o resultado diz que foi gerado agora", async () => {
     listar.mockResolvedValue({ total: 1, registros: [{ ...FATURA, pix_txid: "" }] });
-    expect(await pedido("pix")).toEqual({ ok: false, motivo: "forma_indisponivel" });
-    expect(buscarPix).not.toHaveBeenCalled();
+    const r = await pedido("pix");
 
+    expect(buscarPix).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ ok: true, forma: "pix", enviadas: 2, pixGeradoAgora: true });
+    expect(enviadas[1]).toEqual({ type: "text", body: BR_CODE });
+  });
+
+  it("Pix que já existia não é 'gerado agora'; boleto nunca é", async () => {
+    expect(await pedido("pix")).toMatchObject({ ok: true, pixGeradoAgora: false });
+    expect(await pedido("boleto")).toMatchObject({ ok: true, pixGeradoAgora: false });
+  });
+
+  it("BOLETO que o IXC ainda não registrou NÃO é pedido a ele — pedir faria o IXC registrar um boleto que ninguém pediu", async () => {
     listar.mockResolvedValue({ total: 1, registros: [{ ...FATURA, linha_digitavel: "" }] });
     expect(await pedido("boleto")).toEqual({ ok: false, motivo: "forma_indisponivel" });
     expect(baixarBoleto).not.toHaveBeenCalled();
+    // …mas a MESMA fatura vai por Pix.
+    expect(await pedido("pix")).toMatchObject({ ok: true, forma: "pix" });
   });
 
   it("o IXC não devolveu a cobrança → cobranca_indisponivel, nada é guardado nem enviado", async () => {
     baixarBoleto.mockResolvedValue(null);
     expect(await pedido("boleto")).toEqual({ ok: false, motivo: "cobranca_indisponivel" });
-    buscarPix.mockResolvedValue(null);
+    buscarPix.mockResolvedValue({ ok: false, mensagemDoIxc: "" });
     expect(await pedido("pix")).toEqual({ ok: false, motivo: "cobranca_indisponivel" });
+    // Quando o IXC disse o porquê, a frase dele sobe junto.
+    buscarPix.mockResolvedValue({ ok: false, mensagemDoIxc: "Carteira sem integração PIX" });
+    expect(await pedido("pix")).toEqual({ ok: false, motivo: "cobranca_indisponivel", detalheDoErp: "Carteira sem integração PIX" });
     expect(portas.guardarArquivo).not.toHaveBeenCalled();
   });
 

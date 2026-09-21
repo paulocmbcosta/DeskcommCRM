@@ -224,23 +224,15 @@ export interface PixDoIxc {
   valorOriginal: string;
 }
 
-/**
- * O Pix da fatura. Da resposta inteira (que traz CPF e nome do devedor, chave,
- * txid, location…) saem TRÊS campos — a mesma regra da lista branca das tabelas.
- *
- * Medido: `{type, gateway, pix: {dadosPix, qrCode}}`; `qrCode.qrcode` e
- * `dadosPix.pixCopiaECola` são a mesma string; fatura inexistente responde
- * HTTP 500. `null` = o IXC não tem Pix para esta fatura.
- */
-export async function buscarPixNoIxc(credencial: CredencialDeConector, idDaFatura: string): Promise<PixDoIxc | null> {
-  const { status, texto } = await postarNoIxc(credencial, "get_pix", { id_areceber: idDaFatura }, PRAZO_DA_COBRANCA_MS);
-  if (status >= 500) return null;
-  let json: unknown;
-  try {
-    json = JSON.parse(texto);
-  } catch {
-    return null;
-  }
+export type RespostaDoPix = { ok: true; pix: PixDoIxc } | { ok: false; mensagemDoIxc: string };
+
+/** O que o IXC disse, em forma segura para mostrar: sem marcação, uma linha, curto. */
+function fraseDoIxc(bruta: unknown): string {
+  if (typeof bruta !== "string") return "";
+  return bruta.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+function lerPix(json: unknown): PixDoIxc | null {
   const pix = (json as { pix?: { qrCode?: { qrcode?: unknown }; dadosPix?: Record<string, unknown> } } | null)?.pix;
   const dados = pix?.dadosPix;
   const copiaECola = pix?.qrCode?.qrcode ?? dados?.pixCopiaECola;
@@ -253,3 +245,38 @@ export async function buscarPixNoIxc(credencial: CredencialDeConector, idDaFatur
   };
 }
 
+/**
+ * O Pix da fatura — JÁ gerado, ou gerado AGORA: `get_pix` é a mesma chamada nos
+ * dois casos, e é o IXC que decide. Da resposta inteira (que traz CPF e nome do
+ * devedor, chave, txid, location…) saem TRÊS campos — a mesma regra da lista
+ * branca das tabelas.
+ *
+ * Medido: `{type, gateway, pix: {dadosPix, qrCode}}`; `qrCode.qrcode` e
+ * `dadosPix.pixCopiaECola` são a mesma string; fatura inexistente responde
+ * HTTP 500. NÃO medido: a resposta de quando o Pix é gerado na hora — por isso
+ * uma resposta de SUCESSO que ainda não traz o código ganha UMA segunda chamada
+ * (gerar e devolver em dois tempos é um desenho comum de gateway), e qualquer
+ * recusa volta com a frase do próprio IXC, que é quem sabe o porquê (carteira sem
+ * Pix, usuário do token sem permissão…).
+ */
+export async function buscarPixNoIxc(credencial: CredencialDeConector, idDaFatura: string): Promise<RespostaDoPix> {
+  let mensagemDoIxc = "";
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    const { status, texto } = await postarNoIxc(credencial, "get_pix", { id_areceber: idDaFatura }, PRAZO_DA_COBRANCA_MS);
+    let json: unknown = null;
+    try {
+      json = JSON.parse(texto);
+    } catch {
+      // HTTP 500 com corpo vazio (fatura sem Pix possível), página de erro…
+    }
+    const pix = lerPix(json);
+    if (pix) return { ok: true, pix };
+
+    const obj = json && typeof json === "object" ? (json as Record<string, unknown>) : {};
+    mensagemDoIxc = fraseDoIxc(obj.message ?? obj.mensagem);
+    const sucessoSemCodigo = status < 400 && obj.type === "success";
+    if (!sucessoSemCodigo) break;
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  return { ok: false, mensagemDoIxc };
+}
