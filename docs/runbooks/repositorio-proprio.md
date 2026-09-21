@@ -168,9 +168,31 @@ armadilhas, todas pagas em 2026-09-18:
 2. **O `update.sh` que roda é o do kit ANTIGO.** Ele carrega `_common.sh` na memória antes do
    `git checkout` da tag nova, e o `IMG_NS` ali ainda é o namespace da origem: ele grava no `.env`
    e puxa `ghcr.io/melgarafael/*:1.29.0`, que existe e é público. Medido: a VPS subiu com o
-   produto da origem sobre o nosso banco por sete minutos, saudável no `docker ps`. Faça o
-   `git checkout` da tag **antes** de rodar o `update.sh`: ele detecta "código na versão, imagem
-   antiga", e regrava as imagens já com o namespace certo.
+   produto da origem sobre o nosso banco por sete minutos, saudável no `docker ps`. Por isso,
+   **na migração**, o `git checkout` da tag vem **antes** do `update.sh`: é o que põe o kit novo
+   no disco, com o `IMG_NS` certo.
+
+   ⚠️ **Este item afirmava que, feito o checkout, o `update.sh` "detecta 'código na versão,
+   imagem antiga'". Era falso com a imagem fixada em número de versão** — que é como toda
+   instalação fica. Medido em 2026-09-19, no deploy da v1.32.0: código em `v1.32.0`, `.env` em
+   `:1.31.1` (`pull_policy=missing`), e a resposta foi "Você já está na versão mais recente. Nada
+   a atualizar.", com exit 0 e os três contêineres na 1.31.1. A sonda comparava o digest local da
+   imagem fixada com o digest remoto **da mesma referência** — a imagem antiga contra ela mesma,
+   iguais por definição. Ela só enxergava defasagem em canal móvel (`latest`). Quem atualizou foi
+   `update.sh --to v1.32.0 --force`.
+
+   O kit corrigido compara o que o `.env` fixa com o que a atualização gravaria — a **referência
+   inteira**, namespace incluído, que é exatamente o que esta migração precisa: uma
+   `ghcr.io/<origem>/deskcommcrm:1.29.0` não passa por "em dia" só porque o número coincide. Mas
+   quem decide é o kit **da tag em que você fez o checkout**, não o desta página:
+
+   ```bash
+   grep -c 'imagens_fora_do_alvo' hostgator-setup-kit/_common.sh   # 0 = kit anterior à correção
+   ```
+
+   Com `0` — toda tag até a `v1.32.0` —, o `update.sh` sem argumento responde "Nada a atualizar"
+   com a versão antiga no ar. Use `bash hostgator-setup-kit/update.sh --to <tag> --force`: ele faz
+   o backup do mesmo jeito. Vigiado por `tests/shell/update-guard.test.sh`, caso 12.
 3. **`drop trigger` no `job_queue` deadlocka com o worker de pé.** O `baseline.sql` recria os
    triggers dessa tabela, e a primeira aplicação avisou `deadlock detected`; a segunda passou.
    Confira os triggers depois (abaixo) e, se faltar algum, rode o `update.sh` de novo.
@@ -188,6 +210,19 @@ for t in $(comm -23 /tmp/tags-local /tmp/tags-remoto | awk '{print $2}'); do git
 git fetch --tags origin
 git checkout "$(git tag -l 'v*' --sort=-v:refname | head -1)"   # o kit NOVO fica no disco ANTES do update
 bash hostgator-setup-kit/update.sh                                # backup, banco, imagens deste repositório, up
+# Respondeu "Nada a atualizar" com os contêineres na versão antiga? O kit desta tag é anterior à
+# correção (armadilha 2). Saída:  bash hostgator-setup-kit/update.sh --to <tag> --force
+```
+
+**Esta é a receita da MIGRAÇÃO, não a de rotina.** Depois que o kit no disco já é o deste
+repositório, atualizar é um comando só, **sem `git checkout` antes**: o `update.sh` busca as tags,
+escolhe a mais nova e troca o código ele mesmo — depois do backup, que é a ordem que ele foi
+desenhado para garantir. O checkout prévio não compra nada na rotina, e foi o que armou a
+resposta falsa da v1.32.0.
+
+```bash
+cd /root/DeskcommCRM
+nohup bash hostgator-setup-kit/update.sh > /root/deskcomm-update.log 2>&1 < /dev/null &
 ```
 
 Nada de `sed` no `.env` nem de `latest`/`always`: o `update.sh` grava as três imagens pinadas em
