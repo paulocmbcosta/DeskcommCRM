@@ -334,7 +334,7 @@ jobs:
       SPECS_PARTE_1: >-
         pre-go-live-whatsapp.spec.ts
         smoke.spec.ts auth.spec.ts error-pages.spec.ts
-        icone-da-marca.spec.ts
+        icone-da-marca.spec.ts barra-lateral-recolhida-por-padrao.spec.ts
         password-recovery.spec.ts signup-journey.spec.ts
         primeiro-acesso-sem-organizacao.spec.ts
         rbac-roles.spec.ts inbox-scope.spec.ts reset-password-mfa.spec.ts

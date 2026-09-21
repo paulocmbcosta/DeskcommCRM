@@ -538,9 +538,11 @@
     Consolas, monospace;
 
   /* Espaçamento. Os valores são px LITERAIS (`--space-6` = 24px), não rem — e
-     essa diferença é carregada por quem consome: ver o cálculo de altura em
-     `components/inbox/InboxLayout.tsx`, que soma `var(--space-6)` a um `3.5rem`
-     justamente porque as duas parcelas NÃO estão na mesma unidade.
+     essa diferença é carregada por quem consome: somar um token a uma medida em
+     rem (`3.5rem` da TopBar, por exemplo) mistura unidades, e a conta só acerta
+     com a raiz em 16px. Quem precisa da altura livre do `<main>` cancela o
+     `p-6` dele com `-m-6` — o MESMO token dos dois lados — em vez de somá-lo:
+     ver `components/inbox/InboxLayout.tsx`.
 
      As paradas fora desta lista (`p-7`, `gap-1.5`, `mt-14`…) continuam
      existindo: o v4 as calcula pelo multiplicador `--spacing` (0.25rem), do

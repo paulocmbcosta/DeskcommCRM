@@ -113,6 +113,31 @@ export default defineConfig({
   retries: 0,
   use: {
     baseURL: BASE_URL,
+    // A barra lateral nasce RECOLHIDA para quem nunca mexeu (cookie ausente —
+    // `lib/navigation/barra-lateral.ts`), e várias specs foram escritas contra a
+    // barra ABERTA: lêem os títulos de grupo (`h2`), o `<img>` do logo e o texto
+    // dos links, nada disso desenhado no trilho de 64px. Este cookie é o gesto de
+    // quem a expandiu, e é o que mantém essas medidas valendo sem editar uma a uma.
+    //
+    // O padrão de verdade é vigiado por UMA spec, que o desliga de propósito:
+    // `barra-lateral-recolhida-por-padrao.spec.ts`. Spec nova que precise da
+    // primeira impressão real (sem cookie nenhum) faz o mesmo:
+    // `test.use({ storageState: { cookies: [], origins: [] } })`.
+    storageState: {
+      cookies: [
+        {
+          name: "sidebar_collapsed",
+          value: "0",
+          domain: "localhost",
+          path: "/",
+          expires: -1,
+          httpOnly: true,
+          secure: false,
+          sameSite: "Strict",
+        },
+      ],
+      origins: [],
+    },
     // ⚠️ Era `on-first-retry`, e com `retries: 0` logo acima isso significa
     // **trace nunca gravado**. As duas linhas estão certas isoladamente e
     // erradas juntas: uma diz "só no retry", a outra diz "não há retry".

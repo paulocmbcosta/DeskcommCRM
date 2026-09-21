@@ -21,6 +21,7 @@ import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
 import { acessoFoiRevogado } from "@/lib/auth/vinculo-revogado";
+import { barraLateralRecolhida, COOKIE_BARRA_RECOLHIDA } from "@/lib/navigation/barra-lateral";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await loadAuthUser();
@@ -178,9 +179,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     needsMfaGate = mfaRequired;
   }
 
-  // Read sidebar collapsed state SSR to avoid flash.
+  // Read sidebar collapsed state SSR to avoid flash. Sem cookie, a barra vem
+  // recolhida — a regra (e o porquê) mora em `lib/navigation/barra-lateral.ts`.
   const store = await cookies();
-  const collapsed = store.get("sidebar_collapsed")?.value === "1";
+  const collapsed = barraLateralRecolhida(store.get(COOKIE_BARRA_RECOLHIDA)?.value);
 
   const impersonating = user.support ? {
     tenantId: user.support.organization_id, tenantName: user.support.name,

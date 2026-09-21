@@ -44,6 +44,10 @@ export {
   Brain,
   ArrowsClockwise,
   Dot,
+  // "Ver tudo em …" do sidebar: um ícone por grupo com hub (lib/navigation/registry.ts).
+  // Sparkle, que já vive acima em "navigation", faz o do grupo de IA.
+  Handshake,
+  ChartPieSlice,
   // actions
   ArrowBendUpLeft,
   List,
