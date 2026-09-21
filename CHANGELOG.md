@@ -8,6 +8,29 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.34.2] — 2026-09-21
+
+### Corrigido
+
+- **Com o rodízio ligado, a IA atende primeiro e o time recebe só o que ela transfere** **A IA volta a responder quando há atendente online.** Com a distribuição em
+  **Rodízio automático entre os atendentes**, toda conversa nova era entregue na hora
+  a quem estivesse disponível — e a IA, vendo uma pessoa como dona da conversa, não
+  respondia. Soltar a conversa não adiantava: o rodízio a entregava de novo em menos
+  de um minuto. Enquanto houvesse alguém online, nenhum cliente era atendido pela IA.
+
+  Agora o fluxo é o que se espera de um pré-atendimento:
+
+  - O cliente escreve e **a IA atende**. Ninguém da equipe recebe a conversa nessa hora.
+  - Quando a IA **transfere para um setor**, ela para de responder e a conversa entra no
+    **rodízio daquele time**: vai para quem tem menos atendimentos abertos, respeitando o
+    limite de conversas simultâneas do time.
+  - Se todos estiverem no limite, a conversa **espera na fila do time** e é entregue assim
+    que alguém encerra um atendimento ou fica disponível.
+  - Se a IA não vai atender a conversa — agente pausado, número fora da lista de teste —
+    ela vai direto para a fila da equipe, em vez de ficar sem resposta.
+
+  Nada a configurar: a atualização aplica a mudança sozinha.
+
 ## [1.34.1] — 2026-09-21
 
 ### Alterado
@@ -5191,7 +5214,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.2...HEAD
+[1.34.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.1...v1.34.2
 [1.34.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.0...v1.34.1
 [1.34.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.33.0...v1.34.0
 [1.33.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.1...v1.33.0
