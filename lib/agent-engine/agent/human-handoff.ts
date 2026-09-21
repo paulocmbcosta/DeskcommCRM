@@ -257,6 +257,8 @@ interface TimeAtivo {
   id: string;
   slug: string;
   name: string;
+  /** O "quando usar" que a empresa escreveu na tela de Times. */
+  description: string;
 }
 
 /**
@@ -268,16 +270,60 @@ interface TimeAtivo {
  * Uma query só de propósito: ela resolve o slug pedido E produz a lista que o
  * erro de ensino precisa citar. Duas queries dariam duas verdades — a lista
  * ensinada poderia não conter o time que a primeira acabou de recusar.
+ *
+ * É também a query que monta o catálogo DENTRO da ferramenta de transferência
+ * (`setoresDaTransferencia`, abaixo) — pelo mesmo motivo: o slug que o modelo vê
+ * no schema e o slug que esta função aceita saem da mesma leitura. E `pg`, não
+ * supabase-js, é o que deixa a prévia do botão Testar sem nenhuma ida HTTP
+ * (`tests/invariants/autonomia-preview-core.test.ts` a proíbe).
+ *
+ * `order by name` é contrato: o catálogo entra no prefixo cacheado da
+ * organização, e ordem instável invalidaria o cache a cada turno.
  */
 async function timesAtivos(db: pg.Pool, tenantId: string): Promise<TimeAtivo[]> {
   const { rows } = await db.query<TimeAtivo>(
-    `select id, slug, name
+    `select id, slug, name, description
        from attendance_teams
       where organization_id = $1 and archived_at is null
-      order by name`,
+      order by name, slug`,
     [tenantId],
   );
   return rows;
+}
+
+/**
+ * Um setor como a ferramenta de transferência o apresenta ao modelo. Só o que é
+ * ESTÁVEL entra: "aberto agora" e quantas pessoas podem assumir mudam a cada
+ * minuto e ficam em `crm_list_teams` — no prefixo cacheado, invalidariam o cache
+ * da organização inteira a cada turno.
+ */
+export interface SetorDaTransferencia {
+  slug: string;
+  name: string;
+  /** "Quando usar", como a empresa escreveu. Pode ser vazio. */
+  description: string;
+}
+
+/**
+ * O catálogo de setores para a ferramenta de transferência — e NUNCA derruba o
+ * turno. Leitura que falha devolve lista vazia, e a ferramenta volta à forma de
+ * antes (sem catálogo, sem enum): o modelo ainda transfere, só que sem o mapa.
+ * Transferir sem o setor é um prejuízo; não atender é outro, maior.
+ */
+export async function setoresDaTransferencia(
+  db: pg.Pool,
+  tenantId: string,
+  log: Logger,
+): Promise<SetorDaTransferencia[]> {
+  try {
+    const times = await timesAtivos(db, tenantId);
+    return times.map(({ slug, name, description }) => ({ slug, name, description: description ?? '' }));
+  } catch (err) {
+    log.warn('catálogo de setores não lido — a transferência segue sem ele neste turno', {
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 160),
+    });
+    return [];
+  }
 }
 
 export type RequestHumanHandoffResult =

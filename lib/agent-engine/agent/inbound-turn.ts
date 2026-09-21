@@ -91,6 +91,8 @@ import {
   detectHumanHandoffRequest,
   isLeadInHandoff,
   performHumanHandoff,
+  setoresDaTransferencia,
+  type SetorDaTransferencia,
 } from './human-handoff';
 import {
   maybeCompact,
@@ -396,6 +398,81 @@ export const AGENT_TOOL_DEFS = {
       .passthrough(),
   },
 } as const;
+
+/**
+ * A ferramenta de transferência COM o catálogo de setores dentro dela.
+ *
+ * ═══ O DEFEITO (medido em produção) ═══
+ *
+ * A descrição fixa pedia ao modelo que consultasse `crm_list_teams` antes de
+ * transferir. Com os setores `comercial`, `cobranca`, `suporte-tecnico`,
+ * `cancelamentos` e `fornecedores-e-parceiros`, o Sonnet NÃO consultou e passou
+ * `team: "fornecedores"` — que não existe; numa rodada anterior, transferiu sem
+ * setor nenhum (fila geral). A recusa de `applyRequestHumanHandoff` ensina e o
+ * modelo se corrige, mas gasta um step e arrisca terminar o turno sem transferir.
+ * Uma consulta que depende de o modelo LEMBRAR de fazê-la é a mesma lição do
+ * aviso ao lead (`avisarLeadDaEscalacao`): metade das vezes ela não existe.
+ *
+ * ═══ O CONSERTO ═══
+ *
+ * O turno lê os setores ativos do banco e os entrega na própria ferramenta: a
+ * descrição lista `slug — nome — quando usar`, e `team` ganha `enum` com os
+ * slugs no JSON Schema que o modelo lê. Continua sendo descoberta em runtime
+ * (decisão 4 da spec de Times): nada disto está escrito em prompt; sai do banco,
+ * a cada turno, e renomear um setor continua sem tocar em prompt nenhum.
+ *
+ * O `enum` está no JSON Schema, NÃO na validação do SDK (`.meta`, não
+ * `z.enum`). É a regra do schema LARGO desta ferramenta: slug fora da lista tem
+ * de chegar a `applyRequestHumanHandoff` e voltar como erro de ENSINO — com a
+ * lista e o "nada foi alterado" —, nunca como exceção de validação do SDK.
+ *
+ * Só entra o que é estável (slug, nome, "quando usar"): a ferramenta faz parte do
+ * prefixo cacheado da organização. "Aberto agora" e elegíveis continuam em
+ * `crm_list_teams`.
+ *
+ * Sem setores, a ferramenta é EXATAMENTE a de `AGENT_TOOL_DEFS` — mesmo objeto.
+ */
+export function ferramentaDeTransferencia(setores: readonly SetorDaTransferencia[]): {
+  description: string;
+  inputSchema: (typeof AGENT_TOOL_DEFS)['request_human_handoff']['inputSchema'];
+} {
+  const base = AGENT_TOOL_DEFS.request_human_handoff;
+  if (setores.length === 0) return base;
+
+  // O parágrafo DESTINO da base manda consultar `crm_list_teams`; com o catálogo
+  // aqui, ele é trocado — o resto da descrição (avisar antes, nunca "já chamei")
+  // continua o mesmo texto, sem cópia.
+  const antesDoDestino = base.description.slice(0, base.description.indexOf('DESTINO:'));
+  const umaLinha = (s: string): string => s.replace(/\s+/g, ' ').trim();
+  const catalogo = setores
+    .map((s) => {
+      const quandoUsar = umaLinha(s.description);
+      return `- ${s.slug} — ${umaLinha(s.name)}${quandoUsar === '' ? '' : ` — ${quandoUsar}`}`;
+    })
+    .join('\n');
+  const slugs = setores.map((s) => s.slug);
+
+  return {
+    description:
+      antesDoDestino +
+      'DESTINO: escolha o setor pelo assunto do pedido e passe o slug dele em "team" — sem ele a ' +
+      'conversa cai na fila GERAL, onde pode esperar por alguém que não trata o assunto. Use ' +
+      'SOMENTE um slug desta lista; com o cliente, fale o NOME do setor, nunca o slug. Se ' +
+      'crm_list_teams estiver entre as suas ferramentas, ela diz quais setores estão abertos agora.\n' +
+      'Setores (slug — nome — quando usar):\n' +
+      catalogo,
+    inputSchema: z
+      .object({
+        reason: z.string().optional().describe('por que passar ao humano (curto)'),
+        team: z
+          .string()
+          .meta({ enum: slugs })
+          .optional()
+          .describe('slug do setor de destino — um dos listados na descrição desta ferramenta'),
+      })
+      .passthrough(),
+  };
+}
 
 /**
  * Quantos vetos de `internal_vocabulary_leak` o turno tolera antes de o fail-safe soltar
@@ -2405,6 +2482,17 @@ async function executarTurnoDoAgente(
    */
   const mcpToolIdsDoTurno: string[] = [];
 
+  // Os setores ativos entram NA ferramenta de transferência (ver
+  // `ferramentaDeTransferencia`). Lidos só quando ela vai existir neste turno — a
+  // tela pode desligá-la, e aí a leitura seria ida ao banco sem consumidor. Leitura
+  // que falha devolve [] e a ferramenta volta à forma de antes; nunca derruba o
+  // turno. A prévia lê igual (pelo `pool`, sem HTTP): o botão Testar precisa ver a
+  // ferramenta que o cliente veria.
+  const setoresDoTurno =
+    agentConfig === null || agentConfig.handoffToolEnabled
+      ? await setoresDaTransferencia(pool, tenantId, runLog)
+      : [];
+
   const rawTools: ToolSet = {
     get_lead_context: tool({
       ...AGENT_TOOL_DEFS.get_lead_context,
@@ -3094,7 +3182,7 @@ async function executarTurnoDoAgente(
     // (seta force_human no CRM + cancela crons + inbox), fora de READ_ONLY_TOOLS. tenant/
     // lead/conversation vêm da ROW do job (closure), nunca do payload do modelo.
     request_human_handoff: tool({
-      ...AGENT_TOOL_DEFS.request_human_handoff,
+      ...ferramentaDeTransferencia(setoresDoTurno),
       execute: async (raw) => {
         try {
           // ═══ O PISO: se o modelo não falou, o sistema fala ═══
