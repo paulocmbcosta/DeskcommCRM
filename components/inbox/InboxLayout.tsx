@@ -398,24 +398,28 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       ? t("Contato anonimizado — não é possível enviar mensagens.")
       : null;
 
-  // Altura da grade: a conta desconta TUDO que fica acima e abaixo dela.
-  //   3.5rem            TopBar (`h-14`, em components/shell/TopBar.tsx)
-  //   2 * --space-6     padding do <main> do AppShell (`p-6`, em cima e embaixo)
+  // A grade ENCOSTA nas quatro bordas do <main>, e é por isso que a altura é a que é.
   //
-  // Com `100vh-3.5rem` o padding ficava de fora e a grade media 48px a MAIS que a
-  // tela. Quem pagava a diferença era o composer, que fica no rodapé: nascia
-  // parcialmente abaixo da borda, atrapalhando justo na hora de escrever.
+  // O `<main>` do AppShell tem `p-6`, e uma grade posta dentro dele deixava 24px
+  // vazios em cada lado: junto da barra lateral, junto da linha do cabeçalho, junto
+  // da borda direita e sob o composer. Numa tela em que lista, conversa e ficha do
+  // cliente disputam a mesma largura, eram 48px na horizontal e 48px na vertical
+  // jogados fora. `-m-6` cancela o `p-6` — a mesma técnica de Desempenho e Meta
+  // Ads, e pelo MESMO token, então não existe uma segunda medida para discordar.
   //
-  // As duas parcelas NÃO estão na mesma unidade, e por isso o padding entra pelo
-  // token e não como `3rem`: o `@theme inline` de `app/globals.css` remapeia a
-  // escala de spacing para `var(--space-N)` — `--space-6` é `24px` LITERAL —, mas
-  // não remapeia o `14`, que o Tailwind 4 calcula pelo multiplicador `--spacing`
-  // e segue sendo `3.5rem` de verdade. (Até o Tailwind 4 quem remapeava era o
-  // `tailwind.config.ts`; o arquivo não existe mais, o efeito é o mesmo.)
-  // Escrever a soma como
-  // `6.5rem` só acerta enquanto a raiz for 16px; com acessibilidade de fonte maior
-  // ou menor o composer sai da tela de novo. Pelo token, a conta se auto-corrige
-  // se a escala de espaçamento mudar.
+  // Cancelado o respiro, a única coisa acima da grade é a TopBar (`h-14` = 3.5rem,
+  // em components/shell/TopBar.tsx): a altura é `100dvh - 3.5rem`, sem descontar
+  // mais nada. A conta fecha porque a margem negativa faz a caixa ocupar `H - 48px`
+  // no fluxo e o padding do `<main>` devolve os 48px — o `<main>` mede exatamente
+  // `100dvh - 3.5rem`, e a página não rola.
+  //
+  // ⚠️ Se o `-m-6` sair e a altura ficar, a grade passa a medir 48px a MAIS que a
+  // tela e quem paga é o composer, que fica no rodapé: nasce abaixo da borda,
+  // justo na hora de escrever. Os dois andam juntos.
+  //
+  // Sem `w-full` de propósito: com largura automática a margem negativa ALARGA a
+  // caixa; com `w-full` ela só a deslocaria para a esquerda, e sobraria 48px de
+  // vazio à direita — o defeito que este ajuste veio tirar, por outro caminho.
   //
   // `dvh` em vez de `vh` porque no celular a `vh` ignora a barra do navegador — o
   // mesmo corte, só que pior e mudando conforme se rola a página.
@@ -455,7 +459,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       // regra do breakpoint arbitrário ANTES da do `xl` no CSS final, então em
       // 1440px o `xl` vencia e a lista ficava nos 248px para sempre. Sem
       // sobreposição não há ordem para errar.
-      className="grid h-[calc(100dvh-3.5rem-2*var(--space-6))] w-full grid-cols-1 md:max-xl:grid-cols-[300px_1fr] xl:max-[1399px]:grid-cols-[292px_minmax(0,1fr)_auto] min-[1400px]:grid-cols-[344px_minmax(0,1fr)_auto]"
+      className="-m-6 grid h-[calc(100dvh-3.5rem)] grid-cols-1 md:max-xl:grid-cols-[300px_1fr] xl:max-[1399px]:grid-cols-[292px_minmax(0,1fr)_auto] min-[1400px]:grid-cols-[344px_minmax(0,1fr)_auto]"
       /*
        * O ESTADO DO TEMPO REAL, LEGÍVEL DE FORA — mesmo par que o dossiê do lead
        * já publica (`LeadDossier`), e pela mesma razão: quando a entrega morre,

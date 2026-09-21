@@ -1913,6 +1913,33 @@ grampeado no `clientHeight`, então "excesso 0" e "sobra 200px" dão o MESMO nú
 Quem quiser saber quanta folga restou tem de medir o `bottom` do último filho
 contra a caixa de conteúdo da `<nav>` — foi assim que os 19px saíram.
 
+## O Inbox usa a tela inteira, e a barra lateral nasce recolhida (2026-09-21)
+
+Origem: pedido do dono, olhando o Inbox em produção — o chat perdia um respiro à
+esquerda (junto da barra), à direita e em cima (junto da linha do cabeçalho); a barra
+lateral ocupava 240px de uma tela em que lista, conversa e ficha disputam largura; e
+os três "Ver tudo em …" desenhavam a mesma seta. Fragmento de release:
+`.changes/inbox-de-borda-a-borda-e-barra-recolhida.md`.
+
+Medido em Chromium, banco fresco do `baseline.sql`, `next build` + `next start`, com uma
+conversa de cinco mensagens aberta, 1440×900 — `getBoundingClientRect`, não a olho:
+
+| caso | prioridade | estado |
+|---|---|---|
+| Sem nenhum cookie, a barra vem recolhida (64px), sem títulos de grupo | `[P0]` primeira impressão | **PASS**, `tests/e2e/barra-lateral-recolhida-por-padrao.spec.ts`. O padrão vem do cookie **ausente**: `lib/navigation/barra-lateral.ts`. A forma antiga (`=== "1"`) o deixava cair na barra aberta |
+| O Inbox encosta nas quatro bordas: barra, linha do cabeçalho, borda direita e borda de baixo | `[P0]` | **PASS.** Antes **24 / 24 / 24 / 24px**, depois **0 / 0 / 0 / 0px**. A coluna da conversa foi de **500px para 724px** (+224px) com a barra recolhida e para **548px** com a barra aberta por escolha (+48px). Antes = build atual com a geometria antiga emulada por estilo, na mesma página — a comparação não mistura builds |
+| A grade não obriga a página a rolar (o composer não nasce abaixo da borda) | `[P0]` | **PASS**, `scrollHeight - innerHeight = 0` em 390×844, 768×1024, 1024×768, 1280×800, 1440×900 e 1920×1080. **`overflowX` = 0** nas seis — a margem negativa não vaza no celular |
+| Expandir a barra persiste ao F5, e recolher também | `[P1]` | **PASS**, mesma spec: 64px → 240px → F5 → 240px → 64px → F5 → 64px |
+| Os três "Ver tudo em CRM / IA / Análise" têm ícones diferentes, com a barra recolhida e com ela aberta | `[P1]` | **PASS**, três `<svg>` distintos nos dois estados. Aperto de mão, brilho, fatia de gráfico. A propriedade geral — nenhum ícone se repete no menu, em nenhum papel — é `tests/unit/sidebar-icones-distintos.test.ts` |
+| Os e2e que medem a barra ABERTA continuam medindo-a | — | **PASS**: `playwright.config.ts` planta o cookie `sidebar_collapsed=0` em todo contexto; só a spec acima o desliga. 39 casos passaram (2 pulados, ver abaixo) em `navegacao`, `interface-por-vinculo`, `central-avisos-destino`, `logo-moldura-no-tema-escuro` e sete das oito `inbox-*` — a que ficou de fora, `inbox-tempo-real`, o CI também não roda |
+| Provado por sabotagem | — | Voltar a regra para `=== "1"` reprova 3 casos (inclusive o do layout executado); zerar os ícones dos hubs reprova os 6 casos de ícone, citando "Ver tudo em CRM = Ver tudo em IA = Ver tudo em Análise" |
+
+**Não medido:** `inbox-responder-citando.spec.ts` **pula** os dois casos nesta máquina e
+já pulava — o helper `abrirConversaComMensagens` clica no primeiro `li` da página, que é o
+do menu lateral, e nunca chega a uma conversa. Independe desta mudança, e por isso a
+spec segue sem provar o que promete. Radar (`ClockCountdown`) e Atividades
+(`ClockCounterClockwise`) são dois relógios parecidos, mas não são o mesmo ícone, e ficaram.
+
 ## O inbox em tempo real — o defeito que veio de fora (2026-08-24)
 
 **Sintoma relatado pelo dono:** *"Recebemos mensagem e só reflete no inbox (na
