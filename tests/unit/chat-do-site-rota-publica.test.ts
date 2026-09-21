@@ -158,6 +158,45 @@ describe("quem é recusado, e como", () => {
   });
 });
 
+describe("o que um anônimo NÃO consegue empurrar para dentro", () => {
+  it("corpo gigante: 413 antes de parsear — e nada é gravado", async () => {
+    const r = await rotaMensagens.POST(
+      pedido("POST", "messages", { corpo: { ...corpoValido, body: "x".repeat(40_000) } }),
+      ctx(),
+    );
+    expect(r.status).toBe(413);
+    expect(r.headers.get("access-control-allow-origin")).toBe("*");
+    expect(ingerir).not.toHaveBeenCalled();
+  });
+
+  it("`javascript:` na URL da página é DESCARTADO na entrada — nunca chega ao banco", async () => {
+    ingerir.mockResolvedValue({ status: "ingested", conversationId: "c", tokenNovo: TOKEN, mensagem: null });
+    for (const url of ["javascript:alert(1)", "data:text/html,<script>1</script>", "não é url"]) {
+      const r = await rotaMensagens.POST(
+        pedido("POST", "messages", { corpo: { ...corpoValido, pagina: { url, titulo: "Planos" } } }),
+        ctx(),
+      );
+      // A mensagem do visitante NÃO se perde por causa de um campo acessório torto.
+      expect(r.status).toBe(201);
+      const entrada = ingerir.mock.calls.at(-1)?.[1] as { pagina?: { url?: string; titulo?: string } };
+      expect(entrada.pagina?.url).toBeUndefined();
+      expect(entrada.pagina?.titulo).toBe("Planos");
+      expect(JSON.stringify(entrada)).not.toContain("javascript:");
+    }
+  });
+
+  it("URL http(s) de verdade passa", async () => {
+    ingerir.mockResolvedValue({ status: "ingested", conversationId: "c", tokenNovo: TOKEN, mensagem: null });
+    await rotaMensagens.POST(
+      pedido("POST", "messages", { corpo: { ...corpoValido, pagina: { url: "https://loja.exemplo.com/planos" } } }),
+      ctx(),
+    );
+    expect((ingerir.mock.calls.at(-1)?.[1] as { pagina?: { url?: string } }).pagina?.url).toBe(
+      "https://loja.exemplo.com/planos",
+    );
+  });
+});
+
 describe("o campo-isca", () => {
   it("preenchido: responde 201 como se tivesse dado certo e NÃO grava nada", async () => {
     const r = await rotaMensagens.POST(

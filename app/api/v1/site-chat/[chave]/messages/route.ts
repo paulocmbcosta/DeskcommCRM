@@ -23,6 +23,7 @@ import { conversaDoVisitante, ingerirMensagemDoVisitante } from "@/lib/channels/
 import {
   HEADER_DO_TOKEN,
   LIMITES,
+  MAXIMO_DO_CORPO_BYTES,
   baldeDoToken,
   comCors,
   corpoDoEnvioSchema,
@@ -113,7 +114,22 @@ export async function POST(req: Request, { params }: RouteCtx): Promise<Response
     });
   }
 
-  const bruto = await req.json().catch(() => null);
+  // Rota ANÔNIMA: o tamanho do corpo é conferido ANTES de virar objeto. Sem isto,
+  // qualquer um faz o servidor parsear megabytes de JSON por pedido, de graça.
+  const declarado = Number(req.headers.get("content-length") ?? "0");
+  const texto = declarado > MAXIMO_DO_CORPO_BYTES ? null : await req.text().catch(() => null);
+  if (texto === null || texto.length > MAXIMO_DO_CORPO_BYTES) {
+    return fail("payload_too_large", "Mensagem grande demais.", 413, {
+      requestId: ctx.requestId,
+      headers: comCors(),
+    });
+  }
+  let bruto: unknown = null;
+  try {
+    bruto = JSON.parse(texto);
+  } catch {
+    bruto = null;
+  }
   const parsed = corpoDoEnvioSchema.safeParse(bruto);
   if (!parsed.success) {
     return fail("validation_failed", "Mensagem inválida.", 422, {

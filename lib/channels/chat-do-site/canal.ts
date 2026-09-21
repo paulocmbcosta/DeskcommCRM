@@ -19,6 +19,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { metadataInicialDoCanal } from "@/lib/ai/elegibilidade/pre-go-live";
 
 import { CHANNEL_PROVIDER_SITE_WIDGET } from "../capabilities";
+// O nome de um canal tem UMA regra (`../estado.ts`), e é dela que sai o que o
+// resto do produto mostra — o card do Inbox, os seletores de agente, o filtro.
+// Remontar a cadeia de fallback aqui faria a tela de Conexões chamar o canal de
+// um jeito e o Inbox de outro. O nome é obrigatório na criação e na edição
+// (Zod, `min(1)`), então o último degrau só aparece em linha editada à mão.
+import { nomeDoCanal } from "../estado";
 
 import { CONFIG_PADRAO_DO_WIDGET, lerConfig, type ConfigDoWidget } from "./config";
 import { gerarChaveDoWidget } from "./identidade";
@@ -64,7 +70,7 @@ function paraCanal(l: Linha): CanalDoSite | null {
   if (!l.site_widget_key) return null;
   return {
     id: l.id,
-    nome: l.display_name?.trim() || "Chat do site",
+    nome: nomeDoCanal(l),
     chave: l.site_widget_key,
     config: lerConfig(l.site_widget_config),
     criadoEm: l.created_at,
@@ -213,7 +219,7 @@ export async function canalPelaChave(
   return {
     id: l.id,
     organizationId: l.organization_id,
-    nome: l.display_name?.trim() || "Chat do site",
+    nome: nomeDoCanal(l),
     config: lerConfig(l.site_widget_config),
     ultimoSinal: lerSinal(l),
   };

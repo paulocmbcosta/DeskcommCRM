@@ -67,7 +67,13 @@ export const LIMITES = {
    * Conversa NOVA — o pedido caro: cria contato, conversa, lead e pode acordar o
    * agente de IA (custo por token). É o alvo de quem quer encher o inbox de lixo.
    */
-  conversaNova: { porIp: 5, porWidget: 60, janelaS: 600 },
+  //
+  // O balde por WIDGET é o que vale de verdade: o IP sai de `x-forwarded-for`,
+  // que quem não é navegador escreve como quiser — girando o header, o balde por
+  // IP não segura ninguém. 30 conversas novas a cada 10 min (3 por minuto,
+  // sustentado) está muito acima de qualquer site de PME e corta pela metade o
+  // pior caso de quem resolve encher o inbox de lixo.
+  conversaNova: { porIp: 5, porWidget: 30, janelaS: 600 },
 } as const;
 
 export interface ContextoPublico {
@@ -163,6 +169,31 @@ export function baldeDoToken(thread: string): string {
 
 const textoCurto = (max: number) => z.string().trim().max(max);
 
+/** Quanto o corpo de um envio pode pesar. Uma mensagem de 4000 caracteres + formulário cabe com folga. */
+export const MAXIMO_DO_CORPO_BYTES = 32_000;
+
+/**
+ * A URL da página onde o visitante está — só `http(s)`.
+ *
+ * Ela é gravada em `metadata` e existe para o atendente ver "de qual página a
+ * pessoa escreveu". É dado de um ANÔNIMO que um dia alguma tela vai querer
+ * transformar em link: um `javascript:` guardado aqui seria XSS armazenado no
+ * CRM, esperando só o `<a href>` de quem não leu este comentário. Esquema que
+ * não seja http(s) é descartado na ENTRADA, que é o único lugar onde dá para
+ * garantir por todos os leitores futuros.
+ */
+const urlDaPagina = textoCurto(500).refine(
+  (v) => {
+    try {
+      const u = new URL(v);
+      return u.protocol === "https:" || u.protocol === "http:";
+    } catch {
+      return false;
+    }
+  },
+  { message: "url da página precisa ser http(s)" },
+);
+
 /**
  * O corpo do envio. Estrito no que importa (texto, id de idempotência) e
  * tolerante no resto: campo opcional malformado é DESCARTADO, não motivo de
@@ -183,7 +214,8 @@ export const corpoDoEnvioSchema = z.object({
     .catch(undefined),
   pagina: z
     .object({
-      url: textoCurto(500).optional(),
+      // `.catch(undefined)`: URL torta é DESCARTADA, não motivo de perder a mensagem.
+      url: urlDaPagina.optional().catch(undefined),
       titulo: textoCurto(200).optional(),
       utm: z.record(z.string().regex(/^utm_[a-z_]{1,20}$/), textoCurto(120)).optional().catch(undefined),
     })

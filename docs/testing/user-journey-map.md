@@ -653,6 +653,46 @@ role mas a única ação da tela nunca saia da vista. Medido depois:
 **A spec agora prende isso**, e a guarda foi sabotada para provar que morde: devolvendo
 o CSS antigo, o J28.3 reprova em 136 ms.
 
+### O CI reprovou duas vezes — e as duas causas eram minhas, não do produto
+
+**1. A spec presumia a ABA.** Na primeira rodada do `e2e` no CI (run 35528903796) o
+J28.4 reprovou: o card do visitante não apareceu no Inbox em 30 s. O produto estava
+certo — o J28.3 tinha passado (o POST de outra origem deu 201) e a sondagem seguia com
+o token. O screenshot da falha explicou: o Inbox abriu na aba **Fila** com 2 conversas,
+e as outras abas mostravam 7, 1 e 4. No CI o banco é compartilhado com ~38 specs que
+rodam antes e deixam rodízio e times configurados; a conversa nova é **atribuída** a
+alguém e sai da Fila. Na minha máquina o banco era fresco e ela ficava lá.
+
+Presumir a aba era medir o ambiente. A spec agora acha a conversa pela **busca da API**
+(alcança o nome do contato, não depende de aba), confere o **meio** (`channel =
+site_chat`) no mesmo payload que o card lê, e abre por link direto. O desenho do ícone
+foi para `tests/unit/inbox-por-onde-entrou.test.tsx`, que não depende de banco nenhum —
+com o controle: conversa de WhatsApp continua com telefone.
+
+**2. `verify` reprovou com a suíte VERDE na minha máquina.**
+`tests/unit/rotulo-do-contato.test.ts` proíbe remontar à mão a cadeia
+`display_name || …`, e `canal.ts` tinha duas. Não apareceu local porque a varredura
+lista arquivos com **`git ls-files`** — e eu rodei a suíte com os arquivos novos ainda
+**não rastreados**: para ela, eles não existiam. Vale como regra de método: *arquivo
+novo só é medido por esse tipo de varredura depois do `git add`*. O conserto foi usar a
+regra única de nome de canal (`nomeDoCanal`, de `lib/channels/estado.ts`) — que é
+também o certo por produto: a tela de Conexões e o Inbox chamam o canal do mesmo jeito.
+
+### Endurecimento da rota pública, depois de uma revisão de segurança feita à mão
+
+(A revisão por agente independente foi disparada duas vezes e morreu nas duas por limite
+de uso, sem produzir achado — então a passada foi minha, e o que ela NÃO cobre está em
+"Não medido".) Três mudanças, todas com teste em
+`tests/unit/chat-do-site-rota-publica.test.ts`:
+
+- **URL da página só `http(s)`.** Ela vem de um anônimo e é gravada em `metadata`; um
+  `javascript:` guardado ali seria XSS armazenado esperando o primeiro `<a href>` de uma
+  tela futura. Descartada na entrada — sem perder a mensagem.
+- **Corpo acima de 32 KB: 413 antes de parsear.**
+- **Teto por widget de 60 → 30 conversas novas / 10 min.** O balde por IP sai de
+  `x-forwarded-for`, que quem não é navegador escreve como quiser; o que segura de
+  verdade é o balde por widget.
+
 ### O que o laboratório exigiu, e que NÃO é do produto
 
 O Chromium barra pedido de uma origem "pública" para `localhost` (*Local Network
@@ -676,6 +716,8 @@ regra não se aplica.
 - **Safari/Firefox**: a spec roda em Chromium.
 - **Carga**: os limites de `lib/channels/chat-do-site/http.ts` estão presos por valor no
   teste da rota, mas ninguém martelou a rota de verdade.
+- **Revisão de segurança por um segundo par de olhos.** A superfície pública foi revisada
+  só por quem a escreveu. É o item desta lista que mais merece ser refeito.
 
 ---
 

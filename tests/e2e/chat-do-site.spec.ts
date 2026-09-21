@@ -185,15 +185,48 @@ test("o visitante preenche o formulário e a mensagem dele aparece no balão", a
   expect(guardado[0]).toMatch(/"t":"wv_[A-Za-z0-9_-]{43}"/);
 });
 
-test("a conversa nasce no Inbox, marcada como vinda do SITE, e o atendente responde", async () => {
-  await admin.goto("/app/inbox");
-  const card = admin.getByRole("button").filter({ hasText: nomeDoVisitante }).first();
-  await expect(card).toBeVisible({ timeout: 30_000 });
-  // O ícone acompanha o MEIO: telefone aqui mandaria o atendente procurar um número.
-  await expect(card.locator('[data-meio="site_chat"]')).toBeVisible();
+/**
+ * A conversa do visitante, achada pela BUSCA da API — que alcança o nome do
+ * contato e não depende de aba.
+ *
+ * ⚠️ A primeira versão procurava o card na lista do Inbox, e reprovou no CI com o
+ * produto certo (run 35528903796): lá o banco é compartilhado com ~38 specs que
+ * rodam antes e deixam rodízio e times configurados, então a conversa nova é
+ * ATRIBUÍDA a alguém e sai da aba "Fila" — o screenshot da falha mostra a Fila
+ * com 2 conversas e as outras abas com 7, 1 e 4. Presumir a aba era medir o
+ * ambiente. Em qual aba a conversa cai é regra de roteamento, que tem spec
+ * própria; o que ESTA jornada afirma é que ela existe, é do site, e responde.
+ */
+async function conversaDoVisitanteNoCrm(): Promise<{ id: string; channel: string }> {
+  let achada: { id: string; channel: string } | undefined;
+  await expect
+    .poll(
+      async () => {
+        const r = await admin.request.get(
+          `/api/v1/conversations?limit=20&search=${encodeURIComponent(nomeDoVisitante)}`,
+        );
+        if (!r.ok()) return `http ${r.status()}`;
+        const { data } = (await r.json()) as {
+          data: Array<{ id: string; channel: string; contacts?: { display_name?: string | null } }>;
+        };
+        achada = data.find((c) => c.contacts?.display_name === nomeDoVisitante);
+        return achada ? "achada" : `sem a conversa entre ${data.length}`;
+      },
+      { timeout: 30_000, message: "a conversa do visitante não apareceu na busca do Inbox" },
+    )
+    .toBe("achada");
+  return achada as { id: string; channel: string };
+}
 
-  await card.click();
-  await expect(admin.getByText("Oi! Vocês entregam em Recife?").first()).toBeVisible();
+test("a conversa nasce no Inbox, marcada como vinda do SITE, e o atendente responde", async () => {
+  const conversa = await conversaDoVisitanteNoCrm();
+  // O MEIO chega ao navegador do atendente no mesmo payload que o card lê — é por
+  // ele que o ícone vira globo (o desenho em si está preso em
+  // `tests/unit/inbox-por-onde-entrou.test.tsx`, que não depende do banco do CI).
+  expect(conversa.channel).toBe("site_chat");
+
+  await admin.goto(`/app/inbox/${conversa.id}`);
+  await expect(admin.getByText("Oi! Vocês entregam em Recife?").first()).toBeVisible({ timeout: 30_000 });
 
   const campo = admin.getByRole("textbox", { name: "Mensagem", exact: true });
   await campo.fill("Entregamos sim! Em Recife chega em 3 dias úteis.");
@@ -207,13 +240,10 @@ test("a resposta do atendente chega ao balão do visitante — e vira `delivered
 
   // O laço de retorno: entregar ao navegador é o que promove a mensagem. Lido
   // pela API do próprio atendente (o mesmo dado que pinta o tique na tela).
+  const conversa = await conversaDoVisitanteNoCrm();
   await expect
     .poll(
       async () => {
-        const lista = await admin.request.get("/api/v1/conversations?limit=50");
-        const { data } = (await lista.json()) as { data: Array<{ id: string; contacts?: { display_name?: string } }> };
-        const conversa = data.find((c) => c.contacts?.display_name === nomeDoVisitante);
-        if (!conversa) return "sem-conversa";
         const msgs = await admin.request.get(`/api/v1/conversations/${conversa.id}/messages?limit=20`);
         const corpo = (await msgs.json()) as { data: Array<{ body: string | null; status: string }> };
         return corpo.data.find((m) => m.body?.startsWith("Entregamos sim!"))?.status ?? "sem-mensagem";
@@ -292,7 +322,8 @@ test("excluir pede confirmação nomeando o alvo — e tira o balão do ar na ho
   await expect(page.getByTestId("site-chat-lancador")).toHaveCount(0);
   await ctx.close();
 
-  // E a conversa que já tinha entrado continua no Inbox.
-  await admin.goto("/app/inbox");
-  await expect(admin.getByRole("button").filter({ hasText: nomeDoVisitante }).first()).toBeVisible({ timeout: 30_000 });
+  // E a conversa que já tinha entrado continua no Inbox, com o histórico inteiro.
+  const conversa = await conversaDoVisitanteNoCrm();
+  await admin.goto(`/app/inbox/${conversa.id}`);
+  await expect(admin.getByText("Oi! Vocês entregam em Recife?").first()).toBeVisible({ timeout: 30_000 });
 });
