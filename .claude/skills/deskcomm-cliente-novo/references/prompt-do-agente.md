@@ -32,6 +32,13 @@ vocabulário interno, agenda sem ferramenta, aviso de IA. O veto volta ao modelo
 - "Encaminhe ao gerente Fulano tudo que não souber" — medido: faz o modelo responder "vou
   confirmar com o Fulano" **em vez de usar a agenda**. Restrinja a situações que nenhuma
   capacidade cobre.
+- O nome ou o identificador de um **setor** ("transfira para o time `cobranca`") — o agente descobre
+  os setores no atendimento, pelo "quando usar" de cada um. Escreva o **assunto** ("passe para o
+  time de cobrança", "fatura vai para quem cuida de cobrança") e peça que ele **escolha o setor antes
+  de passar** — medido: sem essa frase, o modelo passou a conversa sem setor (fila geral) e, noutra
+  rodada, com um identificador inventado.
+- "Prefira várias mensagens curtas" — o modelo dispara várias mensagens ao mesmo tempo e elas podem
+  chegar fora de ordem. Peça **uma mensagem por resposta**, curta.
 - "Resuma o atendimento no fim", "leia o histórico antes de perguntar de novo", "que dia é hoje"
   — já vêm no contexto de cada turno.
 - Preço e prazo em texto quando existe catálogo ou base de conhecimento — duas fontes divergem.

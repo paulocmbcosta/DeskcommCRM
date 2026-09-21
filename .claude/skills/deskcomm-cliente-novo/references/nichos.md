@@ -169,6 +169,99 @@ grátis a partir de X. **Teste**: "tem o {produto} no tamanho M?", "quanto fica 
 
 ---
 
+## Provedor de internet (telecom)
+
+O agente aqui é **atendente principal**, não só vendedor: a maior parte de quem escreve já é
+assinante (boleto, internet caiu, cancelar, mudar de endereço). A venda de plano é um dos fluxos.
+Por isso o pacote tem **setores** (`pela-tela.md` §Times) e, quando o provedor usa um ERP como o
+IXC, **conector** (`pela-tela.md` §Conectores).
+
+**Funil "Vendas de internet"** (marque como padrão — é onde toda conversa nova nasce). Etapa e, entre
+parênteses, o passo do agente que leva o card até ela: Novo contato (novo lead) → Conhecendo os
+planos (em qualificação) → Plano escolhido (qualificado) → Dados da instalação (em negociação) →
+Verificando cobertura (sem passo — o time comercial confere pelo CEP depois de receber os dados) →
+Instalação agendada (ganho) → Instalado (sem passo; pós-venda) → Não contratou (perdido).
+**"Primeiro contato" fica em "não mover"**: quem chama para pedir boleto também recebe a primeira
+resposta, e com o passo ligado o card dele andaria como se fosse venda. **Vocabulário**: cliente =
+*interessado*, negócio = *contratação*, ganhou = *contratou*, perdeu = *não contratou*. **Motivos de
+perda**: sem cobertura no endereço, achou caro, não quis fidelidade, fechou com outro provedor,
+parou de responder, só pesquisando.
+
+⚠️ Quem já é assinante também nasce nesse funil: a oportunidade é criada na primeira mensagem,
+antes de o agente saber quem é, e mover entre funis é proibido ao agente. O prompt manda **não
+avançar** a etapa de contratação para quem já é cliente — o card fica parado em "Novo contato".
+Diga isso à pessoa na entrega; não é defeito da configuração. (O "funil de clientes" do produto só
+recebe sozinho quem tem horário marcado pela agenda — ver `pela-tela.md` §Funil.)
+
+**Setores** (Configurações › Times; o "quando usar" é o que o agente lê — escreva como o cliente
+fala): *Comercial* (contratar, trocar plano, cobertura, agendar instalação, mudança de endereço,
+pedido de desconto); *Cobrança* (fatura, boleto, pagamento não reconhecido, internet bloqueada ou
+reduzida por atraso, negociar débito); *Suporte técnico* (sem sinal, lenta, Wi-Fi sumiu, visita
+técnica — depois do passo a passo); *Cancelamentos* (quem mantém o cancelamento depois da
+retenção; costuma ter horário próprio, mais curto); *Fornecedores e parceiros* (assunto corporativo).
+Horário de cada um no próprio time — o agente sabe se o setor está aberto agora.
+
+**Prompt (preencha):**
+
+```markdown
+# Quem você é
+Você é {nome} e atende os clientes da {provedor} pelo WhatsApp. {O que o provedor faz e onde, em uma frase.}
+{Tom em uma frase.} Você resolve o que dá para resolver na conversa e chama o time certo quando não dá.
+
+# O que você faz primeiro
+Descubra o que a pessoa precisa: contratar ou trocar de plano; internet caiu, lenta, Wi-Fi sumiu;
+boleto, fatura ou internet bloqueada; cancelamento; mudança de endereço; outro assunto.
+Se não ficou claro, pergunte uma vez, de forma simples.
+
+# Contratação
+1. Consulte os materiais de planos antes de falar de plano ou valor.
+2. Se ajudar a escolher, entenda o uso: quantas pessoas, quantas TVs ao mesmo tempo, trabalho em casa, jogo online.
+3. Quando a pessoa reagir a um plano, marque que ela escolheu e anote qual.
+4. Com o plano escolhido, peça um de cada vez: data preferida para a instalação, endereço completo com CEP, CPF. Anote.
+5. Passe para o time comercial confirmar a cobertura e agendar. Você não agenda instalação.
+
+# Quem já é cliente
+Não trate como venda: não mexa na etapa da contratação.
+- Problema técnico: siga o passo a passo dos materiais de suporte, uma orientação por vez, até {3-4} tentativas; depois, passe para o suporte técnico.
+- Fatura ou bloqueio: {com conector de ERP com capacidade de fatura: consulte e envie; sem: peça o CPF do titular, anote e passe para o time de cobrança}.
+- Cancelamento: siga os materiais de retenção, no máximo {2} tentativas; se mantiver, avise o horário do setor e passe, anotando motivo e tentativas.
+- Mudança de endereço: siga os materiais e passe para o time comercial no fim.
+
+# Ao passar para uma pessoa
+Antes de passar, veja a lista de setores e escolha o que cuida do assunto — nunca passe sem escolher o setor. Avise antes. Se o setor estiver fora do horário agora, diga que fica registrado e que ele retorna no próximo horário — e passe mesmo assim.
+
+# Limites
+Você não oferece desconto, não agenda instalação, não fala de restrição de CPF/CNPJ e só fala de multa ou fidelidade se perguntarem.
+
+# Estilo
+Uma mensagem só por resposta, curta; para apresentar planos, uma lista curta. Emoji com parcimônia — e nenhum com quem está chateado, com problema ou cancelando. Diga "aparelho", não roteador nem ONU.
+```
+
+Dois ajustes que o botão Testar mostrou na primeira implantação, e que por isso já estão no esqueleto:
+sem "veja a lista de setores", o modelo passou a conversa **sem setor** (fila geral) e, noutra
+rodada, com um setor **inventado**; sem a regra do emoji, respondeu "que pena saber disso 😊" a quem
+pedia cancelamento.
+
+**Materiais**: *Planos e serviços* (tabela com valor pontual e cheio, o que vem em cada plano,
+aplicativos inclusos, como a contratação acontece, objeções); *Suporte técnico — passo a passo*
+(sem internet, lenta, Wi-Fi não aparece, um app só; quando passar direto); *Retenção e
+cancelamento* (princípios, técnica por motivo, frases proibidas); *Mudança de endereço* (taxa, o
+que levar, o que o time comercial confere). **Memória**: cobertura, horário dos setores e da loja,
+telefones, site de vagas, fidelidade, apps que o provedor **não** tem. **FAQ**: fatura disponível
+quantos dias antes; desconto de pontualidade; fidelidade; comodato; cobertura; taxa de mudança;
+multa (resposta: quem explica é o setor); vagas; loja. **Capacidades**: atender, passar para humano
+(é o que dá ao agente a lista de setores), notas e funil; **sem** agenda se quem agenda instalação é
+o time. **Follow-ups**: "Conhecendo os planos" em silêncio 24 h: "ficou alguma dúvida sobre os
+planos?"; 72 h: última e registrar motivo. **Teste**: "quero saber dos planos", "quero o de {plano}",
+"minha internet caiu", "preciso do boleto", "quero cancelar", "vocês têm vaga?", "quero falar com um
+atendente".
+
+**Identidade antes de dado financeiro** (quando o agente tiver acesso ao ERP): o número do WhatsApp
+que bate com o cadastro basta; se não bater, peça **CPF e data de nascimento** e confira os dois.
+Só o CPF deixa qualquer um que saiba o CPF de outra pessoa receber o boleto e o endereço dela.
+
+---
+
 ## Outro tipo de negócio (genérico)
 
 **Funil "Clientes"**: Novo contato → Já respondi → Entendendo a necessidade → Proposta enviada →
