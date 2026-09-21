@@ -15,7 +15,8 @@ import { guardServiceEffect } from "@/lib/atendimento/fronteira-server";
  *   (b) conversa: status transiciona SÓ 'ai_handling'→'pending' (CASE — nunca pisa em
  *       claimed/closed) + bot_silenced_until='infinity' + last_handoff_at/reason;
  *   (c) cancela os crons PENDENTES do lead (follow-ups agendados não disparam após handoff);
- *   (d) cria agent_inbox_items(kind='handoff') com o resumo (dedup por episódio aberto).
+ *   (d) cria agent_inbox_items(kind='handoff') com o resumo (dedup por episódio aberto);
+ *   (f) grava o time de destino, quando houver, e (g) SÓ ENTÃO pede o rodízio da fila humana.
  *
  * tenant/lead/conversation vêm da ROW do job (closure do run), NUNCA do payload (regra dura 1).
  * O resumo vai ao inbox (é PARA o humano assumir) — mas NUNCA a log (PII fora de log, regra 8).
@@ -31,6 +32,7 @@ import type { Logger } from '../obs/logger';
 import { cancelPendingCronsForLead } from '../cron/scheduler';
 import { findForbiddenKey, zodIssuesSummary } from './lead-state';
 import { renderDeclaracaoParaHumano, type DeclaracaoDoTurno } from './declaracao';
+import { pedirRodizioDaFilaHumana } from './rodizio';
 
 /** Postgres `infinity`: o bot nunca reassume após handoff. */
 const SILENCE_INFINITY = 'infinity';
@@ -134,6 +136,11 @@ export async function performHumanHandoff(
      * aberto na informação.
      */
     avisoAoLead?: { avisado: boolean; porque?: string };
+    /**
+     * Time de destino (`attendance_teams.id`), já resolvido e validado pelo
+     * chamador. Ausente/nulo = fila geral, o comportamento de antes.
+     */
+    teamId?: string | null;
     log: Logger;
   },
 ): Promise<void> {
@@ -217,8 +224,40 @@ export async function performHumanHandoff(
     });
   }
 
+  // (f) O DESTINO na conversa. Este caminho não escolhe atendente — quem escolhe é o
+  // cron de roteamento (`lib/routing/worker.ts`), que lê `conversations.team_id` e
+  // procura dentro do time. Gravar esta coluna é a feature inteira deste lado; sem
+  // ela o agente descobre os setores, escolhe, e a conversa cai na fila geral assim
+  // mesmo.
+  //
+  // `organization_id` no WHERE mesmo com o id da conversa em mãos: este módulo roda
+  // sob service role, que bypassa RLS (anti-pattern nº 10).
+  if (opts.teamId) {
+    await guardServiceEffect();
+    await db.query(
+      `update conversations set team_id = $1 where id = $2 and organization_id = $3`,
+      [opts.teamId, ids.conversationId, ids.tenantId],
+    );
+  }
+
+  // (g) O RODÍZIO, por último e de propósito. O cron não distribui a conversa que a
+  // IA automática atende (migration 0273 — medido em produção em 2026-09-21: com
+  // atendente online, a IA não respondia ninguém), então o pedido que nasceu com a
+  // conversa já fechou como `skipped_ai_attending`; sem este, a conversa passada
+  // para humano não seria distribuída a ninguém. Depois do silêncio (b) porque o
+  // rodízio só pode enxergar uma conversa que já saiu da IA, e depois do time (f)
+  // porque pedir antes abriria uma janela em que o cron distribui para a
+  // organização inteira — o cancelamento caindo no comercial.
+  await guardServiceEffect();
+  await pedirRodizioDaFilaHumana(
+    db,
+    { organizationId: ids.tenantId, conversationId: ids.conversationId },
+    opts.log,
+    'handoff',
+  );
+
   // PII fora do log: só ids/motivo — nunca o resumo da conversa (regra dura 8).
-  opts.log.info('handoff humano aplicado (force_human + silêncio + crons cancelados + inbox)', {
+  opts.log.info('handoff humano aplicado (force_human + silêncio + crons cancelados + inbox + rodízio)', {
     reason: opts.reason,
   });
 }
@@ -391,29 +430,15 @@ export async function applyRequestHumanHandoff(
     teamId = escolhido.id;
   }
 
+  // O time vai DENTRO da passagem: é ela quem grava o destino e só depois pede o
+  // rodízio — ver os passos (f) e (g) de `performHumanHandoff`.
   await performHumanHandoff(db, ids, {
     reason: parsed.data.reason ?? 'requested_human',
     conversationSummary: opts.conversationSummary,
     ...(opts.avisoAoLead !== undefined ? { avisoAoLead: opts.avisoAoLead } : {}),
+    teamId,
     log: opts.log,
   });
-
-  // O DESTINO na conversa. Este caminho não escolhe atendente — `performHumanHandoff`
-  // não chama o roteamento G5 — e não precisa: quem escolhe é o cron de roteamento
-  // (`lib/routing/worker.ts`), que já lê `conversations.team_id` e procura dentro do
-  // time. Gravar esta coluna é a feature inteira deste lado; sem ela o agente
-  // descobre os setores por `crm_list_teams`, escolhe, e a conversa cai na fila geral
-  // assim mesmo.
-  //
-  // `organization_id` no WHERE mesmo com o id da conversa em mãos: este módulo roda
-  // sob service role, que bypassa RLS (anti-pattern nº 10).
-  if (teamId !== null) {
-    await guardServiceEffect();
-    await db.query(
-      `update conversations set team_id = $1 where id = $2 and organization_id = $3`,
-      [teamId, ids.conversationId, ids.tenantId],
-    );
-  }
 
   // ACH-03: a expectativa vai JUNTO com a confirmação. Antes, a mensagem afirmava
   // que "um atendente vai assumir" sem que ninguém tivesse olhado se havia

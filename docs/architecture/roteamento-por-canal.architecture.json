@@ -91,6 +91,20 @@
       "col": 3,
       "type": "database",
       "label": "Confirmar ou preservar FAILED para retry da mesma identidade"
+    },
+    {
+      "id": "ia_atende",
+      "lane": "db",
+      "col": 5,
+      "type": "database",
+      "label": "A IA do canal vai atender? (fn_ia_automatica_no_canal + trava do motor)"
+    },
+    {
+      "id": "passagem",
+      "lane": "app",
+      "col": 6,
+      "type": "service",
+      "label": "IA transfere para o time (ou recusa o turno) e pede o rodízio"
     }
   ],
   "edges": [
@@ -143,6 +157,21 @@
       "from": "finish",
       "to": "connect",
       "label": "Estado visível ou reparo"
+    },
+    {
+      "from": "ia_atende",
+      "to": "passagem",
+      "label": "Sim: ninguém recebe; a IA atende até transferir"
+    },
+    {
+      "from": "ia_atende",
+      "to": "loader",
+      "label": "Não: distribui (time ou organização)"
+    },
+    {
+      "from": "passagem",
+      "to": "loader",
+      "label": "Pedido de rodízio, já com o time gravado"
     }
   ]
 }

@@ -356,3 +356,70 @@ it("anti-backlog: ordena a última inbound por coalesce(sent_at, created_at), n�
   expect(consultaUltima).toContain('coalesce(sent_at, created_at) desc');
   expect(consultaUltima).not.toContain('nulls last');
 });
+
+/**
+ * Rede de segurança do rodízio: quando o motor NÃO vai atender, a conversa vai
+ * para a fila humana.
+ *
+ * O rodízio deixou de distribuir a conversa que a IA atende (medido em produção
+ * em 2026-09-21: com atendente online, a IA não respondia ninguém). O preço
+ * disso é uma pergunta nova: e quando a IA deixa de atender DEPOIS que o
+ * rodízio já decidiu? Agente pausado, contato fora da lista de teste, passagem
+ * para humano — o drain é o lugar onde a recusa acontece, e é aqui que ela
+ * devolve a conversa ao rodízio. Sem isto, "pausei o agente" deixaria o cliente
+ * falando sozinho, sem IA e sem fila.
+ *
+ * `fn_request_channel_routing` se protege sozinha (conversa com dono, fechada ou
+ * já na fila: no-op), então pedir a mais é inofensivo; pedir a menos é cliente
+ * esquecido.
+ */
+const pediuRodizio = (calls: string[]) => calls.some((s) => s.includes('fn_request_channel_routing'));
+
+it('sem agente publicado para a sessão: a conversa vai para a fila humana', async () => {
+  const calls: string[] = [];
+  process.env.__ESPERA__ = '0';
+  await drainTick(
+    poolFalso({ type: 'text', media_derived_status: null }, calls, { tem_agente: false, tem_roteador: false }),
+    knobs, log,
+  );
+  expect(calls.some((s) => s.includes('job_queue'))).toBe(false);
+  expect(pediuRodizio(calls)).toBe(true);
+});
+
+it("trava recusa (allowlist sem autorização): a conversa vai para a fila humana", async () => {
+  const calls: string[] = [];
+  await drainTick(poolElegibilidade(calls, { aiGate: 'allowlist', aiAuthorizedAt: null }), knobs, log);
+  expect(calls.some((s) => s.includes('job_queue'))).toBe(false);
+  expect(pediuRodizio(calls)).toBe(true);
+});
+
+it('evento superado por mensagem mais nova: NÃO pede rodízio — o evento novo decide', async () => {
+  const calls: string[] = [];
+  await drainTick(poolElegibilidade(calls, { ultimaInboundId: 'outra-mensagem-mais-nova' }), knobs, log);
+  expect(pediuRodizio(calls)).toBe(false);
+});
+
+it('IA vai atender (agente publicado, conversa elegível): NÃO pede rodízio', async () => {
+  const calls: string[] = [];
+  await drainTick(poolElegibilidade(calls, { aiGate: null }), knobs, log);
+  expect(calls.some((s) => s.includes('job_queue'))).toBe(true);
+  expect(pediuRodizio(calls)).toBe(false);
+});
+
+it('pedido de rodízio que falha não derruba o drain: o evento fecha mesmo assim', async () => {
+  const calls: string[] = [];
+  const base = poolElegibilidade(calls, { aiGate: 'allowlist', aiAuthorizedAt: null }) as unknown as {
+    query: ReturnType<typeof vi.fn>;
+  };
+  const original = base.query.getMockImplementation() as (sql: string) => unknown;
+  base.query.mockImplementation((sql: string) => {
+    if (sql.includes('fn_request_channel_routing')) {
+      calls.push(sql);
+      throw new Error('rpc caiu');
+    }
+    return original(sql);
+  });
+  await drainTick(base as unknown as pg.Pool, knobs, log);
+  expect(pediuRodizio(calls)).toBe(true);
+  expect(calls.some((s) => s.includes("status = 'done'"))).toBe(true);
+});
