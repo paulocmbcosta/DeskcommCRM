@@ -47,6 +47,25 @@ const pintar = (
 ) =>
   render(<ConversationListItem conversation={conv} isSelected={false} onSelect={() => {}} {...props} />);
 
+describe("o ícone acompanha o MEIO da conversa, não o transporte", () => {
+  // Telefone numa conversa que veio de um site manda o atendente procurar um
+  // número que não existe. O card lê `conversations.channel` (o meio) — nunca o
+  // provider, que a tela nem recebe.
+  const doSite = { ...base, channel: "site_chat", channel_sessions: { phone_number: null, display_name: "Site da loja" } };
+
+  it("conversa do chat do site: globo, e o title diz de onde veio", () => {
+    const { container } = pintar(doSite as unknown as ConversationWithContact);
+    expect(container.querySelector('[data-meio="site_chat"]')).not.toBeNull();
+    expect(screen.getByTitle("Entrou pelo chat do site · Site da loja")).toBeInTheDocument();
+  });
+
+  it("conversa de WhatsApp continua com o telefone — o controle que impede o globo de virar padrão", () => {
+    const { container } = pintar(comCanal({ phone_number: "+19392301037", display_name: "MP wp" }));
+    expect(container.querySelector('[data-meio="whatsapp"]')).not.toBeNull();
+    expect(container.querySelector('[data-meio="site_chat"]')).toBeNull();
+  });
+});
+
 describe("o canal por onde a conversa entrou aparece SEMPRE", () => {
   it("sem pedir nada: o padrão é mostrar", () => {
     pintar(comCanal({ phone_number: "+19392301037", display_name: null }));

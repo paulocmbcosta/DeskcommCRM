@@ -31,6 +31,7 @@ import { ApiError } from "@/lib/api/types";
 import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { iniciarConversaEEnviar } from "@/lib/messaging/iniciar-conversa";
+import { CANAL_NAO_FALA_PRIMEIRO } from "@/lib/messaging/open-shared-contact-conversation";
 import { iniciarConversaSchema, validateRequest } from "@/lib/schemas";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -125,6 +126,14 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
     if (msg === "invalid_phone") {
       return fail("validation_error", t("Telefone inválido."), 422, { requestId });
+    }
+    if (msg === CANAL_NAO_FALA_PRIMEIRO) {
+      return fail(
+        CANAL_NAO_FALA_PRIMEIRO,
+        t("Por esta conexão só dá para responder quem já escreveu. Escolha um número de WhatsApp para chamar o cliente."),
+        422,
+        { requestId },
+      );
     }
     return fail("internal_error", msg, 500, { requestId });
   }

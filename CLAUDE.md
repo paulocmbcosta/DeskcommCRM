@@ -144,6 +144,14 @@ DeskcommCRM é um sistema operacional de vendas open source com agentes de IA na
 - Grupos: SKIP CRM binding se `chatId.endsWith('@g.us')`. Sender é `p.author`, não `p.from`
 - Cron `recover-stuck-messages` (`app/api/v1/cron/recover-stuck-messages/route.ts`, agendado no `scheduler` do `docker-compose.prod.yml`): marca `status='sending'` há >5min como `failed` **e abre aviso na Central** (`agent_inbox_items` kind `message_send_stuck`). Não toca em `queued`: esse estado tem dono (o agent-engine reagenda por `SEND_QUEUED_RETRY_MS`), e falhá-lo perderia mensagem que ia sair. Não reenvia — envio em dobro é pior que não-envio
 
+### Chat do site (o canal que não é WhatsApp)
+- **Provider não é meio.** `site_widget` é o TRANSPORTE (`channel_sessions.provider`) e só se escreve dentro de `lib/channels/`; `site_chat` é o MEIO (`conversations.channel`) e é o que a feature pode ler — via `meioDoCanal()`, nunca por comparação de provider. Racional em `docs/doctrine/restricao-de-canal.md` §"Provider não é meio"
+- **Visitante novo é SEMPRE contato novo.** Telefone/e-mail digitados num formulário aberto não são identidade: se já pertencem a outro contato, vão para `source_metadata` como *informados, não verificados* e a fusão é do humano. Procurar o contato pelo telefone digitado exporia a ficha (e a fatura do ERP) de um cliente a quem só sabe o número dele
+- **O token do visitante nunca está no banco** — só o SHA-256, em `conversations.provider_conversation_id`. Vai em header (`X-Visitor-Token`), nunca em query. Anonimizar um contato REVOGA o token antes da cascata (`lib/channels/chat-do-site/revogar.ts`)
+- **Não fala primeiro** (`outboundFirst: false`): quem INICIA conversa pergunta `canalFalaPrimeiro`/`PROVIDERS_QUE_FALAM_PRIMEIRO`, nunca `PROVIDERS_DE_MENSAGEM`. Seletor novo de "por onde enviar" que liste todo canal de mensagem grava `sent` numa mensagem que ninguém lê
+- **As duas rotas públicas** (`/api/v1/site-chat/[chave]/{config,messages}`) são as únicas do produto com CORS — `*`, **sem credenciais**, e é só por isso que é seguro. A organização sai da CHAVE do path. Rota nova debaixo desse prefixo NÃO é pública: `lib/auth/public-paths.ts` ancora os dois recursos
+- O widget (`public/site-chat/widget.js`) roda no site de TERCEIROS: sem `innerHTML`, sem marca, sem dependência. Vigiado em `tests/unit/canal-chat-do-site-vocabulario.test.ts`. Mapa em `docs/architecture/chat-do-site.architecture.json`
+
 ### Marca própria (white-label)
 - **Uma imagem Docker serve todas as marcas.** Nada de `NEXT_PUBLIC_*` para marca, nada de `public/favicon.ico`, nada de imagem por revendedor — a imagem é pré-buildada e o `update.sh` regrava `APP_IMAGE` incondicionalmente
 - **O banco está ACIMA do `.env`.** `platform_branding` (instalação) e `organizations.settings.branding` (organização) são a fonte; `APP_NAME`/`APP_LOGO_URL`/`APP_ACCENT_HEX` são **semente e piso de rollback** (o `agent.sh` reverte a imagem, nunca o banco)

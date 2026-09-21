@@ -120,7 +120,12 @@ export function ChamarNoWhatsAppDialog({
     queryKey: ["channel-sessions-para-chamar"],
     enabled: open,
     queryFn: async () =>
-      (await apiClient.get<{ data: Conexao[] }>("/api/v1/channel-sessions")).data,
+      // Só conexão que FALA PRIMEIRO: o chat do site responde quem já escreveu e
+      // não tem como abrir conversa — oferecê-lo aqui é oferecer um clique que o
+      // servidor recusa (`channel_cannot_start_conversation`).
+      (await apiClient.get<{ data: Array<Conexao & { fala_primeiro?: boolean }> }>("/api/v1/channel-sessions")).data.filter(
+        (c) => c.fala_primeiro !== false,
+      ),
     staleTime: 30_000,
   });
 

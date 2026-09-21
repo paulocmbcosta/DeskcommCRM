@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CanalOficialClient } from "./CanalOficialClient";
 import { CanalParceiroClient } from "./CanalParceiroClient";
 import { CanalVozClient } from "./CanalVozClient";
+import { ChatDoSiteClient } from "./ChatDoSiteClient";
 import { ConnectionsClient } from "./ConnectionsClient";
 import { TemplatesClient } from "./TemplatesClient";
 import { TemplatesParceiroClient } from "./TemplatesParceiroClient";
@@ -52,7 +53,9 @@ export function ConexoesShell({
         ? "parceiro"
         : abaParam === "voz"
           ? "voz"
-          : "numeros";
+          : abaParam === "site"
+            ? "site"
+            : "numeros";
   const sub = params.get("sub") === "templates" ? "templates" : "conexao";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
@@ -86,7 +89,15 @@ export function ConexoesShell({
             Aqui fica o CONCEITO; lá dentro o cartão diz de quem se trata. */}
         <TabsTrigger value="parceiro">{t("Provedor parceiro")}</TabsTrigger>
         <TabsTrigger value="voz">{t("Chamada de voz")}</TabsTrigger>
+        {/* O primeiro canal que não é WhatsApp. Por último na lista porque é o
+            mais novo, não o menos importante: a ordem das abas é a ordem em que
+            quem instala costuma chegar a cada uma. */}
+        <TabsTrigger value="site">{t("Chat do site")}</TabsTrigger>
       </TabsList>
+
+      <TabsContent value="site" className="mt-0">
+        <ChatDoSiteClient />
+      </TabsContent>
 
       <TabsContent value="numeros" className="mt-0">
         <ConnectionsClient wahaConfigured={wahaConfigured} />

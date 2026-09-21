@@ -47,7 +47,16 @@
  * por rota, componente e cópia de tela. Provider novo = uma linha aqui, no
  * mesmo commit.
  */
-const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|graph\.facebook\.com)(?![a-zA-Z0-9])/i;
+//
+// O QUARTO nome, e a diferença que ele traz: é o primeiro canal que não é
+// WhatsApp, e o nome do PROVIDER (o transporte — o nosso widget embutido) não é
+// o nome do MEIO ("chat do site", `site_chat` em `conversations.channel`).
+// Feature fala do meio à vontade; o que a catraca barra é o identificador do
+// transporte, que é o que vira `if (provider === …)`. Escolhido com `_` no meio
+// de propósito: não é palavra que um cliente diga numa conversa, então o
+// guardrail de vocabulário interno — que deriva desta mesma lista de providers —
+// não tem como barrar uma resposta legítima do agente por causa dele.
+const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|site_widget|graph\.facebook\.com)(?![a-zA-Z0-9])/i;
 
 /**
  * Grafia PascalCase dentro de identificador: `WahaClient`,
@@ -57,7 +66,7 @@ const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|graph\.facebook\.com)(
  * segmento. Não seguido de minúscula/dígito exclui `Wahalla` — onde `Waha` é
  * começo de outra palavra, não segmento próprio.
  */
-const PASCAL = /(Waha|Zernio)(?![a-z0-9])/;
+const PASCAL = /(Waha|Zernio|SiteWidget)(?![a-z0-9])/;
 
 /** Um trecho de código/prosa nomeia um provider de canal? */
 export function nomeiaProvider(texto: string): boolean {

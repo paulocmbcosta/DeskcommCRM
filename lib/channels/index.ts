@@ -3,6 +3,7 @@
  * pede o adapter do provider da conversa e o descritor de capabilities.
  */
 import { metaCloudAdapter } from "./adapters/meta-cloud";
+import { siteWidgetAdapter } from "./adapters/site-widget";
 import { wahaAdapter } from "./adapters/waha";
 import { zernioAdapter } from "./adapters/zernio";
 import type { ChannelAdapter, ChannelProvider, ProviderDeMensagem } from "./types";
@@ -15,6 +16,7 @@ const ADAPTERS: Record<ProviderDeMensagem, ChannelAdapter | null> = {
   waha: wahaAdapter,
   meta_cloud: metaCloudAdapter,
   zernio: zernioAdapter,
+  site_widget: siteWidgetAdapter,
 };
 
 /**
@@ -32,12 +34,17 @@ export {
   CHANNEL_CAPABILITIES,
   DEFAULT_CHANNEL_PROVIDER,
   PROVIDERS_DE_MENSAGEM,
+  PROVIDERS_QUE_FALAM_PRIMEIRO,
   PROVIDERS_SEM_MENSAGEM,
+  canalFalaPrimeiro,
+  meioDoCanal,
+  MEIOS_DE_CANAL,
   canalConhecidoSemMensagem,
   transportaMensagem,
 } from "./capabilities";
 export { CHANNEL_SESSION_REF_COLUMNS, resolveSessionRef } from "./session-ref";
 export type { ChannelSessionRef } from "./session-ref";
+export type { MeioDeCanal } from "./capabilities";
 export type {
   ChannelAdapter,
   ChannelCapabilities,

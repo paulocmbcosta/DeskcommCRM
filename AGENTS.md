@@ -264,6 +264,12 @@ feature nomeando um provider de canal (gate `pnpm lint:channels`); tela nova sem
 `lib/navigation/registry.ts` (gate `tests/unit/navegacao-completude.test.ts`); `getSession()` no
 server; segredo em query string; `throw` cru na borda da API.
 
+**Chat do site** (o canal que não é WhatsApp, migration 0272) — o provider `site_widget` só se
+escreve em `lib/channels/`; a feature lê o MEIO (`conversations.channel = 'site_chat'`, via
+`meioDoCanal()`). Visitante novo é sempre contato novo (dado digitado não é identidade); o token
+do visitante só existe em claro no navegador (o banco guarda o SHA-256); o canal não fala
+primeiro — quem inicia conversa pergunta `canalFalaPrimeiro`. Detalhe em `CLAUDE.md`.
+
 ## Important Files
 
 | Arquivo                                    | Por quê                                                                      |

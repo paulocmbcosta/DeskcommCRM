@@ -5,11 +5,20 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ensureConversation, sessaoProntaParaEnvio } from "@/lib/automation/start-conversation";
+import { canalFalaPrimeiro } from "@/lib/channels/capabilities";
 import { encontrarContatoPorTelefone } from "@/lib/channels/contato-por-telefone";
 import { phoneLookupVariants, canonicalPhoneBR } from "@/lib/channels/phone-variants";
 import { parseDialablePhone } from "@/lib/messaging/contact-card";
 
 type Admin = SupabaseClient;
+
+/**
+ * Código do erro lançado quando a conexão escolhida não consegue INICIAR
+ * conversa (só responde dentro de uma thread que o cliente abriu). Exportado
+ * para que quem chama traduza em 422, e não em 500: é escolha errada do
+ * operador, não defeito do servidor.
+ */
+export const CANAL_NAO_FALA_PRIMEIRO = "channel_cannot_start_conversation";
 
 export interface OpenSharedContactInput {
   channel_session_id?: string;
@@ -87,12 +96,20 @@ export async function openSharedContactConversation(
   if (!sessionId) throw new Error("session_not_found");
   const { data: session, error: sessErr } = await admin
     .from("channel_sessions")
-    .select("id")
+    .select("id, provider")
     .eq("organization_id", organizationId)
     .eq("id", sessionId)
     .maybeSingle();
   if (sessErr) throw new Error(sessErr.message);
   if (!session) throw new Error("session_not_found");
+  // Este é o funil ÚNICO de quem abre conversa por iniciativa do CRM (o botão de
+  // chamar o cliente, a rota irmã, a tool do MCP). Canal que só responde dentro
+  // de uma thread aberta pelo cliente não tem como receber uma conversa nova, e
+  // deixar passar gravaria "enviada" numa mensagem que ninguém lê. A pergunta é
+  // pela CAPACIDADE, nunca pelo nome do canal.
+  if (!canalFalaPrimeiro((session as { provider?: string | null }).provider)) {
+    throw new Error(CANAL_NAO_FALA_PRIMEIRO);
+  }
 
   const contactId = await resolveContactId(admin, organizationId, input);
   const conversationId = await ensureConversation(
