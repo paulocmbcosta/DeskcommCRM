@@ -221,6 +221,51 @@ silenciado e sem destino — pior que recusar.
 Com `team` válido: grava `conversations.team_id` e passa `teamId` no `RoutingScope`. Sem `team`:
 comportamento idêntico ao de hoje.
 
+### Adendo de 2026-09-21 — o catálogo vai DENTRO da ferramenta de transferência
+
+**Medido em produção.** Com os setores `comercial`, `cobranca`, `suporte-tecnico`,
+`cancelamentos` e `fornecedores-e-parceiros`, o agente (Claude Sonnet 5) não chamou
+`crm_list_teams` antes de transferir e passou `team: "fornecedores"` — slug que não existe.
+Numa rodada anterior, transferiu sem `team`, para a fila geral. A recusa estruturada desta seção
+funcionou como desenhada: o modelo se corrige na chamada seguinte. Mas gasta um step, e o turno
+pode acabar antes da correção. A descoberta por tool pressupunha que o modelo **lembraria** de
+consultar — e capacidade que depende de o modelo lembrar existe metade das vezes.
+
+**O que mudou.** Ao montar as ferramentas do turno, o motor lê os setores ativos da organização
+e os entrega na própria ferramenta nativa de transferência (`request_human_handoff`,
+`ferramentaDeTransferencia` em `lib/agent-engine/agent/inbound-turn.ts`): a descrição lista
+`slug — nome — quando usar`, e `team` ganha `enum` com os slugs no JSON Schema que o modelo lê.
+
+**A decisão 4 continua valendo.** O que ela recusou foi o slug **escrito no prompt** de cada
+organização e um enum **fixo do produto**. Isto não é nenhum dos dois: o catálogo sai do banco a
+cada turno, por organização, e renomear ou trocar um setor continua sem tocar em prompt nenhum.
+Muda o **momento** da descoberta — da chamada que o modelo talvez faça para a montagem que o
+motor sempre faz —, não a origem.
+
+**Os limites, cada um com o porquê:**
+
+- **Só o estável.** Slug, nome e "quando usar" mudam raramente, e a ferramenta faz parte do
+  prefixo de prompt cacheado por organização (`stable-prefix.ts`). "Aberto agora" e quantas
+  pessoas podem assumir mudam a cada minuto: no prefixo, derrubariam o cache a cada turno.
+  Continuam em `crm_list_teams`, que a descrição ainda cita para essa pergunta.
+- **O `enum` está no schema, não na validação do SDK.** É `.meta({ enum })`, não `z.enum`: o
+  modelo vê a lista, mas um slug fora dela ainda chega à recusa desta seção — que ensina com a
+  lista e com "nada foi alterado" — em vez de morrer num erro de validação cru do SDK.
+- **A leitura é a do validador.** `setoresDaTransferencia` usa a mesma consulta `pg` que valida
+  o slug em `applyRequestHumanHandoff` — o slug que o modelo vê e o que é aceito saem da mesma
+  leitura. Não usa `lib/times/catalogo.ts`: aquele carregador fala supabase-js, que é HTTP, e a
+  prévia do botão Testar não pode fazer nenhuma ida HTTP
+  (`tests/invariants/autonomia-preview-core.test.ts`).
+- **Sem setores, nada muda.** A ferramenta é a mesma de antes, sem `enum`. Leitura que falha
+  também cai nela, com um aviso no log: transferir sem o mapa é prejuízo; derrubar o turno seria
+  não atender.
+- **O handoff determinístico (regex, antes do modelo) não passa por aqui.** Pedido explícito de
+  humano continua indo à fila geral, e o catálogo só é lido depois que esse caminho já retornou.
+
+Provas: `tests/unit/transferencia-conhece-os-setores.test.ts` (forma da ferramenta, queda para a
+forma antiga) e `tests/invariants/transferencia-conhece-os-setores.test.ts` (do
+`attendance_teams` ao que o provider recebe, com setor arquivado de fora).
+
 ---
 
 ## 6. Tela e API
