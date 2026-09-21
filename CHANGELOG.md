@@ -8,6 +8,106 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.34.1] — 2026-09-21
+
+### Alterado
+
+- **O guia de montar cliente novo cobre setores, conector de ERP e provedor de internet** O guia embutido para configurar o CRM para um cliente (`deskcomm-cliente-novo`, usado pelo
+  Claude Code, Codex, Cursor e afins) foi atualizado a partir de uma implantação real de um
+  provedor de internet:
+
+  - **Setores (Configurações › Times)**: o que cada campo faz, por que o prompt não nomeia setor e
+    qual capacidade dá ao agente a lista de setores.
+  - **Conector de ERP (Configurações › Conectores)**: o que a aba do painel entrega ao atendente e
+    como conferir se a IA já consulta o sistema.
+  - **Modo de teste do canal**: publicar o agente num número que também é pessoal sem a IA
+    responder a amigos e família — só os números da lista de teste recebem resposta.
+  - **Etapas do funil**: onde fica o editor, como trocar os papéis de ganhou/perdeu sem reordenar
+    coluna por coluna, e por que o passo "Primeiro contato" fica em "não mover" quando o mesmo número
+    atende venda e suporte.
+  - **Pacote de provedor de internet**, e um guia novo para
+    **migrar um agente de outra plataforma** sem recomeçar do zero.
+
+  Nada muda na instalação: é documentação para quem implanta.
+
+### Corrigido
+
+- **A IA manda as mensagens de uma resposta na ordem certa e transfere para o setor certo de primeira** **As mensagens de uma resposta chegam na ordem em que a IA as escreveu.** Quando
+  o agente respondia em várias mensagens de uma vez, elas podiam chegar ao cliente
+  embaralhadas — "Pra te ajudar a escolher: quantas pessoas usam…?" antes de "Oi,
+  Carla! Eu sou a Bia…". As mensagens eram preparadas ao mesmo tempo e saía
+  primeiro a que ficava pronta primeiro. Agora elas saem uma de cada vez, na ordem
+  da resposta, também no botão **Testar**.
+
+  Com **Responder em várias mensagens curtas** ligado (na tela do agente), a IA passa a escrever a resposta
+  inteira de uma vez, em parágrafos curtos, e o sistema a entrega em mensagens
+  menores, na ordem. Antes a instrução a levava a mandar cada parágrafo
+  separadamente, que era o caminho em que a ordem se perdia.
+
+  Uma consequência: quando a IA escreve mais mensagens de uma vez do que o limite
+  de mensagens por turno, o que fica de fora é o fim da resposta. Antes, a cortada
+  era a que ficava pronta por último — podia ser justamente a saudação.
+
+  **A transferência para uma pessoa acerta o setor.** Nas empresas com setores
+  cadastrados em **Times de atendimento**, a IA recebe a lista de setores — com o "quando usar"
+  que você escreveu — junto com a própria ferramenta de transferência. Antes ela
+  precisava lembrar de consultar essa lista, e às vezes não consultava: inventava o
+  nome de um setor que não existe (e perdia uma tentativa corrigindo) ou mandava a
+  conversa para a fila geral. Setor arquivado não entra na lista, e o pedido
+  explícito do cliente por um atendente continua indo para a fila geral, como
+  antes.
+
+  Nada a configurar.
+
+- **O resumo de "Devolver ao automático" considera só o atendimento em curso** Quando uma pessoa clica em **Devolver ao automático**, o sistema monta um resumo
+  do que a equipe fez — as notas internas, o que foi decidido nos chamados e o que
+  ficou pendente com o cliente — para o agente retomar sem pedir tudo de novo.
+
+  Esse resumo era montado com a **conversa inteira**. Como a conversa é uma só por
+  cliente e canal, ele misturava atendimentos diferentes: o cliente que falou com o
+  Financeiro na segunda ("enviei a 2ª via do boleto", "pedir o comprovante de
+  pagamento") e voltou na quarta com a internet caída tinha, no resumo da devolução
+  do Suporte, a nota do boleto como coisa combinada **neste** atendimento — e o
+  comprovante como a próxima coisa a cobrar dele.
+
+  Agora o resumo segue a mesma regra que a tela já seguia para mensagens e notas
+  internas: **o atendimento novo começa do zero**. Entram só as notas escritas e os
+  chamados abertos no atendimento em curso. Se nele ninguém da equipe registrou
+  nada, a devolução não inventa um resumo com assunto encerrado.
+
+  O histórico não se perde: os atendimentos anteriores continuam inteiros em
+  **Atendimentos anteriores**, no painel da conversa, e cada chamado continua com a
+  linha do tempo completa.
+
+  Para quem automatiza: o campo `human_continuity` de `crm_get_human_case` e de
+  `crm_resume_ai_attendance` passa a trazer só o atendimento em curso. O detalhe do
+  chamado pedido continua vindo completo, seja de que atendimento for. O campo ganha
+  também `read_failed`: quando é `true`, o resumo não pôde ser lido — o que não é o
+  mesmo que a equipe não ter registrado nada.
+
+  Nada a configurar.
+
+- **O `update.sh` para de responder "nada a atualizar" com o CRM ainda na versão anterior** Quando o código do servidor já estava na versão nova mas o CRM seguia rodando a
+  anterior — o que acontece se uma atualização é interrompida no meio, ou se alguém
+  faz o `git checkout` da versão à mão antes —, o `update.sh` respondia "Você já
+  está na versão mais recente. Nada a atualizar." e saía sem mexer em nada. A
+  única saída era forçar com `--to <versão> --force`.
+
+  O motivo: a conferência comparava a imagem que o servidor está configurado para
+  rodar com ela mesma. Isso só detecta atraso em quem segue um canal (`latest`); com
+  a versão fixada em número, que é como toda instalação fica hoje, a resposta era
+  sempre "em dia".
+
+  Agora o script confere as três imagens do `.env` (app, worker e scheduler) contra
+  a versão do código e atualiza quando qualquer uma ficou para trás, dizendo qual.
+  Também deixa de dar por "em dia" um servidor que voltou para a versão anterior
+  depois de uma atualização que falhou. Quem segue um canal de propósito continua
+  exatamente como estava.
+
+  Nada a fazer para receber a correção: a atualização normal — pela tela ou com
+  `bash hostgator-setup-kit/update.sh`, sem `git checkout` antes — funciona como
+  sempre.
+
 ## [1.34.0] — 2026-09-21
 
 ### Adicionado
@@ -5091,7 +5191,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.1...HEAD
+[1.34.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.0...v1.34.1
 [1.34.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.33.0...v1.34.0
 [1.33.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.1...v1.33.0
 [1.32.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.32.0...v1.32.1
