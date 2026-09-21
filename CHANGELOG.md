@@ -8,6 +8,45 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.35.0] — 2026-09-21
+
+### Alterado
+
+- **O Inbox usa a tela inteira, e o menu lateral já vem recolhido** **Mais espaço para conversar.** O Inbox passa a ocupar a tela de ponta a ponta: a lista
+  de conversas encosta no menu lateral, a conversa e a ficha do cliente vão até a borda
+  direita, e o topo encosta na linha do cabeçalho. Eram cerca de 24 pixels de vazio em cada
+  lado — agora eles trabalham a favor de quem atende.
+
+  **O menu lateral vem recolhido.** Quem nunca mexeu nele o vê como uma faixa estreita só
+  com os ícones, o que devolve mais de 170 pixels à conversa. Para ver os nomes, clique em
+  **Expandir** no rodapé do menu; o sistema lembra a sua escolha neste navegador. Quem já
+  tinha aberto o menu de propósito continua com ele aberto.
+
+  **Os três "Ver tudo em …" ganharam ícones próprios.** CRM, IA e Análise usavam a mesma
+  seta, e com o menu recolhido não dava para saber qual era qual. Agora cada um tem o seu:
+  um aperto de mão para o CRM, um brilho para a IA e uma fatia de gráfico para Análise.
+
+  Nada a configurar: a atualização aplica a mudança sozinha.
+
+- **IXC — a fatura vai como boleto em PDF ou como Pix (QR code + copia e cola), à escolha do atendente** Na aba **IXC** do atendimento, o botão **Enviar** de uma fatura agora pergunta como enviar:
+
+  - **Boleto** — o CRM baixa do IXC o PDF do boleto e o envia como documento na conversa,
+    com valor e vencimento na legenda; a linha digitável vai sozinha na mensagem seguinte,
+    para o cliente copiar com um toque.
+  - **Pix** — o CRM busca no IXC o Pix copia e cola da fatura, gera o QR code e o envia
+    como imagem; o código copia e cola vai sozinho na mensagem seguinte.
+
+  O link do boleto no site do banco, que ia no texto, não é mais enviado.
+
+  Antes de sair, a cobrança é conferida: o arquivo tem de ser um PDF de verdade, o código
+  Pix tem de fechar a conferência (CRC) e o Pix tem de estar ativo no IXC — se não, nada é
+  enviado e a tela diz por quê. Só aparece a forma que o IXC já gerou para aquela fatura
+  (parcela futura ainda sem boleto ou Pix registrado não oferece o botão).
+
+  Quem usa o conector com token restrito por recurso no IXC precisa liberar também
+  `get_boleto` e `get_pix` para o usuário do token; sem isso, o envio responde que a
+  cobrança não está disponível. Quem não usa IXC não vê nada de novo.
+
 ## [1.34.2] — 2026-09-21
 
 ### Corrigido
@@ -5214,7 +5253,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.2...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.0...HEAD
+[1.35.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.2...v1.35.0
 [1.34.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.1...v1.34.2
 [1.34.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.0...v1.34.1
 [1.34.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.33.0...v1.34.0
