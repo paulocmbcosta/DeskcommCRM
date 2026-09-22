@@ -157,6 +157,34 @@ describe("data de nascimento — como o IXC grava (medido em 22/09)", () => {
     expect(dataInformada("12/3/85")).toBeNull();
     expect(dataInformada("ontem")).toBeNull();
   });
+
+  it("recusa data no FUTURO — ninguém nasce depois de hoje", () => {
+    expect(dataInformada("2026-09-23", "2026-09-22")).toBeNull();
+    expect(dataInformada("2026-09-22", "2026-09-22")).toBe("2026-09-22");
+    expect(dataInformada("2026-09-21", "2026-09-22")).toBe("2026-09-21");
+  });
+
+  it("anos bissextos: 29/02/2000 vale (bissexto — divisível por 400); 29/02/1900 e 29/02/2001 não", () => {
+    expect(dataInformada("29/02/2000")).toBe("2000-02-29");
+    expect(dataInformada("29/02/1900")).toBeNull();
+    expect(dataInformada("29/02/2001")).toBeNull();
+  });
+
+  it("espaços nas pontas não atrapalham", () => {
+    expect(dataInformada("  1985-03-12  ")).toBe("1985-03-12");
+    expect(nascimentoDoIxc("  1985-03-12  ")).toBe("1985-03-12");
+  });
+
+  it("nascimentoDoIxc aceita a data com hora grudada — só os 10 primeiros caracteres importam", () => {
+    expect(nascimentoDoIxc("1985-03-12 00:00:00")).toBe("1985-03-12");
+  });
+
+  it("o piso do ano é 1900: 1899 recusa, 1900 aceita — nos dois lados (IXC e informada)", () => {
+    expect(nascimentoDoIxc("1899-12-31")).toBeNull();
+    expect(nascimentoDoIxc("1900-01-01")).toBe("1900-01-01");
+    expect(dataInformada("1899-12-31")).toBeNull();
+    expect(dataInformada("1900-01-01")).toBe("1900-01-01");
+  });
 });
 
 describe("cadastrosQueConferem — CPF + nascimento, resposta única para toda recusa", () => {

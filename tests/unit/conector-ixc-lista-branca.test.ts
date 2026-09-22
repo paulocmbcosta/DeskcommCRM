@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { LISTAS_BRANCAS } from "@/lib/conectores/ixc/campos";
+import { CAMPOS_DA_CONFERENCIA, CAMPOS_DO_CLIENTE, LISTAS_BRANCAS } from "@/lib/conectores/ixc/campos";
 
 const SEGREDO = /senha|password|passwd|token|secret|md5|hash|credit_card|cartao|cvv/i;
 
@@ -34,5 +34,10 @@ describe("lista branca do conector IXC", () => {
   it("controle positivo: a régua PEGA os campos reais que o IXC devolve", () => {
     const reais = ["senha", "senha_hotsite_md5", "senha_rede_sem_fio", "senha_onu_cliente", "credit_card_recorrente_token", "gerencianet_token"];
     expect(reais.filter((c) => !SEGREDO.test(c))).toEqual([]);
+  });
+
+  it("a data de nascimento só sai na lista da CONFERÊNCIA, nunca na do painel/navegador", () => {
+    expect(CAMPOS_DO_CLIENTE).not.toContain("data_nascimento");
+    expect(CAMPOS_DA_CONFERENCIA).toContain("data_nascimento");
   });
 });

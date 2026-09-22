@@ -122,14 +122,21 @@ export function nascimentoDoIxc(bruto: string | undefined): string | null {
   return Number(v.slice(0, 4)) >= 1900 ? v : null;
 }
 
-/** A data que o cliente informou, em `AAAA-MM-DD` (aceita `DD/MM/AAAA`). `null` se não existir no calendário. */
-export function dataInformada(bruto: string): string | null {
+/**
+ * A data que o cliente informou, em `AAAA-MM-DD` (aceita `DD/MM/AAAA`). `null`
+ * se não existir no calendário OU se for no FUTURO — ninguém nasce depois de
+ * hoje, e aceitar abriria a conferência para qualquer chute de quem não sabe a
+ * data certa. `hoje` é injetável só para teste; em produção é o dia real em UTC
+ * (a granularidade do dia já basta — não é hora de fechamento de fatura).
+ */
+export function dataInformada(bruto: string, hoje: string = new Date().toISOString().slice(0, 10)): string | null {
   const t = bruto.trim();
   const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t);
   const iso = br ? `${br[3]}-${br[2]}-${br[1]}` : t;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso) || Number(iso.slice(0, 4)) < 1900) return null;
   const d = new Date(`${iso}T00:00:00Z`);
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === iso ? iso : null;
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso) return null;
+  return iso > hoje ? null : iso;
 }
 
 /**
