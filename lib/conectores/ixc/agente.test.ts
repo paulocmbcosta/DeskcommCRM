@@ -184,6 +184,27 @@ describe("clienteDe — status_internet desconhecido não é 'Liberado' com conf
   });
 });
 
+describe("clienteDe — primeiroNome de PJ nunca vaza o CPF embutido na razão (importante 6)", () => {
+  const MEI: Linha = { id: "30", razao: "JOSE DA SILVA 52998224725", fantasia: "", cnpj_cpf: "11.222.333/0001-81", tipo_pessoa: "J", ativo: "S", telefone_celular: "" };
+
+  beforeEach(() => listarVinculos.mockResolvedValue([{ external_id: "30", verificado_por: "documento", created_at: "" }]));
+
+  it("MEI sem fantasia: corta o sufixo numérico da razão — nenhum dígito do CPF sai na projeção", async () => {
+    ixc({ cliente: [MEI] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.cliente.primeiroNome).toBe("JOSE DA SILVA");
+    expect(JSON.stringify(r)).not.toContain("52998224725");
+  });
+
+  it("PJ com fantasia: usa o fantasia, nunca a razão", async () => {
+    ixc({ cliente: [{ ...MEI, fantasia: "Mercado do Zé" }] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.cliente.primeiroNome).toBe("Mercado do Zé");
+  });
+});
+
 const PDF = Buffer.from("%PDF-1.4 boleto %%EOF", "latin1");
 const BR_CODE =
   "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";

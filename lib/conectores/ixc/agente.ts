@@ -35,7 +35,7 @@ import { CAMPOS_DA_FATURA } from "./campos";
 import { enviarCobrancaIxc, type ResultadoDoEnvio } from "./enviar-cobranca";
 import { faturaDaVez, hojeEmSaoPaulo, recortarFaturas, type Fatura, type RecorteDeFaturas } from "./faturas";
 import { listarNoIxc } from "./http";
-import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientesPorTelefone, dataInformada } from "./identificar";
+import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientesPorTelefone, dataInformada, type ClienteIxc } from "./identificar";
 import { documentoNaMascara, soDigitos } from "./mascara";
 import { montarResumo, type ContratoIxc, type ResumoIxc } from "./resumo";
 import { acessoLiberado } from "./vocabulario";
@@ -121,17 +121,27 @@ function situacaoParaAgente(vigentes: readonly ContratoIxc[]): { rotulo: string;
   return { rotulo: "Liberado", detalhe: null, bloqueado: false };
 }
 
+/**
+ * PJ pequena (MEI) costuma trazer o CPF do titular DENTRO da razão social —
+ * "JOSE DA SILVA 52998224725", medido no IXC real — e `nome` (em `ClienteIxc`)
+ * é exatamente essa razão quando ela existe. Nunca usar `nome` cru pra PJ:
+ * prefere o `fantasia`; na ausência dele, corta o sufixo numérico de 11/14
+ * dígitos (CPF/CNPJ) que a razão eventualmente carrega.
+ */
+function primeiroNomeDe(cliente: ClienteIxc): string {
+  if (!cliente.pessoaJuridica) return cliente.nome.split(/\s+/)[0] ?? "";
+  if (cliente.fantasia) return cliente.fantasia;
+  return cliente.nome.replace(/\s*\d{11,14}$/, "").trim() || cliente.nome;
+}
+
 function clienteDe(resumo: ResumoIxc): ClienteParaAgente {
   const contratos = resumo.contratos.ok ? resumo.contratos.dados : null;
   const vigentes = contratos?.filter((c) => c.vigente) ?? [];
   const situacao = contratos ? situacaoParaAgente(vigentes) : null;
   const conexoes = resumo.conexoes.ok ? resumo.conexoes.dados : null;
   const os = resumo.ordensDeServico.ok ? resumo.ordensDeServico.dados : null;
-  const nome = resumo.cliente.nome.trim();
   return {
-    // Pessoa jurídica é tratada pelo nome inteiro: o "primeiro nome" de
-    // "Mercado do Zé Ltda" seria "Mercado".
-    primeiroNome: resumo.cliente.pessoaJuridica ? nome : (nome.split(/\s+/)[0] ?? ""),
+    primeiroNome: primeiroNomeDe(resumo.cliente),
     situacao: situacao?.rotulo ?? null,
     motivoDaSituacao: situacao?.detalhe ?? null,
     bloqueado: situacao?.bloqueado ?? null,

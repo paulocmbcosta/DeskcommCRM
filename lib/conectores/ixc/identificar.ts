@@ -22,6 +22,14 @@ export const TETO_DE_CANDIDATOS = 8;
 export interface ClienteIxc {
   id: string;
   nome: string;
+  /**
+   * Só para PJ: o nome fantasia, quando o cadastro tem um. PJ pequena (MEI)
+   * costuma ter o CPF do titular EMBUTIDO na razão social — "JOSE DA SILVA
+   * 52998224725", medido no IXC real —, e é por isso que a projeção da IA
+   * (`clienteDe`, em `lib/conectores/ixc/agente.ts`) prefere isto a `nome`
+   * quando `pessoaJuridica` é true.
+   */
+  fantasia: string;
   /** CPF/CNPJ na máscara do IXC. */
   documento: string;
   ativo: boolean;
@@ -32,6 +40,7 @@ export function lerCliente(registro: Record<string, string>): ClienteIxc {
   return {
     id: registro.id ?? "",
     nome: (registro.razao || registro.fantasia || "").trim(),
+    fantasia: (registro.fantasia ?? "").trim(),
     documento: (registro.cnpj_cpf ?? "").trim(),
     ativo: registro.ativo === "S",
     pessoaJuridica: registro.tipo_pessoa === "J",
