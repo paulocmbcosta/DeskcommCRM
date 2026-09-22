@@ -7,8 +7,10 @@ import { logger } from "@/lib/logger";
 export type OrigemDaChave = "organizacao" | "instalacao";
 
 /**
- * A chave da OpenRouter que paga o Jev: a da organização (IA › Provedores),
- * senão a da instalação (`OPENROUTER_API_KEY`).
+ * A chave da OpenRouter que paga o Jev: a da organização (cadastrada e
+ * validada em IA › Credenciais; IA › Provedores só escolhe qual credencial
+ * atende cada ponto, não cadastra nenhuma), senão a da instalação
+ * (`OPENROUTER_API_KEY`).
  *
  * Independe do provedor PADRÃO da organização: quem conversa pode ser Anthropic,
  * e o Jev só existe na OpenRouter. É por isso que isto não reusa

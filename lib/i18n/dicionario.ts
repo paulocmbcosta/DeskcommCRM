@@ -2598,16 +2598,17 @@ export const DICIONARIO: Traducoes = {
 
   // ─── components/crm/NascimentoDoCard.tsx (funis › "Quando o card nasce") ───
   "Quando o card nasce": { es: "Cuándo nace la tarjeta" },
-  "Decide quais conversas abrem um card no funil de entrada.": { es: "Decide qué conversaciones abren una tarjeta en el embudo de entrada." },
+  "Decide quais conversas abrem um card.": { es: "Decide qué conversaciones abren una tarjeta." },
   "Toda conversa vira card": { es: "Toda conversación se vuelve tarjeta" },
-  "A primeira mensagem de quem não tem card abre um no funil de entrada.": { es: "El primer mensaje de quien no tiene tarjeta abre una en el embudo de entrada." },
+  "A primeira mensagem de quem não tem card abre um card.": { es: "El primer mensaje de quien no tiene tarjeta abre una." },
   "Só conversas comerciais": { es: "Solo conversaciones comerciales" },
-  "A cada mensagem de quem ainda não tem card, a IA decide se o assunto é contratação, mudança de plano ou conhecer planos. Suporte, financeiro e cancelamento não abrem card.": { es: "En cada mensaje de quien aún no tiene tarjeta, la IA decide si el asunto es contratación, cambio de plan o conocer planes. Soporte, finanzas y cancelación no abren tarjeta." },
+  "A cada mensagem de quem ainda não tem card, a IA decide se o assunto é contratação, mudança de plano ou conhecer planos. Suporte, financeiro e cancelamento não contam como comerciais.": { es: "En cada mensaje de quien aún no tiene tarjeta, la IA decide si el asunto es contratación, cambio de plan o conocer planes. Soporte, finanzas y cancelación no cuentan como comerciales." },
   "Certeza mínima para abrir o card": { es: "Certeza mínima para abrir la tarjeta" },
   "Mais alto abre menos cards por engano, mas pode deixar passar uma venda. Se a IA não conseguir responder, o card nasce assim mesmo e a linha do tempo diz por quê.": { es: "Más alto abre menos tarjetas por error, pero puede dejar pasar una venta. Si la IA no logra responder, la tarjeta nace igual y la línea de tiempo dice por qué." },
   "Regra salva.": { es: "Regla guardada." },
   "Escolha um modo e uma certeza mínima válidos.": { es: "Elige un modo y una certeza mínima válidos." },
-  "Cadastre uma chave da OpenRouter em IA › Provedores antes de ligar esta regra.": { es: "Registra una clave de OpenRouter en IA › Proveedores antes de activar esta regla." },
+  "Cadastre e valide uma chave da OpenRouter em IA › Credenciais antes de ligar esta regra.": { es: "Registra y valida una clave de OpenRouter en IA › Credenciales antes de activar esta regla." },
+  "Outra pessoa mudou esta configuração agora. Recarregue a página e tente de novo.": { es: "Otra persona cambió esta configuración ahora. Recarga la página e inténtalo de nuevo." },
 
   "Ouvir o áudio do cliente": {
     es: "Escuchar el audio del cliente",
@@ -4489,9 +4490,10 @@ export const DICIONARIO: Traducoes = {
   "Para onde o agente leva o card em cada passo do atendimento": {
     es: "Adónde lleva el agente la tarjeta en cada paso de la atención",
   },
-  ", vocabulário, custom fields e motivos de perda": {
-    es: ", vocabulario, custom fields y motivos de pérdida",
+  ", vocabulário, custom fields, motivos de perda e quando o card nasce": {
+    es: ", vocabulario, custom fields, motivos de pérdida y cuándo nace la tarjeta",
   },
+  " e quando o card nasce": { es: " y cuándo nace la tarjeta" },
   "Nada especial": { es: "Nada especial" },
   "Aqui o cliente fecha": { es: "Aquí el cliente cierra" },
   "Aqui o cliente desiste": { es: "Aquí el cliente desiste" },
@@ -8878,7 +8880,7 @@ export const DICIONARIO: Traducoes = {
   "Nuvemshop": { es: "Nuvemshop" },
   "Billing": { es: "Facturación" },
   "API Tokens": { es: "Tokens de API" },
-  "As colunas de cada funil, o vocabulário do negócio e os motivos de perda.": { es: "Las columnas de cada embudo, el vocabulario del negocio y los motivos de pérdida." },
+  "As colunas de cada funil, o vocabulário do negócio, os motivos de perda e quando o card nasce.": { es: "Las columnas de cada embudo, el vocabulario del negocio, los motivos de pérdida y cuándo nace la tarjeta." },
   "As conversas de WhatsApp, com você e a IA atendendo lado a lado.": { es: "Las conversaciones de WhatsApp, contigo y la IA atendiendo lado a lado." },
   "As pessoas do outro lado da conversa e seu histórico.": { es: "Las personas del otro lado de la conversación y su historial." },
   "Avise outros sistemas quando algo acontecer aqui dentro.": { es: "Avisa a otros sistemas cuando algo ocurra aquí dentro." },
