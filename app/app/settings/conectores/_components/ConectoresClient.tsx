@@ -12,6 +12,7 @@ import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import type { ConexaoPublica } from "@/lib/conectores/conexao";
+import { FAIXA_DO_LIMITE } from "@/lib/conectores/limite-de-cobranca";
 import { FRASE_DA_FALHA, type MotivoDeFalha } from "@/lib/conectores/tipos";
 import { CheckCircle, CircleNotch, PlugsConnected, Warning } from "@/lib/ui/icons";
 
@@ -44,14 +45,29 @@ function mensagemDoErro(err: unknown, padrao: string): string {
 /**
  * O limite de dias da cobrança pela IA (migration 0274). Mora na ficha do
  * conector porque é política DAQUELA ligação com o sistema de gestão.
+ *
+ * A11y: "Cobrança pela IA" é o TÍTULO do bloco (não rotula o input — nada o
+ * pede); quem rotula o campo é o `<Label htmlFor>` visível "Dias de atraso",
+ * e o parágrafo explicativo liga por `aria-describedby`. A versão anterior
+ * tinha as duas coisas TROCADAS (o `<Label>` dizia "Cobrança pela IA" e um
+ * `aria-label` por cima dizia "Dias de atraso"), e o segundo apaga o
+ * primeiro para quem usa leitor de tela — o nome acessível do campo nunca
+ * era o do `<Label>` visível.
  */
 function LimiteDaCobranca({ conector, dias }: { conector: string; dias: number }) {
   const t = useT();
   const qc = useQueryClient();
   const [valor, setValor] = useState(String(dias));
+  const numero = Number(valor);
+  // `Number("")` é 0, que passaria no range se não fosse pelo `valor.trim()`
+  // vazio — sem isto, campo apagado vira um 422 do servidor por erro de digitação.
+  const valido = valor.trim() !== "" && Number.isInteger(numero) && numero >= FAIXA_DO_LIMITE.min && numero <= FAIXA_DO_LIMITE.max;
+  // Comparação NUMÉRICA, não de string: "045" === "45" é false, e o botão
+  // ficaria habilitado para salvar o MESMO valor (auditando de:45, para:45).
+  const inalterado = valido && numero === dias;
+  const descricaoId = `limite-cobranca-desc-${conector}`;
   const salvar = useMutation({
-    mutationFn: () =>
-      apiClient.patch(`/api/v1/conectores/${conector}/conexao`, { cobranca_encaminha_apos_dias: Number(valor) }),
+    mutationFn: () => apiClient.patch(`/api/v1/conectores/${conector}/conexao`, { cobranca_encaminha_apos_dias: numero }),
     onSuccess: () => {
       toast.success(t("Limite salvo."));
       void qc.invalidateQueries({ queryKey: CHAVE });
@@ -64,29 +80,33 @@ function LimiteDaCobranca({ conector, dias }: { conector: string; dias: number }
       data-testid={`limite-cobranca-${conector}`}
       onSubmit={(e) => {
         e.preventDefault();
-        salvar.mutate();
+        if (valido) salvar.mutate();
       }}
     >
-      <Label htmlFor={`limite-${conector}`}>{t("Cobrança pela IA")}</Label>
+      <p className="text-sm font-medium text-text">{t("Cobrança pela IA")}</p>
       <div className="flex flex-wrap items-center gap-2 text-sm text-text">
         <span>{t("Faturas com mais de")}</span>
+        <Label htmlFor={`limite-${conector}`} className="sr-only">
+          {t("Dias de atraso")}
+        </Label>
         <Input
           id={`limite-${conector}`}
           type="number"
           inputMode="numeric"
-          min={1}
-          max={3650}
+          min={FAIXA_DO_LIMITE.min}
+          max={FAIXA_DO_LIMITE.max}
+          required
           value={valor}
           onChange={(e) => setValor(e.target.value)}
           className="w-24"
-          aria-label={t("Dias de atraso")}
+          aria-describedby={descricaoId}
         />
         <span>{t("dias de atraso vão para a Cobrança.")}</span>
-        <Button type="submit" variant="outline" disabled={salvar.isPending || valor === String(dias)}>
+        <Button type="submit" variant="outline" disabled={salvar.isPending || !valido || inalterado}>
           {t("Salvar")}
         </Button>
       </div>
-      <p className="text-xs text-text-muted">
+      <p id={descricaoId} className="text-xs text-text-muted">
         {t("A IA não envia a cobrança dessas faturas: avisa o cliente que ela foi encaminhada ao setor de cobrança e transfere a conversa.")}
       </p>
     </form>
