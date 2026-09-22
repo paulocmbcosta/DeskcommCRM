@@ -17,7 +17,8 @@ import { ehConectorId, type ConectorId, type CredencialDeConector, type EstadoDa
 
 type Admin = ReturnType<typeof createAdminClient>;
 
-const COLUNAS_PUBLICAS = "conector, base_url, token_last4, status, status_detalhe, verificada_em, updated_at";
+const COLUNAS_PUBLICAS =
+  "conector, base_url, token_last4, status, status_detalhe, verificada_em, updated_at, cobranca_encaminha_apos_dias";
 const COLUNAS_DA_CREDENCIAL = "base_url, token_encrypted, token_iv, token_tag, status";
 
 export interface ConexaoPublica {
@@ -28,6 +29,7 @@ export interface ConexaoPublica {
   status_detalhe: string | null;
   verificada_em: string | null;
   updated_at: string;
+  cobranca_encaminha_apos_dias: number;
 }
 
 export async function lerConexaoPublica(admin: Admin, orgId: string, conector: ConectorId): Promise<ConexaoPublica | null> {
@@ -142,4 +144,35 @@ export async function carimbarEstado(
   } catch {
     // de propósito: ver o cabeçalho da função
   }
+}
+
+/** A regra do dono (22/09): sem configuração, fatura com MAIS de 60 dias de atraso vai para a Cobrança. */
+export const LIMITE_PADRAO_DA_COBRANCA = 60;
+
+/**
+ * O limite de dias desta conexão. Cai no padrão quando a coluna ainda não existe
+ * (clone no meio do `update.sh`, antes do baseline) ou não há conexão: a IA
+ * continua com a regra do dono em vez de cair o turno.
+ */
+export async function lerLimiteDeCobranca(admin: Admin, orgId: string, conector: ConectorId): Promise<number> {
+  const { data, error } = await admin
+    .from("conector_conexoes")
+    .select("cobranca_encaminha_apos_dias")
+    .eq("organization_id", orgId)
+    .eq("conector", conector)
+    .maybeSingle();
+  const n = Number((data as { cobranca_encaminha_apos_dias?: unknown } | null)?.cobranca_encaminha_apos_dias);
+  return !error && Number.isInteger(n) && n >= 1 ? n : LIMITE_PADRAO_DA_COBRANCA;
+}
+
+/** Grava o limite. `false` = não havia conexão para gravar. O CHECK do banco guarda a faixa. */
+export async function salvarLimiteDeCobranca(admin: Admin, orgId: string, conector: ConectorId, dias: number): Promise<boolean> {
+  const { data, error } = await admin
+    .from("conector_conexoes")
+    .update({ cobranca_encaminha_apos_dias: dias, updated_at: new Date().toISOString() })
+    .eq("organization_id", orgId)
+    .eq("conector", conector)
+    .select("id");
+  if (error) throw new Error(`conector_conexoes: ${error.message}`);
+  return (data ?? []).length > 0;
 }
