@@ -28,6 +28,8 @@
    senão o contato que o furo antigo vinculou fica preso em "escolher" para sempre.
 3. **Fatura de valor zero não se cobra** (Tarefa 7): `reaisParaCents` devolve 0 para valor
    ilegível, e a IA mandaria uma cobrança de R$ 0,00.
+4. **`vincular` mudou de assinatura** (Tarefa 6): devolve `{ vinculou, promovido }`, não mais
+   `boolean` — `vinculou` é true tanto para linha nova quanto para promoção.
 
 ## Regras que valem para todas as tarefas
 
@@ -989,8 +991,11 @@ async function identificado(
 async function vincularE(p: PedidoDeConsulta, cadastros: string[], verificadoPor: FormaDeVerificacao): Promise<ResultadoDaConsulta> {
   let criou = false;
   for (const externalId of cadastros) {
-    const novo = await vincular({ admin: p.admin, orgId: p.orgId, contactId: p.contactId, conector: "ixc", externalId, verificadoPor, userId: null });
-    criou = criou || novo;
+    // `vincular` devolve `{ vinculou, promovido }`: gravou agora OU promoveu a
+    // linha que existia (o vínculo por telefone vira `documento` quando o CPF
+    // confere). Os dois casos são "mudou o vínculo" e vão para a auditoria.
+    const { vinculou } = await vincular({ admin: p.admin, orgId: p.orgId, contactId: p.contactId, conector: "ixc", externalId, verificadoPor, userId: null });
+    criou = criou || vinculou;
   }
   return (await identificado(p, cadastros, criou ? { verificadoPor, cadastros } : null)) ?? { estado: "precisa_cpf_e_nascimento" };
 }
