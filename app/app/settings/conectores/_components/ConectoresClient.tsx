@@ -46,26 +46,34 @@ function mensagemDoErro(err: unknown, padrao: string): string {
  * O limite de dias da cobrança pela IA (migration 0274). Mora na ficha do
  * conector porque é política DAQUELA ligação com o sistema de gestão.
  *
- * A11y: "Cobrança pela IA" é o TÍTULO do bloco (não rotula o input — nada o
- * pede); quem rotula o campo é o `<Label htmlFor>` visível "Dias de atraso",
- * e o parágrafo explicativo liga por `aria-describedby`. A versão anterior
- * tinha as duas coisas TROCADAS (o `<Label>` dizia "Cobrança pela IA" e um
- * `aria-label` por cima dizia "Dias de atraso"), e o segundo apaga o
- * primeiro para quem usa leitor de tela — o nome acessível do campo nunca
- * era o do `<Label>` visível.
+ * A11y: "Cobrança pela IA" é o TÍTULO do bloco — tem `id` e o `<form>` o cita
+ * em `aria-labelledby`, que é o que nomeia o bloco inteiro para quem usa
+ * leitor de tela (um `<p>` sem isso não rotula nada). Quem rotula o CAMPO é o
+ * `<Label htmlFor>` visível "Dias de atraso" (sr-only), e o parágrafo
+ * explicativo mais a linha de erro (quando aparece) ligam por
+ * `aria-describedby`. A versão anterior tinha o título e o rótulo do campo
+ * TROCADOS (o `<Label>` dizia "Cobrança pela IA" e um `aria-label` por cima
+ * dizia "Dias de atraso" — o segundo apagava o primeiro) e nada nomeava o
+ * bloco.
  */
 function LimiteDaCobranca({ conector, dias }: { conector: string; dias: number }) {
   const t = useT();
   const qc = useQueryClient();
   const [valor, setValor] = useState(String(dias));
   const numero = Number(valor);
-  // `Number("")` é 0, que passaria no range se não fosse pelo `valor.trim()`
-  // vazio — sem isto, campo apagado vira um 422 do servidor por erro de digitação.
-  const valido = valor.trim() !== "" && Number.isInteger(numero) && numero >= FAIXA_DO_LIMITE.min && numero <= FAIXA_DO_LIMITE.max;
+  const vazio = valor.trim() === "";
+  // `Number("")` é 0, que passaria no range se não fosse pelo `vazio` — sem
+  // isto, campo apagado vira um 422 do servidor por erro de digitação.
+  const valido = !vazio && Number.isInteger(numero) && numero >= FAIXA_DO_LIMITE.min && numero <= FAIXA_DO_LIMITE.max;
+  // Campo vazio não é "inválido" ainda (é o estado inicial de limpar pra
+  // redigitar); só mostra erro quando HÁ algo digitado e não serve.
+  const invalido = !vazio && !valido;
   // Comparação NUMÉRICA, não de string: "045" === "45" é false, e o botão
   // ficaria habilitado para salvar o MESMO valor (auditando de:45, para:45).
   const inalterado = valido && numero === dias;
+  const tituloId = `limite-cobranca-titulo-${conector}`;
   const descricaoId = `limite-cobranca-desc-${conector}`;
+  const erroId = `limite-cobranca-erro-${conector}`;
   const salvar = useMutation({
     mutationFn: () => apiClient.patch(`/api/v1/conectores/${conector}/conexao`, { cobranca_encaminha_apos_dias: numero }),
     onSuccess: () => {
@@ -78,12 +86,15 @@ function LimiteDaCobranca({ conector, dias }: { conector: string; dias: number }
     <form
       className="mt-4 space-y-1.5 border-t border-border pt-4"
       data-testid={`limite-cobranca-${conector}`}
+      aria-labelledby={tituloId}
       onSubmit={(e) => {
         e.preventDefault();
         if (valido) salvar.mutate();
       }}
     >
-      <p className="text-sm font-medium text-text">{t("Cobrança pela IA")}</p>
+      <p id={tituloId} className="text-sm font-medium text-text">
+        {t("Cobrança pela IA")}
+      </p>
       <div className="flex flex-wrap items-center gap-2 text-sm text-text">
         <span>{t("Faturas com mais de")}</span>
         <Label htmlFor={`limite-${conector}`} className="sr-only">
@@ -99,13 +110,19 @@ function LimiteDaCobranca({ conector, dias }: { conector: string; dias: number }
           value={valor}
           onChange={(e) => setValor(e.target.value)}
           className="w-24"
-          aria-describedby={descricaoId}
+          aria-describedby={invalido ? `${erroId} ${descricaoId}` : descricaoId}
+          aria-invalid={invalido || undefined}
         />
         <span>{t("dias de atraso vão para a Cobrança.")}</span>
         <Button type="submit" variant="outline" disabled={salvar.isPending || !valido || inalterado}>
           {t("Salvar")}
         </Button>
       </div>
+      {invalido && (
+        <p id={erroId} role="status" className="text-xs text-error-fg">
+          {t("Informe um número inteiro de dias dentro da faixa permitida.")}
+        </p>
+      )}
       <p id={descricaoId} className="text-xs text-text-muted">
         {t("A IA não envia a cobrança dessas faturas: avisa o cliente que ela foi encaminhada ao setor de cobrança e transfere a conversa.")}
       </p>
