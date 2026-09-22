@@ -1,18 +1,18 @@
 [
-  { "esperado": "nao", "assunto": "outro", "conversa": [{ "quem": "cliente", "texto": "oi" }] },
-  { "esperado": "sim", "assunto": "conhecer_planos", "conversa": [{ "quem": "cliente", "texto": "Oi, quanto custa o plano de 500 mega?" }] },
-  { "esperado": "nao", "assunto": "suporte", "conversa": [{ "quem": "cliente", "texto": "Minha internet caiu desde ontem, a luz do aparelho tá vermelha" }] },
-  { "esperado": "nao", "assunto": "financeiro", "conversa": [{ "quem": "cliente", "texto": "Preciso da segunda via do boleto de setembro" }] },
-  { "esperado": "sim", "assunto": "mudanca_de_plano", "conversa": [{ "quem": "cliente", "texto": "Quero aumentar minha velocidade, hoje tenho 300 mega" }] },
-  { "esperado": "sim", "assunto": "contratacao", "conversa": [{ "quem": "cliente", "texto": "Vocês atendem no Setor O? Queria instalar internet em casa" }] },
-  { "esperado": "nao", "assunto": "cancelamento", "conversa": [{ "quem": "cliente", "texto": "Quero cancelar meu contrato" }] },
-  { "esperado": "sim", "assunto": "mudanca_de_plano", "conversa": [{ "quem": "cliente", "texto": "então moço é que eu mudei de casa e queria ver se dá pra levar a internet e se tem um plano melhor que o meu" }] },
-  { "esperado": "nao", "assunto": "suporte", "conversa": [
-    { "quem": "cliente", "texto": "boa tarde" },
-    { "quem": "atendente", "texto": "Olá! Como posso ajudar?" },
-    { "quem": "cliente", "texto": "tô sem sinal nenhum aqui" }
+  { "esperado": "nao", "assunto": "outro", "mensagens": [{ "direcao": "inbound", "texto": "oi" }] },
+  { "esperado": "sim", "assunto": "conhecer_planos", "mensagens": [{ "direcao": "inbound", "texto": "Oi, quanto custa o plano de 500 mega?" }] },
+  { "esperado": "nao", "assunto": "suporte", "mensagens": [{ "direcao": "inbound", "texto": "Minha internet caiu desde ontem, a luz do aparelho tá vermelha" }] },
+  { "esperado": "nao", "assunto": "financeiro", "mensagens": [{ "direcao": "inbound", "texto": "Preciso da segunda via do boleto de setembro" }] },
+  { "esperado": "sim", "assunto": "mudanca_de_plano", "mensagens": [{ "direcao": "inbound", "texto": "Quero aumentar minha velocidade, hoje tenho 300 mega" }] },
+  { "esperado": "sim", "assunto": "contratacao", "mensagens": [{ "direcao": "inbound", "texto": "Vocês atendem no Setor O? Queria instalar internet em casa" }] },
+  { "esperado": "nao", "assunto": "cancelamento", "mensagens": [{ "direcao": "inbound", "texto": "Quero cancelar meu contrato" }] },
+  { "esperado": "sim", "assunto": "mudanca_de_plano", "mensagens": [{ "direcao": "inbound", "texto": "então moço é que eu mudei de casa e queria ver se dá pra levar a internet e se tem um plano melhor que o meu" }] },
+  { "esperado": "nao", "assunto": "suporte", "mensagens": [
+    { "direcao": "inbound", "texto": "boa tarde" },
+    { "direcao": "outbound", "texto": "Olá! Como posso ajudar?" },
+    { "direcao": "inbound", "texto": "tô sem sinal nenhum aqui" }
   ] },
-  { "esperado": "nao", "assunto": "financeiro", "conversa": [{ "quem": "cliente", "texto": "paguei o boleto mas continua bloqueado" }] },
-  { "esperado": "sim", "assunto": "contratacao", "conversa": [{ "quem": "cliente", "texto": "Tem plano empresarial? Tenho uma loja no centro" }] },
-  { "esperado": "nao", "assunto": "outro", "conversa": [{ "quem": "cliente", "texto": "Sou fornecedor de cabos de fibra, com quem eu falo?" }] }
+  { "esperado": "nao", "assunto": "financeiro", "mensagens": [{ "direcao": "inbound", "texto": "paguei o boleto mas continua bloqueado" }] },
+  { "esperado": "sim", "assunto": "contratacao", "mensagens": [{ "direcao": "inbound", "texto": "Tem plano empresarial? Tenho uma loja no centro" }] },
+  { "esperado": "nao", "assunto": "outro", "mensagens": [{ "direcao": "inbound", "texto": "Sou fornecedor de cabos de fibra, com quem eu falo?" }] }
 ]

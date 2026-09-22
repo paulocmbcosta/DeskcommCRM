@@ -122,7 +122,7 @@ export interface RespostaDoJev {
   comercial: number;
   assunto: string | null;
   confiancaDoAssunto: number | null;
-  /** Versão que respondeu, como o provedor a devolveu (ex.: `jev-1.13.0`). */
+  /** Versão que respondeu, como o provedor a devolveu (ex.: `typesafe/jev-1.13-20260917` — medido pela sonda, `scripts/sondar-jev.ts`). */
   modelo: string;
   /** `null` = o provedor não informou uso — nunca 0 (0 é "grátis", `null` é "não sei"). */
   tokensDeEntrada: number | null;

@@ -3,11 +3,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { custoEmCentavos, perguntarAoJev } from "@/lib/classificador-comercial/jev";
-import { MODELO_DO_JEV } from "@/lib/classificador-comercial/perguntas";
+import { ASSUNTOS, MODELO_DO_JEV } from "@/lib/classificador-comercial/perguntas";
 
 const ESTADO = { conversa: [{ quem: "cliente" as const, texto: "quero mudar meu plano" }] };
 
-/** O formato da doc da TypeSafe. A Task 3 troca isto pela resposta REAL medida. */
+/**
+ * O formato descrito na doc da TypeSafe — fica só como EXEMPLO da doc, para
+ * os testes de tradução/erro abaixo. O contrato REAL, medido pela sonda
+ * (`scripts/sondar-jev.ts`), está no describe "contrato REAL..." no fim
+ * deste arquivo, lido de `tests/fixtures/jev/resposta-real.json`.
+ */
 const RESPOSTA_DOCUMENTADA = {
   model: "jev-1.13.0",
   answers: {
@@ -311,18 +316,33 @@ describe("custoEmCentavos", () => {
 });
 
 describe("contrato REAL medido pela sonda (tests/fixtures/jev/resposta-real.json)", () => {
-  it("o schema aceita a resposta que a OpenRouter devolveu de verdade", async () => {
+  it("o schema aceita a resposta que a OpenRouter devolveu de verdade, e o produto usa TUDO que ela informou", async () => {
     const caminho = "tests/fixtures/jev/resposta-real.json";
     expect(existsSync(caminho), "rode scripts/sondar-jev.ts (Task 3) — sem a resposta real este teste não prova nada").toBe(true);
-    const real = JSON.parse(readFileSync(caminho, "utf8")) as unknown;
+    const real = JSON.parse(readFileSync(caminho, "utf8")) as {
+      model?: string;
+      answers: { assunto?: { choice?: string; confidence?: number } };
+      usage?: { input_tokens?: number; cost?: number };
+    };
     const { f } = fetchQueDevolve(200, real);
     const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
     expect(r.ok, JSON.stringify(r)).toBe(true);
-    // A resposta real tem `usage.cost` em dólares (0.00002709) — prova que o
-    // custo REAL do provedor é usado, não só o fallback por token.
-    const usage = (real as { usage?: { cost?: number } }).usage;
-    if (r.ok && usage?.cost !== undefined) {
-      expect(r.resposta.custoEmCentavos).toBeCloseTo(usage.cost * 100, 8);
+
+    // Cada campo que o PRODUTO de fato usa — não só "existe no schema". Se o
+    // provedor renomear `usage` ou mudar o formato de `assunto`, isto cai,
+    // sem depender de um valor fixo (a resposta real muda a cada chamada).
+    expect(r.ok && r.resposta.tokensDeEntrada).toBe(real.usage?.input_tokens ?? null);
+    expect(r.ok && r.resposta.modelo).toBe(real.model ?? MODELO_DO_JEV);
+    expect(r.ok && r.resposta.confiancaDoAssunto).not.toBeNull();
+    expect(r.ok && r.resposta.assunto).not.toBeNull();
+    expect(r.ok && r.resposta.assunto !== null && Object.hasOwn(ASSUNTOS, r.resposta.assunto)).toBe(true);
+
+    // A resposta real tem `usage.cost` em dólares — prova que o custo REAL do
+    // provedor é usado, não só o fallback por token (já coberto pelos testes
+    // de `usa usage.cost REAL`/`cai para a estimativa`; aqui só quando a
+    // fixture atual de fato trouxer `cost`, para não duplicar).
+    if (r.ok && real.usage?.cost !== undefined) {
+      expect(r.resposta.custoEmCentavos).toBeCloseTo(real.usage.cost * 100, 8);
     }
   });
 });
