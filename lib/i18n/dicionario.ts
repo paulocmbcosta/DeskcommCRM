@@ -2583,6 +2583,18 @@ export const DICIONARIO: Traducoes = {
   "O agente responde de forma genérica, ignorando o que está escrito nos seus documentos.": {
     es: "El agente responde de forma genérica, ignorando lo que está escrito en tus documentos.",
   },
+  "Decidir se a conversa vira card": {
+    es: "Decidir si la conversación se convierte en tarjeta",
+  },
+  "Com a regra \"Só conversas comerciais\" ligada, lê a conversa de quem ainda não tem card e decide se o assunto é contratação, mudança de plano ou conhecer planos. Só então o card nasce no funil.": {
+    es: "Con la regla \"Solo conversaciones comerciales\" activada, lee la conversación de quien todavía no tiene tarjeta y decide si el asunto es contratación, cambio de plan o conocer planes. Solo entonces nace la tarjeta en el embudo.",
+  },
+  "Usa o Jev, da TypeSafe: um modelo que devolve decisões com probabilidade em vez de texto. Ele não é um modelo de conversa e fala outra API (System One), por isso não entra na troca de modelos deste painel. Paga com a chave da OpenRouter cadastrada aqui, ou com a da instalação.": {
+    es: "Usa el Jev, de TypeSafe: un modelo que devuelve decisiones con probabilidad en vez de texto. No es un modelo de conversación y habla otra API (System One), por eso no entra en el cambio de modelos de este panel. Se paga con la clave de OpenRouter registrada aquí, o con la de la instalación.",
+  },
+  "Com \"Só conversas comerciais\" ligada, os cards voltam a nascer para toda conversa — o produto cria o card quando não consegue classificar — e a linha do tempo do card diz por quê.": {
+    es: "Con \"Solo conversaciones comerciales\" activada, las tarjetas vuelven a nacer para toda conversación — el producto crea la tarjeta cuando no logra clasificar — y la línea de tiempo de la tarjeta dice por qué.",
+  },
   "Ouvir o áudio do cliente": {
     es: "Escuchar el audio del cliente",
   },

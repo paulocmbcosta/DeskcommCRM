@@ -260,6 +260,23 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     registraEm: "llm_calls",
   },
   {
+    id: "commercial_classify",
+    rotulo: "Decidir se a conversa vira card",
+    oQueFaz:
+      "Com a regra \"Só conversas comerciais\" ligada, lê a conversa de quem ainda não tem card e decide se o assunto é contratação, mudança de plano ou conhecer planos. Só então o card nasce no funil.",
+    papel: "entender",
+    exige: {},
+    emissor: "workers/classificador-comercial.ts",
+    fixo: {
+      razao:
+        "Usa o Jev, da TypeSafe: um modelo que devolve decisões com probabilidade em vez de texto. Ele não é um modelo de conversa e fala outra API (System One), por isso não entra na troca de modelos deste painel. Paga com a chave da OpenRouter cadastrada aqui, ou com a da instalação.",
+      usa: { provider: "openrouter", modelId: "typesafe/jev-1.13" },
+    },
+    sintomaDeFalha:
+      "Com \"Só conversas comerciais\" ligada, os cards voltam a nascer para toda conversa — o produto cria o card quando não consegue classificar — e a linha do tempo do card diz por quê.",
+    registraEm: "llm_calls",
+  },
+  {
     id: "sentiment_classify",
     rotulo: "Medir o clima da conversa",
     oQueFaz:
