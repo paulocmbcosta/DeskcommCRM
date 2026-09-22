@@ -592,7 +592,17 @@ export type ResultadoDaConsulta =
       /** Presente quando ESTA consulta criou o vínculo — vai para a auditoria. */
       vinculou: { verificadoPor: FormaDeVerificacao; cadastros: string[] } | null;
     }
-  | { estado: "precisa_cpf" | "precisa_cpf_e_nascimento" | "cpf_invalido" | "data_invalida" | "nao_conferiu" };
+  | {
+      estado: "precisa_cpf" | "precisa_cpf_e_nascimento" | "cpf_invalido" | "data_invalida" | "nao_conferiu";
+      /**
+       * Só em `nao_conferiu`: o CPF existe no sistema, mas a data de nascimento do
+       * cadastro está num formato que esta imagem não lê. O CLIENTE recebe a mesma
+       * recusa de sempre (não se diz qual dado falhou); quem precisa saber é o LOG do
+       * turno — sem isto, um ERP que grave a data de outro jeito faria 100% das
+       * conferências recusarem em silêncio, queimando as 3 tentativas de todo mundo.
+       */
+      dataIlegivel?: true;
+    };
 
 export interface PedidoDeCobranca {
   admin: SupabaseClient;
@@ -1028,8 +1038,8 @@ async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
   }
 
   if (!documento || !nascimento) return { estado: "precisa_cpf_e_nascimento" };
-  const conferidos = await cadastrosQueConferem(p.credencial, documento, nascimento);
-  if (conferidos.length === 0) return { estado: "nao_conferiu" };
+  const { cadastros: conferidos, dataIlegivel } = await cadastrosQueConferem(p.credencial, documento, nascimento);
+  if (conferidos.length === 0) return { estado: "nao_conferiu", ...(dataIlegivel ? { dataIlegivel: true } : {}) };
   return vincularE(p, conferidos.slice(0, TETO_DE_CANDIDATOS).map((c) => c.id), "documento");
 }
 
