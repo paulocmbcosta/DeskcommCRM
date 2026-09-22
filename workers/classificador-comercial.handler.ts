@@ -3,16 +3,18 @@
  * `event_log`. Registra em `message.received`.
  *
  * DENTRO de uma requisição (o dreno que corre no POST do webhook,
- * lib/dev/kick-local-pipeline.ts) ele é ADIADO para o worker
- * (`foraDaRequisicao`): o canal não espera o Jev. NO WORKER, o dispatcher roda
- * os consumidores de um evento em série, e este fica depois dos outros
- * (lib/event-log/register-handlers.ts), para não atrasar push e automações.
+ * lib/dev/kick-local-pipeline.ts) ele é ADIADO para o worker — mas SÓ para a
+ * organização que ligou a regra (`foraDaRequisicao`, um predicado): o canal
+ * não espera o Jev, e quem não usa a feature segue terminando o evento na
+ * requisição. NO WORKER, o dispatcher roda os consumidores de um evento em
+ * série, e este fica depois dos outros (lib/event-log/register-handlers.ts),
+ * para não atrasar push e automações.
  *
  * `retry` não conta tentativa no drain (lib/event-log/drain.ts): por isso o
  * worker tem teto pela IDADE do evento, e não pelo número de voltas.
  */
 import type { EventHandler, HandlerResult } from "@/lib/event-log/dispatcher";
-import { processarClassificacao } from "@/workers/classificador-comercial";
+import { ehOrganizacaoComClassificador, processarClassificacao } from "@/workers/classificador-comercial";
 
 export const CLASSIFICADOR_COMERCIAL_HANDLER_KEY = "classificador-comercial.v1";
 
@@ -21,8 +23,9 @@ const PULOS_DE_TODA_MENSAGEM: ReadonlySet<string> = new Set(["modo_toda_conversa
 export const classificadorComercialHandler: EventHandler = {
   key: CLASSIFICADOR_COMERCIAL_HANDLER_KEY,
   events: ["message.received"],
-  // Espera o Jev (até 8 s): não pode segurar a resposta de um webhook.
-  foraDaRequisicao: true,
+  // Espera o Jev (até 8 s): não pode segurar a resposta de um webhook — mas só
+  // na organização que ligou a regra; nas outras o pulo é uma leitura barata.
+  foraDaRequisicao: (row) => ehOrganizacaoComClassificador(row),
   async handle(row): Promise<HandlerResult> {
     const consumer_key = CLASSIFICADOR_COMERCIAL_HANDLER_KEY;
     try {

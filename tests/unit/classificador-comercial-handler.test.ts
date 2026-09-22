@@ -8,11 +8,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/workers/classificador-comercial", () => ({ processarClassificacao: vi.fn() }));
+vi.mock("@/workers/classificador-comercial", () => ({
+  processarClassificacao: vi.fn(),
+  ehOrganizacaoComClassificador: vi.fn(),
+}));
 
 import type { EventRow } from "@/lib/event-log/dispatcher";
 
-const { processarClassificacao } = await import("@/workers/classificador-comercial");
+const { processarClassificacao, ehOrganizacaoComClassificador } = await import(
+  "@/workers/classificador-comercial"
+);
 const { classificadorComercialHandler, CLASSIFICADOR_COMERCIAL_HANDLER_KEY } = await import(
   "@/workers/classificador-comercial.handler"
 );
@@ -137,9 +142,16 @@ describe("classificadorComercialHandler — a tradução de cada desfecho", () =
   });
 });
 
-describe("o classificador não roda dentro de uma requisição", () => {
-  it("declara foraDaRequisicao: o dreno do webhook o adia para o worker em vez de esperar o Jev", () => {
-    expect(classificadorComercialHandler.foraDaRequisicao).toBe(true);
+describe("o classificador não roda dentro de uma requisição — mas só de quem ligou a regra", () => {
+  it("organização com a regra ligada: o predicado diz para adiar", async () => {
+    vi.mocked(ehOrganizacaoComClassificador).mockResolvedValue(true);
+    await expect(classificadorComercialHandler.foraDaRequisicao!(evento())).resolves.toBe(true);
+    expect(ehOrganizacaoComClassificador).toHaveBeenCalledWith(expect.objectContaining({ organization_id: "org-1" }));
+  });
+
+  it("organização com a regra DESLIGADA: não adia — o evento termina na requisição, como antes", async () => {
+    vi.mocked(ehOrganizacaoComClassificador).mockResolvedValue(false);
+    await expect(classificadorComercialHandler.foraDaRequisicao!(evento())).resolves.toBe(false);
   });
 });
 
