@@ -117,8 +117,16 @@ export async function definirNascimentoDoCard(entrada: unknown): Promise<Respost
 
   // Nada mudou: nem grava, nem audita. Uma auditoria "trocou X por X" não é
   // mutação — é ruído na trilha que alguém vai ler depois tentando entender o
-  // que de fato aconteceu.
+  // que de fato aconteceu. A comparação é pela regra EM VIGOR — `nascimentoDoCard`
+  // arredonda o limiar lido para a opção mais próxima da tela, de propósito: um
+  // valor cru fora das opções (só alcançável por SQL, fora da tela) fica como
+  // está até a próxima mudança REAL. Normalizar esse valor aqui exigiria gravar
+  // sem deixar trilha (silencioso) ou auditar "0.7 → 0.7", que não é mutação
+  // nenhuma.
   if (antes.modo === lido.data.modo && antes.limiar === lido.data.limiar) {
+    // Aba velha reaberta com o banco já igual: sem revalidar, o `inicial` que a
+    // tela usa para decidir se o botão fica habilitado nunca se atualiza.
+    revalidatePath("/app/settings/tenant/pipelines");
     return { ok: true, modo: lido.data.modo, limiar: lido.data.limiar };
   }
 

@@ -4,7 +4,13 @@ import { logger } from "@/lib/logger";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const USER = "11111111-1111-4111-8111-111111111111";
-const UPDATED_AT = "2026-01-01T00:00:00.000Z";
+// Formato REAL do PostgREST (microssegundos + offset), não `Date.toISOString()`
+// (milissegundos + "Z"). Uma regressão que passe o valor lido por
+// `new Date(x).toISOString()` antes do `.eq("updated_at", ...)` perde os
+// microssegundos — em Postgres real isso é sempre "tente_de_novo" (o filtro
+// nunca casa) — e com um fixture já no formato de `Date` essa regressão
+// passaria verde. Provado por sabotagem (ver o relatório da tarefa).
+const UPDATED_AT = "2026-09-22T15:15:57.510777+00:00";
 
 let semSessao = false;
 let semOrgAtiva = false;
@@ -164,13 +170,23 @@ describe("definirNascimentoDoCard", () => {
     expect(gravados).toEqual([]);
   });
 
-  it("desligar não exige chave, e chaveDaOpenRouter não é chamada", async () => {
+  it("desliga de verdade: estava classificador/0.8 sem chave disponível, grava toda_conversa e audita; chaveDaOpenRouter não é chamada", async () => {
+    leituraAtual = {
+      settings: { crm: { nascimento_do_card: { modo: "classificador", limiar: 0.8 } } },
+      updated_at: UPDATED_AT,
+    };
     chaveDisponivel = null;
-    expect(await definirNascimentoDoCard({ modo: "toda_conversa", limiar: 0.7 })).toEqual({
-      ok: true,
-      modo: "toda_conversa",
-      limiar: 0.7,
-    });
+    const r = await definirNascimentoDoCard({ modo: "toda_conversa", limiar: 0.7 });
+    expect(r).toEqual({ ok: true, modo: "toda_conversa", limiar: 0.7 });
+    expect(gravados).toEqual([
+      { settings: { crm: { nascimento_do_card: { modo: "toda_conversa", limiar: 0.7 } } } },
+    ]);
+    expect(auditadas).toEqual([
+      expect.objectContaining({
+        action: "crm.nascimento_do_card_alterado",
+        metadata: { antes: { modo: "classificador", limiar: 0.8 }, depois: { modo: "toda_conversa", limiar: 0.7 } },
+      }),
+    ]);
     expect(chaveDaOpenRouterMock).not.toHaveBeenCalled();
   });
 
@@ -198,7 +214,7 @@ describe("definirNascimentoDoCard", () => {
     expect(revalidatePath).toHaveBeenCalledWith("/app/settings/tenant/pipelines");
   });
 
-  it("mesma regra: sem gravação, sem auditoria", async () => {
+  it("mesma regra: sem gravação, sem auditoria, mas revalida (aba velha não fica com o botão habilitado à toa)", async () => {
     leituraAtual = {
       settings: { crm: { nascimento_do_card: { modo: "classificador", limiar: 0.8 } } },
       updated_at: UPDATED_AT,
@@ -207,6 +223,7 @@ describe("definirNascimentoDoCard", () => {
     expect(r).toEqual({ ok: true, modo: "classificador", limiar: 0.8 });
     expect(gravados).toEqual([]);
     expect(auditadas).toEqual([]);
+    expect(revalidatePath).toHaveBeenCalledWith("/app/settings/tenant/pipelines");
   });
 
   it("filtra pela organização: select e update levam eq('id', ORG); a chave é pedida para ORG", async () => {
