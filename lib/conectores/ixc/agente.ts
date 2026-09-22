@@ -32,7 +32,7 @@ import type {
 } from "../tipos";
 import { listarVinculos, vincular } from "../vinculos";
 import { CAMPOS_DA_FATURA } from "./campos";
-import { enviarCobrancaIxc, type ResultadoDoEnvio } from "./enviar-cobranca";
+import { enviarCobrancaIxc, type MotivoDaRecusa, type ResultadoDoEnvio } from "./enviar-cobranca";
 import { faturaDaVez, hojeEmSaoPaulo, recortarFaturas, type Fatura, type RecorteDeFaturas } from "./faturas";
 import { listarNoIxc } from "./http";
 import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientesPorTelefone, dataInformada, type ClienteIxc } from "./identificar";
@@ -243,7 +243,7 @@ async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
   return vincularE(p, conferidos.map((c) => c.id), "documento");
 }
 
-const MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE = new Set(["cobranca_indisponivel", "pix_inativo", "pix_corrompido"]);
+const MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE: ReadonlySet<MotivoDaRecusa> = new Set(["cobranca_indisponivel", "pix_inativo", "pix_corrompido"]);
 
 function enviada(r: Extract<ResultadoDoEnvio, { ok: true }>, pixIndisponivel: boolean): ResultadoDaCobranca {
   return {

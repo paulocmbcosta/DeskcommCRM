@@ -402,3 +402,37 @@ describe("enviarCobranca — fatura fecha ENTRE listar e reler (importante 5)", 
     expect(r.detalheDoErp).toBeUndefined();
   });
 });
+
+describe("enviarCobranca — Pix recusado por motivo FORA do Set não tenta o boleto (importante 10)", () => {
+  // `fatura_fechada` NÃO serve pra este teste: o conserto do importante 5 já a
+  // intercepta ANTES de chegar perto de `MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE` — um
+  // teste com ela passaria mesmo se alguém apagasse o `.has(pix.motivo)` do
+  // `if`. `fatura_nao_encontrada` é o motivo que de fato exercita o Set, com
+  // `temBoleto: true` pra a condição só não cair no curto-circuito de
+  // `daVez.temBoleto`.
+  //
+  // A régua NÃO pode ser "baixarBoleto não foi chamado": pra este motivo
+  // específico, a fatura genuinamente não é achada na releitura — uma segunda
+  // tentativa (boleto) bateria na MESMA ausência e nunca chegaria a chamar
+  // `baixarBoletoDoIxc` de qualquer jeito, gate ou não. A régua sensível é
+  // CONTAR as releituras por id: com o gate, só a do Pix acontece; sem o gate,
+  // o boleto tentaria ler de novo (e falharia de novo, mas teria tentado).
+  it("fatura_nao_encontrada com temBoleto=true: só UMA releitura por id (hoje, apagar o `.has()` deixaria a suíte verde)", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
+    let releiturasPorId = 0;
+    listar.mockImplementation(async (_c: unknown, p: { tabela: string; tambem?: Array<{ campo: string }> }) => {
+      if (p.tabela !== "fn_areceber") return { total: 0, registros: [] };
+      const eAListagemAberta = (p.tambem ?? []).some((f) => f.campo === "fn_areceber.status");
+      if (eAListagemAberta) return { total: 1, registros: [fatura("901", "2026-08-20", { linha_digitavel: "0019 x" })] };
+      releiturasPorId += 1;
+      return { total: 0, registros: [] }; // releitura por id: não acha mais — fatura_nao_encontrada
+    });
+    const { portas: p } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toMatchObject({ resultado: "sem_como_cobrar" });
+    if (r.resultado !== "sem_como_cobrar") throw new Error("inalcançável");
+    expect(r.auditoria.motivoInterno).toBe("fatura_nao_encontrada");
+    expect(releiturasPorId).toBe(1);
+    expect(baixarBoleto).not.toHaveBeenCalled();
+  });
+});
