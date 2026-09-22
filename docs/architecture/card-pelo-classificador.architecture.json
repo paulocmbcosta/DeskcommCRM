@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "O card nasce quando a conversa é comercial",
+    "subtitle": "ingest recua, o Jev decide só para quem não tem card, e o card nasce pela mesma função de sempre",
+    "output": "card-pelo-classificador.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "tela", "label": "Tela" },
+    { "id": "entrada", "label": "Entrada da mensagem" },
+    { "id": "worker", "label": "Worker (event_log)" },
+    { "id": "banco", "label": "Banco" },
+    { "id": "fora", "label": "Fora" }
+  ],
+  "mainPath": ["ingest", "evento", "worker", "gate", "jev", "nascer", "timeline"],
+  "nodes": [
+    { "id": "config", "lane": "tela", "col": 1, "type": "frontend", "label": "Configurações › Funis › Quando o card nasce (admin) — toda conversa | só comerciais + certeza mínima" },
+    { "id": "timeline", "lane": "tela", "col": 3, "type": "frontend", "label": "Linha do tempo da conversa — 'conversa identificada como comercial (93%) — assunto: mudança de plano'" },
+    { "id": "execucoes", "lane": "tela", "col": 4, "type": "frontend", "label": "IA › Execuções — toda chamada ao Jev, com custo e falha (purpose commercial_classify)" },
+    { "id": "ingest", "lane": "entrada", "col": 1, "type": "backend", "label": "pos-entrada → garantirLeadDaConversa(origem ingest) — recua com 'aguarda_classificador'" },
+    { "id": "evento", "lane": "entrada", "col": 2, "type": "messagebus", "label": "message.received (trg_messages_emit_event, todo canal)" },
+    { "id": "worker", "lane": "worker", "col": 2, "type": "backend", "label": "classificador-comercial.v1 — roda POR ÚLTIMO entre os consumidores do evento; regra, card aberto?, bloqueado?, transcrição" },
+    { "id": "gate", "lane": "worker", "col": 3, "type": "backend", "label": "JÁ TEM CARD? → para, sem chamar o Jev" },
+    { "id": "nascer", "lane": "worker", "col": 4, "type": "backend", "label": "garantirLeadDaConversa(origem classificador | sem_classificacao) — trava por contato; falha de escrita LANÇA" },
+    { "id": "settings", "lane": "banco", "col": 1, "type": "database", "label": "organizations.settings.crm.nascimento_do_card" },
+    { "id": "leads", "lane": "banco", "col": 3, "type": "database", "label": "crm_leads (open por contato) + crm_lead_activities (lead_created, reason)" },
+    { "id": "llmcalls", "lane": "banco", "col": 4, "type": "database", "label": "llm_calls — custo real do provedor (usage.cost), cálculo por token como plano B" },
+    { "id": "jev", "lane": "fora", "col": 3, "type": "external", "label": "Jev (TypeSafe) via OpenRouter — POST {base}/systemone, typesafe/jev-1.13" }
+  ],
+  "edges": [
+    { "from": "config", "to": "settings", "label": "grava a regra (admin client, audita crm.nascimento_do_card_alterado)" },
+    { "from": "ingest", "to": "settings", "label": "lê a regra (só quem não tem card)" },
+    { "from": "ingest", "to": "evento", "label": "a mensagem gravada emite" },
+    { "from": "evento", "to": "worker", "label": "drain do event_log" },
+    { "from": "worker", "to": "settings", "label": "modo e limiar (arredondado para a opção da tela)" },
+    { "from": "worker", "to": "gate", "label": "antes de gastar" },
+    { "from": "gate", "to": "leads", "label": "card aberto do contato?" },
+    { "from": "gate", "to": "jev", "label": "só sem card: últimas 12 falas do ATENDIMENTO ATUAL" },
+    { "from": "jev", "to": "worker", "label": "noul comercial + choice assunto" },
+    { "from": "worker", "to": "llmcalls", "label": "toda chamada, ok ou erro" },
+    { "from": "worker", "to": "nascer", "label": "passou do limiar, ou falhou (decisão A)" },
+    { "from": "nascer", "to": "leads", "label": "card + lead_created com a razão" },
+    { "from": "leads", "to": "timeline", "label": "a conversa mostra a atividade do negócio" },
+    { "from": "llmcalls", "to": "execucoes", "label": "o operador vê custo e falha" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "O que a forma não mostra",
+      "items": [
+        "Quem já tem card não paga chamada — o portão vem ANTES da chave e do Jev",
+        "Falha do classificador cria o card: card a mais se arquiva, card a menos é venda que some",
+        "O modelo só responde 'é comercial?'; funil, etapa, título e trava continuam em garantirLeadDaConversa",
+        "O Jev lê só o ATENDIMENTO ATUAL (janelaDoAtendimento), não a conversa inteira — cliente antigo que volta não traz negociação velha para dentro da janela",
+        "O worker roda por ÚLTIMO entre os consumidores de message.received, de propósito, para não atrasar push e automações esperando o Jev",
+        "Card comercial que falha ao nascer não vira 'skipped' silencioso: a escrita LANÇA, o drain tenta de novo com backoff e, esgotado, abre aviso de evento morto na Central"
+      ]
+    }
+  ]
+}
