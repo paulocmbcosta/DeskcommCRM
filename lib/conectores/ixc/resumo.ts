@@ -48,6 +48,14 @@ export interface ContratoIxc {
   acesso: Leitura;
   vigente: boolean;
   bloqueado: boolean;
+  /**
+   * O `status_internet` CRU. O painel não precisa dele (já tem `acesso` e
+   * `bloqueado`); quem precisa é a projeção da IA (`clienteDe`, em
+   * `lib/conectores/ixc/agente.ts`), pra distinguir "vocabulário conhece como
+   * liberado" de "código que esta imagem nunca viu" — ver `acessoLiberado` em
+   * `vocabulario.ts`.
+   */
+  statusInternet: string;
   ativadoEm: string;
   endereco: string;
   parcelasEmAtraso: number;
@@ -143,6 +151,7 @@ function lerContrato(r: Record<string, string>): ContratoIxc {
     acesso: lerStatusDoAcesso(statusInternet),
     vigente: status === "A",
     bloqueado: acessoBloqueado(statusInternet),
+    statusInternet,
     ativadoEm: data(r.data_ativacao),
     endereco: [[r.endereco, r.numero].filter(Boolean).join(", "), r.bairro].filter(Boolean).join(" — "),
     parcelasEmAtraso: Number.parseInt(r.num_parcelas_atraso ?? "", 10) || 0,

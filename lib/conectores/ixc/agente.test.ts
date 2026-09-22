@@ -153,6 +153,33 @@ describe("consultar — CPF contraditório NÃO vincula pelo telefone (crítico 
   });
 });
 
+describe("clienteDe — status_internet desconhecido não é 'Liberado' com confiança (crítico 2)", () => {
+  beforeEach(() => listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]));
+
+  it("controle: status_internet 'A' (conhecido como liberado) → bloqueado false", async () => {
+    ixc({ cliente: [MARIA], cliente_contrato: [{ ...CONTRATO, status_internet: "A" }] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.cliente.bloqueado).toBe(false);
+    expect(r.cliente.situacao).toBe("Liberado");
+  });
+
+  it("controle: status_internet 'FA' (bloqueio conhecido) → bloqueado true", async () => {
+    ixc({ cliente: [MARIA], cliente_contrato: [{ ...CONTRATO, status_internet: "FA" }] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.cliente.bloqueado).toBe(true);
+  });
+
+  it("status_internet 'ZZ' (que este vocabulário nunca viu) → bloqueado null, rótulo é o código cru", async () => {
+    ixc({ cliente: [MARIA], cliente_contrato: [{ ...CONTRATO, status_internet: "ZZ" }] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.cliente.bloqueado).toBeNull();
+    expect(r.cliente.situacao).toBe("ZZ");
+  });
+});
+
 const PDF = Buffer.from("%PDF-1.4 boleto %%EOF", "latin1");
 const BR_CODE =
   "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";

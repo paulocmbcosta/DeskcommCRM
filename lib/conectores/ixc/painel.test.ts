@@ -218,6 +218,7 @@ describe("situacaoDoCliente", () => {
     acesso: { rotulo: "Liberado", tom: "bom" },
     vigente: true,
     bloqueado: false,
+    statusInternet: "A",
     ativadoEm: "",
     endereco: "",
     parcelasEmAtraso: 0,

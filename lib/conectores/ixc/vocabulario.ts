@@ -46,6 +46,17 @@ const STATUS_DO_ACESSO: Record<string, Leitura> = {
 /** Suspensão ≠ cancelamento: bloqueio mora em `status_internet`, não em `status`. */
 const ACESSOS_BLOQUEADOS = new Set(["CM", "CA", "FA"]);
 
+/**
+ * O único `status_internet` que este vocabulário conhece como "acesso REALMENTE
+ * liberado" — o resto (`D`, `AA`, e qualquer código que uma instância customizada
+ * inventar) não é bloqueio conhecido, mas também não é "sem problema". A
+ * diferença importa para quem afirma isso a um CLIENTE sem revisão humana (a IA,
+ * `lib/conectores/ixc/agente.ts`): `!acessoBloqueado(c)` sozinho confunde "sei
+ * que está liberado" com "não sei o que é isto" — e o painel, que mostra o
+ * atendente decidindo, pode seguir usando só `acessoBloqueado`.
+ */
+const ACESSOS_LIBERADOS = new Set(["A"]);
+
 const STATUS_DA_OS: Record<string, Leitura> = {
   A: { rotulo: "Aberta", tom: "atencao" },
   AN: { rotulo: "Em análise", tom: "atencao" },
@@ -79,6 +90,7 @@ export const lerStatusDaOs = (c: string) => ler(STATUS_DA_OS, c);
 export const lerStatusDoTicket = (c: string) => ler(STATUS_DO_TICKET, c);
 export const lerPrioridade = (c: string) => ler(PRIORIDADE, c);
 export const acessoBloqueado = (statusInternet: string) => ACESSOS_BLOQUEADOS.has(statusInternet);
+export const acessoLiberado = (statusInternet: string) => ACESSOS_LIBERADOS.has(statusInternet);
 
 /** `online` do `radusuarios`: S, N, vazio — e `SS`, que é sessão em dobro (medido). */
 export function lerConexao(online: string): Leitura {

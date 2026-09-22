@@ -35,7 +35,8 @@ import { faturaDaVez, hojeEmSaoPaulo, recortarFaturas, type Fatura, type Recorte
 import { listarNoIxc } from "./http";
 import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientesPorTelefone, dataInformada } from "./identificar";
 import { documentoNaMascara, soDigitos } from "./mascara";
-import { montarResumo, type ResumoIxc } from "./resumo";
+import { montarResumo, type ContratoIxc, type ResumoIxc } from "./resumo";
+import { acessoLiberado } from "./vocabulario";
 
 type Pedido = Pick<PedidoDeConsulta, "admin" | "orgId" | "contactId" | "identidadeDoTelefone">;
 
@@ -86,9 +87,29 @@ function financeiroDe(r: RecorteDeFaturas): FinanceiroParaAgente {
   };
 }
 
+/**
+ * A leitura do acesso PARA A IA — mais rígida que `resumo.situacao` (painel).
+ * O painel, de propósito, assume "Liberado" quando nenhum contrato vigente
+ * está na lista de bloqueados; aqui só se afirma "Liberado" quando o
+ * vocabulário CONHECE o código como liberado (`acessoLiberado`). Um
+ * `status_internet` que este conector nunca viu (upgrade do IXC, campo
+ * customizado da instância…) não pode virar uma afirmação de "sem bloqueio"
+ * pra quem não tem como conferir — vira `bloqueado: null` e o rótulo CRU do
+ * código (`lerStatusDoAcesso` devolve o próprio código quando não reconhece).
+ */
+function situacaoParaAgente(vigentes: readonly ContratoIxc[]): { rotulo: string; detalhe: string | null; bloqueado: boolean | null } {
+  if (vigentes.length === 0) return { rotulo: "Sem contrato ativo", detalhe: null, bloqueado: false };
+  const bloqueado = vigentes.find((c) => c.bloqueado);
+  if (bloqueado) return { rotulo: bloqueado.acesso.rotulo, detalhe: bloqueado.acesso.detalhe ?? null, bloqueado: true };
+  const desconhecido = vigentes.find((c) => !acessoLiberado(c.statusInternet));
+  if (desconhecido) return { rotulo: desconhecido.acesso.rotulo, detalhe: desconhecido.acesso.detalhe ?? null, bloqueado: null };
+  return { rotulo: "Liberado", detalhe: null, bloqueado: false };
+}
+
 function clienteDe(resumo: ResumoIxc): ClienteParaAgente {
   const contratos = resumo.contratos.ok ? resumo.contratos.dados : null;
   const vigentes = contratos?.filter((c) => c.vigente) ?? [];
+  const situacao = contratos ? situacaoParaAgente(vigentes) : null;
   const conexoes = resumo.conexoes.ok ? resumo.conexoes.dados : null;
   const os = resumo.ordensDeServico.ok ? resumo.ordensDeServico.dados : null;
   const nome = resumo.cliente.nome.trim();
@@ -96,9 +117,9 @@ function clienteDe(resumo: ResumoIxc): ClienteParaAgente {
     // Pessoa jurídica é tratada pelo nome inteiro: o "primeiro nome" de
     // "Mercado do Zé Ltda" seria "Mercado".
     primeiroNome: resumo.cliente.pessoaJuridica ? nome : (nome.split(/\s+/)[0] ?? ""),
-    situacao: contratos ? resumo.situacao.rotulo : null,
-    motivoDaSituacao: contratos ? (resumo.situacao.detalhe ?? null) : null,
-    bloqueado: contratos ? vigentes.some((c) => c.bloqueado) : null,
+    situacao: situacao?.rotulo ?? null,
+    motivoDaSituacao: situacao?.detalhe ?? null,
+    bloqueado: situacao?.bloqueado ?? null,
     plano: vigentes.map((c) => c.plano).filter(Boolean).join(" + ") || null,
     clienteDesde:
       vigentes
