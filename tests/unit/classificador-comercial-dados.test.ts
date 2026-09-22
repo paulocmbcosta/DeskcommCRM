@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JanelaDoAtendimento } from "@/lib/atendimento/janela-do-atendimento";
+import { ATENDIMENTO_VIGENTE } from "@/lib/schemas/messaging";
 
 vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+// Mockado para provar, sem tocar o Postgres, QUEM `dadosViaSupabase` chama
+// quando ninguém injeta `deps`: se o padrão real fosse trocado por um stub
+// silencioso (ou esquecido), nenhum destes testes notaria sem este mock.
+vi.mock("@/lib/atendimento/janela-do-atendimento", () => ({ janelaDoAtendimento: vi.fn() }));
 
 const { dadosViaSupabase } = await import("@/lib/classificador-comercial/dados");
 const { logger } = await import("@/lib/logger");
+const { janelaDoAtendimento } = await import("@/lib/atendimento/janela-do-atendimento");
 
 /** Builder falso: registra filtros e devolve `resultado` no fim da cadeia. */
 function dbQueDevolve(porTabela: Record<string, { data: unknown; error: { message: string } | null }>) {
@@ -183,6 +189,23 @@ describe("dadosViaSupabase", () => {
       await dadosViaSupabase(db, { janela }).ultimasMensagens("org-1", "conversa-1", 24);
       expect(filtros).toContainEqual(["messages", "gte", ["sent_at", "2026-09-20T12:00:00Z"]]);
       expect(filtros.some(([, metodo]) => metodo === "lt")).toBe(false);
+    });
+
+    it("chama a janela com (db, organização, conversa, ATENDIMENTO_VIGENTE) — nunca outro episódio", async () => {
+      const { db } = dbQueDevolve({ messages: { data: [], error: null } });
+      const janela = vi.fn(async (): Promise<JanelaDoAtendimento> => ({ ok: true, desde: null, ate: null }));
+      await dadosViaSupabase(db, { janela }).ultimasMensagens("org-1", "conversa-1", 24);
+      expect(janela).toHaveBeenCalledWith(db, "org-1", "conversa-1", ATENDIMENTO_VIGENTE);
+    });
+
+    it("sem `deps`, o padrão é a `janelaDoAtendimento` REAL — não um stub silencioso", async () => {
+      const { db } = dbQueDevolve({ messages: { data: [], error: null } });
+      vi.mocked(janelaDoAtendimento).mockResolvedValueOnce({ ok: true, desde: null, ate: null });
+      // Nenhum `deps` passado: se o parâmetro padrão de `dadosViaSupabase`
+      // fosse trocado por outra coisa (ou removido), este mock do módulo
+      // real nunca seria chamado, e a asserção abaixo pegaria.
+      await dadosViaSupabase(db).ultimasMensagens("org-1", "conversa-1", 24);
+      expect(janelaDoAtendimento).toHaveBeenCalledWith(db, "org-1", "conversa-1", ATENDIMENTO_VIGENTE);
     });
 
     it("recorta pelo atendimento vigente: com `desde` E `ate`, aplica os dois limites", async () => {

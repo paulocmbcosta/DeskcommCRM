@@ -15,16 +15,16 @@
  * (`lib/leads/modo-de-nascimento.ts`, usada pelo INGEST): aquela nunca
  * lança — lê errado, loga e cai para `toda_conversa`, porque para o ingest
  * "card a mais" é o erro seguro. Aqui a leitura errada tem o efeito
- * OPOSTO: se `regra` caísse para o padrão em vez de lançar, uma falha
- * transitória de leitura viraria "modo desconhecido ⇒ segue como se fosse
- * toda_conversa" DENTRO do worker, que já passou do passo 2 de
- * `garantirLeadDaConversa` sabendo que o modo é `classificador` — ou o
- * card nasceria fora da decisão do Jev (auditoria errada), ou pior: se o
- * chamador interpretasse "não decidiu" como "não é comercial", a mensagem
- * que disparou a checagem NUNCA mais seria reclassificada (o card não
- * existe, então a próxima mensagem cairia na mesma leitura). Por isso
- * `regra` aqui repete o padrão de `temCardAberto`/`contatoBloqueado`/
- * `mensagem`: lê, e lança em qualquer forma de "não sei".
+ * OPOSTO: se `regra` caísse para `toda_conversa` em vez de lançar, o
+ * handler (`workers/classificador-comercial.ts`) leria `modo !==
+ * "classificador"` e devolveria `{ status: "pulado", motivo:
+ * "modo_toda_conversa" }` — que `workers/classificador-comercial.handler.ts`
+ * traduz para `{ status: "skipped" }`, o drain do `event_log` NÃO tenta de
+ * novo, e a decisão daquela mensagem some para sempre (o ingest já tinha
+ * recuado no passo 2b de `garantirLeadDaConversa`, então ninguém mais cria
+ * o card por ela). Por isso `regra` aqui repete o padrão de
+ * `temCardAberto`/`contatoBloqueado`/`mensagem`: lê, e lança em qualquer
+ * forma de "não sei".
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
