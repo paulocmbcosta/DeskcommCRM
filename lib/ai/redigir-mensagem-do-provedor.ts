@@ -38,6 +38,11 @@ export function redigirMensagemDoProvedor(bruto: string): string {
     // O header inteiro, em qualquer caixa, com ou sem `Authorization:` na
     // frente — é assim que ele costuma aparecer ecoado num corpo de erro.
     .replace(/\b[Bb]earer\s+[A-Za-z0-9._-]{8,}/g, "Bearer [CHAVE]")
-    .replace(/\b(x-api-key|api[-_]?key|authorization)\b\s*[:=]\s*\S+/gi, "$1: [CHAVE]");
+    // Aspas opcionais em volta do NOME e do VALOR: um corpo de erro em JSON
+    // ecoa `{"x-api-key":"..."}` — sem o `["']?` dos dois lados, `[^\s"',}]+`
+    // param no primeiro caractere que já é aspa (o valor some do match) e o
+    // início da chave escapava pro `scrubMessage` redigir só o pedaço que
+    // "parece" telefone (`abcdef[PHONE]`), deixando o resto exposto.
+    .replace(/\b(x-api-key|api[-_]?key|authorization)\b["']?\s*[:=]\s*["']?[^\s"',}]+/gi, "$1: [CHAVE]");
   return scrubMessage(semSegredo).slice(0, 500);
 }

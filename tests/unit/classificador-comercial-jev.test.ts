@@ -143,6 +143,26 @@ describe("perguntarAoJev", () => {
     expect(r.ok && r.resposta.custoEmCentavos).toBe(custoEmCentavos(1_000_000));
   });
 
+  it("usage.cost MALFORMADO (string) não derruba usage inteiro — tokensDeEntrada sobrevive, custo cai pro plano B", async () => {
+    const { f } = fetchQueDevolve(200, {
+      answers: { comercial: { type: "noul", noul: 0.05 } },
+      usage: { input_tokens: 700, cost: "x" },
+    });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(r.ok && r.resposta.tokensDeEntrada).toBe(700);
+    expect(r.ok && r.resposta.custoEmCentavos).toBe(custoEmCentavos(700));
+  });
+
+  it("usage.cost NEGATIVO (malformado) também não derruba usage inteiro", async () => {
+    const { f } = fetchQueDevolve(200, {
+      answers: { comercial: { type: "noul", noul: 0.05 } },
+      usage: { input_tokens: 700, cost: -1 },
+    });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(r.ok && r.resposta.tokensDeEntrada).toBe(700);
+    expect(r.ok && r.resposta.custoEmCentavos).toBe(custoEmCentavos(700));
+  });
+
   it("assunto com choice ausente (campo que só EXPLICA, malformado) não veta a decisão", async () => {
     const { f } = fetchQueDevolve(200, {
       answers: { comercial: { type: "noul", noul: 0.8 }, assunto: { type: "choice", confidence: 0.5 } },
@@ -274,6 +294,20 @@ describe("perguntarAoJev", () => {
     expect(!r.ok && r.falha.detalhe).toContain("sem saldo");
   });
 
+  it("error.code que é OBJETO (malformado) é omitido — nunca vira '[object Object]' no detalhe", async () => {
+    const { f } = fetchQueDevolve(403, { error: { code: { estranho: true }, message: "flagged" } });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(!r.ok && r.falha.detalhe).toContain("flagged");
+    expect(!r.ok && r.falha.detalhe).not.toContain("[object Object]");
+  });
+
+  it("error.code STRING ou NUMBER continua indo para o detalhe normalmente", async () => {
+    const { f } = fetchQueDevolve(403, { error: { code: "insufficient_quota", message: "flagged" } });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(!r.ok && r.falha.detalhe).toContain("insufficient_quota");
+    expect(!r.ok && r.falha.detalhe).toContain("flagged");
+  });
+
   it("chave malformada (espaço, caractere invisível) é problema de conta ANTES do fetch — sem retentativa inútil", async () => {
     const { f, chamadas } = fetchQueDevolve(200, RESPOSTA_DOCUMENTADA);
     const r = await perguntarAoJev({ apiKey: "sk-or-​x", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
@@ -324,25 +358,35 @@ describe("contrato REAL medido pela sonda (tests/fixtures/jev/resposta-real.json
       answers: { assunto?: { choice?: string; confidence?: number } };
       usage?: { input_tokens?: number; cost?: number };
     };
+
+    // ABSOLUTAS, não condicionais: a fixture é regravada por
+    // `scripts/sondar-jev.ts --gravar-contrato`, que descarta campo
+    // desconhecido do provedor. Se a OpenRouter renomear `usage`/`model`, uma
+    // fixture nova viria SEM eles — e as comparações relativas logo abaixo
+    // (`real.usage?.x ?? null`) bateriam `null` contra `null`, verdes por
+    // acidente, sem provar nada. Estas travam que a FIXTURA em si ainda tem
+    // o formato esperado, antes de comparar com o que o produto extraiu dela.
+    expect(real.usage?.input_tokens).toEqual(expect.any(Number));
+    expect(typeof real.model).toBe("string");
+    expect(real.usage?.cost).toEqual(expect.any(Number));
+
     const { f } = fetchQueDevolve(200, real);
     const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
     expect(r.ok, JSON.stringify(r)).toBe(true);
 
-    // Cada campo que o PRODUTO de fato usa — não só "existe no schema". Se o
-    // provedor renomear `usage` ou mudar o formato de `assunto`, isto cai,
-    // sem depender de um valor fixo (a resposta real muda a cada chamada).
+    // Cada campo que o PRODUTO de fato usa — não só "existe no schema". Com
+    // as asserções absolutas acima já garantindo a forma da fixture, comparar
+    // contra `real.usage?.x` aqui não corre o risco de "null contra null".
     expect(r.ok && r.resposta.tokensDeEntrada).toBe(real.usage?.input_tokens ?? null);
+    expect(r.ok && r.resposta.tokensDeEntrada).not.toBeNull();
     expect(r.ok && r.resposta.modelo).toBe(real.model ?? MODELO_DO_JEV);
     expect(r.ok && r.resposta.confiancaDoAssunto).not.toBeNull();
     expect(r.ok && r.resposta.assunto).not.toBeNull();
     expect(r.ok && r.resposta.assunto !== null && Object.hasOwn(ASSUNTOS, r.resposta.assunto)).toBe(true);
 
-    // A resposta real tem `usage.cost` em dólares — prova que o custo REAL do
-    // provedor é usado, não só o fallback por token (já coberto pelos testes
-    // de `usa usage.cost REAL`/`cai para a estimativa`; aqui só quando a
-    // fixture atual de fato trouxer `cost`, para não duplicar).
-    if (r.ok && real.usage?.cost !== undefined) {
-      expect(r.resposta.custoEmCentavos).toBeCloseTo(real.usage.cost * 100, 8);
-    }
+    // A resposta real tem `usage.cost` em dólares (garantido acima) — prova
+    // que o custo REAL do provedor é usado, não o fallback por token. Roda
+    // SEMPRE agora, não só quando a fixture "por acaso" trouxer `cost`.
+    expect(r.ok && r.resposta.custoEmCentavos).toBeCloseTo(real.usage!.cost! * 100, 8);
   });
 });

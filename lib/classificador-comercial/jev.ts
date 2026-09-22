@@ -85,8 +85,14 @@ const respostaSchema = z.object({
   usage: z
     .object({
       input_tokens: z.number().int().nonnegative(),
-      /** Custo REAL em DÓLARES, quando o provedor informa (ex.: `0.00002709`). */
-      cost: z.number().nonnegative().optional(),
+      /**
+       * Custo REAL em DÓLARES, quando o provedor informa (ex.: `0.00002709`).
+       * `.catch(undefined)` PRÓPRIO: sem ele, um `cost` malformado (texto,
+       * negativo) reprova o `z.object` inteiro do `usage` — e leva
+       * `input_tokens` junto, que é um campo bom e não tem nada a ver com o
+       * defeito do provedor no `cost`.
+       */
+      cost: z.number().nonnegative().optional().catch(undefined),
     })
     .optional()
     .catch(undefined),
@@ -142,8 +148,12 @@ function extrairMensagemDeErro(texto: string): string {
   if (!erro || typeof erro !== "object" || !("message" in erro)) return texto;
   const mensagem = (erro as { message: unknown }).message;
   if (typeof mensagem !== "string") return texto;
-  const codigo = "code" in erro ? (erro as { code: unknown }).code : undefined;
-  return codigo === undefined || codigo === null ? mensagem : `[${String(codigo)}] ${mensagem}`;
+  const codigoBruto = "code" in erro ? (erro as { code: unknown }).code : undefined;
+  // Só string/number formam um prefixo legível (`[403] ...`). `code` objeto
+  // ou array vira `String(codigo)` → `"[object Object]"`/lixo — pior que
+  // omitir, porque parece informação e não é.
+  const codigo = typeof codigoBruto === "string" || typeof codigoBruto === "number" ? codigoBruto : undefined;
+  return codigo === undefined ? mensagem : `[${codigo}] ${mensagem}`;
 }
 
 /**

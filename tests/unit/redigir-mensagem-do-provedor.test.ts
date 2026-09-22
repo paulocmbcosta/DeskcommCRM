@@ -43,6 +43,27 @@ describe("redigirMensagemDoProvedor", () => {
     expect(saida).not.toContain("abcdef0123456789xyz");
   });
 
+  it("redige x-api-key entre aspas DUPLAS, no formato de um corpo de erro em JSON", () => {
+    const bruto = '{"x-api-key":"abcdef0123456789"}';
+    const saida = redigirMensagemDoProvedor(bruto);
+    expect(saida).toContain("[CHAVE]");
+    expect(saida).not.toContain("abcdef0123456789");
+  });
+
+  it("redige x-api-key entre aspas SIMPLES", () => {
+    const bruto = "{'x-api-key':'abcdef0123456789'}";
+    const saida = redigirMensagemDoProvedor(bruto);
+    expect(saida).toContain("[CHAVE]");
+    expect(saida).not.toContain("abcdef0123456789");
+  });
+
+  it("redige api_key entre aspas duplas com espaço antes do dois-pontos", () => {
+    const bruto = '{"api_key" : "abcdef0123456789xyz"}';
+    const saida = redigirMensagemDoProvedor(bruto);
+    expect(saida).toContain("[CHAVE]");
+    expect(saida).not.toContain("abcdef0123456789xyz");
+  });
+
   // A revisão de qualidade achou: a extração perdeu o `\b` (word boundary) das
   // 4 regexes — na origin/main (desde 2889421d) elas tinham um BYTE 0x08
   // literal onde deveria haver o ESCAPE `\b`, então NUNCA casavam nada (a
@@ -55,6 +76,20 @@ describe("redigirMensagemDoProvedor", () => {
 
   it("NÃO redige 'risk-assessment0' — mesma razão, outra palavra que contém 'sk-'", () => {
     expect(redigirMensagemDoProvedor("relatório risk-assessment0 pendente")).toBe("relatório risk-assessment0 pendente");
+  });
+
+  // O `sk-` já tinha o par positivo/negativo; estes três cobrem os outros três
+  // padrões (AIza, Bearer, api-key) — só o `sk-` estava provado dos dois lados.
+  it("NÃO redige 'xAIzaSyabcdefghijk' — 'AIza' no meio de palavra não é a chave do Google", () => {
+    expect(redigirMensagemDoProvedor("id xAIzaSyabcdefghijk gerado")).toBe("id xAIzaSyabcdefghijk gerado");
+  });
+
+  it("NÃO redige 'subearer abcdefgh1234' — 'bearer' no meio de 'subearer' não é o header", () => {
+    expect(redigirMensagemDoProvedor("token subearer abcdefgh1234 interno")).toBe("token subearer abcdefgh1234 interno");
+  });
+
+  it("NÃO redige 'myapikey=1' — 'apikey' no meio de palavra não é o header/query", () => {
+    expect(redigirMensagemDoProvedor("var myapikey=1 local")).toBe("var myapikey=1 local");
   });
 
   it("redige CPF (dado do titular, via scrubMessage)", () => {
