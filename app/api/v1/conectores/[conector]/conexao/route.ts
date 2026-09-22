@@ -21,14 +21,8 @@ import { z } from "zod";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
-import {
-  FAIXA_DO_LIMITE,
-  lerConexaoPublica,
-  lerCredencial,
-  removerConexao,
-  salvarConexao,
-  salvarLimiteDeCobranca,
-} from "@/lib/conectores/conexao";
+import { lerConexaoPublica, lerCredencial, removerConexao, salvarConexao, salvarLimiteDeCobranca } from "@/lib/conectores/conexao";
+import { FAIXA_DO_LIMITE } from "@/lib/conectores/limite-de-cobranca";
 import { obterConector } from "@/lib/conectores/registro";
 import { FRASE_DA_FALHA } from "@/lib/conectores/tipos";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -163,12 +157,16 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ conector:
   }
   const parsed = preferenciasSchema.safeParse(corpo);
   if (!parsed.success) {
-    return fail(
-      "validation_failed",
-      t(`Informe um número inteiro de dias, entre ${FAIXA_DO_LIMITE.min} e ${FAIXA_DO_LIMITE.max}.`),
-      422,
-      { requestId, details: parsed.error.flatten() },
-    );
+    // Frase ESTÁTICA, sem os números: uma chave dinâmica (`t(`...${min}...`)`)
+    // casa com o dicionário por coincidência hoje, e no dia em que a faixa
+    // mudar o espanhol cai pro português em silêncio — o varredor de i18n
+    // não alcança `app/api`, então nenhum gate pega isso. Os limites vão em
+    // `details`, que o `flatten()` do Zod já traz (a mensagem de cada issue
+    // cita o `min`/`max` que falhou).
+    return fail("validation_failed", t("Informe um número inteiro de dias dentro da faixa permitida."), 422, {
+      requestId,
+      details: parsed.error.flatten(),
+    });
   }
 
   const admin = createAdminClient();
@@ -190,7 +188,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ conector:
         conector: conector.id,
         campo: "cobranca_encaminha_apos_dias",
         de: antes?.cobranca_encaminha_apos_dias ?? null,
-        para: parsed.data.cobranca_encaminha_apos_dias,
+        // Do que o BANCO devolveu (`atualizada`), não do pedido: é o que
+        // realmente ficou gravado, não o que foi pedido.
+        para: atualizada.cobranca_encaminha_apos_dias,
       },
       requestId,
     });

@@ -9096,7 +9096,7 @@ export const DICIONARIO: Traducoes = {
   },
   "Limite salvo.": { es: "Límite guardado." },
   "Não consegui salvar o limite.": { es: "No pude guardar el límite." },
-  "Informe um número inteiro de dias, entre 1 e 3650.": { es: "Informe un número entero de días, entre 1 y 3650." },
+  "Informe um número inteiro de dias dentro da faixa permitida.": { es: "Informe un número entero de días dentro del rango permitido." },
   "Este conector está desligado.": { es: "Este conector está desactivado." },
   "Trocar endereço ou token": { es: "Cambiar dirección o token" },
   "Confirmar: desligar": { es: "Confirmar: desactivar" },
