@@ -158,7 +158,11 @@ function situacaoParaAgente(vigentes: readonly ContratoIxc[]): { rotulo: string;
 function primeiroNomeDe(cliente: ClienteIxc): string {
   if (!cliente.pessoaJuridica) return cliente.nome.split(/\s+/)[0] ?? "";
   if (cliente.fantasia) return cliente.fantasia;
-  return cliente.nome.replace(/\s*\d{11,14}$/, "").trim() || cliente.nome;
+  // SEM `|| cliente.nome`: quando a razão é SÓ o CPF ("52998224725", sem nome
+  // nenhum na frente), o `replace` zera a string, e o `||` reintroduzia o
+  // número inteiro pela porta de trás — o último caminho por onde o CPF do
+  // MEI ainda chegava na projeção. Vazio é o fallback certo, não o número.
+  return cliente.nome.replace(/\s*\d{11,14}$/, "").trim();
 }
 
 function clienteDe(resumo: ResumoIxc): ClienteParaAgente {

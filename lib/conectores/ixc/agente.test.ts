@@ -261,6 +261,17 @@ describe("clienteDe — primeiroNome de PJ nunca vaza o CPF embutido na razão (
     if (r.estado !== "identificado") throw new Error("inalcançável");
     expect(r.cliente.primeiroNome).toBe("Mercado do Zé");
   });
+
+  it("razão social é SÓ o CPF (sem nome nenhum na frente): primeiroNome fica vazio, não o número", async () => {
+    // O caso mais estreito: depois de cortar o sufixo numérico não sobra nada
+    // pra descrever a empresa. O fallback `|| cliente.nome` reintroduzia o
+    // número inteiro — o último caminho por onde o CPF do MEI vazava.
+    ixc({ cliente: [{ ...MEI, razao: "52998224725", fantasia: "" }] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.cliente.primeiroNome).toBe("");
+    expect(JSON.stringify(r)).not.toContain("52998224725");
+  });
 });
 
 describe("consultar — sem a onda de sinal e sem su_ticket (importante 7, latência)", () => {
