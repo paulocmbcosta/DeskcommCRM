@@ -171,6 +171,50 @@ describe("consultar — CPF contraditório NÃO vincula pelo telefone (crítico 
   });
 });
 
+describe("consultar — o mesmo furo do crítico 1, um turno depois (vínculo já existe)", () => {
+  // `cadastrosValidos` responde ANTES de qualquer regra de identidade rodar:
+  // telefone reciclado identifica a Maria na 1ª mensagem (vínculo `telefone`
+  // gravado), a IA chama `consultar` de novo sem argumentos e recebe
+  // "identificado" — e se o CPF de quem é dono de verdade aparecer numa
+  // mensagem seguinte, o vínculo por telefone tinha ficado imune a ele.
+  it("(a) controle: vínculo telefone já existe + CPF que BATE → identifica, sem re-buscar por telefone", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
+    ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "529.982.247-25" });
+    expect(r.estado).toBe("identificado");
+    // A confirmação é o CPF batendo com o cadastro já vinculado — não uma
+    // busca por telefone de novo (4 queries `LIKE` em paralelo).
+    const buscasPorTelefone = listar.mock.calls.filter((c) => (c[1] as { filtro: { operador: string } }).filtro.operador === "L");
+    expect(buscasPorTelefone).toHaveLength(0);
+  });
+
+  it("(b) vínculo telefone já existe + CPF que CONTRADIZ → NÃO identifica pelo vínculo, pede nascimento", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
+    ixc({ cliente: [MARIA] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: JOSE.cnpj_cpf });
+    expect(r.estado).toBe("precisa_cpf_e_nascimento");
+  });
+
+  it("(c) controle: vínculo por DOCUMENTO/manual já provado não é reconferido — CPF diferente não desfaz", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]);
+    ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: JOSE.cnpj_cpf });
+    expect(r.estado).toBe("identificado");
+  });
+
+  it("(d) controle de custo: sem CPF informado, nenhuma leitura extra além da do próprio resumo", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
+    ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO] });
+    await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    // Só a leitura que `montarResumo` já fazia por dentro — nada de confirmação
+    // extra, porque não há CPF pra confirmar.
+    const leiturasDoCliente = listar.mock.calls.filter(
+      (c) => (c[1] as { tabela: string; filtro: { campo: string } }).tabela === "cliente" && (c[1] as { filtro: { campo: string } }).filtro.campo === "cliente.id",
+    );
+    expect(leiturasDoCliente).toHaveLength(1);
+  });
+});
+
 describe("clienteDe — status_internet desconhecido não é 'Liberado' com confiança (crítico 2)", () => {
   beforeEach(() => listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]));
 

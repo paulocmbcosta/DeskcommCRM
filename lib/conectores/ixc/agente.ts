@@ -36,25 +36,51 @@ import { CAMPOS_DA_FATURA } from "./campos";
 import { enviarCobrancaIxc, type MotivoDaRecusa, type ResultadoDoEnvio } from "./enviar-cobranca";
 import { faturaDaVez, hojeEmSaoPaulo, recortarFaturas, type Fatura, type RecorteDeFaturas } from "./faturas";
 import { listarNoIxc } from "./http";
-import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientesPorTelefone, dataInformada, type ClienteIxc } from "./identificar";
+import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientePorId, clientesPorTelefone, dataInformada, type ClienteIxc } from "./identificar";
 import { documentoNaMascara, soDigitos } from "./mascara";
 import { montarResumo, type ContratoIxc, type ResumoIxc } from "./resumo";
 import { acessoLiberado } from "./vocabulario";
 
 type Pedido = Pick<PedidoDeConsulta, "admin" | "orgId" | "contactId" | "identidadeDoTelefone">;
 
+interface CadastroValido {
+  externalId: string;
+  verificadoPor: FormaDeVerificacao;
+}
+
 /**
- * Os cadastros vinculados que VALEM para a IA. O vínculo `telefone` é descartado
- * onde o telefone SABIDAMENTE não é identidade (antes do conserto de 22/09 o
- * painel vinculava pelo número DIGITADO no chat do site). Canal "desconhecido"
- * NÃO descarta: "não sei" não é "não é" — esconder vínculo legítimo faria a IA
- * pedir CPF a quem já está identificado.
+ * Os cadastros vinculados que VALEM para a IA, com a forma que os provou. O
+ * vínculo `telefone` é descartado onde o telefone SABIDAMENTE não é identidade
+ * (antes do conserto de 22/09 o painel vinculava pelo número DIGITADO no chat
+ * do site). Canal "desconhecido" NÃO descarta: "não sei" não é "não é" —
+ * esconder vínculo legítimo faria a IA pedir CPF a quem já está identificado.
  */
-async function cadastrosValidos(p: Pedido): Promise<string[]> {
+async function cadastrosValidosComForma(p: Pedido): Promise<CadastroValido[]> {
   const vinculos = await listarVinculos(p.admin, p.orgId, p.contactId, "ixc");
   return vinculos
     .filter((v) => v.verificado_por !== "telefone" || p.identidadeDoTelefone !== "nao")
-    .map((v) => v.external_id);
+    .map((v) => ({ externalId: v.external_id, verificadoPor: v.verificado_por }));
+}
+
+async function cadastrosValidos(p: Pedido): Promise<string[]> {
+  return (await cadastrosValidosComForma(p)).map((c) => c.externalId);
+}
+
+/**
+ * O CPF informado bate com ALGUM dos cadastros? Só é chamada quando TODOS os
+ * vínculos existentes são por `telefone` — a única forma nunca desafiada por um
+ * dado que só o titular sabe (`documento`/`manual` já provaram isso e não são
+ * reconferidos aqui).
+ *
+ * É o crítico 1 um turno depois: telefone reciclado identifica errado na 1ª
+ * mensagem (vira vínculo `telefone`), a IA chama de novo SEM argumentos e
+ * recebe "identificado" — e se o cliente manda o CPF dele (o de verdade) numa
+ * mensagem seguinte, essa é a ÚNICA chance de pegar a contradição, porque
+ * `cadastrosValidos` responde antes de qualquer regra de identidade rodar.
+ */
+async function telefoneConfereComCpf(credencial: CredencialDeConector, cadastros: readonly string[], documento: string): Promise<boolean> {
+  const clientes = await Promise.all(cadastros.map((id) => clientePorId(credencial, id)));
+  return clientes.some((c) => c !== null && soDigitos(c.documento) === soDigitos(documento));
 }
 
 function paraAgente(f: Fatura): FaturaParaAgente {
@@ -207,15 +233,29 @@ async function vincularE(p: PedidoDeConsulta, cadastros: string[], verificadoPor
 }
 
 async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
-  const validos = await cadastrosValidos(p);
-  if (validos.length > 0) {
-    const r = await identificado(p, validos, null);
-    if (r) return r;
-    // O vínculo aponta para um cadastro que o IXC não devolve mais: identifica de novo.
-  }
-
+  const validos = await cadastrosValidosComForma(p);
   // Conta antes de consulta: dígito verificador e calendário não revelam se o CPF é de alguém.
   const documento = p.cpfCnpj === undefined ? null : documentoNaMascara(p.cpfCnpj);
+
+  if (validos.length > 0) {
+    const externalIds = validos.map((v) => v.externalId);
+    // Vínculo por `documento`/`manual` já foi PROVADO por algo que só o titular
+    // sabe — não é reconferido aqui, e um CPF diferente informado depois não o
+    // desfaz. Só o vínculo por `telefone` (nunca desafiado) exige bater com um
+    // CPF BEM-FORMADO que apareça agora; CPF ausente ou malformado não é
+    // contradição — é "não dá pra comparar" (mesma regra do candidato único
+    // por telefone, abaixo: `documento !== null`).
+    const soTelefone = validos.every((v) => v.verificadoPor === "telefone");
+    const confia = !(documento && soTelefone) || (await telefoneConfereComCpf(p.credencial, externalIds, documento));
+    if (confia) {
+      const r = await identificado(p, externalIds, null);
+      if (r) return r;
+      // O vínculo aponta para um cadastro que o IXC não devolve mais: identifica de novo.
+    }
+    // Senão: o CPF contradiz TODOS os vínculos por telefone — ignora-os e cai
+    // no fluxo normal de identificação abaixo, igual a quem nunca teve vínculo.
+  }
+
   if (p.cpfCnpj !== undefined && documento === null) return { estado: "cpf_invalido" };
   const nascimento = p.dataNascimento === undefined ? null : dataInformada(p.dataNascimento);
   if (p.dataNascimento !== undefined && nascimento === null) return { estado: "data_invalida" };
