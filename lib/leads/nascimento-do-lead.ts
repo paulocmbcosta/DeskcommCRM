@@ -104,6 +104,21 @@ export interface DadosDoNascimento {
 }
 
 /**
+ * Por que o classificador NÃO decidiu — vocabulário fechado, não free-text:
+ * quem chama aponta o CÓDIGO (contável em `payload.sem_classificacao`); o
+ * TEXTO mora só aqui, num único lugar, para a frase da timeline nunca
+ * divergir da causa registrada.
+ */
+export type CausaSemClassificacao = "sem_chave" | "conta" | "temporaria" | "formato";
+
+const TEXTO_DA_CAUSA: Record<CausaSemClassificacao, string> = {
+  sem_chave: "sem chave da OpenRouter",
+  conta: "a OpenRouter recusou o pedido: chave inválida, sem saldo ou pedido barrado",
+  temporaria: "o classificador ficou fora do ar por mais de 10 minutos",
+  formato: "o classificador respondeu num formato inesperado",
+};
+
+/**
  * QUEM decidiu que esta conversa vira card.
  *
  * `ingest`: a mensagem chegou (o caminho de sempre). É o ÚNICO que consulta a
@@ -116,13 +131,22 @@ export interface DadosDoNascimento {
 export type OrigemDoNascimento =
   | { tipo: "ingest" }
   | { tipo: "classificador"; assunto: string; rotuloDoAssunto: string; probabilidade: number; modelo: string }
-  | { tipo: "sem_classificacao"; causa: string };
+  | { tipo: "sem_classificacao"; causa: CausaSemClassificacao };
 
 function razaoDoNascimento(origem: OrigemDoNascimento, ehCliente: boolean): string {
+  // O ingest já tem a frase própria para cliente conhecido; nas origens novas
+  // o sufixo só se soma ao final, sem esconder o motivo principal (classificação
+  // ou falta dela) atrás da observação sobre o contato.
+  const sufixoCliente = ehCliente ? " — cliente conhecido" : "";
   if (origem.tipo === "classificador") {
-    return `conversa identificada como comercial: ${origem.rotuloDoAssunto} (${Math.round(origem.probabilidade * 100)}%)`;
+    // `min(99, …)` porque 0.999 não é 100%: o card nasceu de uma PROBABILIDADE,
+    // nunca de certeza, e "100%" leria como se o sistema tivesse certeza.
+    const pct = Math.min(99, Math.round(origem.probabilidade * 100));
+    return `conversa identificada como comercial (${pct}%) — assunto: ${origem.rotuloDoAssunto}${sufixoCliente}`;
   }
-  if (origem.tipo === "sem_classificacao") return `card criado sem classificar a conversa (${origem.causa})`;
+  if (origem.tipo === "sem_classificacao") {
+    return `card criado sem classificar a conversa — ${TEXTO_DA_CAUSA[origem.causa]}${sufixoCliente}`;
+  }
   return ehCliente ? "cliente conhecido voltou a escrever" : "primeira mensagem recebida no WhatsApp";
 }
 
@@ -384,7 +408,9 @@ export async function garantirLeadDaConversa(
     sourceId: conversationId,
     // `webhook_source` e não um "system" inventado: `actorParaAtividade` já
     // traduz esta variante para `kind: "system"` na timeline, e ela descreve o
-    // que de fato aconteceu — a mensagem chegou por webhook, o produto agiu.
+    // que de fato aconteceu — no ingest, a mensagem chegou por webhook e o
+    // produto agiu; nas origens do classificador, quem agiu foi o WORKER
+    // (`workers/classificador-comercial.ts`), rodando fora do request.
     actor: { type: "webhook_source", id: origem.tipo === "ingest" ? "canal-inbound" : "classificador-comercial" },
     // A timeline é o ÚNICO lugar onde quem abre o card descobre por que ele
     // nasceu naquele funil. Sem esta distinção, o cliente antigo aparece num
@@ -394,6 +420,10 @@ export async function garantirLeadDaConversa(
     payload: {
       conversation_id: conversationId,
       cliente: ehCliente,
+      // O único registro durável da probabilidade exata, do código do assunto
+      // e da versão do modelo por card — é o que a Tarefa 15 do plano lê para
+      // calibrar o limiar (contando falso positivo por card do classificador
+      // que foi perdido/arquivado sem nunca ser comercial de fato).
       ...(origem.tipo === "classificador"
         ? { classificacao: { assunto: origem.assunto, probabilidade: origem.probabilidade, modelo: origem.modelo } }
         : {}),

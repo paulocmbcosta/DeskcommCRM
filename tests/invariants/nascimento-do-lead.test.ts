@@ -46,6 +46,8 @@ const ORG_SO_FECHADAS = "1ead7e00-0000-4000-8000-000000000003";
 const ORG_GANHO_PRIMEIRO = "1ead7e00-0000-4000-8000-000000000004";
 /** Org com a regra "só conversas comerciais" ligada. */
 const ORG_CLASSIFICADOR = "1ead7e00-0000-4000-8000-000000000005";
+/** Org com classificador LIGADO e "cliente pela agenda" LIGADA — o sufixo. */
+const ORG_CLASSIFICADOR_CLIENTE = "1ead7e00-0000-4000-8000-000000000006";
 
 const CONVERSA = "1ead7e00-0000-4000-8000-00000000c001";
 
@@ -107,11 +109,37 @@ beforeAll(async () => {
       where id = $1`,
     [ORG_CLASSIFICADOR],
   );
+
+  // ORG_CLASSIFICADOR_CLIENTE: as DUAS regras ligadas juntas — é o único jeito
+  // de exercitar o sufixo "cliente conhecido" numa razão do classificador.
+  // Funil de clientes próprio (irmão exclusivo do padrão que o trigger semeia),
+  // com etapa utilizável — sem ela o destino cairia no padrão (regra do
+  // cabeçalho de nascimento-do-lead.ts) e o `ehCliente` continuaria `true`
+  // mesmo assim, então a etapa não é o que este teste mede; está aqui só para
+  // não deixar `funilDeEntrada` recusar por falta de etapa.
+  await criarOrg(ORG_CLASSIFICADOR_CLIENTE, "org-nascimento-classificador-cliente");
+  await pool.query(
+    `update organizations
+        set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{crm}',
+              '{"nascimento_do_card": {"modo": "classificador", "limiar": 0.7}, "cliente_pela_agenda": true}'::jsonb)
+      where id = $1`,
+    [ORG_CLASSIFICADOR_CLIENTE],
+  );
+  const { rows: funilDeClientesRows } = await pool.query<{ id: string }>(
+    `insert into crm_pipelines (organization_id, name, slug, is_client_pipeline, position)
+     values ($1, 'Clientes', 'clientes-classificador', true, 9000) returning id`,
+    [ORG_CLASSIFICADOR_CLIENTE],
+  );
+  await pool.query(
+    `insert into crm_stages (organization_id, pipeline_id, name, slug, position)
+     values ($1, $2, 'Voltou a falar', 'voltou-classificador', 1000)`,
+    [ORG_CLASSIFICADOR_CLIENTE, funilDeClientesRows[0]!.id],
+  );
 });
 
 afterAll(async () => {
   await pool.query("delete from organizations where id = any($1)", [
-    [ORG_VIVA, ORG_SEM_FUNIL, ORG_SO_FECHADAS, ORG_GANHO_PRIMEIRO, ORG_CLASSIFICADOR],
+    [ORG_VIVA, ORG_SEM_FUNIL, ORG_SO_FECHADAS, ORG_GANHO_PRIMEIRO, ORG_CLASSIFICADOR, ORG_CLASSIFICADOR_CLIENTE],
   ]);
   await pool.end();
 });
@@ -521,9 +549,20 @@ describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", (
     expect(await leadsDo(contato)).toBe(1);
 
     const [at] = await atividadeDeCriacao(contato);
-    expect(at!.reason).toBe("conversa identificada como comercial: mudança de plano (93%)");
+    expect(at!.reason).toBe("conversa identificada como comercial (93%) — assunto: mudança de plano");
     expect(at!.source_module).toBe("crm.classificador_comercial");
     expect(at!.payload.classificacao).toMatchObject({ assunto: "mudanca_de_plano", probabilidade: 0.93, modelo: "jev-1.13.0" });
+  });
+
+  it("0.999 de probabilidade não vira '100%' — o card nasceu de uma chance, não de certeza", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Quase Certeza");
+    await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Quase Certeza" },
+      { tipo: "classificador", assunto: "contratacao", rotuloDoAssunto: "contratação", probabilidade: 0.999, modelo: "jev-1.13.0" },
+    );
+    const [at] = await atividadeDeCriacao(contato);
+    expect(at!.reason).toBe("conversa identificada como comercial (99%) — assunto: contratação");
   });
 
   it("sem classificação o card nasce mesmo assim, e a razão diz a causa (decisão A)", async () => {
@@ -531,20 +570,106 @@ describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", (
     const r = await garantirLeadDaConversa(
       db,
       { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Bruno Sem Chave" },
-      { tipo: "sem_classificacao", causa: "sem chave da OpenRouter" },
+      { tipo: "sem_classificacao", causa: "sem_chave" },
     );
     expect(r.criado).toBe(true);
     const [at] = await atividadeDeCriacao(contato);
-    expect(at!.reason).toBe("card criado sem classificar a conversa (sem chave da OpenRouter)");
+    expect(at!.reason).toBe("card criado sem classificar a conversa — sem chave da OpenRouter");
+    expect(at!.source_module).toBe("crm.classificador_comercial");
+    // O CÓDIGO (contável), não a frase — é o que uma consulta agregada de
+    // "quantos cards nasceram sem classificar, por causa" pode agrupar.
+    expect(at!.payload.sem_classificacao).toBe("sem_chave");
   });
 
-  it("o classificador também respeita um por demanda: segundo 'sim' não abre segundo card", async () => {
+  it("cliente conhecido: o sufixo aparece ao final da razão do classificador", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR_CLIENTE, "Duda Cliente");
+    // `first_service_at` é a coluna que `garantirLeadDaConversa` lê para decidir
+    // `ehCliente` — a mesma regra do describe "o funil de clientes" de
+    // `cliente-nasce-do-agendamento.test.ts`, aqui só na medida do que este
+    // arquivo precisa: a organização já nasce com `cliente_pela_agenda: true`.
+    await pool.query("update contacts set first_service_at = now() where id = $1", [contato]);
+
+    const r = await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR_CLIENTE, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Duda Cliente" },
+      { tipo: "classificador", assunto: "duvida_geral", rotuloDoAssunto: "dúvida geral", probabilidade: 0.8, modelo: "jev-1.13.0" },
+    );
+    expect(r.criado, JSON.stringify(r)).toBe(true);
+
+    const { rows } = await pool.query<{ reason: string }>(
+      `select reason from crm_lead_activities
+        where organization_id = $1 and contact_id = $2 and type = 'lead_created'`,
+      [ORG_CLASSIFICADOR_CLIENTE, contato],
+    );
+    expect(rows[0]!.reason).toBe(
+      "conversa identificada como comercial (80%) — assunto: dúvida geral — cliente conhecido",
+    );
+  });
+
+  it("cliente conhecido: o sufixo também aparece quando o classificador falhou (sem_classificacao)", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR_CLIENTE, "Edu Cliente Sem Chave");
+    await pool.query("update contacts set first_service_at = now() where id = $1", [contato]);
+
+    await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR_CLIENTE, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Edu Cliente Sem Chave" },
+      { tipo: "sem_classificacao", causa: "temporaria" },
+    );
+
+    const { rows } = await pool.query<{ reason: string }>(
+      `select reason from crm_lead_activities
+        where organization_id = $1 and contact_id = $2 and type = 'lead_created'`,
+      [ORG_CLASSIFICADOR_CLIENTE, contato],
+    );
+    expect(rows[0]!.reason).toBe(
+      "card criado sem classificar a conversa — o classificador ficou fora do ar por mais de 10 minutos — cliente conhecido",
+    );
+  });
+
+  it("opt-out também vale nas origens do classificador — quem pediu para sair não vira card", async () => {
+    // O passo 1 (opt-out) roda ANTES do passo 2b (a regra da organização) e
+    // não é condicionado à origem — é o MESMO guardião para as três. Sem este
+    // caso, um refactor que movesse a checagem para "só quando origem.tipo ===
+    // 'ingest'" passaria batido: os outros testes deste describe usam contato
+    // sem bloqueio nenhum.
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Saiu Pelo Classificador");
+    await pool.query(
+      "update contacts set is_blocked = true, blocked_reason = 'stop_keyword' where id = $1",
+      [contato],
+    );
+
+    const peloClassificador = await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Saiu Pelo Classificador" },
+      { tipo: "classificador", assunto: "contratacao", rotuloDoAssunto: "contratação", probabilidade: 0.9, modelo: "jev-1.13.0" },
+    );
+    expect(peloClassificador).toEqual({ criado: false, motivo: "contato_bloqueado" });
+
+    const semClassificar = await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Saiu Pelo Classificador" },
+      { tipo: "sem_classificacao", causa: "sem_chave" },
+    );
+    expect(semClassificar).toEqual({ criado: false, motivo: "contato_bloqueado" });
+
+    expect(await leadsDo(contato)).toBe(0);
+  });
+
+  it("o classificador também respeita um por demanda: segundo 'sim' não abre segundo card, e o ingest que vier depois encontra o mesmo card", async () => {
     const contato = await criarContato(ORG_CLASSIFICADOR, "Carla Duas Vezes");
     const origem = { tipo: "classificador", assunto: "contratacao", rotuloDoAssunto: "contratação", probabilidade: 0.9, modelo: "jev-1.13.0" } as const;
     const dados = { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Carla Duas Vezes" };
     await garantirLeadDaConversa(db, dados, origem);
     const segundo = await garantirLeadDaConversa(db, dados, origem);
     expect(segundo).toEqual({ criado: false, motivo: "ja_existe" });
+    expect(await leadsDo(contato)).toBe(1);
+
+    // A ORDEM que importa: passo 2 (já existe?) roda ANTES do passo 2b (a
+    // regra). Com o card já aberto, uma mensagem de INGEST (a origem padrão)
+    // encontra `ja_existe` — nunca `aguarda_classificador`, que seria a leitura
+    // errada "esta organização nunca deixa o ingest crescer o card existente".
+    const terceiro = await garantirLeadDaConversa(db, dados);
+    expect(terceiro).toEqual({ criado: false, motivo: "ja_existe" });
     expect(await leadsDo(contato)).toBe(1);
   });
 });
