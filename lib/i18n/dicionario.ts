@@ -2608,7 +2608,7 @@ export const DICIONARIO: Traducoes = {
   "Regra salva.": { es: "Regla guardada." },
   "Escolha um modo e uma certeza mínima válidos.": { es: "Elige un modo y una certeza mínima válidos." },
   "Cadastre e valide uma chave da OpenRouter em IA › Credenciais antes de ligar esta regra.": { es: "Registra y valida una clave de OpenRouter en IA › Credenciales antes de activar esta regla." },
-  "Outra pessoa mudou esta configuração agora. Recarregue a página e tente de novo.": { es: "Otra persona cambió esta configuración ahora. Recarga la página e inténtalo de nuevo." },
+  "Outra pessoa mudou esta configuração agora. Confira e salve de novo.": { es: "Otra persona cambió esta configuración ahora. Revisa y guarda de nuevo." },
 
   "Ouvir o áudio do cliente": {
     es: "Escuchar el audio del cliente",

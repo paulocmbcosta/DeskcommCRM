@@ -16,11 +16,14 @@
  * a pessoa de fechar a tela achando que a regra já vale.
  *
  * ⚠️ `tente_de_novo` é a corrida otimista da action (`updated_at` mudou entre
- * a leitura e a gravação dela): `router.refresh()` traz o `inicial` fresco do
- * servidor, e a página remonta este componente pela `key` nova — sem isso o
- * usuário tentaria salvar de novo em cima de um estado que já era velho.
+ * a leitura e a gravação dela): `router.refresh()` já traz o `inicial` fresco
+ * do servidor — a mensagem não pode mandar "recarregue a página" (o
+ * `refresh()` FEZ isso; pedir de novo faria a pessoa perder o rascunho
+ * achando que precisa recarregar na mão) — e `SecaoNascimentoDoCard`
+ * (exportado abaixo, é o que a página usa) remonta este componente pela
+ * `key` nova assim que o `inicial` atualizado chega.
  */
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -45,7 +48,7 @@ const MENSAGEM_DO_ERRO: Record<ErroNascimentoDoCard, string> = {
   sem_permissao: "Só um administrador pode mudar essa regra.",
   mfa: "Confirme a verificação em duas etapas.",
   sem_chave_openrouter: "Cadastre e valide uma chave da OpenRouter em IA › Credenciais antes de ligar esta regra.",
-  tente_de_novo: "Outra pessoa mudou esta configuração agora. Recarregue a página e tente de novo.",
+  tente_de_novo: "Outra pessoa mudou esta configuração agora. Confira e salve de novo.",
   falha: "Não consegui salvar essa mudança agora.",
 };
 
@@ -112,6 +115,7 @@ function Opcao({
 export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; podeEditar: boolean }) {
   const t = useT();
   const router = useRouter();
+  const tituloRef = useRef<HTMLHeadingElement>(null);
   const [modo, setModo] = useState<ModoDeNascimentoDoCard>(inicial.modo);
   const [limiar, setLimiar] = useState<number>(inicial.limiar);
   const [semChaveOpenRouter, setSemChaveOpenRouter] = useState(false);
@@ -125,12 +129,18 @@ export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; pode
       const r = await definirNascimentoDoCard({ modo, limiar });
       if (r.ok) {
         toast.success(t("Regra salva."));
+        // Foco pro título da seção: sem isto o foco fica no botão Salvar que
+        // acabou de desabilitar (mudou volta a `false`) ou, quando a página
+        // remonta pela `key` nova de `SecaoNascimentoDoCard`, cai no `body` —
+        // o navegador não tem mais pra onde levar o foco que a remontagem
+        // derrubou.
+        tituloRef.current?.focus({ preventScroll: true });
         return;
       }
       toast.error(t(MENSAGEM_DO_ERRO[r.erro]));
       if (r.erro === "sem_chave_openrouter") setSemChaveOpenRouter(true);
-      // A leitura fresca vem pela `key` nova que a página monta a partir do
-      // `inicial` atualizado — este componente só pede o refresh.
+      // A leitura fresca vem pela `key` nova que `SecaoNascimentoDoCard` monta
+      // a partir do `inicial` atualizado — este componente só pede o refresh.
       if (r.erro === "tente_de_novo") router.refresh();
     });
   }
@@ -138,7 +148,7 @@ export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; pode
   return (
     <Card className="space-y-6 p-6" data-testid="nascimento-do-card">
       <div>
-        <h2 id={TITULO_ID} className="text-base font-semibold">
+        <h2 ref={tituloRef} id={TITULO_ID} tabIndex={-1} className="text-base font-semibold outline-hidden">
           {t("Quando o card nasce")}
         </h2>
         <p className="text-sm text-muted-foreground">{t("Decide quais conversas abrem um card.")}</p>
@@ -190,11 +200,11 @@ export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; pode
             )}
           </p>
           {semChaveOpenRouter ? (
-            <p
-              role="alert"
-              data-testid="aviso-sem-chave-openrouter"
-              className="text-xs text-amber-700 dark:text-amber-300"
-            >
+            // SEM `role="alert"`: o toast já anuncia o mesmo texto quando o
+            // erro chega — um `alert` aqui faria um leitor de tela ouvir a
+            // mesma frase duas vezes. Isto fica como texto comum, só lido
+            // por quem navega até o card.
+            <p data-testid="aviso-sem-chave-openrouter" className="text-xs text-amber-700 dark:text-amber-300">
               {t("Cadastre e valide uma chave da OpenRouter em IA › Credenciais antes de ligar esta regra.")}{" "}
               <Link href="/app/ai/credentials" className="font-medium underline underline-offset-4">
                 {t("Cadastrar uma chave")}
@@ -215,4 +225,22 @@ export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; pode
       )}
     </Card>
   );
+}
+
+/**
+ * O invólucro que a PÁGINA usa — nunca `NascimentoDoCard` direto.
+ *
+ * A `key` mora AQUI, não espalhada na chamada de quem monta a tela: sem ela,
+ * um `rerender` com `inicial` novo (a regra mudou no servidor — outra aba, ou
+ * o `router.refresh()` de cima depois de um "tente_de_novo") reaproveitaria a
+ * MESMA instância de `NascimentoDoCard`, e o `useState` que guarda `modo`/
+ * `limiar` só roda o inicializador na primeira montagem — o rádio continuaria
+ * mostrando a escolha ANTIGA, e "Salvar" compararia contra um `inicial` que
+ * já não é mais o valor em vigor. Trocar a `key` força o React a desmontar e
+ * remontar, e só a remontagem reinicializa o estado a partir do `inicial`
+ * novo. `NascimentoDoCard.test.tsx` prova isto num invólucro rerenderizado
+ * SEM clique nenhum — só assim o teste mede a `key`, e não o clique.
+ */
+export function SecaoNascimentoDoCard(props: { inicial: Regra; podeEditar: boolean }) {
+  return <NascimentoDoCard key={`${props.inicial.modo}:${props.inicial.limiar}`} {...props} />;
 }

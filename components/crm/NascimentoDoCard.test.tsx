@@ -19,7 +19,7 @@ window.HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
 window.HTMLElement.prototype.setPointerCapture = vi.fn();
 window.HTMLElement.prototype.releasePointerCapture = vi.fn();
 
-const { NascimentoDoCard } = await import("@/components/crm/NascimentoDoCard");
+const { NascimentoDoCard, SecaoNascimentoDoCard } = await import("@/components/crm/NascimentoDoCard");
 
 /**
  * `delay: null` mata a espera que o user-event insere entre cada evento de
@@ -74,7 +74,7 @@ describe("NascimentoDoCard", () => {
     },
   );
 
-  it("sem chave da OpenRouter, diz onde cadastrar e deixa o link fixo no card", async () => {
+  it("sem chave da OpenRouter, diz onde cadastrar e deixa o link fixo no card — SEM role=alert (o toast já anuncia)", async () => {
     definir.mockResolvedValue({ ok: false, erro: "sem_chave_openrouter" });
     render(<NascimentoDoCard inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />);
     fireEvent.click(screen.getByLabelText(/só conversas comerciais/i));
@@ -82,14 +82,28 @@ describe("NascimentoDoCard", () => {
     await waitFor(() => expect(toastErro).toHaveBeenCalledWith(expect.stringMatching(/OpenRouter.*Credenciais/)));
     const link = screen.getByRole("link", { name: /cadastrar uma chave/i });
     expect(link).toHaveAttribute("href", "/app/ai/credentials");
+    // Duplicar o anúncio (toast + alert) faria um leitor de tela ouvir a
+    // mesma frase duas vezes — por isso este aviso é texto comum, não alerta.
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("erro tente_de_novo recarrega a página em vez de deixar o admin salvar em cima de dado velho", async () => {
+  it("ao salvar com sucesso, o foco vai para o título da seção", async () => {
+    definir.mockResolvedValue({ ok: true, modo: "classificador", limiar: 0.7 });
+    render(<NascimentoDoCard inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />);
+    fireEvent.click(screen.getByLabelText(/só conversas comerciais/i));
+    fireEvent.click(screen.getByRole("button", { name: /salvar/i }));
+    await waitFor(() => expect(toastOk).toHaveBeenCalled());
+    expect(screen.getByRole("heading", { name: /quando o card nasce/i })).toHaveFocus();
+  });
+
+  it("erro tente_de_novo pede pra conferir e salvar de novo — NUNCA 'recarregue', o refresh() já fez isso", async () => {
     definir.mockResolvedValue({ ok: false, erro: "tente_de_novo" });
     render(<NascimentoDoCard inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />);
     fireEvent.click(screen.getByLabelText(/só conversas comerciais/i));
     fireEvent.click(screen.getByRole("button", { name: /salvar/i }));
-    await waitFor(() => expect(toastErro).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(toastErro).toHaveBeenCalledWith("Outra pessoa mudou esta configuração agora. Confira e salve de novo."),
+    );
     expect(refreshMock).toHaveBeenCalled();
   });
 
@@ -98,17 +112,38 @@ describe("NascimentoDoCard", () => {
     expect(screen.getByLabelText(/só conversas comerciais/i)).toBeDisabled();
     expect(screen.queryByRole("button", { name: /salvar/i })).toBeNull();
   });
+});
 
-  it("quando a regra salva muda por fora (key nova, no molde da página), remonta e Salvar volta a ficar desabilitado", () => {
+describe("SecaoNascimentoDoCard — o invólucro que a página usa (é quem tem a key)", () => {
+  /**
+   * ⚠️ Este é o teste que PROVA a `key`, não o clique.
+   *
+   * Uma versão anterior deste teste clicava em "Só conversas comerciais"
+   * ANTES do rerender e só então rerenderizava com `inicial` já em
+   * `classificador`/0.7 — os MESMOS valores que o clique já tinha deixado no
+   * estado local. Isso passava com ou sem remontagem: o clique, sozinho, já
+   * igualava `modo`/`limiar` ao `inicial` novo, então a asserção "Salvar
+   * desabilitado" era verdadeira mesmo se a `key` nunca existisse. Sabotagem
+   * confirmou: comentar a `key` de `SecaoNascimentoDoCard` não derrubava
+   * aquele teste.
+   *
+   * Este aqui NÃO clica em nada — o `rerender` troca só o `inicial`, com um
+   * `limiar` (0.8) que o usuário nunca escolheu. Só a REMONTAGEM (a `key`
+   * mudando de "toda_conversa:0.7" pra "classificador:0.8") explica o rádio
+   * novo aparecer marcado e o Salvar nascer desabilitado — sem ela, o estado
+   * local ficaria preso em "toda_conversa"/0.7 e o teste reprovaria. Sabotado
+   * de novo (removendo a `key` do invólucro) para confirmar que ESTE vai pro
+   * vermelho: foi.
+   */
+  it("quando a regra salva muda por fora, remonta com a regra nova sem precisar de clique", () => {
     const { rerender } = render(
-      <NascimentoDoCard key="toda_conversa:0.7" inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />,
+      <SecaoNascimentoDoCard inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />,
     );
-    fireEvent.click(screen.getByLabelText(/só conversas comerciais/i));
-    expect(screen.getByRole("button", { name: /salvar/i })).toBeEnabled();
+    expect(screen.getByLabelText(/toda conversa vira card/i)).toBeChecked();
 
-    rerender(
-      <NascimentoDoCard key="classificador:0.7" inicial={{ modo: "classificador", limiar: 0.7 }} podeEditar />,
-    );
+    rerender(<SecaoNascimentoDoCard inicial={{ modo: "classificador", limiar: 0.8 }} podeEditar />);
+
+    expect(screen.getByLabelText(/só conversas comerciais/i)).toBeChecked();
     expect(screen.getByRole("button", { name: /salvar/i })).toBeDisabled();
   });
 });

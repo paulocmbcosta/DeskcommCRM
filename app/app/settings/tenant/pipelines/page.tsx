@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { NascimentoDoCard } from "@/components/crm/NascimentoDoCard";
+import { SecaoNascimentoDoCard } from "@/components/crm/NascimentoDoCard";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -67,16 +67,10 @@ export default async function PipelinesSettingsPage() {
           .
         </p>
       </header>
-      {/* `key` força remontar quando a regra SALVA muda por fora (ex.: outra
-          aba, ou o `router.refresh()` que o próprio componente pede depois de
-          um "tente_de_novo") — sem isso o estado local ficaria preso no valor
-          do primeiro mount, e o botão Salvar compararia contra um `inicial`
-          que já não é mais o valor em vigor no servidor. */}
-      <NascimentoDoCard
-        key={`${regraDeNascimento.modo}:${regraDeNascimento.limiar}`}
-        inicial={regraDeNascimento}
-        podeEditar={podeEditarNascimento}
-      />
+      {/* A `key` que remonta quando a regra SALVA muda por fora mora DENTRO
+          de `SecaoNascimentoDoCard` — ver o cabeçalho dela em
+          components/crm/NascimentoDoCard.tsx. */}
+      <SecaoNascimentoDoCard inicial={regraDeNascimento} podeEditar={podeEditarNascimento} />
       <PipelinesClient pipelines={pipelines} podeEditarConfig={podeEditarConfig} />
     </div>
   );
