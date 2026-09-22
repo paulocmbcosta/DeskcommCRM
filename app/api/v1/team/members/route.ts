@@ -10,6 +10,15 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
  *
  * A senha entra no body e morre aqui: não volta na resposta, não vai para a
  * auditoria, não vai para log. A tela mostra a que a própria pessoa digitou.
+ *
+ * SEM `Idempotency-Key`, de propósito, e contra a regra geral dos POST de
+ * criação. O recibo de `lib/api/idempotency.ts` guarda por 24h o sha256 do
+ * corpo — e aqui o corpo tem a senha: seria um hash rápido, sem sal, de uma
+ * senha recém-escolhida, sentado no banco. Tirar a senha do hash faria uma
+ * repetição com senha diferente devolver o recibo da primeira, e a tela
+ * mostraria como válida uma senha que não vale. O efeito já é único pelo
+ * e-mail: repetir o POST responde 409 "já faz parte da equipe" e nada
+ * acontece duas vezes.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";

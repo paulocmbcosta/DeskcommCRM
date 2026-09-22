@@ -52,7 +52,7 @@ modo leitura barra (`requireSupportWrite`), `requireRole("admin")`, service role
 5. Audita `member.created` (`target_user_id`, `email`, `role`). **Senha nunca vai para metadata,
    log ou resposta.**
 
-Resposta 201 `{ data: { user_id, email, full_name, role, entregue } }`.
+Resposta 201 `{ data: { user_id, email, full_name, role, entregue, login_url } }`.
 
 ### `POST /api/v1/team/[user_id]/password`
 
