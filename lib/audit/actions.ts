@@ -592,6 +592,13 @@ export const AUDIT_ACTIONS = [
   "conector.vinculo_criado",
   "conector.vinculo_removido",
   "conector.fatura_enviada",
+  // Fase 4 (a IA cobra): o limite de dias que manda a fatura para a Cobrança é
+  // política da empresa — quem mudou e de quanto para quanto. A recusa de
+  // identidade é o CONTADOR das 3 tentativas por atendimento (sem CPF nem data no
+  // metadata). E o encaminhamento é o registro de que a IA NÃO mandou, e por quê.
+  "conector.preferencias_alteradas",
+  "conector.identificacao_recusada",
+  "conector.cobranca_encaminhada",
   // Cadastro direto de membro, com a senha escolhida por quem administra — a
   // porta de entrada que não depende de e-mail. E a senha nova definida por um
   // admin para um membro. `metadata` NUNCA leva a senha: diz quem, para quem e

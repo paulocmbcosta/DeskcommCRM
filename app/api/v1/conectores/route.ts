@@ -28,6 +28,7 @@ export async function GET(): Promise<Response> {
         descricao: c.descricao,
         ajuda_do_endereco: c.ajudaDoEndereco,
         ajuda_do_token: c.ajudaDoToken,
+        cobra_pela_ia: Boolean(c.agente),
         conexao: await lerConexaoPublica(admin, authz.org.orgId, c.id),
       })),
     );

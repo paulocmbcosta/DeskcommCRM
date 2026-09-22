@@ -30,6 +30,7 @@ interface ConectorDaTela {
   descricao: string;
   ajuda_do_endereco: string;
   ajuda_do_token: string;
+  cobra_pela_ia: boolean;
   conexao: ConexaoPublica | null;
 }
 
@@ -38,6 +39,58 @@ const CHAVE = ["conectores", "configuracao"] as const;
 
 function mensagemDoErro(err: unknown, padrao: string): string {
   return err instanceof ApiError && err.message ? err.message : padrao;
+}
+
+/**
+ * O limite de dias da cobrança pela IA (migration 0274). Mora na ficha do
+ * conector porque é política DAQUELA ligação com o sistema de gestão.
+ */
+function LimiteDaCobranca({ conector, dias }: { conector: string; dias: number }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const [valor, setValor] = useState(String(dias));
+  const salvar = useMutation({
+    mutationFn: () =>
+      apiClient.patch(`/api/v1/conectores/${conector}/conexao`, { cobranca_encaminha_apos_dias: Number(valor) }),
+    onSuccess: () => {
+      toast.success(t("Limite salvo."));
+      void qc.invalidateQueries({ queryKey: CHAVE });
+    },
+    onError: (err) => toast.error(mensagemDoErro(err, t("Não consegui salvar o limite."))),
+  });
+  return (
+    <form
+      className="mt-4 space-y-1.5 border-t border-border pt-4"
+      data-testid={`limite-cobranca-${conector}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        salvar.mutate();
+      }}
+    >
+      <Label htmlFor={`limite-${conector}`}>{t("Cobrança pela IA")}</Label>
+      <div className="flex flex-wrap items-center gap-2 text-sm text-text">
+        <span>{t("Faturas com mais de")}</span>
+        <Input
+          id={`limite-${conector}`}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={3650}
+          value={valor}
+          onChange={(e) => setValor(e.target.value)}
+          className="w-24"
+          aria-label={t("Dias de atraso")}
+        />
+        <span>{t("dias de atraso vão para a Cobrança.")}</span>
+        <Button type="submit" variant="outline" disabled={salvar.isPending || valor === String(dias)}>
+          {t("Salvar")}
+        </Button>
+      </div>
+      <p className="text-xs text-text-muted">
+        {t("A IA não envia a cobrança dessas faturas: avisa o cliente que ela foi encaminhada ao setor de cobrança e transfere a conversa.")}
+      </p>
+    </form>
+  );
 }
 
 function Ficha({ conector }: { conector: ConectorDaTela }) {
@@ -157,6 +210,10 @@ function Ficha({ conector }: { conector: ConectorDaTela }) {
             </>
           )}
         </dl>
+      )}
+
+      {conexao && !editando && conector.cobra_pela_ia && (
+        <LimiteDaCobranca conector={conector.id} dias={conexao.cobranca_encaminha_apos_dias} />
       )}
 
       {mostrarFormulario && (
