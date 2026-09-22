@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ArquivoDaCobranca, MensagemDaCobranca } from "../tipos";
+import { FalhaDoConector, type ArquivoDaCobranca, type MensagemDaCobranca } from "../tipos";
 
 const listar = vi.fn();
 const baixarBoleto = vi.fn();
@@ -30,9 +30,11 @@ const CONTRATO: Linha = { id: "700", id_cliente: "10", contrato: "Fibra 500 Mega
 const fatura = (id: string, venc: string, extra: Linha = {}): Linha => ({ id, id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: venc, valor: "129.90", valor_aberto: "129.90", linha_digitavel: "", pix_txid: "", ...extra });
 const LOGIN: Linha = { id: "5", id_cliente: "10", id_contrato: "700", login: "maria", ativo: "S", online: "N", ip: "100.64.10.27", mac: "AA:BB:CC:DD:EE:FF" };
 
-/** IXC de mentira: filtra pelo que o conector pediu e PROJETA nos campos pedidos, como `http.ts`. */
-function ixc(tabelas: Record<string, Linha[]>) {
+/** IXC de mentira: filtra pelo que o conector pediu e PROJETA nos campos pedidos, como `http.ts`. Uma tabela pode vir como `Error` — simula seção que falha. */
+function ixc(tabelas: Record<string, Linha[] | Error>) {
   listar.mockImplementation(async (_c: unknown, p: { tabela: string; filtro: { campo: string; valor: string; operador: string }; tambem?: Array<{ campo: string; valor: string; operador: string }>; campos: readonly string[] }) => {
+    const dados = tabelas[p.tabela] ?? [];
+    if (dados instanceof Error) throw dados;
     const casa = (l: Linha, f: { campo: string; valor: string; operador: string }) => {
       const v = l[f.campo.split(".").pop() ?? ""] ?? "";
       if (f.operador === "=") return v === f.valor;
@@ -40,7 +42,7 @@ function ixc(tabelas: Record<string, Linha[]>) {
       if (f.operador === "L") return v.includes(f.valor);
       return true;
     };
-    const achadas = (tabelas[p.tabela] ?? []).filter((l) => [p.filtro, ...(p.tambem ?? [])].every((f) => casa(l, f)));
+    const achadas = dados.filter((l) => [p.filtro, ...(p.tambem ?? [])].every((f) => casa(l, f)));
     return { total: achadas.length, registros: achadas.map((l) => Object.fromEntries(p.campos.map((c) => [c, l[c] ?? ""]))) };
   });
 }
@@ -64,10 +66,22 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
     expect(r.cliente).toMatchObject({ primeiroNome: "Maria", situacao: "Bloqueado", motivoDaSituacao: "financeiro em atraso", bloqueado: true, plano: "Fibra 500 Mega", clienteDesde: "2024-03-10", conexao: "offline", temOsAberta: false });
     expect(r.financeiro?.daVez).toEqual({ vencimento: "2026-07-14", valorCents: 12990, diasDeAtraso: 70 });
     expect(r.financeiro?.proxima?.vencimento).toBe("2026-10-12");
+
+    // Régua de FORMA, não só de string proibida: nenhuma chave extra (id,
+    // documento, endereco, ip, mac…) pode se infiltrar em `ClienteParaAgente`
+    // nem em `FaturaParaAgente` — uma variável com o NOME errado passaria pela
+    // varredura de string abaixo sem deixar rastro.
+    expect(Object.keys(r.cliente).sort()).toEqual(
+      ["primeiroNome", "situacao", "motivoDaSituacao", "bloqueado", "plano", "clienteDesde", "conexao", "temOsAberta"].sort(),
+    );
+    expect(Object.keys(r.financeiro?.daVez ?? {}).sort()).toEqual(["vencimento", "valorCents", "diasDeAtraso"].sort());
     // `auditoria` é o que o motor tem de tirar de propósito antes de montar o
     // contexto da IA — não pode estar dentro do que já é a projeção do cliente.
     expect(r.cliente).not.toHaveProperty("auditoria");
     expect(r.financeiro).not.toHaveProperty("auditoria");
+
+    // Segunda linha de defesa: varredura de string, pro caso de um VALOR (não
+    // uma chave) vazar por um campo que a asserção de forma não cobre.
     const json = JSON.stringify(r);
     for (const proibido of ["529.982", "Rua das Flores", "100.64", "AA:BB", "segredo", "\"900\"", "\"10\"", "\"700\""]) expect(json).not.toContain(proibido);
     expect(vincular).not.toHaveBeenCalled();
@@ -434,5 +448,55 @@ describe("enviarCobranca — Pix recusado por motivo FORA do Set não tenta o bo
     expect(r.auditoria.motivoInterno).toBe("fatura_nao_encontrada");
     expect(releiturasPorId).toBe(1);
     expect(baixarBoleto).not.toHaveBeenCalled();
+  });
+});
+
+describe("consultar — identidadeDoTelefone 'desconhecido' não é 'nao' (importante 11)", () => {
+  it("vínculo `telefone` já gravado continua valendo — 'desconhecido' não descarta", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
+    ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "desconhecido" });
+    expect(r.estado).toBe("identificado");
+  });
+
+  it("sem vínculo: 'desconhecido' NÃO autoriza vincular sozinho pelo telefone", async () => {
+    ixc({ cliente: [MARIA] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "desconhecido" });
+    expect(r.estado).toBe("precisa_cpf_e_nascimento");
+    expect(vincular).not.toHaveBeenCalled();
+  });
+});
+
+describe("consultar — seção do resumo FALHANDO não afirma o que não sabe (importante 11)", () => {
+  beforeEach(() => listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]));
+
+  it("contratos indisponíveis: situacao/bloqueado/plano/clienteDesde são null — nunca 'Liberado'", async () => {
+    ixc({ cliente: [MARIA], cliente_contrato: new FalhaDoConector("recurso_indisponivel", "ixc_cliente_contrato_indisponivel") });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    expect(r.estado).toBe("identificado");
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.cliente.situacao).toBeNull();
+    expect(r.cliente.bloqueado).toBeNull();
+    expect(r.cliente.motivoDaSituacao).toBeNull();
+    expect(r.cliente.plano).toBeNull();
+    expect(r.cliente.clienteDesde).toBeNull();
+  });
+
+  it("financeiro indisponível: financeiro é null, mas o resto do cliente continua de pé", async () => {
+    ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO], fn_areceber: new FalhaDoConector("recurso_indisponivel", "ixc_fn_areceber_indisponivel") });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    expect(r.estado).toBe("identificado");
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.financeiro).toBeNull();
+    expect(r.cliente.situacao).toBe("Bloqueado");
+  });
+});
+
+describe("consultar — vínculo aponta para cadastro que sumiu do IXC (importante 11)", () => {
+  it("identifica de novo em vez de quebrar", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "999", verificado_por: "documento", created_at: "" }]);
+    ixc({ cliente: [] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao" });
+    expect(r.estado).toBe("precisa_cpf_e_nascimento");
   });
 });
