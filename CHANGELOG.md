@@ -8,6 +8,39 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.36.0] — 2026-09-22
+
+### Adicionado
+
+- **Equipe — cadastrar um membro já com senha, sem depender de e-mail** Em **Equipe › Adicionar membros**, a aba **Cadastrar com senha** (agora a primeira) cadastra
+  a pessoa na hora: nome, e-mail, senha e papel. Não há convite, link nem confirmação por
+  e-mail — a pessoa já entra com o e-mail e a senha que você definiu. O botão **Gerar senha**
+  cria uma senha fácil de ditar, e depois do cadastro a tela mostra endereço, e-mail e senha
+  com **Copiar dados de acesso**. A senha não fica guardada em lugar nenhum: copie na hora.
+
+  No menu de cada membro (aba **Membros**) há **Definir nova senha**, para quando alguém
+  esquece a senha — numa instalação sem envio de e-mail, "Esqueci a senha" não chega a lugar
+  nenhum. A senha anterior deixa de valer para novas entradas; quem já estiver conectado
+  pode continuar até sair (para tirar a pessoa na hora, use **Revogar acesso**).
+
+  Novo também: **Configurações › Perfil › Trocar senha**, para qualquer pessoa trocar a
+  própria senha logada, informando a atual. É o jeito de o membro ficar com uma senha que só
+  ele conhece.
+
+  O convite por e-mail continua na aba **Convidar por e-mail**, para quem prefere que a
+  pessoa escolha a própria senha. Sem e-mail configurado, a tela passa a dizer isso e a
+  apontar para o cadastro com senha.
+
+  Proteções, para instalações com mais de uma organização: o cadastro nunca troca a senha de
+  um e-mail que já tem conta no sistema; **Definir nova senha** não vale para quem também faz
+  parte de outra organização; e uma conta cuja senha foi definida por um administrador só
+  aceita convite de **outra** organização depois que a própria pessoa troca a senha. Quem
+  abriu uma organização para outra pessoa entrega o cargo de administrador por convite, não
+  por senha. Numa instalação com uma organização só, nada disso aparece.
+
+  A telemetria de erros passou a apagar senhas e segredos do corpo das requisições antes de
+  enviar qualquer evento.
+
 ## [1.35.1] — 2026-09-22
 
 ### Corrigido
@@ -5273,7 +5306,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.36.0...HEAD
+[1.36.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.1...v1.36.0
 [1.35.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.0...v1.35.1
 [1.35.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.2...v1.35.0
 [1.34.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.1...v1.34.2
