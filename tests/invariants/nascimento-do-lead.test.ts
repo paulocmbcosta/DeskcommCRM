@@ -113,10 +113,12 @@ beforeAll(async () => {
   // ORG_CLASSIFICADOR_CLIENTE: as DUAS regras ligadas juntas — é o único jeito
   // de exercitar o sufixo "cliente conhecido" numa razão do classificador.
   // Funil de clientes próprio (irmão exclusivo do padrão que o trigger semeia),
-  // com etapa utilizável — sem ela o destino cairia no padrão (regra do
-  // cabeçalho de nascimento-do-lead.ts) e o `ehCliente` continuaria `true`
-  // mesmo assim, então a etapa não é o que este teste mede; está aqui só para
-  // não deixar `funilDeEntrada` recusar por falta de etapa.
+  // COM etapa utilizável: sem etapa, `funilDeEntrada` não recusa — ela cai no
+  // funil de ENTRADA mesmo com `ehCliente = true` (a regra do cabeçalho de
+  // nascimento-do-lead.ts: "TODA FALHA CAI NO FUNIL DE ENTRADA"). A etapa
+  // existe aqui porque o teste de baixo precisa que o card entre no funil de
+  // CLIENTES de fato — sem ela, a asserção do `pipelineId` mediria o destino
+  // errado pelo motivo errado.
   await criarOrg(ORG_CLASSIFICADOR_CLIENTE, "org-nascimento-classificador-cliente");
   await pool.query(
     `update organizations
@@ -592,9 +594,18 @@ describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", (
     const r = await garantirLeadDaConversa(
       db,
       { organizationId: ORG_CLASSIFICADOR_CLIENTE, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Duda Cliente" },
-      { tipo: "classificador", assunto: "duvida_geral", rotuloDoAssunto: "dúvida geral", probabilidade: 0.8, modelo: "jev-1.13.0" },
+      { tipo: "classificador", assunto: "mudanca_de_plano", rotuloDoAssunto: "mudança de plano", probabilidade: 0.8, modelo: "jev-1.13.0" },
     );
     expect(r.criado, JSON.stringify(r)).toBe(true);
+    if (!r.criado) return;
+    // O SUFIXO explica justamente este destino: é o funil de CLIENTES, não o
+    // de entrada — sem esta asserção, o teste provaria a frase sem provar que
+    // ela corresponde ao card que de fato nasceu.
+    const { rows: funilDeClientes } = await pool.query<{ id: string }>(
+      "select id from crm_pipelines where organization_id = $1 and is_client_pipeline",
+      [ORG_CLASSIFICADOR_CLIENTE],
+    );
+    expect(r.pipelineId).toBe(funilDeClientes[0]!.id);
 
     const { rows } = await pool.query<{ reason: string }>(
       `select reason from crm_lead_activities
@@ -602,7 +613,7 @@ describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", (
       [ORG_CLASSIFICADOR_CLIENTE, contato],
     );
     expect(rows[0]!.reason).toBe(
-      "conversa identificada como comercial (80%) — assunto: dúvida geral — cliente conhecido",
+      "conversa identificada como comercial (80%) — assunto: mudança de plano — cliente conhecido",
     );
   });
 
