@@ -675,7 +675,9 @@ export type { ArquivoDaCobranca, MensagemDaCobranca, PortasDoEnvio };
 export const FERRAMENTA_CONSULTAR_CLIENTE = "crm_consultar_cliente_erp";
 export const FERRAMENTA_ENVIAR_COBRANCA = "crm_enviar_cobranca_erp";
 
-export const FERRAMENTAS_DO_CONECTOR: readonly string[] = [FERRAMENTA_CONSULTAR_CLIENTE, FERRAMENTA_ENVIAR_COBRANCA];
+export const FERRAMENTAS_DO_CONECTOR = [FERRAMENTA_CONSULTAR_CLIENTE, FERRAMENTA_ENVIAR_COBRANCA] as const;
+/** A mesma lista como `string[]`, para quem compara com id vindo do banco (`tool_ids`). */
+export const IDS_DAS_FERRAMENTAS_DO_CONECTOR: readonly string[] = FERRAMENTAS_DO_CONECTOR;
 
 export const DESCRICAO_CONSULTAR_CLIENTE =
   "Consulta o cliente DESTA conversa no sistema de gestão da empresa: situação do acesso, plano, " +
@@ -2064,7 +2066,7 @@ Em `lib/mcp/tools/index.ts`: `import { crmConsultarClienteErp, crmEnviarCobranca
  * ou no Operador, que não fala com o cliente. Diferente de `BLOCKED_TOOL_IDS`, sai
  * em silêncio: estar ligado na tela é o estado normal, não um alerta.
  */
-export const NATIVAS_DO_MOTOR: ReadonlySet<string> = new Set(FERRAMENTAS_DO_CONECTOR);
+export const NATIVAS_DO_MOTOR: ReadonlySet<string> = new Set(IDS_DAS_FERRAMENTAS_DO_CONECTOR);
 ```
 
 e troque `const allowed = agentConfig.toolIds.filter((id) => !BLOCKED_TOOL_IDS.has(id));` por `const allowed = agentConfig.toolIds.filter((id) => !BLOCKED_TOOL_IDS.has(id) && !NATIVAS_DO_MOTOR.has(id));`.
@@ -2081,7 +2083,7 @@ e troque `const allowed = agentConfig.toolIds.filter((id) => !BLOCKED_TOOL_IDS.h
   } catch {
     temConector = false;
   }
-  const oferecidas = servidas.filter((c) => temConector || !FERRAMENTAS_DO_CONECTOR.includes(c.id));
+  const oferecidas = servidas.filter((c) => temConector || !IDS_DAS_FERRAMENTAS_DO_CONECTOR.includes(c.id));
 ```
 
 e troque `const tools = servidas.map(` por `const tools = oferecidas.map(`.
@@ -2327,7 +2329,7 @@ import {
   DESCRICAO_ENVIAR_COBRANCA,
   FERRAMENTA_CONSULTAR_CLIENTE,
   FERRAMENTA_ENVIAR_COBRANCA,
-  FERRAMENTAS_DO_CONECTOR,
+  IDS_DAS_FERRAMENTAS_DO_CONECTOR,
 } from '@/lib/conectores/ferramentas-do-agente';
 import { conectorDoAgente } from '@/lib/conectores/registro';
 import {
@@ -2430,7 +2432,7 @@ function esgotadas(): Resposta {
 }
 
 export async function montarFerramentasDoConector(p: PedidoDeFerramentas): Promise<FerramentasDoConector> {
-  const pedidas = FERRAMENTAS_DO_CONECTOR.filter((id) => p.toolIds.includes(id));
+  const pedidas = IDS_DAS_FERRAMENTAS_DO_CONECTOR.filter((id) => p.toolIds.includes(id));
   if (pedidas.length === 0) return { tools: {}, ausentes: [] };
   const conector = await conectorDoAgente(p.supabase, p.tenantId);
   if (!conector) return { tools: {}, ausentes: pedidas };
@@ -2840,11 +2842,11 @@ export const FERRAMENTAS_DE_ENVIO = ['send_message', 'send_template', FERRAMENTA
 
 (se o comentário acima dela listar as ferramentas, acrescente a cobrança nele).
 
-- [ ] **Step 4: prévia** — em `lib/agent-engine/agent/preview.ts`, importe `import { FERRAMENTAS_DO_CONECTOR } from '@/lib/conectores/ferramentas-do-agente';`, e em `applyPreviewPolicy`:
-  - logo depois de `const catalog = getToolByName(name);`, acrescente `const doConector = FERRAMENTAS_DO_CONECTOR.includes(name);` e o comentário `// As ferramentas do conector tocam o ERP e gravam (vínculo, auditoria, envio): na prévia são SEMPRE proposta — mesmo a consulta, que o catálogo marca como leitura.`;
+- [ ] **Step 4: prévia** — em `lib/agent-engine/agent/preview.ts`, importe `import { IDS_DAS_FERRAMENTAS_DO_CONECTOR } from '@/lib/conectores/ferramentas-do-agente';`, e em `applyPreviewPolicy`:
+  - logo depois de `const catalog = getToolByName(name);`, acrescente `const doConector = IDS_DAS_FERRAMENTAS_DO_CONECTOR.includes(name);` e o comentário `// As ferramentas do conector tocam o ERP e gravam (vínculo, auditoria, envio): na prévia são SEMPRE proposta — mesmo a consulta, que o catálogo marca como leitura.`;
   - troque o `if (` da passagem direta por `if (!doConector && (nativeRead || (catalog?.category === 'read' && (p.contactId !== null || SCENARIO_READS.has(name)))))`;
   - troque `if (catalog?.category === 'read')` (o do `scenario_contact_unavailable`) por `if (catalog?.category === 'read' && !doConector)`;
-  - no array de nomes do ramo de proposta, acrescente `...FERRAMENTAS_DO_CONECTOR,`.
+  - no array de nomes do ramo de proposta, acrescente `...IDS_DAS_FERRAMENTAS_DO_CONECTOR,`.
 
 - [ ] **Step 5: o turno** — em `lib/agent-engine/agent/inbound-turn.ts`:
   - importe `import { montarFerramentasDoConector } from './ferramentas-do-conector';`;
