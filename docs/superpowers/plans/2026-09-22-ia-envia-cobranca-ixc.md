@@ -30,6 +30,10 @@
    ilegível, e a IA mandaria uma cobrança de R$ 0,00.
 4. **`vincular` mudou de assinatura** (Tarefa 6): devolve `{ vinculou, promovido }`, não mais
    `boolean` — `vinculou` é true tanto para linha nova quanto para promoção.
+5. **Auditoria mora num ramo próprio do resultado** (revisão do lote B): `auditoria.vinculou` e
+   `auditoria.faturaId`/`motivoInterno` ficam FORA do que a Tarefa 13 projeta para o modelo —
+   um `...resultado` desavisado não vaza id. E existe o resultado `fatura_ja_paga`: a fatura
+   fechou entre listar e reler, e quem acabou de pagar NÃO vai para a Cobrança.
 
 ## Regras que valem para todas as tarefas
 
@@ -2174,7 +2178,7 @@ const IDENTIFICADO = {
     totalVencidoCents: 12990,
     daVez: { vencimento: "2026-07-14", valorCents: 12990, diasDeAtraso: 70 },
   },
-  vinculou: { verificadoPor: "telefone", cadastros: ["10"] },
+  auditoria: { vinculou: { verificadoPor: "telefone", cadastros: ["10"] } },
 };
 
 beforeEach(() => {
@@ -2258,7 +2262,7 @@ describe("crm_enviar_cobranca_erp", () => {
       const caminho = await p.portas.guardarArquivo({ nome: "pix-14-07-2026", extensao: "png", mime: "image/png", conteudo: Buffer.from("x") });
       await p.portas.enviar({ type: "image", body: "Segue o Pix", media_storage_path: caminho, media_mime: "image/png", media_size_bytes: 1 });
       await p.portas.enviar({ type: "text", body: "000201..." });
-      return { resultado: "enviada", forma: "pix", fatura: { vencimento: "2026-08-20", valorCents: 12990, diasDeAtraso: 33 }, faturaId: "901", enviadas: 2, previstas: 2, pixGeradoAgora: true, pixIndisponivel: false };
+      return { resultado: "enviada", forma: "pix", fatura: { vencimento: "2026-08-20", valorCents: 12990, diasDeAtraso: 33 }, enviadas: 2, previstas: 2, pixGeradoAgora: true, pixIndisponivel: false, auditoria: { faturaId: "901" } };
     });
     const r = await rodar("crm_enviar_cobranca_erp", { forma: "PIX" });
     expect(enviarCobranca).toHaveBeenCalledWith(expect.objectContaining({ forma: "pix", limiteDeDias: 60 }));
@@ -2279,7 +2283,7 @@ describe("crm_enviar_cobranca_erp", () => {
   });
 
   it("acima do limite: audita o encaminhamento e manda transferir", async () => {
-    enviarCobranca.mockResolvedValue({ resultado: "encaminhar_para_cobranca", fatura: { vencimento: "2026-07-14", valorCents: 12990, diasDeAtraso: 70 }, faturaId: "900" });
+    enviarCobranca.mockResolvedValue({ resultado: "encaminhar_para_cobranca", fatura: { vencimento: "2026-07-14", valorCents: 12990, diasDeAtraso: 70 }, auditoria: { faturaId: "900" } });
     const r = await rodar("crm_enviar_cobranca_erp");
     expect(r).toMatchObject({ ok: false, estado: "encaminhar_para_cobranca" });
     expect(String(r.orientacao)).toMatch(/setor de cobrança/);
@@ -2577,13 +2581,16 @@ function orientacaoDaConsulta(r: Extract<ResultadoDaConsulta, { estado: 'identif
 async function respostaDaConsulta(p: PedidoDeFerramentas, conector: ConectorDoTurno, r: ResultadoDaConsulta): Promise<Resposta> {
   switch (r.estado) {
     case 'identificado': {
-      if (r.vinculou) {
+      // `auditoria` é o único ramo do resultado que pode carregar id — e é por
+      // isso que ela vive separada: nada daqui entra na resposta do modelo.
+      const vinculou = r.auditoria.vinculou;
+      if (vinculou) {
         void audit({
           action: 'conector.vinculo_criado',
           organizationId: p.tenantId,
           resourceType: 'contact',
           resourceId: p.leadId,
-          metadata: { conector: conector.id, cadastros: r.vinculou.cadastros, verificado_por: r.vinculou.verificadoPor, conversa: p.conversationId, ...ator(p) },
+          metadata: { conector: conector.id, cadastros: vinculou.cadastros, verificado_por: vinculou.verificadoPor, conversa: p.conversationId, ...ator(p) },
         });
       }
       const limite = await lerLimiteDeCobranca(p.supabase, p.tenantId, conector.id);
@@ -2622,6 +2629,15 @@ async function respostaDaConsulta(p: PedidoDeFerramentas, conector: ConectorDoTu
     case 'data_invalida':
       return { ok: false, estado: r.estado, orientacao: 'A data informada não é uma data válida. Peça de novo (dia/mês/ano) e envie como AAAA-MM-DD.' };
     case 'nao_conferiu': {
+      // O CPF existe e a data do cadastro é ilegível: o CLIENTE recebe a mesma
+      // recusa, mas quem administra precisa ver — senão um ERP que grave a data
+      // noutro formato recusa 100% das conferências em silêncio.
+      if (r.dataIlegivel) {
+        p.log.warn('conferência recusada com data de nascimento ilegível no sistema de gestão', {
+          conector: conector.id,
+          conversa: p.conversationId,
+        });
+      }
       // AGUARDADA: é o contador das tentativas, não telemetria. Sem CPF nem data no metadata.
       await audit({
         action: 'conector.identificacao_recusada',
@@ -2707,7 +2723,7 @@ function respostaDaCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno, r
         resourceId: p.conversationId,
         metadata: {
           conector: conector.id,
-          fatura: r.faturaId,
+          fatura: r.auditoria.faturaId,
           forma: r.forma,
           vencimento: r.fatura.vencimento,
           valor_cents: r.fatura.valorCents,
@@ -2736,13 +2752,21 @@ function respostaDaCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno, r
       return { ok: false, estado: r.resultado, orientacao: `O cliente desta conversa ainda não foi identificado. Chame ${FERRAMENTA_CONSULTAR_CLIENTE} primeiro.` };
     case 'sem_fatura_em_aberto':
       return { ok: false, estado: r.resultado, orientacao: 'Não há fatura em aberto para este cliente. Diga isso a ele.' };
+    case 'fatura_ja_paga':
+      // Ela fechou ENTRE listar e reler: quem acabou de pagar não vai para a Cobrança.
+      return {
+        ok: false,
+        estado: r.resultado,
+        fatura: faturaDoModelo(r.fatura),
+        orientacao: 'Esta fatura foi paga (o sistema já a fechou). Agradeça o pagamento e não envie cobrança. Se o cliente insistir que há outra em aberto, chame esta ferramenta de novo.',
+      };
     case 'encaminhar_para_cobranca': {
       void audit({
         action: 'conector.cobranca_encaminhada',
         organizationId: p.tenantId,
         resourceType: 'conversation',
         resourceId: p.conversationId,
-        metadata: { conector: conector.id, fatura: r.faturaId, dias_de_atraso: r.fatura.diasDeAtraso, limite_de_dias: limite, ...ator(p) },
+        metadata: { conector: conector.id, fatura: r.auditoria.faturaId, dias_de_atraso: r.fatura.diasDeAtraso, limite_de_dias: limite, ...ator(p) },
       });
       return {
         ok: false,
@@ -2759,6 +2783,7 @@ function respostaDaCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno, r
         estado: r.resultado,
         fatura: faturaDoModelo(r.fatura),
         ...(r.detalheDoErp ? { resposta_do_sistema: r.detalheDoErp } : {}),
+        // `motivoInterno` (quando existe) é falha NOSSA, não frase do ERP: vai ao log, nunca ao modelo.
         orientacao: `Não foi possível gerar a cobrança desta fatura agora. Diga que vai passar para o setor de cobrança e ${TRANSFERIR_COBRANCA} (a resposta do sistema vai no motivo da transferência, não para o cliente).`,
       };
   }
