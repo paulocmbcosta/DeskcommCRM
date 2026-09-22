@@ -33,6 +33,16 @@ export interface EstadoDoJev {
   conversa: Array<{ quem: "cliente" | "atendente"; texto: string }>;
 }
 
+/** Corta por CODE POINT, nunca por unidade UTF-16 — senão um emoji vira um surrogate solto e quebra JSON estrito. */
+function cortarPorCodePoint(texto: string, limite: number): string {
+  return Array.from(texto).slice(0, limite).join("");
+}
+
+/**
+ * Quem garante a ordem cronológica (mais antiga → mais nova) da entrada é
+ * `dadosViaSupabase().ultimasMensagens` (Tarefa 7) — esta função só rotula,
+ * filtra e corta, na ordem em que recebe.
+ */
 export function montarEstado(mensagens: MensagemParaEstado[]): EstadoDoJev | null {
   const conversa = mensagens
     .map((m) => ({
@@ -41,7 +51,7 @@ export function montarEstado(mensagens: MensagemParaEstado[]): EstadoDoJev | nul
     }))
     .filter((m) => m.texto !== "")
     .slice(-LIMITE_DE_MENSAGENS)
-    .map((m) => ({ ...m, texto: m.texto.slice(0, LIMITE_DE_CARACTERES_POR_MENSAGEM) }));
+    .map((m) => ({ ...m, texto: cortarPorCodePoint(m.texto, LIMITE_DE_CARACTERES_POR_MENSAGEM) }));
 
   // Só o atendente falando (campanha, aviso) não é conversa a classificar.
   if (!conversa.some((m) => m.quem === "cliente")) return null;
@@ -60,7 +70,11 @@ export const ASSUNTOS = {
 
 export type Assunto = keyof typeof ASSUNTOS;
 
-/** Decisão C do plano: cancelamento fica de fora. */
+/**
+ * Descritivo: quem de fato aplica a decisão C (cancelamento fora) é o
+ * critério `false` da pergunta `comercial`, não esta lista. Serve para
+ * relatório e para o teste que congela a decisão.
+ */
 export const ASSUNTOS_COMERCIAIS: ReadonlySet<Assunto> = new Set<Assunto>([
   "contratacao",
   "mudanca_de_plano",
@@ -112,6 +126,8 @@ export interface Decisao {
 }
 
 export function decidir(resposta: RespostaDoJev, limiar: number): Decisao {
-  const assunto: Assunto = resposta.assunto in ASSUNTOS ? (resposta.assunto as Assunto) : "outro";
+  // Object.hasOwn (não `in`): `in` também é true para "toString", "constructor",
+  // "__proto__" etc. — herdados de Object.prototype — e gravaria lixo na linha do tempo.
+  const assunto: Assunto = Object.hasOwn(ASSUNTOS, resposta.assunto) ? (resposta.assunto as Assunto) : "outro";
   return { criar: resposta.comercial >= limiar, assunto, probabilidade: resposta.comercial };
 }

@@ -53,6 +53,23 @@ describe("montarEstado", () => {
     expect(montarEstado([{ direcao: "outbound", texto: "Promoção de setembro!" }])).toBeNull();
     expect(montarEstado([])).toBeNull();
   });
+
+  it("filtra as vazias ANTES de cortar para as últimas — 12 falas reais sobrevivem a 5 vazias no fim", () => {
+    const reais = Array.from({ length: LIMITE_DE_MENSAGENS }, (_, i) => ({
+      direcao: "inbound" as const,
+      texto: `fala real ${i}`,
+    }));
+    const vazias = Array.from({ length: 5 }, () => ({ direcao: "inbound" as const, texto: null }));
+    const estado = montarEstado([...reais, ...vazias])!;
+    expect(estado.conversa).toHaveLength(LIMITE_DE_MENSAGENS);
+    expect(estado.conversa.map((m) => m.texto)).toEqual(reais.map((m) => m.texto));
+  });
+
+  it("corta por code point — não parte um emoji ao meio num surrogate solto", () => {
+    const estado = montarEstado([{ direcao: "inbound", texto: "a".repeat(499) + "😀" }])!;
+    expect(estado.conversa[0]!.texto).not.toMatch(/[\uD800-\uDBFF]$/);
+    expect(estado.conversa[0]!.texto).toBe("a".repeat(499) + "😀");
+  });
 });
 
 describe("PERGUNTAS", () => {
@@ -60,6 +77,7 @@ describe("PERGUNTAS", () => {
     expect(PERGUNTAS.comercial.type).toBe("noul");
     expect(PERGUNTAS.assunto.type).toBe("choice");
     expect(Object.keys(PERGUNTAS.assunto.criteria)).toEqual(Object.keys(ASSUNTOS));
+    expect(Object.keys(PERGUNTAS).sort()).toEqual(["assunto", "comercial"]);
   });
 
   it("o modelo é uma versão FIXA, nunca o alias que muda sozinho", () => {
@@ -90,4 +108,11 @@ describe("decidir", () => {
   it("assunto fora da lista vira 'outro' — nunca um rótulo inventado", () => {
     expect(decidir({ ...base, comercial: 0.9, assunto: "vendas" }, 0.7).assunto).toBe("outro");
   });
+
+  it.each(["toString", "constructor", "__proto__", "hasOwnProperty"])(
+    "assunto herdado de Object.prototype (%s) vira 'outro'",
+    (assunto) => {
+      expect(decidir({ ...base, comercial: 0.9, assunto }, 0.7).assunto).toBe("outro");
+    },
+  );
 });
