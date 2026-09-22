@@ -22,7 +22,10 @@ export function usePainelIxc(contactId: string | null, cadastro: string | null, 
       const qs = new URLSearchParams();
       if (cadastro) qs.set("cadastro", cadastro);
       if (conversationId) qs.set("conversa", conversationId);
-      const sufixo = qs.size > 0 ? `?${qs.toString()}` : "";
+      // `URLSearchParams.prototype.size` não existe no Safari 16.x — `toString()`
+      // vale em qualquer motor.
+      const s = qs.toString();
+      const sufixo = s ? `?${s}` : "";
       return (
         await apiClient.get<{ data: EstadoDoPainelIxc }>(`/api/v1/contacts/${contactId}/conectores/ixc${sufixo}`, {
           timeoutMs: PRAZO_DO_ERP_MS,
