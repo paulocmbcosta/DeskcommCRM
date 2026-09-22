@@ -669,6 +669,7 @@ jobs:
         times-de-atendimento.spec.ts
         chamar-o-cliente-primeiro.spec.ts
         chat-do-site.spec.ts
+        equipe-cadastro-com-senha.spec.ts
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts

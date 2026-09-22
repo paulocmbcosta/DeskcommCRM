@@ -1,6 +1,7 @@
 "use client";
 
 import { MemberInterfaceDialog } from "@/components/team/MemberInterfaceDialog";
+import { DefinirSenhaDialog } from "@/components/team/DefinirSenhaDialog";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -59,6 +60,7 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
 
   const [interfaceMember, setInterfaceMember] = useState<TeamMember | null>(null);
   const [revokeDialog, setRevokeDialog] = useState<TeamMember | null>(null);
+  const [senhaDe, setSenhaDe] = useState<TeamMember | null>(null);
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">{t("Carregando…")}</p>;
@@ -190,12 +192,22 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
                               {t("Devolver acesso")}
                             </DropdownMenuItem>
                           ) : (
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              onClick={() => setRevokeDialog(m)}
-                            >
-                              {t("Revogar acesso")}
-                            </DropdownMenuItem>
+                            <>
+                              {/*
+                                Sem e-mail configurado, "esqueci a senha" não
+                                chega a lugar nenhum: é daqui que quem
+                                administra devolve a entrada a quem esqueceu.
+                              */}
+                              <DropdownMenuItem onClick={() => setSenhaDe(m)}>
+                                {t("Definir nova senha")}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                onClick={() => setRevokeDialog(m)}
+                              >
+                                {t("Revogar acesso")}
+                              </DropdownMenuItem>
+                            </>
                           )}
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -210,6 +222,13 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
         </Table>
       </div>
 
+      {senhaDe && (
+        <DefinirSenhaDialog
+          key={senhaDe.user_id}
+          member={senhaDe}
+          onClose={() => setSenhaDe(null)}
+        />
+      )}
       {interfaceMember && (
         <MemberInterfaceDialog
           key={interfaceMember.user_id}

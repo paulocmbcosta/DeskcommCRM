@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 
 import { audit } from "@/lib/audit";
+import { orgQueConheceASenha } from "@/lib/auth/senha-do-admin";
 import { cookieSecure } from "@/lib/supabase/cookie-secure";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { InvitePayload } from "@/lib/auth/invite-token";
@@ -43,7 +44,7 @@ import type { InvitePayload } from "@/lib/auth/invite-token";
 
 export type ResultadoDoConvite =
   | { ok: true; membershipId: string; mudou: boolean }
-  | { ok: false; motivo: "invalid_or_expired" | "internal_error" };
+  | { ok: false; motivo: "invalid_or_expired" | "internal_error" | "senha_definida_por_admin" };
 
 export async function aplicarConvite(params: {
   userId: string;
@@ -62,6 +63,17 @@ export async function aplicarConvite(params: {
     .eq("organization_id", payload.organization_id)
     .maybeSingle();
   if (linhaDoConvite?.revoked_at) return { ok: false, motivo: "invalid_or_expired" };
+
+  // SENHA QUE UM ADMIN DE OUTRA ORGANIZAÇÃO CONHECE não atravessa para esta.
+  // Desde 2026-09-22 um admin pode cadastrar um membro já com senha; se essa
+  // conta aceitasse o convite de outra org, o admin da primeira entraria na
+  // segunda como ela. A marca cai quando a pessoa troca a própria senha
+  // (`lib/auth/senha-do-admin.ts`). Não conseguir ler a conta FECHA a porta.
+  const { data: conta, error: erroConta } = await admin.auth.admin.getUserById(userId);
+  if (erroConta || !conta?.user) return { ok: false, motivo: "internal_error" };
+  const orgDaSenha = orgQueConheceASenha(conta.user.app_metadata);
+  if (orgDaSenha && orgDaSenha !== payload.organization_id)
+    return { ok: false, motivo: "senha_definida_por_admin" };
 
   // Org, papel e convidador vêm EXCLUSIVAMENTE do token assinado; o usuário,
   // de quem chamou. Nada aqui vem de body de requisição.

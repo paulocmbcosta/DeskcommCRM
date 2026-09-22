@@ -92,6 +92,45 @@ describe("sentryScrubHooks", () => {
     expect(JSON.stringify(event)).not.toContain(TOKEN);
   });
 
+  // A telemetria nasce LIGADA (DSN da comunidade) e o SDK anexa o CORPO da
+  // requisição ao evento de erro. Desde o cadastro de membro com senha
+  // (2026-09-22), um corpo de requisição pode carregar a senha que o admin
+  // escolheu para outra pessoa — e um erro qualquer nessa rota a mandaria para
+  // fora do servidor de quem instalou.
+  it("redige senha e segredo do CORPO da requisição, em JSON cru, objeto e formulário", () => {
+    const senha = "Senha-Do-Membro-123";
+    const json = sentryScrubHooks.beforeSend({
+      request: {
+        data: JSON.stringify({ email: "maria@empresa.com", password: senha, nested: { api_token: "tk_1" } }),
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(JSON.stringify(json)).not.toContain(senha);
+    expect(JSON.stringify(json)).not.toContain("tk_1");
+    // A chave fica: sem ela não se sabe o que foi redigido.
+    expect(JSON.stringify(json)).toContain("password");
+
+    const objeto = sentryScrubHooks.beforeSend({
+      request: { data: { password: senha, password_confirm: senha, full_name: "Maria" } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(JSON.stringify(objeto)).not.toContain(senha);
+    expect(JSON.stringify(objeto)).toContain("Maria");
+
+    const formulario = sentryScrubHooks.beforeSend({
+      request: { data: `email=maria%40empresa.com&password=${senha}&senha=${senha}` },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(JSON.stringify(formulario)).not.toContain(senha);
+
+    // JSON quebrado não é salvo-conduto: o par chave/valor sai redigido mesmo assim.
+    const truncado = sentryScrubHooks.beforeSend({
+      request: { data: `{"email":"a@b.co","password":"${senha}","role":"ag` },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(JSON.stringify(truncado)).not.toContain(senha);
+  });
+
   it("beforeSendTransaction limpa os atributos de trace — o canal que não tinha guarda", () => {
     const event = sentryScrubHooks.beforeSendTransaction({
       transaction: `GET /api/v1/webhooks/in/${TOKEN}`,

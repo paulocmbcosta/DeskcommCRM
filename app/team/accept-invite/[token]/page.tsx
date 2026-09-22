@@ -133,7 +133,7 @@ export default async function AcceptInvitePage({ params }: PageProps) {
         {t("Você foi convidado para entrar como")} <strong>{payload.role}</strong>.{" "}
         {t("Confirme abaixo para ativar seu acesso.")}
       </p>
-      <AcceptInviteForm token={token} label={t("Aceitar convite")} pendingLabel={t("Confirmando…")} failureLabel={t("Não foi possível aceitar este convite. Ele pode ter vencido ou seu acesso foi revogado. Peça um novo link ao administrador.")} />
+      <AcceptInviteForm token={token} label={t("Aceitar convite")} pendingLabel={t("Confirmando…")} failureLabel={t("Não foi possível aceitar este convite. Ele pode ter vencido ou seu acesso foi revogado. Peça um novo link ao administrador.")} senhaDoAdminLabel={t("A senha desta conta foi definida pelo administrador de outra equipe. Antes de entrar nesta, troque-a por uma só sua em Configurações › Perfil › Trocar senha e depois abra este link de novo.")} />
     </Shell>
   );
 }

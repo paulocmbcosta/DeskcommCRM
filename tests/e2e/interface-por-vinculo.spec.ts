@@ -140,7 +140,9 @@ test("interface por membro atualiza ao vivo, preserva formulário e convite apli
     ).toBe(true);
     await member.screenshot({ path: `${evidence}/interface-mobile.png` });
     // Convite pela tela, sem serviço de e-mail e com configuração anterior ao aceite.
-    await page.goto("/app/team/invite");
+    // A aba padrão de /app/team/invite é "Cadastrar com senha" desde 2026-09-22;
+    // `?modo=convite` abre direto no convite, que é o que este caso mede.
+    await page.goto("/app/team/invite?modo=convite");
     await page.getByLabel("Emails").fill(emails[3]!);
     await page.getByLabel("Perfil de interface").selectOption("simplificada");
     await page.getByText("Personalizar áreas visíveis", { exact: false }).click();

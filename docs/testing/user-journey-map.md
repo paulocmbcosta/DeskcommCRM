@@ -754,6 +754,95 @@ regra não se aplica.
 
 ---
 
+## J29 — Cadastrar um membro já com senha, e ele entrar sem e-mail `[P0]` (2026-09-22)
+
+Pedido do dono: *"cadastrar um membro da equipe e, ao invés de receber o convite, eu já
+cadastrasse a senha dele aqui dentro e já ficasse tudo resolvido"*. O convite dependia de
+e-mail, e numa instalação sem envio configurado — toda VPS recém-instalada, e a produção do
+dono nesse dia — virava um link copiado de uma tela marcada "(DEV)". Desenho em
+`docs/superpowers/specs/2026-09-22-cadastrar-membro-com-senha-design.md`; mapa em
+`docs/architecture/equipe-cadastro-com-senha.architecture.json`.
+
+`[P0]` porque o primeiro convite é primeira impressão (está na lista da doutrina de QA
+Visual), e porque a porta anterior simplesmente não funcionava sem e-mail.
+
+Spec: `tests/e2e/equipe-cadastro-com-senha.spec.ts` (em `SPECS_PARTE_3`), com **dois
+navegadores** — o do admin e o do membro, sem cookie compartilhado.
+
+### Execução (2026-09-22): **PASS**, na máquina do autor
+
+Chromium real, Supabase local **pg15** com o `baseline.sql` aplicado em banco novo
+(`ON_ERROR_STOP=1`, zero erro), Realtime reiniciado depois do baseline, app em produção
+(`next build` + `next start`). **Sem `RESEND_API_KEY` e sem Redis** — os envs opcionais
+ausentes, que é o estado de um primeiro deploy.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J29.1 De **Equipe**, o botão **Adicionar membros** leva ao cadastro, e **Cadastrar com senha** é a aba aberta (`aria-selected=true`) | `[P0]` | **PASS** |
+| J29.2 **Gerar senha** preenche **e mostra** (o campo vira `type=text`), no formato de três blocos de quatro sem 0/O/1/l/I | `[P0]` | **PASS** |
+| J29.3 Depois de cadastrar, o cartão **Dados de acesso** mostra endereço (`…/login`), e-mail e a senha digitada; o formulário limpa | `[P0]` | **PASS** |
+| J29.3b O cartão **vem para a vista** e recebe o foco: o botão fica no fim de um formulário longo e o cartão nasce no topo da coluna ao lado. Medido por `elementFromPoint` logo abaixo do topo do cartão (dentro da janela, não coberto pelo cabeçalho fixo). **Achado pela evidência desta própria jornada** — na primeira execução, a senha ficava fora da tela numa janela de 1280×720; a medida reprovou o build antigo e aprovou o consertado | `[P0]` | **PASS** |
+| J29.4 Banco: conta com e-mail **já confirmado** e `full_name`; vínculo `agent` aceito; `app_metadata.senha_definida_por_admin` = a org do admin; **uma** `member.created` na auditoria, **sem a senha** | `[P0]` | **PASS** |
+| J29.5 A pessoa entra com a senha num navegador limpo e cai no app com o menu do papel dela (avatar com as iniciais do nome cadastrado) | `[P0]` | **PASS** |
+| J29.5a Com a senha que o admin escolheu, o convite de **outra organização** é recusado na tela de aceite, com a saída escrita ("troque-a… em Configurações › Perfil › Trocar senha"); o banco confirma que não virou vínculo | `[P0]` | **PASS** |
+| J29.5b **Configurações › Perfil › Trocar senha**: senha atual errada → "A senha atual não confere."; certa → "Senha trocada."; a marca some do banco e a sessão continua de pé | `[P0]` | **PASS** |
+| J29.5c Depois de trocar, o **mesmo** convite de fora entra (vínculo ativo na outra org) | `[P0]` | **PASS** |
+| J29.6 Recadastrar o mesmo e-mail responde, ao lado do formulário, **"Esta pessoa já faz parte da equipe."** | `[P1]` | **PASS** |
+| J29.7a **Membros › ⋯ › Definir nova senha** para quem **também responde à outra org** → recusado dentro do diálogo ("só ela pode trocar a própria senha") | `[P0]` | **PASS** |
+| J29.7b Sem o vínculo de fora, o diálogo gera, salva e avisa; a marca volta ao banco | `[P0]` | **PASS** |
+| J29.8 A senha **anterior** (a que a própria pessoa escolheu) passa a dar "Email ou senha incorretos."; a **nova** entra | `[P0]` | **PASS** |
+| J29.9 Em 390 px de largura, **Adicionar membros** não rola para o lado (`scrollWidth ≤ clientWidth + 1`, medido) e as duas abas cabem | `[P1]` | **PASS** |
+
+Evidência visual em `.superpowers/evidence/equipe-cadastro-com-senha/` (9 imagens: o
+cartão de acesso, o membro dentro do app, o convite de fora recusado, a troca da própria
+senha, a recusa de recadastro, a recusa de "Definir nova senha" para quem responde a outra
+org, o diálogo de nova senha, a entrada com a senha nova e a tela em 390 px).
+
+### A revisão de segurança que mudou esta jornada
+
+Uma revisão adversarial independente do PR (antes do merge) achou dois caminhos graves, os
+dois consertados na causa e agora medidos acima:
+
+1. **A senha que o admin escolhe atravessava para outra organização.** O admin da org A
+   conhece a senha; se a pessoa depois aceitasse convite da org B, o admin A entraria em B
+   como ela. Agora a conta carrega `app_metadata.senha_definida_por_admin` (só a chave de
+   serviço escreve ali), `aplicarConvite` recusa convite de outra org enquanto a marca
+   existir, e ela cai quando a pessoa troca a própria senha (J29.5a–c). Para isso nasceu
+   **Configurações › Perfil › Trocar senha**, que não existia.
+2. **A entrega do criador provisório virava fachada.** Quem abriu a org para outra pessoa
+   poderia cadastrar o dono como admin com uma senha que ele mesmo escolheu. Agora é
+   recusado: o dono entra por convite. Preso por unidade (a instalação do e2e não tem
+   criador provisório).
+
+E mais: leitura com erro abre a guarda (agora fecha), o próprio id em maiúsculas contornava
+"a própria senha" (agora UUID canônico — e o teste que dizia medir isso era VAZIO, porque o
+id de teste só tinha dígitos), corpo `text/plain` aceito (agora 415), acompanhamento podia
+criar credencial (agora 403), e o campo `type="password"` levava a senha do membro ao cofre
+do navegador do admin (agora é texto visível).
+
+Rodadas junto, sem regressão: `interface-por-vinculo` (o convite pela tela agora abre por
+`/app/team/invite?modo=convite`), `invite-lifecycle` (os 9 casos do ciclo do convite),
+`qa-equipe-pinta-na-hora` e `qa-titulos-das-telas` — **20 passed**.
+
+### O que NÃO foi medido
+
+- **"Definir nova senha" recusando admin de plataforma e membro revogado**: preso por
+  unidade contra o handler real (`tests/unit/team-definir-senha.test.ts`), não pela tela. A
+  recusa por outra organização, essa sim, foi pela tela (J29.7a).
+- **Criador provisório tentando cadastrar um `admin`**: preso por unidade
+  (`tests/unit/team-cadastro-com-senha.test.ts`); a instalação do e2e não tem criador
+  provisório.
+- **Troca da própria senha numa conta com segundo fator**: preso por unidade
+  (`app/actions/settings/trocarMinhaSenha.test.ts`); o membro do e2e não tem TOTP.
+- **Sessões abertas do membro depois de "Definir nova senha"**: não se mediu se o provedor
+  de auth as encerra. A rota não encerra nada por conta própria — a API de admin do cliente
+  JS não oferece encerrar sessão por id. Quem precisa tirar alguém de dentro na hora usa
+  "Revogar acesso".
+- **Telemetria**: a redação do corpo da requisição está presa por unidade
+  (`lib/sentry/scrub.test.ts`); nenhum evento real foi enviado a um Sentry.
+
+---
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,
