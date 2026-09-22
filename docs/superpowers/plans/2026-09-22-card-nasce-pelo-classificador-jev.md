@@ -3158,7 +3158,7 @@ Memória "Autorização de deploy é por pedido": PR verde **não** autoriza mer
 - [ ] **Step 5: (autorizado) Chave** — o dono cadastra a chave da OpenRouter em **IA › Credenciais** da org Totus Telecom (nunca pelo chat).
 - [ ] **Step 6: (autorizado) Calibrar antes de ligar** — exportar 30 a 50 conversas recentes da Totus por consulta só-leitura, para um arquivo **fora do repositório**, no formato de `tests/fixtures/jev/conversas-de-exemplo.json`. O dono rotula `esperado`. Rodar `npx tsx --env-file=.env.sonda scripts/sondar-jev.ts <arquivo> 0.6`, depois `0.7`, `0.8` e `0.9`, e escolher o limiar pela tabela de acertos. Apagar o arquivo ao fim.
 - [ ] **Step 7: (autorizado) Ligar** — em **CRM › Etapas do funil › Quando o card nasce**, "Só conversas comerciais" com o limiar escolhido.
-- [ ] **Step 8: Observar 48 h** — em IA › Execuções (`commercial_classify`): quantidade, custo, falhas. Por SQL só-leitura: cards criados com `source_module = 'crm.classificador_comercial'` × `sem_classificacao`, e conversas sem card cujo atendente acabou criando card à mão (os "nãos" errados). Relatar ao dono e ajustar o limiar se preciso.
+- [ ] **Step 8: Observar 48 h** — em IA › Execuções (`commercial_classify`): quantidade, custo, falhas. Por SQL só-leitura: cards criados com `source_module = 'crm.classificador_comercial'` × `sem_classificacao`, e conversas sem card cujo atendente acabou criando card à mão (os "nãos" errados). Também os cards abertos pelo AGENTE, agrupados por etapa (`source_module = 'agente.avanco_comercial'`, `payload->'avanco_do_agente'->>'passo'`), para ver se "qualificando" está abrindo card demais. Relatar ao dono e ajustar o limiar se preciso.
 
 ---
 
