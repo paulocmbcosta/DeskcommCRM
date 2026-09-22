@@ -33,7 +33,7 @@
     { "from": "config", "to": "settings", "label": "grava a regra (admin client, audita crm.nascimento_do_card_alterado)" },
     { "from": "ingest", "to": "settings", "label": "lê a regra (só quem não tem card)" },
     { "from": "ingest", "to": "evento", "label": "a mensagem gravada emite" },
-    { "from": "evento", "to": "worker", "label": "drain do event_log" },
+    { "from": "evento", "to": "worker", "label": "drain do event_log — contexto padrão (worker/cron/relógio); dentro do POST do webhook, o classificador se ADIA (foraDaRequisicao)" },
     { "from": "worker", "to": "settings", "label": "modo e limiar (arredondado para a opção da tela)" },
     { "from": "worker", "to": "gate", "label": "antes de gastar" },
     { "from": "gate", "to": "leads", "label": "card aberto do contato?" },
@@ -55,7 +55,8 @@
         "O modelo só responde 'é comercial?'; funil, etapa, título e trava continuam em garantirLeadDaConversa",
         "O Jev lê só o ATENDIMENTO ATUAL (janelaDoAtendimento), não a conversa inteira — cliente antigo que volta não traz negociação velha para dentro da janela",
         "O worker roda por ÚLTIMO entre os consumidores de message.received, de propósito, para não atrasar push e automações esperando o Jev",
-        "Card comercial que falha ao nascer não vira 'skipped' silencioso: a escrita LANÇA, o drain tenta de novo com backoff e, esgotado, abre aviso de evento morto na Central"
+        "Card comercial que falha ao nascer não vira 'skipped' silencioso: a escrita LANÇA, o drain tenta de novo com backoff e, esgotado, abre aviso de evento morto na Central",
+        "Quando o dreno roda DENTRO do webhook (contexto: 'requisicao', lib/dev/kick-local-pipeline.ts), o classificador é ADIADO para o worker (foraDaRequisicao) — o canal não espera o Jev; quem de fato classifica é o serviço worker, o cron event-log-drain ou o relógio (contexto padrão)"
       ]
     }
   ]

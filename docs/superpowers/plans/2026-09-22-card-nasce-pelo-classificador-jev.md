@@ -49,7 +49,7 @@
 |---|---|
 | `lib/classificador-comercial/perguntas.ts` (novo) | Puro: modelo fixo, perguntas ao Jev, montagem do estado, assuntos e rótulos, decisão pelo limiar |
 | `lib/classificador-comercial/jev.ts` (novo) | Cliente HTTP do System One pela OpenRouter; classifica falhas; custo em centavos |
-| `lib/classificador-comercial/chave.ts` (novo) | Chave da OpenRouter: a da organização (IA › Provedores), senão a da instalação |
+| `lib/classificador-comercial/chave.ts` (novo) | Chave da OpenRouter: a da organização (IA › Credenciais), senão a da instalação |
 | `lib/classificador-comercial/dados.ts` (novo) | Leituras do worker (regra, card aberto, bloqueio, mensagem, últimas mensagens), atrás de uma interface para teste |
 | `workers/classificador-comercial.ts` (novo) | Orquestra uma classificação; grava `llm_calls` |
 | `workers/classificador-comercial.handler.ts` (novo) | Adaptador para o dispatcher do `event_log` |
@@ -1007,7 +1007,7 @@ import { logger } from "@/lib/logger";
 export type OrigemDaChave = "organizacao" | "instalacao";
 
 /**
- * A chave da OpenRouter que paga o Jev: a da organização (IA › Provedores),
+ * A chave da OpenRouter que paga o Jev: a da organização (IA › Credenciais),
  * senão a da instalação (`OPENROUTER_API_KEY`).
  *
  * Independe do provedor PADRÃO da organização: quem conversa pode ser Anthropic,
@@ -2483,7 +2483,7 @@ describe("NascimentoDoCard", () => {
     render(<NascimentoDoCard inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />);
     fireEvent.click(screen.getByLabelText(/só conversas comerciais/i));
     fireEvent.click(screen.getByRole("button", { name: /salvar/i }));
-    await waitFor(() => expect(toastErro).toHaveBeenCalledWith(expect.stringMatching(/OpenRouter.*Provedores/)));
+    await waitFor(() => expect(toastErro).toHaveBeenCalledWith(expect.stringMatching(/OpenRouter.*Credenciais/)));
   });
 
   it("quem não é admin vê a regra, mas não muda", () => {
@@ -2533,7 +2533,7 @@ const MENSAGEM_DO_ERRO: Record<ErroNascimentoDoCard, string> = {
   somente_leitura: "Acompanhamento somente leitura ou encerrado.",
   sem_empresa: "Nenhuma empresa ativa.",
   sem_permissao: "Só um administrador pode mudar essa regra.",
-  sem_chave_openrouter: "Cadastre uma chave da OpenRouter em IA › Provedores antes de ligar esta regra.",
+  sem_chave_openrouter: "Cadastre uma chave da OpenRouter em IA › Credenciais antes de ligar esta regra.",
   falha: "Não consegui salvar essa mudança agora.",
 };
 
@@ -2679,7 +2679,7 @@ E no JSX, entre o `</header>` e o `<PipelinesClient ... />`:
   "Mais alto abre menos cards por engano, mas pode deixar passar uma venda. Se a IA não conseguir responder, o card nasce assim mesmo e a linha do tempo diz por quê.": { es: "Más alto abre menos tarjetas por error, pero puede dejar pasar una venta. Si la IA no logra responder, la tarjeta nace igual y la línea de tiempo dice por qué." },
   "Regra salva.": { es: "Regla guardada." },
   "Escolha um modo e uma certeza mínima válidos.": { es: "Elige un modo y una certeza mínima válidos." },
-  "Cadastre uma chave da OpenRouter em IA › Provedores antes de ligar esta regra.": { es: "Registra una clave de OpenRouter en IA › Proveedores antes de activar esta regla." },
+  "Cadastre uma chave da OpenRouter em IA › Credenciais antes de ligar esta regra.": { es: "Registra una clave de OpenRouter en IA › Credenciales antes de activar esta regla." },
 ```
 
 Antes de colar, confira com `grep -n '"Salvar"\|"Salvando…"\|"Sua sessão expirou. Entre de novo."\|"Nenhuma empresa ativa."\|"Só um administrador pode mudar essa regra."\|"Não consegui salvar essa mudança agora."\|"Acompanhamento somente leitura ou encerrado."' lib/i18n/dicionario.ts` quais desses já existem; acrescente só os que faltarem (chave duplicada num objeto literal quebra o lint).
@@ -2790,7 +2790,7 @@ secao: adicionado
 titulo: Funil — o card pode nascer só para conversas comerciais
 ---
 
-Em **Configurações › Funis**, a seção nova **Quando o card nasce** tem duas opções. **Toda
+Em **CRM › Etapas do funil**, a seção nova **Quando o card nasce** tem duas opções. **Toda
 conversa vira card** é o comportamento de sempre e continua sendo o padrão: nada muda até
 alguém escolher a outra.
 
@@ -2801,7 +2801,7 @@ card. Quando abre, a linha do tempo da conversa diz por quê, por exemplo "conve
 como comercial: mudança de plano (93%)". Quem já tem card não gera consulta nenhuma. A
 **certeza mínima** (60 a 90%) regula o quanto a IA precisa estar segura.
 
-Precisa de uma chave da **OpenRouter** em **IA › Provedores** (ou `OPENROUTER_API_KEY` na
+Precisa de uma chave da **OpenRouter** em **IA › Credenciais** (ou `OPENROUTER_API_KEY` na
 instalação). Cada consulta custa menos de um centésimo de centavo de dólar e aparece em
 **IA › Execuções**. Se a IA não conseguir responder (chave sem saldo, serviço fora do ar), o
 card nasce como antes, e a linha do tempo registra a causa.
@@ -3152,9 +3152,9 @@ Memória "Autorização de deploy é por pedido": PR verde **não** autoriza mer
 - [ ] **Step 2: (autorizado) Merge + release** pelo fluxo do repo (`pnpm release:conferir`; PR de release gerado pelos fragmentos).
 - [ ] **Step 3: (autorizado) VPS** — atualizar pelo `update.sh` (runbook `docs/runbooks/deploy.md`), com os dois arquivos de compose se houver Traefik, e conferir que o domínio responde **307**.
 - [ ] **Step 4: (decisão do dono) LGPD** — confirmar que é aceitável o texto das conversas da Totus passar pela OpenRouter e pela TypeSafe (a TypeSafe só oferece retenção zero no plano empresarial). Se sim, registrar o operador novo onde a Totus declara seus operadores.
-- [ ] **Step 5: (autorizado) Chave** — o dono cadastra a chave da OpenRouter em **IA › Provedores** da org Totus Telecom (nunca pelo chat).
-- [ ] **Step 6: (autorizado) Calibrar antes de ligar** — exportar 30 a 50 conversas recentes da Totus por consulta só-leitura, para um arquivo **fora do repositório**, no formato de `tests/fixtures/jev/conversas-de-exemplo.json`. O dono rotula `esperado`. Rodar `npx tsx --env-file=.env.local scripts/sondar-jev.ts <arquivo> 0.6`, depois `0.7`, `0.8` e `0.9`, e escolher o limiar pela tabela de acertos. Apagar o arquivo ao fim.
-- [ ] **Step 7: (autorizado) Ligar** — em **Configurações › Funis › Quando o card nasce**, "Só conversas comerciais" com o limiar escolhido.
+- [ ] **Step 5: (autorizado) Chave** — o dono cadastra a chave da OpenRouter em **IA › Credenciais** da org Totus Telecom (nunca pelo chat).
+- [ ] **Step 6: (autorizado) Calibrar antes de ligar** — exportar 30 a 50 conversas recentes da Totus por consulta só-leitura, para um arquivo **fora do repositório**, no formato de `tests/fixtures/jev/conversas-de-exemplo.json`. O dono rotula `esperado`. Rodar `npx tsx --env-file=.env.sonda scripts/sondar-jev.ts <arquivo> 0.6`, depois `0.7`, `0.8` e `0.9`, e escolher o limiar pela tabela de acertos. Apagar o arquivo ao fim.
+- [ ] **Step 7: (autorizado) Ligar** — em **CRM › Etapas do funil › Quando o card nasce**, "Só conversas comerciais" com o limiar escolhido.
 - [ ] **Step 8: Observar 48 h** — em IA › Execuções (`commercial_classify`): quantidade, custo, falhas. Por SQL só-leitura: cards criados com `source_module = 'crm.classificador_comercial'` × `sem_classificacao`, e conversas sem card cujo atendente acabou criando card à mão (os "nãos" errados). Relatar ao dono e ajustar o limiar se preciso.
 
 ---
