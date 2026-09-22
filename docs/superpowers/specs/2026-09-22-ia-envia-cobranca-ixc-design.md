@@ -120,8 +120,12 @@ pacote **"Atender e responder"**:
 
 | id (contrato de wire) | category | rótulo na tela | risco |
 |---|---|---|---|
-| `crm_consultar_cliente_erp` | read | Consultar o cliente no sistema de gestão | seguro |
-| `crm_enviar_cobranca_erp` | write | Enviar a cobrança do cliente (Pix ou boleto) | atencao |
+| `crm_consultar_cliente_erp` | read | Consultar o cliente no sistema de gestão | atencao |
+| `crm_enviar_cobranca_erp` | write | Enviar a cobrança do cliente (Pix ou boleto) | **critico** |
+
+`critico` na cobrança não é enfeite: ligar o pacote "Atender e responder" NÃO pode dar ao
+agente o direito de mandar mensagem ao cliente (`lib/mcp/tools/selecao-por-pacote.ts` — a
+crítica exige marcação individual, a mesma regra de `crm_send_whatsapp_message`).
 
 Os handlers MCP (`lib/mcp/tools/sistema-de-gestao.ts`) existem pela paridade
 catálogo×handler e **recusam** fora de uma conversa atendida pelo agente — um cliente MCP
@@ -313,21 +317,26 @@ que a IA TENTARIA consultar/enviar, que é o que quem afina o prompt precisa ver
 - `applyPreviewPolicy` — as duas viram proposta.
 - Cerca, catálogo leigo, alcançabilidade e paridade catálogo×handler seguem verdes.
 
-**Invariante (`pnpm test:db`)** — `tests/invariants/ia-envia-cobranca.test.ts`: turno REAL
-dentro de `withServiceJob` (molde de `envios-do-turno-saem-na-ordem.test.ts`), modelo
-roteirizado (consultar → enviar → uma frase), IXC falso HTTP, canal capturando: 2 envios com
-`media` na ordem, ledger com 2 linhas, `conector.fatura_enviada` com `ator: ai_agent`,
-vínculo `telefone` criado; e o caso > limite: zero envio, `conector.cobranca_encaminhada`.
-Cada caso é sabotado (tirar a checagem de limite, trocar a ordem da escolha) e fica vermelho.
+**Invariante (`pnpm test:db`)** — `tests/invariants/conector-limite-de-cobranca.test.ts`: a
+coluna da 0274 (tipo, `not null`, default 60) e o CHECK (recusa 0/3651, aceita 1/60/3650),
+depois do baseline em install E update. **O turno inteiro NÃO é invariante, e o motivo é de
+ambiente:** o `test:db` sobe só Postgres, sem PostgREST nem Storage, e as funções do conector
+(credencial, vínculo, arquivo, auditoria) falam pelo client REST. A cadeia `runBeforeSend`
+com `conteudoDoSistema` é provada em unidade com o pool falso (molde de
+`gate-pacing-capability.test.ts`), e o caminho inteiro — ferramenta → conector → Storage →
+cadeia → ledger → `sendMessageHandler` → WAHA — é provado no e2e, que tem o Supabase local
+completo.
 
 **Tela (`tests/e2e/conector-ixc-no-painel.spec.ts`, estendida)** — o IXC falso ganha
 `data_nascimento` e um cliente com a vencida mais velha acima do limite:
 1. o admin muda o limite em Configurações › Conectores e ele persiste;
 2. no editor do agente, as duas capacidades aparecem (e não aparecem para organização sem
    conector) e são ligadas;
-3. um turno da IA roda com o **motor real e só o modelo roteirizado** (helper que
-   monta o turno como o worker), e a conversa no Inbox mostra o QR code e o copia-e-cola
-   enviados pela IA; o receiver WAHA do rig prova o que saiu;
+3. um turno da IA roda com o **motor real e só o modelo roteirizado**
+   (`scripts/e2e-turno-da-ia-cobranca.ts`, que monta o turno como o worker, dentro de
+   `withServiceJob`), e a conversa no Inbox mostra o QR code e o copia-e-cola enviados pela
+   IA; o receiver WAHA do rig prova o que saiu. O `e2e` não roda em PR neste repositório:
+   a prova é local, com as capturas no PR, e roda de novo no push da `main`;
 4. o cliente acima do limite: nada sai, e a conversa não ganha mensagem da IA com cobrança;
 5. conversa do chat do site com telefone digitado que bate no IXC: o painel mostra
    "escolher", não vincula.
@@ -353,6 +362,9 @@ Evidência em `.superpowers/evidence/ia-cobranca-ixc/`.
 - O envio real de documento/imagem pela saída do MOTOR no canal Meta. A rota do botão já envia
   mídia pela Meta em produção (Pix provado pelo dono em 22/09) pelo MESMO `sendMessageHandler`;
   o motor não foi medido contra a Meta real.
+- A escolha das ferramentas por um modelo DE VERDADE. Desde 22/09 a "Bia - 3025" roda em
+  OpenAI (`gpt-5.6-terra`); o e2e usa modelo roteirizado. A prova com modelo real é o botão
+  Testar (que só PROPÕE) e a primeira conversa depois do deploy, com o dono.
 - Tempo: consultar ≈ 3 s (duas ondas do resumo); enviar ≈ 5 s (lista de faturas + releitura +
   `get_pix`/`get_boleto`). Medido só no IXC falso.
 
