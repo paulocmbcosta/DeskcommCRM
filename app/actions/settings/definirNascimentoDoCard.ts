@@ -11,15 +11,34 @@
  * `settings` é jsonb compartilhado (o provedor de IA e a regra "cliente pela
  * agenda" moram nele): mesclar preserva o que não é nosso.
  *
- * ⚠️ RISCO ACEITO, e escrito para ninguém redescobrir: a mescla é no
- * TypeScript (ler → mesclar → gravar o objeto inteiro). Se
- * `fn_definir_cliente_pela_agenda` rodar ENTRE a leitura e a gravação, esta
- * action regrava o `crm.cliente_pela_agenda` antigo por fora da RPC (sem o
- * advisory lock, sem MFA, sem o recálculo das etiquetas). São dois
- * interruptores raros e só de admin, e o repositório já convive com a mesma
- * janela em `definirExigenciaDeMfa`. Fechar exigiria uma RPC com
- * `jsonb_set(settings, '{crm,nascimento_do_card}', ...)` — migration nova —,
- * o que fica para quando o custo da corrida aparecer.
+ * ✅ TRAVA CONTRA A CORRIDA COM `fn_definir_cliente_pela_agenda` — concorrência
+ * otimista pelo `updated_at`, e não mais um risco aceito. `organizations` tem o
+ * gatilho `trg_organizations_touch` (BEFORE UPDATE → `fn_touch_updated_at`,
+ * `supabase/baseline.sql:3034`), que toca `updated_at` em TODO UPDATE da linha —
+ * inclusive o que a RPC faz. Lemos `updated_at` junto com `settings` e só
+ * regravamos se ele CONTINUA o mesmo (`.eq("updated_at", atual.updated_at)`):
+ * se a RPC correu entre a nossa leitura e a nossa gravação, o UPDATE casa ZERO
+ * linhas — `.select("id")` é o que torna isso detectável — e devolvemos
+ * "tente_de_novo" em vez de regravar por cima o `crm.cliente_pela_agenda` que
+ * ela acabou de calcular (sem o advisory lock dela, sem MFA, sem recálculo de
+ * etiqueta). Quem perde a corrida tenta de novo; ninguém perde escrita em
+ * silêncio. A prova de verdade é o e2e da Tarefa 14 (liga a regra pela tela no
+ * Postgres real): se a igualdade de timestamp não casar com o gatilho de
+ * verdade, aquele teste reprova.
+ *
+ * ⚠️ SÓ ADMIN DO TENANT — de propósito, sem atalho de platform admin. É decisão
+ * de CONTROLADOR (LGPD) sobre o mesmo `crm` cuja RPC irmã (`fn_definir_cliente_
+ * pela_agenda`) também exige admin do tenant; platform admin que precisa mexer
+ * aqui usa o caminho do suporte em modo completo, como em qualquer outra tela.
+ *
+ * ⚠️ MFA PROVADO, NÃO A POLÍTICA. DEPOIS do papel, de propósito — mesma ordem e
+ * mesmo motivo de `updateMarcaDaOrganizacao.ts`: quem nem tem o papel recebe
+ * `sem_permissao`, que é a verdade sobre ele; só quem passaria pelo papel é
+ * cobrado pelo segundo fator. `mfaEmDivida()` NÃO consulta
+ * `organizations.settings.security.mfa_required` nem `platform_admins.
+ * mfa_required` — cadastrar e provar são perguntas diferentes (CLAUDE.md): quem
+ * TEM fator prova SEMPRE, senão ligar a verificação por vontade própria faria o
+ * fator ser ignorado numa sessão sem `aal2`.
  *
  * Não liga o classificador sem chave da OpenRouter: ligado sem chave, todo card
  * nasceria "sem classificar" — o comportamento de antes com um rótulo de erro.
@@ -30,7 +49,7 @@
 import { revalidatePath } from "next/cache";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { chaveDaOpenRouter } from "@/lib/classificador-comercial/chave";
 import { supportWriteError } from "@/lib/impersonate/support";
@@ -49,7 +68,9 @@ export type ErroNascimentoDoCard =
   | "somente_leitura"
   | "sem_empresa"
   | "sem_permissao"
+  | "mfa"
   | "sem_chave_openrouter"
+  | "tente_de_novo"
   | "falha";
 
 export type RespostaNascimentoDoCard =
@@ -67,6 +88,9 @@ export async function definirNascimentoDoCard(entrada: unknown): Promise<Respost
   const org = await resolveActiveOrg(user);
   if (!org) return { ok: false, erro: "sem_empresa" };
   if (ROLE_RANK[org.role] < ROLE_RANK.admin) return { ok: false, erro: "sem_permissao" };
+  // DEPOIS do papel, de propósito (ver o cabeçalho): quem nem tem o papel recebe
+  // `sem_permissao`, que é a verdade sobre ele.
+  if (await mfaEmDivida()) return { ok: false, erro: "mfa" };
 
   const admin = createAdminClient();
   if (lido.data.modo === "classificador" && !(await chaveDaOpenRouter(admin, org.orgId))) {
@@ -75,24 +99,46 @@ export async function definirNascimentoDoCard(entrada: unknown): Promise<Respost
 
   const { data: atual, error: erroLeitura } = await admin
     .from("organizations")
-    .select("settings")
+    .select("settings, updated_at")
     .eq("id", org.orgId)
     .maybeSingle();
-  if (erroLeitura) return { ok: false, erro: "falha" };
+  if (erroLeitura) {
+    logger.error("[nascimento-do-card] leitura falhou", { organization_id: org.orgId, code: erroLeitura.code });
+    return { ok: false, erro: "falha" };
+  }
+  if (!atual) return { ok: false, erro: "sem_empresa" };
 
-  const settings = (atual?.settings ?? {}) as Record<string, unknown>;
+  const settings = (atual.settings ?? {}) as Record<string, unknown>;
   const crm =
     settings.crm && typeof settings.crm === "object" && !Array.isArray(settings.crm)
       ? (settings.crm as Record<string, unknown>)
       : {};
   const antes = nascimentoDoCard(settings);
+
+  // Nada mudou: nem grava, nem audita. Uma auditoria "trocou X por X" não é
+  // mutação — é ruído na trilha que alguém vai ler depois tentando entender o
+  // que de fato aconteceu.
+  if (antes.modo === lido.data.modo && antes.limiar === lido.data.limiar) {
+    return { ok: true, modo: lido.data.modo, limiar: lido.data.limiar };
+  }
+
   const novo = { ...settings, crm: { ...crm, nascimento_do_card: lido.data } };
 
-  const { error } = await admin.from("organizations").update({ settings: novo }).eq("id", org.orgId);
+  const { data: gravado, error } = await admin
+    .from("organizations")
+    .update({ settings: novo })
+    .eq("id", org.orgId)
+    .eq("updated_at", atual.updated_at)
+    .select("id");
   if (error) {
-    logger.error("[nascimento-do-card] gravação falhou", { organization_id: org.orgId, error: error.message });
+    logger.error("[nascimento-do-card] gravação falhou", { organization_id: org.orgId, code: error.code });
     return { ok: false, erro: "falha" };
   }
+  // Zero linhas: alguém (a RPC irmã, outra aba) mudou `organizations` entre a
+  // nossa leitura e a nossa gravação — o gatilho tocou `updated_at` e o filtro
+  // não casou mais nada. Tentar de novo lê o estado fresco; sobrescrever por
+  // cima seria a corrida que o cabeçalho descreve.
+  if (!gravado || gravado.length === 0) return { ok: false, erro: "tente_de_novo" };
 
   await audit({
     action: "crm.nascimento_do_card_alterado",
