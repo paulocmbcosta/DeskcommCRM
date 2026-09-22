@@ -176,7 +176,9 @@ describe("extrairContratoConhecido", () => {
 });
 
 describe("ehArquivoSinteticoPadrao", () => {
-  const CWD = "/Volumes/T9/Dyper/.claude/worktrees/crm-card-filter-conversation-type-4983d9";
+  // Valor NEUTRO de propósito: um caminho absoluto real desta máquina não
+  // pertence a um repositório aberto.
+  const CWD = "/repo";
 
   it("aceita o caminho relativo padrão", () => {
     expect(ehArquivoSinteticoPadrao(ARQUIVO_SINTETICO_PADRAO, CWD)).toBe(true);

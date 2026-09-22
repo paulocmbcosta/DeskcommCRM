@@ -1,7 +1,11 @@
 /**
  * PEÇAS PURAS da sonda do Jev (`scripts/sondar-jev.ts`) — sem rede, sem
- * filesystem, sem `process`. Só aqui porque são testáveis isoladamente; a
- * orquestração (env, fetch, stdout, exit code) fica no script.
+ * LER nem ESCREVER nada em disco. `ehArquivoSinteticoPadrao` usa
+ * `node:path` (só resolve string, não toca o filesystem) e lê
+ * `process.cwd()` como padrão — mas é parâmetro, então o teste fixa um
+ * valor e a função continua determinística para quem chama. Só aqui porque
+ * são testáveis isoladamente; a orquestração (env, fetch, stdout, exit
+ * code, leitura/escrita de arquivo) fica no script.
  *
  *  - `validarCasos`/`casoParaSondaSchema`: a entrada de cada caso é o MESMO
  *    formato que a produção monta (`MensagemParaEstado[]`, via `montarEstado`
