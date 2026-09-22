@@ -592,6 +592,12 @@ export const AUDIT_ACTIONS = [
   "conector.vinculo_criado",
   "conector.vinculo_removido",
   "conector.fatura_enviada",
+  // Cadastro direto de membro, com a senha escolhida por quem administra — a
+  // porta de entrada que não depende de e-mail. E a senha nova definida por um
+  // admin para um membro. `metadata` NUNCA leva a senha: diz quem, para quem e
+  // com que papel.
+  "member.created",
+  "member.password_set",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */
