@@ -38,6 +38,9 @@ describe("capabilities do canal intermediado", () => {
       // fala primeiro. Este fala — com modelo aprovado, que é `requiresTemplates`
       // quem diz; `outboundFirst` só responde se DÁ.
       outboundFirst: true,
+      // Zernio é WhatsApp por intermediário: o número da conversa é o próprio
+      // transporte, igual ao canal oficial e ao WAHA.
+      telefoneEhIdentidade: true,
     });
   });
 
