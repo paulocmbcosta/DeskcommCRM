@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 
+import { NascimentoDoCard } from "@/components/crm/NascimentoDoCard";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import { traduzir } from "@/lib/i18n/dicionario";
+import { nascimentoDoCard } from "@/lib/schemas/settings";
 import { createClient } from "@/lib/supabase/server";
 import { PipelinesClient, type PipelineRow } from "./_client";
-import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +44,16 @@ export default async function PipelinesSettingsPage() {
   const pipelines = (data ?? []) as PipelineRow[];
   const idioma = user.idioma;
 
+  // A regra "quando o card nasce" (settings.crm.nascimento_do_card). Membro lê
+  // a própria organização pela RLS; falha de leitura mostra o padrão, que é o
+  // que a ingestão também assume.
+  const { data: org } = await supabase
+    .from("organizations")
+    .select("settings")
+    .eq("id", activeOrg.orgId)
+    .maybeSingle();
+  const regraDeNascimento = nascimentoDoCard((org as { settings?: unknown } | null)?.settings);
+
   return (
     <div className="flex h-full flex-col gap-6 p-6">
       <header>
@@ -56,6 +68,7 @@ export default async function PipelinesSettingsPage() {
           .
         </p>
       </header>
+      <NascimentoDoCard inicial={regraDeNascimento} podeEditar={podeEditarConfig} />
       <PipelinesClient pipelines={pipelines} podeEditarConfig={podeEditarConfig} />
     </div>
   );

@@ -2595,6 +2595,20 @@ export const DICIONARIO: Traducoes = {
   "Com \"Só conversas comerciais\" ligada, os cards voltam a nascer para toda conversa — o produto cria o card quando não consegue classificar — e a linha do tempo do card diz por quê.": {
     es: "Con \"Solo conversaciones comerciales\" activada, las tarjetas vuelven a nacer para toda conversación — el producto crea la tarjeta cuando no logra clasificar — y la línea de tiempo de la tarjeta dice por qué.",
   },
+
+  // ─── components/crm/NascimentoDoCard.tsx (funis › "Quando o card nasce") ───
+  "Quando o card nasce": { es: "Cuándo nace la tarjeta" },
+  "Decide quais conversas abrem um card no funil de entrada.": { es: "Decide qué conversaciones abren una tarjeta en el embudo de entrada." },
+  "Toda conversa vira card": { es: "Toda conversación se vuelve tarjeta" },
+  "A primeira mensagem de quem não tem card abre um no funil de entrada.": { es: "El primer mensaje de quien no tiene tarjeta abre una en el embudo de entrada." },
+  "Só conversas comerciais": { es: "Solo conversaciones comerciales" },
+  "A cada mensagem de quem ainda não tem card, a IA decide se o assunto é contratação, mudança de plano ou conhecer planos. Suporte, financeiro e cancelamento não abrem card.": { es: "En cada mensaje de quien aún no tiene tarjeta, la IA decide si el asunto es contratación, cambio de plan o conocer planes. Soporte, finanzas y cancelación no abren tarjeta." },
+  "Certeza mínima para abrir o card": { es: "Certeza mínima para abrir la tarjeta" },
+  "Mais alto abre menos cards por engano, mas pode deixar passar uma venda. Se a IA não conseguir responder, o card nasce assim mesmo e a linha do tempo diz por quê.": { es: "Más alto abre menos tarjetas por error, pero puede dejar pasar una venta. Si la IA no logra responder, la tarjeta nace igual y la línea de tiempo dice por qué." },
+  "Regra salva.": { es: "Regla guardada." },
+  "Escolha um modo e uma certeza mínima válidos.": { es: "Elige un modo y una certeza mínima válidos." },
+  "Cadastre uma chave da OpenRouter em IA › Provedores antes de ligar esta regra.": { es: "Registra una clave de OpenRouter en IA › Proveedores antes de activar esta regla." },
+
   "Ouvir o áudio do cliente": {
     es: "Escuchar el audio del cliente",
   },
