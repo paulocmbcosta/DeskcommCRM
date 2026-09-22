@@ -120,6 +120,28 @@ const TEXTO_DA_CAUSA: Record<CausaSemClassificacao, string> = {
 };
 
 /**
+ * Os passos do funil do AGENTE (`LEAD_STAGES`, lib/agent-engine/agent/lead-state.ts)
+ * que são avanço comercial — e o rótulo em português de cada um, para a razão
+ * da linha do tempo. `new`, `contacted` e `lost` ficam de fora: não dizem que a
+ * conversa é comercial. O teste do espelho (`move-lead-stage.test.ts`) confere
+ * que toda chave daqui é um passo real do agente.
+ */
+const ROTULO_DO_PASSO_DO_AGENTE = {
+  qualifying: "qualificando",
+  qualified: "qualificado",
+  negotiating: "em negociação",
+  won: "fechado",
+} as const;
+
+export type PassoDeAvancoComercial = keyof typeof ROTULO_DO_PASSO_DO_AGENTE;
+
+export const PASSOS_DE_AVANCO_COMERCIAL: ReadonlySet<string> = new Set(Object.keys(ROTULO_DO_PASSO_DO_AGENTE));
+
+export function ehAvancoComercial(passo: string): passo is PassoDeAvancoComercial {
+  return PASSOS_DE_AVANCO_COMERCIAL.has(passo);
+}
+
+/**
  * QUEM decidiu que esta conversa vira card.
  *
  * `ingest`: a mensagem chegou (o caminho de sempre). É o ÚNICO que consulta a
@@ -128,11 +150,32 @@ const TEXTO_DA_CAUSA: Record<CausaSemClassificacao, string> = {
  * `sem_classificacao`: o classificador não conseguiu decidir, e o card nasce
  * assim mesmo (decisão A do plano 2026-09-22): card a mais se arquiva, card a
  * menos é venda que some.
+ * `agente`: com a regra ligada, o AGENTE avançou a conversa no funil dele
+ * (`update_lead_state`) e o contato ainda não tinha card — decisão do dono,
+ * 2026-09-22. Quem chama é o espelho de etapa
+ * (`lib/agent-engine/edge/crm/move-lead-stage.ts`), só no modo `classificador`.
  */
 export type OrigemDoNascimento =
   | { tipo: "ingest" }
   | { tipo: "classificador"; assunto: string; rotuloDoAssunto: string; probabilidade: number; modelo: string }
-  | { tipo: "sem_classificacao"; causa: CausaSemClassificacao };
+  | { tipo: "sem_classificacao"; causa: CausaSemClassificacao }
+  | { tipo: "agente"; passo: PassoDeAvancoComercial };
+
+/** `crm_lead_activities.source_module` por origem — vocabulário aberto, uma constante por valor. */
+const MODULO_DA_ORIGEM: Record<OrigemDoNascimento["tipo"], string> = {
+  ingest: "canal.ingest",
+  classificador: "crm.classificador_comercial",
+  sem_classificacao: "crm.classificador_comercial",
+  agente: "agente.avanco_comercial",
+};
+
+/** O `id` do ator `webhook_source` por origem: quem, no sistema, agiu. */
+const ATOR_DA_ORIGEM: Record<OrigemDoNascimento["tipo"], string> = {
+  ingest: "canal-inbound",
+  classificador: "classificador-comercial",
+  sem_classificacao: "classificador-comercial",
+  agente: "agente-avanco-comercial",
+};
 
 function razaoDoNascimento(origem: OrigemDoNascimento, ehCliente: boolean): string {
   // O ingest já tem a frase própria para cliente conhecido; nas origens novas
@@ -147,6 +190,9 @@ function razaoDoNascimento(origem: OrigemDoNascimento, ehCliente: boolean): stri
   }
   if (origem.tipo === "sem_classificacao") {
     return `card criado sem classificar a conversa — ${TEXTO_DA_CAUSA[origem.causa]}${sufixoCliente}`;
+  }
+  if (origem.tipo === "agente") {
+    return `o agente identificou avanço comercial (etapa: ${ROTULO_DO_PASSO_DO_AGENTE[origem.passo]})${sufixoCliente}`;
   }
   return ehCliente ? "cliente conhecido voltou a escrever" : "primeira mensagem recebida no WhatsApp";
 }
@@ -405,14 +451,17 @@ export async function garantirLeadDaConversa(
     // `crm.classificador_comercial` quando quem decidiu foi o classificador; a
     // linha do tempo da conversa (`app/api/v1/conversations/[id]/timeline/route.ts`)
     // mostra esta razão.
-    sourceModule: origem.tipo === "ingest" ? "canal.ingest" : "crm.classificador_comercial",
+    // `agente.avanco_comercial` quando quem viu o avanço foi o agente —
+    // distinto do classificador, para as métricas separarem quem abriu o card.
+    sourceModule: MODULO_DA_ORIGEM[origem.tipo],
     sourceId: conversationId,
     // `webhook_source` e não um "system" inventado: `actorParaAtividade` já
     // traduz esta variante para `kind: "system"` na timeline, e ela descreve o
     // que de fato aconteceu — no ingest, a mensagem chegou por webhook e o
     // produto agiu; nas origens do classificador, quem agiu foi o WORKER
-    // (`workers/classificador-comercial.ts`), rodando fora do request.
-    actor: { type: "webhook_source", id: origem.tipo === "ingest" ? "canal-inbound" : "classificador-comercial" },
+    // (`workers/classificador-comercial.ts`), rodando fora do request; na do
+    // agente, o espelho de etapa do turno (`move-lead-stage.ts`).
+    actor: { type: "webhook_source", id: ATOR_DA_ORIGEM[origem.tipo] },
     // A timeline é o ÚNICO lugar onde quem abre o card descobre por que ele
     // nasceu naquele funil. Sem esta distinção, o cliente antigo aparece num
     // quadro diferente do resto sem explicação nenhuma, e quem vê conclui que
@@ -429,6 +478,7 @@ export async function garantirLeadDaConversa(
         ? { classificacao: { assunto: origem.assunto, probabilidade: origem.probabilidade, modelo: origem.modelo } }
         : {}),
       ...(origem.tipo === "sem_classificacao" ? { sem_classificacao: origem.causa } : {}),
+      ...(origem.tipo === "agente" ? { avanco_do_agente: { passo: origem.passo } } : {}),
     },
   });
   if (!registro.ok) {

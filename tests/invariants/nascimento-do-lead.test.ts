@@ -598,6 +598,21 @@ describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", (
     expect(at!.payload.sem_classificacao).toBe("midia_sem_texto");
   });
 
+  it("o AGENTE avançou a conversa: o card nasce, com razão, módulo e payload próprios do agente", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Diego Avançou");
+    const r = await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Diego Avançou" },
+      { tipo: "agente", passo: "negotiating" },
+    );
+    expect(r.criado, JSON.stringify(r)).toBe(true);
+    const [at] = await atividadeDeCriacao(contato);
+    expect(at!.reason).toBe("o agente identificou avanço comercial (etapa: em negociação)");
+    // Distinto do classificador: as métricas precisam separar quem abriu o card.
+    expect(at!.source_module).toBe("agente.avanco_comercial");
+    expect(at!.payload.avanco_do_agente).toEqual({ passo: "negotiating" });
+  });
+
   it("cliente conhecido: o sufixo aparece ao final da razão do classificador", async () => {
     const contato = await criarContato(ORG_CLASSIFICADOR_CLIENTE, "Duda Cliente");
     // `first_service_at` é a coluna que `garantirLeadDaConversa` lê para decidir

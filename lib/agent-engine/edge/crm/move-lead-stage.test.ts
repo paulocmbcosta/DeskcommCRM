@@ -1,4 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+
+import { LEAD_STAGES } from '../../agent/lead-state';
+import { PASSOS_DE_AVANCO_COMERCIAL } from '@/lib/leads/nascimento-do-lead';
+import { logger } from '@/lib/logger';
 
 import { MIRROR_WARN_ONLY, mirrorLeadStageToCrm } from './move-lead-stage';
 
@@ -91,5 +97,135 @@ describe('mirrorLeadStageToCrm', () => {
       db, cfg as never, { tenantId: 'o', leadId: 'c', toStage: 'won' }, { sync },
     );
     expect(r).toMatchObject({ ok: false, reason: 'crm_error' });
+  });
+});
+
+/**
+ * Decisão do dono (2026-09-22): com "Só conversas comerciais" ligada, o card
+ * também nasce quando o AGENTE avança a conversa no funil e o contato ainda
+ * não tem card — o classificador pode ter dito "ainda não", e o agente, que
+ * conversou, viu o avanço.
+ */
+describe('mirrorLeadStageToCrm — o agente avançou e o contato não tem card', () => {
+  const semNegocio = { moveu: false, motivo: 'sem_negocio' };
+  const modoClassificador = async () => ({ modo: 'classificador' as const, limiar: 0.7 });
+  const modoDeSempre = async () => ({ modo: 'toda_conversa' as const, limiar: 0.7 });
+  const criado = { criado: true, leadId: 'lead-9', pipelineId: 'p', stageId: 's' };
+  const entrada = { tenantId: 'org-1', leadId: 'contato-1', toStage: 'qualified' as const, conversationId: 'conv-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('só avanço comercial cria: qualifying, qualified, negotiating e won — todos passos do agente', () => {
+    expect([...PASSOS_DE_AVANCO_COMERCIAL].sort()).toEqual(['negotiating', 'qualified', 'qualifying', 'won']);
+    for (const passo of PASSOS_DE_AVANCO_COMERCIAL) expect(LEAD_STAGES).toContain(passo);
+  });
+
+  it('modo classificador + passo qualified: o card nasce com a origem do agente e a sincronização roda de novo', async () => {
+    const sync = vi
+      .fn()
+      .mockResolvedValueOnce(semNegocio)
+      .mockResolvedValueOnce({ moveu: true, motivo: 'movido', leadId: 'lead-9', stageName: 'Qualificado' });
+    const garantir = vi.fn().mockResolvedValue(criado);
+
+    const r = await mirrorLeadStageToCrm(db, cfg as never, entrada, { sync, lerRegra: modoClassificador, garantir });
+
+    expect(r).toEqual({ ok: true });
+    expect(garantir).toHaveBeenCalledWith(
+      cfg.supabase,
+      { organizationId: 'org-1', contactId: 'contato-1', conversationId: 'conv-1', nomeDoContato: null },
+      { tipo: 'agente', passo: 'qualified' },
+    );
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(sync).toHaveBeenLastCalledWith(cfg.supabase, {
+      organizationId: 'org-1', contactId: 'contato-1', passo: 'qualified',
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ organization_id: 'org-1', lead_id: 'lead-9', passo: 'qualified' }),
+    );
+  });
+
+  it('sem etapa mapeada para o passo depois de nascer: ok — o card fica na primeira etapa, como sempre', async () => {
+    const sync = vi.fn().mockResolvedValueOnce(semNegocio).mockResolvedValueOnce({ moveu: false, motivo: 'sem_mapeamento' });
+    const garantir = vi.fn().mockResolvedValue(criado);
+    const r = await mirrorLeadStageToCrm(db, cfg as never, entrada, { sync, lerRegra: modoClassificador, garantir });
+    expect(r).toEqual({ ok: true });
+  });
+
+  it.each(['new', 'contacted', 'lost'] as const)('passo %s não cria — não é avanço comercial', async (toStage) => {
+    const sync = vi.fn().mockResolvedValue(semNegocio);
+    const garantir = vi.fn();
+    const r = await mirrorLeadStageToCrm(
+      db, cfg as never, { ...entrada, toStage }, { sync, lerRegra: modoClassificador, garantir },
+    );
+    expect(r).toMatchObject({ ok: false, reason: 'not_configured' });
+    expect(garantir).not.toHaveBeenCalled();
+  });
+
+  it('modo de sempre (toda_conversa): não cria — segue o warn de hoje', async () => {
+    const sync = vi.fn().mockResolvedValue(semNegocio);
+    const garantir = vi.fn();
+    const r = await mirrorLeadStageToCrm(db, cfg as never, entrada, { sync, lerRegra: modoDeSempre, garantir });
+    expect(r).toMatchObject({ ok: false, reason: 'not_configured' });
+    expect(garantir).not.toHaveBeenCalled();
+  });
+
+  it('falha ao ler a regra: não cria, não quebra o turno, e segue o warn de hoje', async () => {
+    const sync = vi.fn().mockResolvedValue(semNegocio);
+    const garantir = vi.fn();
+    const lerRegra = vi.fn().mockRejectedValue(new Error('organização inexistente: org-1'));
+    const r = await mirrorLeadStageToCrm(db, cfg as never, entrada, { sync, lerRegra, garantir });
+    expect(r).toMatchObject({ ok: false, reason: 'not_configured' });
+    expect(garantir).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('garantir diz ja_existe (corrida com o classificador): ressincroniza normal', async () => {
+    const sync = vi
+      .fn()
+      .mockResolvedValueOnce(semNegocio)
+      .mockResolvedValueOnce({ moveu: true, motivo: 'movido', leadId: 'lead-do-classificador', stageName: 'Qualificado' });
+    const garantir = vi.fn().mockResolvedValue({ criado: false, motivo: 'ja_existe' });
+    const r = await mirrorLeadStageToCrm(db, cfg as never, entrada, { sync, lerRegra: modoClassificador, garantir });
+    expect(r).toEqual({ ok: true });
+    expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  it('garantir com erro de escrita: incidente (crm_error), que o caller leva à Central', async () => {
+    const sync = vi.fn().mockResolvedValue(semNegocio);
+    const garantir = vi.fn().mockResolvedValue({ criado: false, motivo: 'erro', detalhe: 'deadlock detected' });
+    const r = await mirrorLeadStageToCrm(db, cfg as never, entrada, { sync, lerRegra: modoClassificador, garantir });
+    expect(r).toMatchObject({ ok: false, reason: 'crm_error' });
+    expect(MIRROR_WARN_ONLY.has('crm_error')).toBe(false);
+  });
+
+  it('sem conversationId: usa a conversa 1:1 mais recente do contato NA organização', async () => {
+    const filtros: unknown[][] = [];
+    const cadeia: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'order', 'limit']) {
+      cadeia[m] = (...args: unknown[]) => {
+        filtros.push([m, ...args]);
+        return cadeia;
+      };
+    }
+    cadeia.maybeSingle = async () => ({ data: { id: 'conv-recente' }, error: null });
+    const supabase = { from: (tabela: string) => (filtros.push(['from', tabela]), cadeia) };
+    const sync = vi.fn().mockResolvedValueOnce(semNegocio).mockResolvedValueOnce({ moveu: false, motivo: 'sem_mapeamento' });
+    const garantir = vi.fn().mockResolvedValue(criado);
+    const { conversationId: _semConversa, ...semConversa } = entrada;
+
+    await mirrorLeadStageToCrm(db, { supabase } as never, semConversa, { sync, lerRegra: modoClassificador, garantir });
+
+    expect(filtros).toContainEqual(['from', 'conversations']);
+    expect(filtros).toContainEqual(['eq', 'organization_id', 'org-1']);
+    expect(filtros).toContainEqual(['eq', 'contact_id', 'contato-1']);
+    expect(filtros).toContainEqual(['eq', 'is_group', false]);
+    expect(garantir).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ conversationId: 'conv-recente' }),
+      { tipo: 'agente', passo: 'qualified' },
+    );
   });
 });
