@@ -745,6 +745,60 @@ regra não se aplica.
 
 ---
 
+## J29 — Cadastrar um membro já com senha, e ele entrar sem e-mail `[P0]` (2026-09-22)
+
+Pedido do dono: *"cadastrar um membro da equipe e, ao invés de receber o convite, eu já
+cadastrasse a senha dele aqui dentro e já ficasse tudo resolvido"*. O convite dependia de
+e-mail, e numa instalação sem envio configurado — toda VPS recém-instalada, e a produção do
+dono nesse dia — virava um link copiado de uma tela marcada "(DEV)". Desenho em
+`docs/superpowers/specs/2026-09-22-cadastrar-membro-com-senha-design.md`; mapa em
+`docs/architecture/equipe-cadastro-com-senha.architecture.json`.
+
+`[P0]` porque o primeiro convite é primeira impressão (está na lista da doutrina de QA
+Visual), e porque a porta anterior simplesmente não funcionava sem e-mail.
+
+Spec: `tests/e2e/equipe-cadastro-com-senha.spec.ts` (em `SPECS_PARTE_3`), com **dois
+navegadores** — o do admin e o do membro, sem cookie compartilhado.
+
+### Execução (2026-09-22): **PASS**, na máquina do autor
+
+Chromium real, Supabase local **pg15** com o `baseline.sql` aplicado em banco novo
+(`ON_ERROR_STOP=1`, zero erro), Realtime reiniciado depois do baseline, app em produção
+(`next build` + `next start`). **Sem `RESEND_API_KEY` e sem Redis** — os envs opcionais
+ausentes, que é o estado de um primeiro deploy.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J29.1 De **Equipe**, o botão **Adicionar membros** leva ao cadastro, e **Cadastrar com senha** é a aba aberta (`aria-selected=true`) | `[P0]` | **PASS** |
+| J29.2 **Gerar senha** preenche **e mostra** (o campo vira `type=text`), no formato de três blocos de quatro sem 0/O/1/l/I | `[P0]` | **PASS** |
+| J29.3 Depois de cadastrar, o cartão **Dados de acesso** mostra endereço (`…/login`), e-mail e a senha digitada; o formulário limpa | `[P0]` | **PASS** — `.superpowers/evidence/equipe-cadastro-com-senha/1-cartao-de-acesso.png` |
+| J29.4 Banco: conta com e-mail **já confirmado** e `full_name`; vínculo `agent` aceito; **uma** `member.created` na auditoria, **sem a senha** | `[P0]` | **PASS** |
+| J29.5 A pessoa entra com a senha num navegador limpo e cai no app com o menu do papel dela (avatar com as iniciais do nome cadastrado) | `[P0]` | **PASS** — `2-membro-entrou.png` |
+| J29.6 Recadastrar o mesmo e-mail responde, ao lado do formulário, **"Esta pessoa já faz parte da equipe."** | `[P1]` | **PASS** — `3-ja-e-membro.png` |
+| J29.7 **Membros › ⋯ › Definir nova senha**: o diálogo nomeia a pessoa, gera a senha, salva e avisa | `[P0]` | **PASS** — `4-definir-nova-senha.png` |
+| J29.8 A senha **antiga** passa a dar "Email ou senha incorretos."; a **nova** entra | `[P0]` | **PASS** — `5-entrou-com-a-nova.png` |
+
+Rodadas junto, sem regressão: `interface-por-vinculo` (o convite pela tela agora abre por
+`/app/team/invite?modo=convite`), `invite-lifecycle` (os 9 casos do ciclo do convite),
+`qa-equipe-pinta-na-hora` e `qa-titulos-das-telas` — **20 passed**.
+
+### O que NÃO foi medido
+
+- **O menu "Definir nova senha" recusando** (outra organização, admin de plataforma,
+  revogado): preso por unidade contra o handler real (`tests/unit/team-definir-senha.test.ts`),
+  não pela tela — a instalação do e2e tem uma organização só, onde nenhuma recusa dispara.
+- **Criador provisório cadastrando um `admin`** (a entrega da migration 0237 pelo cadastro
+  direto): preso por unidade (`tests/unit/team-cadastro-com-senha.test.ts`); a tela mostra o
+  aviso de entrega, mas nenhuma spec o dirigiu.
+- **Sessões abertas do membro depois de "Definir nova senha"**: não se mediu se o provedor
+  de auth as encerra. A rota não encerra nada por conta própria — a API de admin do cliente
+  JS não oferece encerrar sessão por id. Quem precisa tirar alguém de dentro na hora usa
+  "Revogar acesso".
+- **Telemetria**: a redação do corpo da requisição está presa por unidade
+  (`lib/sentry/scrub.test.ts`); nenhum evento real foi enviado a um Sentry.
+
+---
+
 ## J9 — Ver o que o follow-up já fez, e intervir sem matá-lo `[P1]`
 
 Contexto do código: o dossiê do enrollment (`/app/ai/followups/enrollments/[id]`,

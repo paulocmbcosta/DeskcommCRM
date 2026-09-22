@@ -76,8 +76,8 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
     "true",
   );
 
-  await page.getByLabel("Nome").fill(nome);
-  await page.getByLabel("E-mail").fill(email);
+  await page.getByLabel("Nome", { exact: true }).fill(nome);
+  await page.getByLabel("E-mail", { exact: true }).fill(email);
 
   // 2. Gerar preenche E mostra.
   await page.getByRole("button", { name: "Gerar senha" }).click();
@@ -96,8 +96,8 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   await expect(cartao).toContainText(senha);
   await expect(cartao).toContainText("/login");
   // O formulário limpa para o próximo cadastro.
-  await expect(page.getByLabel("E-mail")).toHaveValue("");
-  await page.screenshot({ path: `${EVIDENCIA}/1-cartao-de-acesso.png`, fullPage: true });
+  await expect(page.getByLabel("E-mail", { exact: true })).toHaveValue("");
+  await page.screenshot({ path: `${EVIDENCIA}/1-cartao-de-acesso.png` });
 
   // O banco: vínculo aceito, papel agent, na org de quem cadastrou.
   const { data: vinculos } = await db
@@ -126,15 +126,19 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   const membro = await entrarComo(browser, baseURL, senha);
   await membro.waitForURL(/\/app\//, { timeout: 30_000 });
   await expect(membro.getByText("Você não tem nenhuma organização ativa")).toHaveCount(0);
+  await membro.waitForLoadState("networkidle");
   await membro.screenshot({ path: `${EVIDENCIA}/2-membro-entrou.png` });
   await membro.context().close();
 
   // 6. Recadastrar o mesmo e-mail explica, na tela.
-  await page.getByLabel("Nome").fill(nome);
-  await page.getByLabel("E-mail").fill(email);
+  await page.getByLabel("Nome", { exact: true }).fill(nome);
+  await page.getByLabel("E-mail", { exact: true }).fill(email);
   await page.getByLabel("Senha", { exact: true }).fill("outra-senha-123");
   await page.getByRole("button", { name: "Cadastrar membro" }).click();
-  await expect(page.getByRole("alert")).toContainText("Esta pessoa já faz parte da equipe.");
+  // `filter`: o anunciador de rota do Next também é `role="alert"`.
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Esta pessoa já faz parte da equipe." }),
+  ).toBeVisible();
   await page.screenshot({ path: `${EVIDENCIA}/3-ja-e-membro.png` });
 
   // 5. Definir nova senha pelo menu do membro.
@@ -161,6 +165,7 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   // …e a nova entra.
   const comNova = await entrarComo(browser, baseURL, novaSenha);
   await comNova.waitForURL(/\/app\//, { timeout: 30_000 });
+  await comNova.waitForLoadState("networkidle");
   await comNova.screenshot({ path: `${EVIDENCIA}/5-entrou-com-a-nova.png` });
   await comNova.context().close();
 });

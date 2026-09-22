@@ -72,8 +72,8 @@ Body `{ password }`. Guardas: suporte, `requireRole("admin")`, service role.
 - Troca da própria senha pela pessoa logada (não existe tela para isso hoje, com ou sem esta
   feature). Fica como tarefa separada.
 - Obrigar troca de senha no primeiro login — o pedido é justamente menos burocracia.
-- Encerrar sessões abertas do membro ao redefinir a senha (o provedor não oferece isso por id pela
-  API de admin do cliente JS).
+- Encerrar sessões abertas do membro ao redefinir a senha: a API de admin do cliente JS não
+  oferece isso por id. Quem precisa tirar alguém de dentro na hora usa "Revogar acesso".
 - Migration: nenhuma. Tudo reaproveita `fn_accept_team_invite`, `team_invites` e o provedor de auth.
 
 ## Prova
