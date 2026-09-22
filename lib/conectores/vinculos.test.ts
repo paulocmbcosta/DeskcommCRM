@@ -1,7 +1,7 @@
 /**
  * `vincular` — o INSERT idempotente e a PROMOÇÃO no `23505`.
  *
- * O admin falso reproduz só as dias formas que `vincular` usa:
+ * O admin falso reproduz só as duas formas que `vincular` usa:
  * `from(t).insert(payload)` (devolve `{error}`) e
  * `from(t).update(payload).eq()...in().select()` (devolve `{data, error}`,
  * `data` com N linhas simulando quantas a promoção afetou). Cada chamada é
@@ -109,10 +109,14 @@ describe("vincular — 23505 (linha já existe)", () => {
     expect(admin.chamadas).toEqual([expect.objectContaining({ op: "insert" })]);
   });
 
-  it("(c) linha existente é 'documento' e chega 'manual' → PROMOVE (confirmação humana é mais forte que documento informado)", async () => {
-    // Decisão registrada no PR: 'documento' é uma das formas MAIS FRACAS que
-    // 'manual', então o filtro do update inclui as duas ("telefone" e
-    // "documento") — se a linha real estiver em qualquer uma delas, promove.
+  it("(c) 'manual' inclui 'documento' entre as formas mais fracas — decisão do PR: confirmação humana promove sobre documento informado", async () => {
+    // Este admin falso não guarda a forma da linha real — ele só devolve "N
+    // linhas afetadas" fixo, sem olhar o filtro. Então este caso NÃO prova que
+    // uma linha 'documento' de verdade vira 'manual'; prova só que o filtro do
+    // `.in()` para 'manual' contém "documento" (a decisão do item 1c: manual é
+    // confirmação humana, mais forte que documento informado, então promove).
+    // Quem prova o comportamento fim-a-fim é o teste de rota
+    // (`.../vinculo/route.test.ts`), com um admin falso que reage ao filtro de verdade.
     const admin = adminFalso({ erroDoInsert: { code: "23505", message: "dup" }, linhasPromovidas: 1 });
     const resultado = await vincular({ admin: comoAdmin(admin), ...PEDIDO_BASE, verificadoPor: "manual" });
     expect(resultado).toEqual({ vinculou: true, promovido: true });

@@ -98,6 +98,10 @@ export async function vincular(p: PedidoDeVincular): Promise<ResultadoDeVincular
   const formasMaisFracas = MAIS_FRACAS_QUE[p.verificadoPor];
   if (formasMaisFracas.length === 0) return { vinculou: false, promovido: false };
 
+  // A promoção REESCREVE `created_by` para quem promoveu agora — o autor
+  // original da linha (o sistema, no vínculo por telefone) some daqui e só
+  // continua rastreável no `api_audit_log` (a entrada de `conector.vinculo_criado`
+  // que gravou a linha da primeira vez).
   const { data, error: erroPromocao } = await p.admin
     .from("contato_vinculos_externos")
     .update({ verificado_por: p.verificadoPor, created_by: p.userId })

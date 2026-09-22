@@ -146,6 +146,11 @@ export async function estadoDoPainelIxc(p: PedidoDoPainel): Promise<EstadoDoPain
         userId: null,
       })
     ).vinculou;
+    // Cosmético: assume `verificado_por: "telefone"` para montar a resposta
+    // desta leitura. Num pedido CONCORRENTE que já tenha criado a linha como
+    // "documento"/"manual", `vincular` não promove nada (telefone é a mais
+    // fraca — nunca sobrescreve) e a aba mostra "telefone" até o refetch, que
+    // lê a linha de verdade do banco.
     vinculos = [{ external_id: unico.id, verificado_por: "telefone", created_at: new Date().toISOString() }];
   }
 
