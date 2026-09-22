@@ -235,7 +235,12 @@ async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
   if (!documento || !nascimento) return { estado: "precisa_cpf_e_nascimento" };
   const { cadastros: conferidos, dataIlegivel } = await cadastrosQueConferem(p.credencial, documento, nascimento);
   if (conferidos.length === 0) return { estado: "nao_conferiu", ...(dataIlegivel ? { dataIlegivel: true } : {}) };
-  return vincularE(p, conferidos.slice(0, TETO_DE_CANDIDATOS).map((c) => c.id), "documento");
+  // TETO_DE_CANDIDATOS é do telefone (número de recepção, placeholder — muita
+  // gente atrás do MESMO número). Cadastros que conferem por CPF são do MESMO
+  // documento: fatiar essa lista faria "a mais atrasada entre TODOS os
+  // cadastros vinculados" parar de valer em silêncio pra quem tem mais
+  // contratos no próprio CPF do que esse teto.
+  return vincularE(p, conferidos.map((c) => c.id), "documento");
 }
 
 const MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE = new Set(["cobranca_indisponivel", "pix_inativo", "pix_corrompido"]);

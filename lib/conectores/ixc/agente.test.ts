@@ -228,6 +228,39 @@ describe("consultar — sem a onda de sinal e sem su_ticket (importante 7, latê
   // inteira prova que o default não mudou.
 });
 
+describe("consultar — 9 cadastros do MESMO CPF não são cortados pelo teto do telefone (importante 9)", () => {
+  const DOCUMENTO = "529.982.247-25";
+  const NASCIMENTO = "1985-03-12";
+  const cadastroDoDocumento = (sufixo: string, id: string): Linha => ({
+    id,
+    razao: `Cliente ${sufixo}`,
+    cnpj_cpf: DOCUMENTO,
+    tipo_pessoa: "F",
+    ativo: "S",
+    telefone_celular: "",
+    data_nascimento: NASCIMENTO,
+  });
+  // "Z09" ordena DEPOIS de "A01".."A08" (`ativosPrimeiro` desempata por nome) —
+  // é o TETO_DE_CANDIDATOS (8) antigo que cortaria exatamente este.
+  const oitoCadastros = Array.from({ length: 8 }, (_, i) => cadastroDoDocumento(`A0${i + 1}`, `${101 + i}`));
+  const nonoCadastro = cadastroDoDocumento("Z09", "109");
+
+  it("a fatura mais atrasada é do 9º cadastro — sumiria se a lista fosse cortada em 8", async () => {
+    ixc({
+      cliente: [...oitoCadastros, nonoCadastro],
+      fn_areceber: [
+        ...oitoCadastros.map((c) => fatura(`f${c.id ?? ""}`, "2026-09-01", { id_cliente: c.id ?? "" })),
+        fatura(`f${nonoCadastro.id ?? ""}`, "2026-06-01", { id_cliente: nonoCadastro.id ?? "" }),
+      ],
+    });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao", cpfCnpj: DOCUMENTO, dataNascimento: NASCIMENTO });
+    expect(r.estado).toBe("identificado");
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.auditoria.vinculou?.cadastros).toHaveLength(9);
+    expect(r.financeiro?.daVez?.vencimento).toBe("2026-06-01");
+  });
+});
+
 const PDF = Buffer.from("%PDF-1.4 boleto %%EOF", "latin1");
 const BR_CODE =
   "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";
