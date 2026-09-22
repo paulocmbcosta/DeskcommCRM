@@ -126,6 +126,15 @@ export interface RespostaDoJev {
   modelo: string;
   /** `null` = o provedor não informou uso — nunca 0 (0 é "grátis", `null` é "não sei"). */
   tokensDeEntrada: number | null;
+  /**
+   * Custo em CENTAVOS: `usage.cost` real do provedor (em dólares na resposta
+   * HTTP, `* 100` aqui) quando presente — é mais exato que estimar. Plano B
+   * (`custoEmCentavos(tokensDeEntrada)`, `lib/classificador-comercial/jev.ts`)
+   * quando o provedor não informa `cost`. `null` só quando NENHUM dos dois
+   * está disponível — nunca 0 (mesma régua de `llm_calls.cost_cents`: "null =
+   * preço desconhecido", `supabase/baseline.sql`).
+   */
+  custoEmCentavos: number | null;
 }
 
 export interface Decisao {

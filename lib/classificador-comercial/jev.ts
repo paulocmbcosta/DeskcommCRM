@@ -16,11 +16,16 @@
  *    pedido ou a resposta mudou. É defeito nosso ou do provedor, e precisa
  *    aparecer.
  *
- * O `detalhe` nunca carrega a chave: passa por `redigirMensagemDoProvedor`
- * (padrões conhecidos de chave) MAIS um `replaceAll` da chave usada nesta
- * chamada (backstop para um formato que os padrões não cobrem), e o que sobra
- * de erro de rede é só o NOME do erro (`TimeoutError`, `TypeError`...), nunca
- * a mensagem crua.
+ * O `detalhe` nunca carrega a chave: se o corpo de erro é JSON com
+ * `error.message`, só ESSE campo (mais `error.code`, se vier) sobrevive — o
+ * resto é descartado ANTES de qualquer redação, porque provedor de erro pode
+ * anexar dado que nenhum regex reconhece (ex.: a OpenRouter ecoa
+ * `error.metadata.flagged_input`, um TRECHO DA CONVERSA DO CLIENTE, em erro
+ * de moderação). O que sobra passa por `redigirMensagemDoProvedor` (padrões
+ * conhecidos de chave e PII) MAIS um `replaceAll` da chave USADA nesta
+ * chamada — já aparada — como backstop para um formato que os padrões não
+ * cobrem. O que sobra de erro de rede é só o NOME do erro (`TimeoutError`,
+ * `TypeError`...), nunca a mensagem crua.
  */
 import { z } from "zod";
 
@@ -78,7 +83,11 @@ const respostaSchema = z.object({
       .catch(undefined),
   }),
   usage: z
-    .object({ input_tokens: z.number().int().nonnegative() })
+    .object({
+      input_tokens: z.number().int().nonnegative(),
+      /** Custo REAL em DÓLARES, quando o provedor informa (ex.: `0.00002709`). */
+      cost: z.number().nonnegative().optional(),
+    })
     .optional()
     .catch(undefined),
 });
@@ -112,18 +121,45 @@ function nomeDoErro(err: unknown): string {
 }
 
 /**
- * O corpo cru do provedor pode ecoar a própria chave (ex.: "Incorrect API key
+ * Corpo de erro em JSON pode trazer mais que o motivo: a OpenRouter anexa
+ * `error.metadata.flagged_input` — um TRECHO DA CONVERSA DO CLIENTE — em erro
+ * de moderação, e isso não é chave nem CPF/telefone/e-mail, então nenhum
+ * regex de `redigirMensagemDoProvedor` o reconhece. Guardar só
+ * `error.message` (e `error.code`, se vier) descarta esse resto ANTES da
+ * redação rodar. Corpo que não é JSON, ou que é JSON sem `error.message`
+ * string, devolve o texto cru — mesmo comportamento de antes desta função
+ * existir.
+ */
+function extrairMensagemDeErro(texto: string): string {
+  let corpo: unknown;
+  try {
+    corpo = JSON.parse(texto);
+  } catch {
+    return texto;
+  }
+  if (!corpo || typeof corpo !== "object" || !("error" in corpo)) return texto;
+  const erro = (corpo as { error: unknown }).error;
+  if (!erro || typeof erro !== "object" || !("message" in erro)) return texto;
+  const mensagem = (erro as { message: unknown }).message;
+  if (typeof mensagem !== "string") return texto;
+  const codigo = "code" in erro ? (erro as { code: unknown }).code : undefined;
+  return codigo === undefined || codigo === null ? mensagem : `[${String(codigo)}] ${mensagem}`;
+}
+
+/**
+ * O corpo do provedor pode ecoar a própria chave (ex.: "Incorrect API key
  * provided: Bearer sk-or-..."). `redigirMensagemDoProvedor` cobre os padrões
- * conhecidos (`sk-…`, `AIza…`, `Bearer …`); o `replaceAll` da CHAVE USADA
- * nesta chamada é o backstop para um provedor que ecoa a chave num formato
- * que nenhum padrão cobre. Corte por CODE POINT (mesma razão de
+ * conhecidos (`sk-…`, `AIza…`, `Bearer …`) e PII; o `replaceAll` da CHAVE
+ * USADA nesta chamada (já APARADA — mesma chave que foi ao header) é o
+ * backstop para um provedor que ecoa a chave num formato que nenhum padrão
+ * cobre. Corte por CODE POINT (mesma razão de
  * `perguntas.ts:cortarPorCodePoint`, deliberadamente não compartilhada — não
  * vale acoplar o módulo HTTP ao módulo puro por uma função de 3 linhas):
  * `slice`/`substring` por unidade UTF-16 pode partir um emoji ao meio.
  */
-function redigirDetalhe(bruto: string, apiKey: string): string {
-  let texto = redigirMensagemDoProvedor(bruto);
-  if (apiKey.length >= 8) texto = texto.replaceAll(apiKey, "[CHAVE]");
+function redigirDetalhe(bruto: string, chave: string): string {
+  let texto = redigirMensagemDoProvedor(extrairMensagemDeErro(bruto));
+  if (chave.length >= 8) texto = texto.replaceAll(chave, "[CHAVE]");
   return Array.from(texto).slice(0, 200).join("");
 }
 
@@ -139,8 +175,13 @@ export async function perguntarAoJev(entrada: {
   const inicio = Date.now();
   const base = (entrada.baseUrl?.trim() || OPENROUTER_BASE_PADRAO).replace(/\/+$/, "");
   const f = entrada.fetchImpl ?? fetch;
+  // Aparada UMA vez, e usada em TUDO que segue (validação, header, redação):
+  // `\n`/`\r\n`/espaço no fim (ex.: `.env` CRLF, ou um `OPENROUTER_API_KEY`
+  // colado com quebra de linha) não deveria travar a chamada pra sempre em
+  // "chave malformada" — o `fetch` real aparava sozinho, o mock de teste não.
+  const chave = entrada.apiKey.trim();
 
-  if (!CHAVE_VALIDA.test(entrada.apiKey)) {
+  if (!CHAVE_VALIDA.test(chave)) {
     return {
       ok: false,
       latenciaMs: Date.now() - inicio,
@@ -148,15 +189,23 @@ export async function perguntarAoJev(entrada: {
     };
   }
 
+  // Filtra ANTES de espalhar: mesmo em outra CAIXA (`authorization`,
+  // `content-type`), extra não pode sobrescrever autenticação nem o tipo de
+  // conteúdo — chave de objeto JS é case-sensitive, então sem o filtro as
+  // duas grafias convivem no mesmo objeto de headers.
+  const extrasSemAutenticacao = Object.fromEntries(
+    Object.entries(entrada.cabecalhosExtras ?? {}).filter(
+      ([nome]) => !["authorization", "content-type"].includes(nome.toLowerCase()),
+    ),
+  );
+
   let resp: Response;
   try {
     resp = await f(`${base}/systemone`, {
       method: "POST",
       headers: {
-        // Extras PRIMEIRO: um chamador não pode sobrescrever autenticação
-        // nem o tipo de conteúdo passando `cabecalhosExtras.Authorization`.
-        ...(entrada.cabecalhosExtras ?? {}),
-        Authorization: `Bearer ${entrada.apiKey}`,
+        ...extrasSemAutenticacao,
+        Authorization: `Bearer ${chave}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ model: entrada.modelo, state: entrada.estado, questions: PERGUNTAS }),
@@ -190,7 +239,7 @@ export async function perguntarAoJev(entrada: {
   const latenciaMs = Date.now() - inicio;
 
   if (!resp.ok) {
-    const detalhe = redigirDetalhe(texto, entrada.apiKey);
+    const detalhe = redigirDetalhe(texto, chave);
     const s = resp.status;
     if (s === 401 || s === 402 || s === 403) return { ok: false, latenciaMs, falha: { tipo: "conta", status: s, detalhe } };
     if (s === 408 || s === 429 || s >= 500) return { ok: false, latenciaMs, falha: { tipo: "temporaria", status: s, detalhe } };
@@ -210,7 +259,10 @@ export async function perguntarAoJev(entrada: {
 
   const lido = respostaSchema.safeParse(corpo);
   if (!lido.success) {
-    const caminhos = lido.error.issues.map((issue) => issue.path.join(".")).join(", ");
+    // `|| "(raiz)"` por ISSUE: um problema no corpo INTEIRO (ex.: `corpo` é
+    // `null` ou array — não bate nem o tipo `object`) vem com `path: []`, e
+    // `[].join(".")` é `""` — sem o fallback o detalhe terminava em `": "`.
+    const caminhos = lido.error.issues.map((issue) => issue.path.join(".") || "(raiz)").join(", ");
     return {
       ok: false,
       latenciaMs,
@@ -219,6 +271,10 @@ export async function perguntarAoJev(entrada: {
   }
 
   const a = lido.data;
+  // `usage.cost` é o valor REAL do provedor, em DÓLARES — mais exato que
+  // estimar por token. Plano B (`custoEmCentavos`, definida acima) só quando
+  // o provedor não informa `cost` (ele é opcional no schema).
+  const custo = a.usage?.cost !== undefined ? a.usage.cost * 100 : custoEmCentavos(a.usage?.input_tokens ?? null);
   return {
     ok: true,
     latenciaMs,
@@ -228,6 +284,7 @@ export async function perguntarAoJev(entrada: {
       confiancaDoAssunto: a.answers.assunto?.confidence ?? null,
       modelo: a.model ?? entrada.modelo,
       tokensDeEntrada: a.usage?.input_tokens ?? null,
+      custoEmCentavos: custo,
     },
   };
 }

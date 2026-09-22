@@ -63,6 +63,31 @@ describe("perguntarAoJev", () => {
     expect(headers["X-Extra"]).toBe("1");
   });
 
+  it("cabeçalhos extras em OUTRA CAIXA (authorization minúsculo) também não sobrevivem — filtrados antes de espalhar", async () => {
+    const { f, chamadas } = fetchQueDevolve(200, RESPOSTA_DOCUMENTADA);
+    await perguntarAoJev({
+      apiKey: "sk-or-teste",
+      estado: ESTADO,
+      modelo: MODELO_DO_JEV,
+      fetchImpl: f,
+      cabecalhosExtras: { authorization: "lixo", "content-type": "text/plain" },
+    });
+    const headers = chamadas[0]!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-or-teste");
+    expect(headers["Content-Type"]).toBe("application/json");
+    // Sem a filtragem por caixa, o objeto teria QUATRO chaves (as duas extras
+    // em minúsculo SOMADAS às nossas) — chaves de objeto JS são case-sensitive.
+    expect(Object.keys(headers).map((k) => k.toLowerCase())).toEqual(["authorization", "content-type"]);
+  });
+
+  it("chave com \\r\\n no fim é aparada antes de validar, montar o header e comparar no detalhe — não fica presa em 'malformada'", async () => {
+    const { f, chamadas } = fetchQueDevolve(200, RESPOSTA_DOCUMENTADA);
+    const r = await perguntarAoJev({ apiKey: "sk-or-teste\r\n", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(r.ok).toBe(true);
+    const headers = chamadas[0]!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-or-teste");
+  });
+
   it("traduz a resposta para o que o produto usa", async () => {
     const { f } = fetchQueDevolve(200, RESPOSTA_DOCUMENTADA);
     const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
@@ -72,6 +97,8 @@ describe("perguntarAoJev", () => {
       confiancaDoAssunto: 0.81,
       modelo: "jev-1.13.0",
       tokensDeEntrada: 812,
+      // RESPOSTA_DOCUMENTADA não tem `usage.cost` — plano B: estimado por token.
+      custoEmCentavos: custoEmCentavos(812),
     });
   });
 
@@ -84,7 +111,31 @@ describe("perguntarAoJev", () => {
       confiancaDoAssunto: null,
       modelo: MODELO_DO_JEV,
       tokensDeEntrada: null,
+      custoEmCentavos: null,
     });
+  });
+
+  it("usa usage.cost REAL (em dólares) quando o provedor o informa — mais exato que estimar por token", async () => {
+    // input_tokens deliberadamente ALTO: se o código usasse o plano B por
+    // engano, o resultado seria ~4,2 centavos — bem diferente do `cost` real
+    // informado (0,0027 centavos), o que prova que o real venceu o estimado.
+    const { f } = fetchQueDevolve(200, {
+      answers: { comercial: { type: "noul", noul: 0.05 } },
+      usage: { input_tokens: 999_999, cost: 0.00002709 },
+    });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    // cost está em DÓLARES; custoEmCentavos é CENTAVOS → * 100.
+    expect(r.ok && r.resposta.custoEmCentavos).toBeCloseTo(0.00002709 * 100, 10);
+    expect(r.ok && r.resposta.custoEmCentavos).not.toBe(custoEmCentavos(999_999));
+  });
+
+  it("cai para a estimativa por token (plano B) quando usage.cost falta", async () => {
+    const { f } = fetchQueDevolve(200, {
+      answers: { comercial: { type: "noul", noul: 0.05 } },
+      usage: { input_tokens: 1_000_000 },
+    });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(r.ok && r.resposta.custoEmCentavos).toBe(custoEmCentavos(1_000_000));
   });
 
   it("assunto com choice ausente (campo que só EXPLICA, malformado) não veta a decisão", async () => {
@@ -167,6 +218,14 @@ describe("perguntarAoJev", () => {
     expect(!r.ok && r.falha.detalhe).toContain("answers.comercial");
   });
 
+  it("200 com corpo null tem caminho de erro VAZIO no Zod — vira '(raiz)', nunca termina em ': '", async () => {
+    const { f } = fetchQueDevolve(200, null);
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(!r.ok && r.falha.tipo).toBe("contrato");
+    expect(!r.ok && r.falha.detalhe).toContain("(raiz)");
+    expect(!r.ok && r.falha.detalhe.endsWith(": ")).toBe(false);
+  });
+
   it("detalhe nunca carrega a chave, mesmo se o provedor ecoar ela de volta no corpo do erro", async () => {
     const chave = "sk-or-v1-abcdef0123456789";
     const { f } = fetchQueDevolve(401, `Incorrect API key provided: Bearer ${chave}`);
@@ -179,6 +238,35 @@ describe("perguntarAoJev", () => {
     const { f } = fetchQueDevolve(401, `chave usada: ${chave}`);
     const r = await perguntarAoJev({ apiKey: chave, estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
     expect(!r.ok && r.falha.detalhe).not.toContain(chave);
+  });
+
+  it("detalhe passa mesmo por redigirMensagemDoProvedor: CPF e e-mail do corpo de erro saem redigidos", async () => {
+    const { f } = fetchQueDevolve(403, "cliente com CPF 123.456.789-09, contato maria@example.com, recusado");
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(!r.ok && r.falha.detalhe).toContain("[CPF]");
+    expect(!r.ok && r.falha.detalhe).toContain("[EMAIL]");
+    expect(!r.ok && r.falha.detalhe).not.toContain("123.456.789-09");
+    expect(!r.ok && r.falha.detalhe).not.toContain("maria@example.com");
+  });
+
+  it("corpo de erro em JSON guarda só error.code/message — metadata (que pode trazer trecho da conversa do cliente) é descartada", async () => {
+    const { f } = fetchQueDevolve(403, {
+      error: {
+        code: 403,
+        message: "flagged",
+        metadata: { flagged_input: "sou a Maria Silva, rua das Flores 12" },
+      },
+    });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(!r.ok && r.falha.detalhe).toContain("flagged");
+    expect(!r.ok && r.falha.detalhe).not.toContain("Maria");
+    expect(!r.ok && r.falha.detalhe).not.toContain("Flores");
+  });
+
+  it("corpo de erro em JSON sem error.message cai para o texto cru (comportamento anterior preservado)", async () => {
+    const { f } = fetchQueDevolve(403, { algumOutroFormato: "sem saldo" });
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(!r.ok && r.falha.detalhe).toContain("sem saldo");
   });
 
   it("chave malformada (espaço, caractere invisível) é problema de conta ANTES do fetch — sem retentativa inútil", async () => {
@@ -230,5 +318,11 @@ describe("contrato REAL medido pela sonda (tests/fixtures/jev/resposta-real.json
     const { f } = fetchQueDevolve(200, real);
     const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
     expect(r.ok, JSON.stringify(r)).toBe(true);
+    // A resposta real tem `usage.cost` em dólares (0.00002709) — prova que o
+    // custo REAL do provedor é usado, não só o fallback por token.
+    const usage = (real as { usage?: { cost?: number } }).usage;
+    if (r.ok && usage?.cost !== undefined) {
+      expect(r.resposta.custoEmCentavos).toBeCloseTo(usage.cost * 100, 8);
+    }
   });
 });
