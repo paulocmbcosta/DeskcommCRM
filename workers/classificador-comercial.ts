@@ -2,7 +2,9 @@
  * O CARD NASCE QUANDO A CONVERSA É COMERCIAL — o classificador (Jev).
  *
  * Consome `message.received` (emitido pelo gatilho `trg_messages_emit_event`
- * em TODO canal), em paralelo com os outros consumidores. Só age quando a
+ * em TODO canal). O dispatcher roda os consumidores de um evento EM SÉRIE, e
+ * este é registrado DEPOIS dos outros (lib/event-log/register-handlers.ts),
+ * para não atrasar push e automações esperando o Jev. Só age quando a
  * organização ligou `settings.crm.nascimento_do_card.modo = 'classificador'`;
  * no modo de sempre quem abre o card é o ingest, e aqui é um `skipped` barato.
  *
@@ -19,8 +21,21 @@
  * em `lib/leads/nascimento-do-lead.ts`; daqui sai só o CÓDIGO
  * (`CausaSemClassificacao`), para a frase da linha do tempo não divergir dele.
  *
+ * Quando o Jev diz "comercial" e o card NÃO nasce, o motivo não some: falha de
+ * escrita LANÇA (o drain aplica backoff e, esgotadas as tentativas, avisa do
+ * evento morto); falta de funil ou de etapa vira aviso no log, porque é
+ * configuração que alguém precisa ver; corrida legítima (`ja_existe`,
+ * `contato_bloqueado`) segue, com o motivo no log.
+ *
  * Toda chamada, com sucesso ou falha, vira uma linha em `llm_calls`
  * (`purpose = commercial_classify`): é o que aparece em IA › Execuções.
+ *
+ * O TETO DE ORÇAMENTO da organização NÃO é consultado antes de chamar o Jev, de
+ * propósito: a chamada custa ≈0,003 centavo, e barrar no teto derrubaria cards
+ * ou os jogaria todos em "sem classificar". O gasto aparece assim mesmo — o
+ * gatilho `trg_llm_calls_budget` soma cada linha. E a chave da INSTALAÇÃO
+ * (`OPENROUTER_API_KEY`) paga pelas organizações que não cadastraram a sua
+ * (`lib/classificador-comercial/chave.ts`).
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -40,6 +55,9 @@ import {
   garantirLeadDaConversa,
   type CausaSemClassificacao,
   type DadosDoNascimento,
+  type MotivoSemLead,
+  type NascimentoDoLead,
+  type OrigemDoNascimento,
 } from "@/lib/leads/nascimento-do-lead";
 import { logger } from "@/lib/logger";
 import { DERIVACAO_TERMINADA, TIPOS_DERIVAVEIS } from "@/lib/messaging/media/derivable";
@@ -52,11 +70,22 @@ export const ESPERA_APOS_FALHA_TEMPORARIA_MS = 60_000;
 /** O `retry` do dispatcher não conta tentativa: o teto é pela IDADE do evento. */
 export const TETO_DE_FALHA_TEMPORARIA_MS = 10 * 60_000;
 
+/** Por que o card de uma conversa comercial não nasceu — `erro` nunca chega aqui: ele LANÇA. */
+export type MotivoDoCardQueNaoNasceu = Exclude<MotivoSemLead, "erro">;
+
 export type ResultadoDaClassificacao =
   | { status: "pulado"; motivo: string }
   | { status: "tentar_de_novo"; em: Date; motivo: string }
+  /** `criouCard: false` aqui é SÓ "não comercial"; comercial sem card é o status abaixo. */
   | { status: "classificado"; criouCard: boolean; assunto: string; probabilidade: number }
-  | { status: "card_sem_classificar"; causa: CausaSemClassificacao; criouCard: boolean };
+  | { status: "comercial_sem_card"; motivo: MotivoDoCardQueNaoNasceu; assunto: string; probabilidade: number }
+  | {
+      status: "card_sem_classificar";
+      causa: CausaSemClassificacao;
+      criouCard: boolean;
+      /** Só quando `criouCard` é false. */
+      motivo?: MotivoDoCardQueNaoNasceu;
+    };
 
 export interface LinhaDeChamada {
   organizationId: string;
@@ -165,19 +194,67 @@ function causaDaFalha(falha: FalhaDoJev): CausaSemClassificacao {
   return "formato";
 }
 
+/** Falta de configuração: a conversa merecia card e a organização não tem onde pô-lo. */
+const MOTIVOS_DE_CONFIGURACAO: ReadonlySet<MotivoSemLead> = new Set(["sem_funil_de_entrada", "sem_etapa"]);
+
+/**
+ * O desfecho depois de `erro` ter lançado. Escrito por extenso: `Exclude<…,
+ * { motivo: "erro" }>` não remove nada, porque o membro da união tem
+ * `motivo: MotivoSemLead`, e não só `"erro"`.
+ */
+type NascimentoSemErro =
+  | Extract<NascimentoDoLead, { criado: true }>
+  | { criado: false; motivo: MotivoDoCardQueNaoNasceu };
+
+/**
+ * `garantirLeadDaConversa` e o desfecho dele no log — os DOIS lados, como o
+ * ingest (lib/channels/pos-entrada.ts): sem a linha do "não criou", "já
+ * existia" e "a organização não tem funil" têm a mesma cara.
+ *
+ * `erro` LANÇA: devolver "ok" deixaria o drain descartar a única pista de que
+ * uma conversa comercial ficou sem card. Lançando, o handler devolve `error`, o
+ * drain aplica backoff e, esgotadas as tentativas, avisa do evento morto.
+ */
+async function nascerCard(
+  deps: DependenciasDoClassificador,
+  dados: DadosDoNascimento,
+  origem: Exclude<OrigemDoNascimento, { tipo: "ingest" }>,
+  contexto: Record<string, unknown>,
+): Promise<NascimentoSemErro> {
+  const nascimento = await deps.garantir(deps.admin, dados, origem);
+  const base = {
+    organization_id: dados.organizationId,
+    conversation_id: dados.conversationId,
+    origem: origem.tipo,
+    ...contexto,
+  };
+  if (nascimento.criado) {
+    // Card sem classificar é aviso mesmo quando nasce: o classificador falhou.
+    const nivel = origem.tipo === "sem_classificacao" ? "warn" : "info";
+    logger[nivel]("classificador-comercial: card criado", { ...base, lead_id: nascimento.leadId });
+    return nascimento;
+  }
+  if (nascimento.motivo === "erro") {
+    throw new Error(`nascimento do card falhou: ${nascimento.detalhe ?? "erro"}`);
+  }
+  const motivo = nascimento.motivo;
+  if (MOTIVOS_DE_CONFIGURACAO.has(motivo)) {
+    logger.warn("classificador-comercial: card não nasceu — falta configurar o funil de entrada", { ...base, motivo });
+  } else {
+    logger.info("classificador-comercial: card não nasceu", { ...base, motivo });
+  }
+  return { criado: false, motivo };
+}
+
 async function criarSemClassificar(
   deps: DependenciasDoClassificador,
   dados: DadosDoNascimento,
   causa: CausaSemClassificacao,
 ): Promise<ResultadoDaClassificacao> {
-  const nascimento = await deps.garantir(deps.admin, dados, { tipo: "sem_classificacao", causa });
-  logger.warn("classificador-comercial: card criado sem classificar", {
-    organization_id: dados.organizationId,
-    conversation_id: dados.conversationId,
-    causa,
-    criado: nascimento.criado,
-  });
-  return { status: "card_sem_classificar", causa, criouCard: nascimento.criado };
+  const nascimento = await nascerCard(deps, dados, { tipo: "sem_classificacao", causa }, { causa });
+  return nascimento.criado
+    ? { status: "card_sem_classificar", causa, criouCard: true }
+    : { status: "card_sem_classificar", causa, criouCard: false, motivo: nascimento.motivo };
 }
 
 export async function processarClassificacao(
@@ -201,7 +278,12 @@ export async function processarClassificacao(
   if (await deps.dados.contatoBloqueado(org, contactId)) return { status: "pulado", motivo: "contato_bloqueado" };
 
   const agora = deps.agora().getTime();
-  const idadeMs = event.created_at ? agora - new Date(event.created_at).getTime() : 0;
+  // Idade DESCONHECIDA conta como VENCIDA: com 0, um evento sem `created_at`
+  // repetiria o `retry` para sempre — o drain não conta tentativa de `retry` —
+  // e chamaria o Jev a cada 60 s. Vencido, a transcrição não é esperada e a
+  // falha temporária cai na decisão A na hora. (`created_at` inválido dá NaN,
+  // que também reprova os dois `<` abaixo: vencido do mesmo jeito.)
+  const idadeMs = event.created_at ? agora - new Date(event.created_at).getTime() : Number.POSITIVE_INFINITY;
 
   // 3 · áudio ainda virando texto: esperar, senão o Jev lê uma conversa vazia.
   const disparadora = await deps.dados.mensagem(org, messageId);
@@ -277,17 +359,25 @@ export async function processarClassificacao(
     return { status: "classificado", criouCard: false, assunto: decisao.assunto, probabilidade: decisao.probabilidade };
   }
 
-  const nascimento = await deps.garantir(deps.admin, dadosDoCard, {
-    tipo: "classificador",
-    assunto: decisao.assunto,
-    rotuloDoAssunto: ROTULO_DO_ASSUNTO[decisao.assunto],
-    probabilidade: decisao.probabilidade,
-    modelo: r.resposta.modelo,
-  });
-  return {
-    status: "classificado",
-    criouCard: nascimento.criado,
-    assunto: decisao.assunto,
-    probabilidade: decisao.probabilidade,
-  };
+  const nascimento = await nascerCard(
+    deps,
+    dadosDoCard,
+    {
+      tipo: "classificador",
+      assunto: decisao.assunto,
+      rotuloDoAssunto: ROTULO_DO_ASSUNTO[decisao.assunto],
+      probabilidade: decisao.probabilidade,
+      modelo: r.resposta.modelo,
+    },
+    { assunto: decisao.assunto },
+  );
+  if (!nascimento.criado) {
+    return {
+      status: "comercial_sem_card",
+      motivo: nascimento.motivo,
+      assunto: decisao.assunto,
+      probabilidade: decisao.probabilidade,
+    };
+  }
+  return { status: "classificado", criouCard: true, assunto: decisao.assunto, probabilidade: decisao.probabilidade };
 }

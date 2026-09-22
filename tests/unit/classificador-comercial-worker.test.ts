@@ -15,6 +15,7 @@ const { processarClassificacao, registrarNoLlmCalls, codigoDeErroDaFalha } = awa
   "@/workers/classificador-comercial"
 );
 const { classificadorComercialHandler } = await import("@/workers/classificador-comercial.handler");
+const { logger } = await import("@/lib/logger");
 
 const AGORA = new Date("2026-09-22T15:00:00Z");
 
@@ -78,6 +79,7 @@ function deps() {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   dados = {
     regra: async () => ({ modo: "classificador", limiar: 0.7 }),
     temCardAberto: async () => false,
@@ -110,6 +112,17 @@ describe("processarClassificacao — quando NÃO chama o Jev", () => {
       status: "pulado",
       motivo: "nao_e_entrada",
     });
+    expect(perguntar).not.toHaveBeenCalled();
+  });
+
+  it("payload sem a conversa: pula como payload_incompleto, sem ler a regra", async () => {
+    const regra = vi.fn(dados.regra);
+    dados.regra = regra;
+    expect(await processarClassificacao(evento({}, { conversation_id: null }), deps())).toEqual({
+      status: "pulado",
+      motivo: "payload_incompleto",
+    });
+    expect(regra).not.toHaveBeenCalled();
     expect(perguntar).not.toHaveBeenCalled();
   });
 
@@ -224,6 +237,130 @@ describe("processarClassificacao — quando o classificador falha (decisão A)",
     expect(r).toEqual({
       status: "card_sem_classificar",
       causa: "conta",
+      criouCard: true,
+    });
+  });
+});
+
+describe("processarClassificacao — resposta fora do formato (contrato)", () => {
+  it("o card nasce sem classificar, com a causa formato", async () => {
+    perguntar.mockResolvedValue({
+      ok: false,
+      latenciaMs: 120,
+      falha: { tipo: "contrato", status: 200, detalhe: "resposta fora do formato esperado: answers.comercial.noul" },
+    });
+    expect(await processarClassificacao(evento(), deps())).toEqual({
+      status: "card_sem_classificar",
+      causa: "formato",
+      criouCard: true,
+    });
+    expect(garantir).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      tipo: "sem_classificacao",
+      causa: "formato",
+    });
+  });
+});
+
+describe("processarClassificacao — o Jev disse comercial e o card NÃO nasceu", () => {
+  it("falha de escrita (motivo erro) LANÇA: o drain aplica backoff e, no fim, avisa do evento morto", async () => {
+    garantir.mockResolvedValue({ criado: false, motivo: "erro", detalhe: "deadlock detected" });
+    await expect(processarClassificacao(evento(), deps())).rejects.toThrow(/deadlock detected/);
+  });
+
+  it.each(["sem_funil_de_entrada", "sem_etapa"] as const)(
+    "%s: falta de configuração vira AVISO com organização, conversa e motivo",
+    async (motivo) => {
+      garantir.mockResolvedValue({ criado: false, motivo });
+      expect(await processarClassificacao(evento(), deps())).toEqual({
+        status: "comercial_sem_card",
+        motivo,
+        assunto: "mudanca_de_plano",
+        probabilidade: 0.93,
+      });
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ organization_id: "org-1", conversation_id: "conv-1", motivo }),
+      );
+    },
+  );
+
+  it.each(["ja_existe", "contato_bloqueado"] as const)(
+    "%s: corrida legítima — segue, com o motivo no log de info (sem aviso)",
+    async (motivo) => {
+      garantir.mockResolvedValue({ criado: false, motivo });
+      expect(await processarClassificacao(evento(), deps())).toEqual({
+        status: "comercial_sem_card",
+        motivo,
+        assunto: "mudanca_de_plano",
+        probabilidade: 0.93,
+      });
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ organization_id: "org-1", conversation_id: "conv-1", motivo }),
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("card criado: o log leva o lead_id", async () => {
+    await processarClassificacao(evento(), deps());
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ organization_id: "org-1", conversation_id: "conv-1", lead_id: "lead-1" }),
+    );
+  });
+});
+
+describe("processarClassificacao — card sem classificar: o desfecho do nascimento também aparece", () => {
+  beforeEach(() => {
+    chave.mockResolvedValue(null);
+  });
+
+  it("criou: o log leva o lead_id e a causa", async () => {
+    await processarClassificacao(evento(), deps());
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ organization_id: "org-1", conversation_id: "conv-1", lead_id: "lead-1", causa: "sem_chave" }),
+    );
+  });
+
+  it("falha de escrita (motivo erro) LANÇA aqui também", async () => {
+    garantir.mockResolvedValue({ criado: false, motivo: "erro", detalhe: "timeout" });
+    await expect(processarClassificacao(evento(), deps())).rejects.toThrow(/timeout/);
+  });
+
+  it("sem funil de entrada: o resultado e o aviso dizem por que o card não nasceu", async () => {
+    garantir.mockResolvedValue({ criado: false, motivo: "sem_funil_de_entrada" });
+    expect(await processarClassificacao(evento(), deps())).toEqual({
+      status: "card_sem_classificar",
+      causa: "sem_chave",
+      criouCard: false,
+      motivo: "sem_funil_de_entrada",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ organization_id: "org-1", conversation_id: "conv-1", motivo: "sem_funil_de_entrada" }),
+    );
+  });
+});
+
+describe("processarClassificacao — evento SEM created_at: idade desconhecida conta como vencida", () => {
+  function semData(): EventRow {
+    const e = evento();
+    delete e.created_at;
+    return e;
+  }
+
+  it("transcrição pendente não espera: classifica com o que houver", async () => {
+    dados.mensagem = async () => ({ type: "audio", media_derived_status: "pending" });
+    expect((await processarClassificacao(semData(), deps())).status).toBe("classificado");
+  });
+
+  it("falha temporária não vira retry eterno: o card nasce sem classificar na hora (decisão A)", async () => {
+    perguntar.mockResolvedValue({ ok: false, latenciaMs: 8000, falha: { tipo: "temporaria", status: 529, detalhe: "" } });
+    expect(await processarClassificacao(semData(), deps())).toEqual({
+      status: "card_sem_classificar",
+      causa: "temporaria",
       criouCard: true,
     });
   });
