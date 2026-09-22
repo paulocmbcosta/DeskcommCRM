@@ -9119,6 +9119,9 @@ export const DICIONARIO: Traducoes = {
   "Não consegui consultar o IXC.": { es: "No pude consultar IXC." },
   "Um administrador precisa conferir a conexão em Configurações › Conectores.": { es: "Un administrador debe revisar la conexión en Configuración › Conectores." },
   "Este telefone está em mais de um cadastro do IXC. Confirme com o cliente qual é o dele.": { es: "Este teléfono está en más de un registro de IXC. Confirma con el cliente cuál es el suyo." },
+  "Este número foi digitado por quem está conversando — ele não confirma quem é. Confirme com a pessoa antes de vincular.": {
+    es: "Este número lo escribió quien está conversando — no confirma quién es. Confirma con la persona antes de vincular.",
+  },
   "É este": { es: "Es este" },
   "Há mais cadastros com este telefone. Busque pelo CPF ou CNPJ.": { es: "Hay más registros con este teléfono. Busca por CPF o CNPJ." },
   "Não achei este telefone no IXC. O cliente pode estar escrevendo de outro número.": { es: "No encontré este teléfono en IXC. El cliente puede estar escribiendo desde otro número." },

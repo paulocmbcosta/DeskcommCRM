@@ -2,10 +2,13 @@
  * O QUE O PAINEL DO IXC MOSTRA PARA ESTE CONTATO — a máquina de estados, sem HTTP.
  *
  *   vinculado ............ já se sabe quem é: devolve o resumo.
- *   escolher ............. o telefone bate com 2+ cadastros. Ninguém escolhe
- *                          sozinho: marido e mulher dividem o celular, e abrir o
- *                          financeiro do cadastro errado é vazar dado de outra
- *                          pessoa para o atendente falar em voz alta.
+ *   escolher ............. ninguém vincula sozinho — por dois motivos possíveis
+ *                          (`MotivoDeEscolher`): o telefone bate com 2+
+ *                          cadastros (marido e mulher dividem o celular), ou o
+ *                          telefone não é identidade neste canal (visitante do
+ *                          chat do site). Abrir o financeiro do cadastro errado
+ *                          é vazar dado de outra pessoa para o atendente falar
+ *                          em voz alta.
  *   nao_encontrado ....... o telefone não está no IXC (o cliente escreveu de
  *                          outro número — é comum). A tela oferece o CPF/CNPJ.
  *   vinculo_sem_cadastro . o vínculo aponta para um id que o IXC não devolve mais.
@@ -48,9 +51,20 @@ export interface CadastroVinculado {
   verificado_por: FormaDeVerificacao;
 }
 
+/**
+ * Por que a tela caiu em "escolher": a pergunta muda a frase que o atendente lê.
+ *
+ *   varios_cadastros ... o telefone É identidade aqui, e bateu com 2+ cadastros
+ *                        (marido e mulher, recadastro). O atendente confirma QUAL.
+ *   telefone_nao_prova . o telefone NÃO é identidade neste canal (foi digitado
+ *                        pelo visitante do chat do site) — mesmo com 1 candidato
+ *                        só, ele não vincula sozinho. O atendente confirma SE É.
+ */
+export type MotivoDeEscolher = "varios_cadastros" | "telefone_nao_prova";
+
 export type EstadoDoPainelIxc =
   | { estado: "vinculado"; cadastros: CadastroVinculado[]; cadastro_em_tela: string; resumo: ResumoIxc; vinculou_agora: boolean }
-  | { estado: "escolher"; candidatos: CandidatoNaTela[]; ha_mais: boolean }
+  | { estado: "escolher"; motivo: MotivoDeEscolher; candidatos: CandidatoNaTela[]; ha_mais: boolean }
   | { estado: "nao_encontrado"; procurou_por_telefone: boolean }
   | { estado: "vinculo_sem_cadastro"; cadastros: CadastroVinculado[]; cadastro_em_tela: string };
 
@@ -75,6 +89,12 @@ export async function estadoDoPainelIxc(p: PedidoDoPainel): Promise<EstadoDoPain
   let vinculos: Vinculo[] = await listarVinculos(p.admin, p.orgId, p.contactId, "ixc");
   let vinculouAgora = false;
 
+  // O vínculo por telefone só vale onde o telefone é identidade do canal: um
+  // vínculo criado pelo furo antigo (visitante do chat do site, número digitado)
+  // não pode continuar valendo como "já sei quem é" para sempre. Descartado, o
+  // contato volta para o fluxo de identificação normal.
+  vinculos = vinculos.filter((v) => v.verificado_por !== "telefone" || p.telefoneEhIdentidade);
+
   if (vinculos.length === 0) {
     const candidatos = await clientesPorTelefone(p.credencial, p.telefone);
     if (candidatos.length === 0) {
@@ -84,6 +104,7 @@ export async function estadoDoPainelIxc(p: PedidoDoPainel): Promise<EstadoDoPain
     if (!unico) {
       return {
         estado: "escolher",
+        motivo: p.telefoneEhIdentidade ? "varios_cadastros" : "telefone_nao_prova",
         candidatos: candidatos.slice(0, TETO_DE_CANDIDATOS).map(candidatoNaTela),
         ha_mais: candidatos.length > TETO_DE_CANDIDATOS,
       };
