@@ -270,3 +270,47 @@ export function clientePelaAgendaLigado(settings: unknown): boolean {
       : undefined;
   return crmSettingsSchema.parse(crm ?? {}).cliente_pela_agenda === true;
 }
+
+/**
+ * `organizations.settings.crm.nascimento_do_card` — QUANDO o card nasce.
+ *
+ * `toda_conversa` (padrão de toda organização, e o comportamento de sempre): a
+ * primeira mensagem de quem não tem card abre um no funil de entrada.
+ * `classificador`: nenhuma mensagem abre card sozinha. A cada mensagem de um
+ * contato SEM card aberto, o Jev decide se a conversa é comercial
+ * (`workers/classificador-comercial.ts`), e o card nasce quando a probabilidade
+ * alcança o `limiar`.
+ *
+ * Lixo lê como `toda_conversa`: na dúvida, o card nasce. Card a mais se
+ * arquiva; card a menos é venda que some sem ninguém ver.
+ */
+export const MODOS_DE_NASCIMENTO_DO_CARD = ["toda_conversa", "classificador"] as const;
+export type ModoDeNascimentoDoCard = (typeof MODOS_DE_NASCIMENTO_DO_CARD)[number];
+/** As opções da tela. A escrita só aceita estas; a leitura aceita qualquer valor em [0.5, 0.95]. */
+export const LIMIARES_DO_CLASSIFICADOR = [0.6, 0.7, 0.8, 0.9] as const;
+export const NASCIMENTO_DO_CARD_PADRAO = { modo: "toda_conversa", limiar: 0.7 } as const satisfies {
+  modo: ModoDeNascimentoDoCard;
+  limiar: number;
+};
+
+export const nascimentoDoCardSchema = z
+  .object({
+    modo: z.enum(MODOS_DE_NASCIMENTO_DO_CARD).catch(NASCIMENTO_DO_CARD_PADRAO.modo),
+    limiar: z.number().min(0.5).max(0.95).catch(NASCIMENTO_DO_CARD_PADRAO.limiar),
+  })
+  .catch({ ...NASCIMENTO_DO_CARD_PADRAO });
+export type NascimentoDoCard = z.infer<typeof nascimentoDoCardSchema>;
+
+export const nascimentoDoCardWriteSchema = z.object({
+  modo: z.enum(MODOS_DE_NASCIMENTO_DO_CARD),
+  limiar: z
+    .number()
+    .refine((v) => (LIMIARES_DO_CLASSIFICADOR as readonly number[]).includes(v), "limiar fora das opções"),
+});
+
+/** A regra em vigor. Nunca lança. */
+export function nascimentoDoCard(settings: unknown): NascimentoDoCard {
+  const objeto = (v: unknown): Record<string, unknown> | undefined =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  return nascimentoDoCardSchema.parse(objeto(objeto(settings)?.crm)?.nascimento_do_card ?? {});
+}
