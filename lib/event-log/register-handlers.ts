@@ -8,6 +8,7 @@ import { followupGatilhoPresencaHandler } from "@/lib/followup/gatilho-presenca.
 
 import { aiResponseHandler } from "@/workers/ai-response-worker.handler";
 import { aiSentimentHandler } from "@/workers/ai-sentiment-worker.handler";
+import { classificadorComercialHandler } from "@/workers/classificador-comercial.handler";
 import { aiHandoffFromSentimentHandler } from "@/workers/ai-handoff-from-sentiment.handler";
 import { ragIndexerHandler } from "@/workers/rag-indexer.handler";
 import { lgpdExportHandler } from "@/workers/lgpd-export-worker.handler";
@@ -31,6 +32,7 @@ export function ensureHandlersRegistered(): void {
   registerHandler(followupReactivityHandler);
   registerHandler(aiResponseHandler);
   registerHandler(aiSentimentHandler);
+  registerHandler(classificadorComercialHandler);
   registerHandler(aiHandoffFromSentimentHandler);
   registerHandler(ragIndexerHandler);
   registerHandler(lgpdExportHandler);

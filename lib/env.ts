@@ -195,6 +195,10 @@ const schema = z.object({
   // `cabecalhosDeAtribuicaoOpenRouter()`, em edge/llm/providers.ts.
   OPENROUTER_APP_URL: z.string().optional().default(""),
   OPENROUTER_APP_TITLE: z.string().optional().default(""),
+  // Base do System One do classificador comercial (Jev). Vazio = OpenRouter
+  // (https://openrouter.ai/api/v1). Existe para o e2e apontar para um Jev falso
+  // local sem mexer no roteamento do chat (OPENROUTER_BASE_URL).
+  CLASSIFICADOR_COMERCIAL_BASE_URL: z.string().optional().default(""),
   VERCEL_AI_GATEWAY_URL: z.string().optional().default(""),
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   OPENAI_API_KEY: z.string().optional().default(""),
