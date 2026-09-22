@@ -235,6 +235,17 @@ export interface GateContext {
    */
   spinningEnforced?: boolean;
   /**
+   * O corpo é CONTEÚDO DO SISTEMA — composto pelo código a partir de dado
+   * conferido (hoje: a cobrança do conector, com o valor e o código relidos no
+   * ERP) — e não texto do modelo. Desarma SÓ os gates que julgam a cópia do
+   * modelo: `spinning` (a mesma legenda para o 3º cliente do número seria vetada,
+   * a janela cruza clientes — a mesma conta do aviso de escalação) e `promise`
+   * (o valor da fatura cairia no piso de preço). Os dois saem `skipped` com
+   * `conteudo_do_sistema` no trace. Opt-out, LGPD, ritmo, janela e aviso de IA
+   * continuam valendo integralmente. Ausente = conteúdo do modelo (tudo armado).
+   */
+  conteudoDoSistema?: boolean;
+  /**
    * Arma o `agendaStallGate`. Ausente = no-op — mesma direção segura de
    * `internalVocabularyEnforced` (caller que não conhece o campo não arma nada).
    *
@@ -268,7 +279,7 @@ export type GateVerdict =
   // `skipped: 'not_applicable'` (invariante 4 de `docs/doctrine/restricao-de-canal.md`): a
   // restrição não existe NESTE canal. Passa, mas o trace registra que não se aplicava — um
   // `pass` silencioso apagaria a diferença entre "não regrediu" e "provo que não regrediu".
-  | { pass: true; waitMs?: number; amendBody?: string; skipped?: 'not_applicable' }
+  | { pass: true; waitMs?: number; amendBody?: string; skipped?: 'not_applicable' | 'conteudo_do_sistema' }
   | {
       pass: false;
       code: string;
@@ -344,6 +355,7 @@ export const lgpdGate: Gate = {
 export const promiseGate: Gate = {
   name: 'promise',
   evaluate: (ctx) => {
+    if (ctx.conteudoDoSistema === true) return { pass: true, skipped: 'conteudo_do_sistema' };
     if (ctx.promise.table === null) return { pass: true };
     const decision = decidePromise({ candidate: ctx.body, table: ctx.promise.table });
     return decision.allow
@@ -642,6 +654,7 @@ export const messagingWindowGate: Gate = {
 const spinningGate: Gate = {
   name: 'spinning',
   evaluate: (ctx) => {
+    if (ctx.conteudoDoSistema === true) return { pass: true, skipped: 'conteudo_do_sistema' };
     // Desarmado explicitamente: `skipped`, nunca `pass` silencioso — a diferença
     // entre "não vetou" e "nem chegou a olhar" é esta linha no trace (a mesma
     // disciplina do `messagingWindowGate` com canal sem janela).
@@ -835,6 +848,8 @@ export interface RunBeforeSendArgs {
    * diário (`recordSend`) continua valendo — o aviso é uma mensagem de verdade.
    */
   enforceSpinning?: boolean;
+  /** Ver `GateContext.conteudoDoSistema`. Também não chama o classificador semântico nem grava a cópia. */
+  conteudoDoSistema?: boolean;
   /**
    * Arma o `agendaStallGate` para ESTA tentativa — ver `GateContext.agenda`. Ausente = gate
    * no-op (retrocompatível com todo caller que não conhece agenda, ex.: `followup-turn.ts`).
@@ -976,9 +991,10 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
     const promise = await loadPromiseTable(client, args.tenantId);
     // Camada semântica (F4-02): a chamada de modelo (async) roda AQUI, sob o lock, e o
     // veredito entra no ctx para o `semanticPromiseGate` (sync) ler. Ausente = camada off.
-    const semanticPromise = args.classifyPromiseSemantic
-      ? await args.classifyPromiseSemantic(args.body)
-      : null;
+    const semanticPromise =
+      args.classifyPromiseSemantic && args.conteudoDoSistema !== true
+        ? await args.classifyPromiseSemantic(args.body)
+        : null;
     // Disclosure (F4-05): template por ponteiro da org + detecção de 1º outbound via
     // send_ledger (só conta se há template — sem template o gate é no-op de qualquer forma).
     const disclosure = await loadDisclosureTemplate(client, args.tenantId);
@@ -1010,6 +1026,7 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
       },
       spinning: { knobs: spinningKnobs, window },
       ...(args.enforceSpinning === false ? { spinningEnforced: false as const } : {}),
+      ...(args.conteudoDoSistema === true ? { conteudoDoSistema: true as const } : {}),
       promise: {
         table: promise?.table ?? null,
         ...(promise?.versionId !== undefined ? { versionId: promise.versionId } : {}),
@@ -1102,7 +1119,7 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
       await recordSend(client, args.tenantId, args.channelSessionId, args.now);
       // Simetria com o gate desarmado: quem não é julgado pela janela não entra
       // nela. Ver `GateContext.spinningEnforced`.
-      if (args.enforceSpinning !== false) {
+      if (args.enforceSpinning !== false && args.conteudoDoSistema !== true) {
         await recordCopy(client, args.tenantId, args.channelSessionId, ctx.body, args.now);
       }
     }
