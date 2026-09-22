@@ -46,6 +46,19 @@ export interface DadosDoClassificador {
   temCardAberto(organizationId: string, contactId: string): Promise<boolean>;
   contatoBloqueado(organizationId: string, contactId: string): Promise<boolean>;
   mensagem(organizationId: string, messageId: string): Promise<MensagemDisparadora | null>;
+  /**
+   * A derivação desta mídia ainda está na fila?
+   *
+   * ⚠️ `messages.media_derived_status` NÃO responde isso. A coluna não tem
+   * default e o produto só escreve nela os DOIS estados finais — `ready` e
+   * `failed` (`workers/media-derive-worker.ts`). Enquanto a mídia está na
+   * fila, inclusive no backoff do Whisper e no acúmulo depois de uma queda, o
+   * valor é `null`: o MESMO de uma mídia que nunca foi persistida e nunca vai
+   * ser derivada. Quem separa os dois é o evento `media.derive_requested`
+   * (emitido pelo `media-persist-worker` no passo em que grava o
+   * `media_storage_path`) ainda não concluído.
+   */
+  derivacaoPendente(organizationId: string, messageId: string): Promise<boolean>;
   /** Do mais velho para o mais novo, já sem o que não é fala, e só do atendimento ATUAL. */
   ultimasMensagens(organizationId: string, conversationId: string, limite: number): Promise<MensagemParaEstado[]>;
 }
@@ -194,6 +207,24 @@ export function dadosViaSupabase(
         .maybeSingle();
       if (error) throw new Error(error.message);
       return (data as { is_blocked?: boolean } | null)?.is_blocked === true;
+    },
+
+    async derivacaoPendente(organizationId, messageId) {
+      // `done` cobre também o `skipped` do vídeo com a descrição desligada, e
+      // `dead` é o pedido que esgotou as tentativas: em nenhum dos dois há o
+      // que esperar. Índice `event_log_entity_idx` (entity_kind, entity_id).
+      const { data, error } = await db
+        .from("event_log")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("entity_kind", "message")
+        .eq("entity_id", messageId)
+        .eq("event_type", "media.derive_requested")
+        .in("status", ["pending", "processing"])
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data !== null;
     },
 
     async mensagem(organizationId, messageId) {

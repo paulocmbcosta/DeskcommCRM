@@ -22,7 +22,7 @@ function dbQueDevolve(porTabela: Record<string, { data: unknown; error: { messag
     db: {
       from(tabela: string) {
         const cadeia: Record<string, unknown> = {};
-        for (const m of ["select", "eq", "order", "limit", "gte", "lt"]) {
+        for (const m of ["select", "eq", "order", "limit", "gte", "lt", "in"]) {
           cadeia[m] = (...args: unknown[]) => {
             filtros.push([tabela, m, args]);
             return cadeia;
@@ -105,6 +105,45 @@ describe("dadosViaSupabase", () => {
     it("erro de banco LANÇA", async () => {
       const { db } = dbQueDevolve({ messages: { data: null, error: { message: "fora" } } });
       await expect(dadosViaSupabase(db).mensagem("o", "m")).rejects.toThrow("fora");
+    });
+  });
+
+  describe("derivacaoPendente", () => {
+    /**
+     * O FATO que diz "a derivação foi pedida e ainda não terminou".
+     *
+     * `messages.media_derived_status` NÃO serve: a coluna não tem default e o
+     * produto só escreve `ready` e `failed` (workers/media-derive-worker.ts) —
+     * enquanto a mídia está na fila, inclusive no backoff do Whisper, o valor
+     * é `null`, idêntico ao de uma mídia que nunca foi persistida. Quem
+     * distingue os dois é o evento `media.derive_requested`, emitido pelo
+     * `media-persist-worker` no mesmo passo em que grava o
+     * `media_storage_path`.
+     */
+    it("consulta o media.derive_requested da mensagem, por organização, só em estado não terminal", async () => {
+      const { db, filtros } = dbQueDevolve({ event_log: { data: { id: "ev-1" }, error: null } });
+      const r = await dadosViaSupabase(db, { janela: janelaSemPiso }).derivacaoPendente("org-1", "msg-1");
+      expect(r).toBe(true);
+      expect(filtros).toContainEqual(["event_log", "select", ["id"]]);
+      expect(filtros).toContainEqual(["event_log", "eq", ["organization_id", "org-1"]]);
+      expect(filtros).toContainEqual(["event_log", "eq", ["entity_kind", "message"]]);
+      expect(filtros).toContainEqual(["event_log", "eq", ["entity_id", "msg-1"]]);
+      expect(filtros).toContainEqual(["event_log", "eq", ["event_type", "media.derive_requested"]]);
+      // `done` (inclusive o `skipped` do vídeo desligado) e `dead` ficam de
+      // fora: não há mais o que esperar em nenhum dos dois.
+      expect(filtros).toContainEqual(["event_log", "in", ["status", ["pending", "processing"]]]);
+    });
+
+    it("sem linha vira false — nada a esperar", async () => {
+      const { db } = dbQueDevolve({ event_log: { data: null, error: null } });
+      expect(await dadosViaSupabase(db, { janela: janelaSemPiso }).derivacaoPendente("org-1", "msg-1")).toBe(false);
+    });
+
+    it("erro de banco LANÇA (o drain tenta de novo)", async () => {
+      const { db } = dbQueDevolve({ event_log: { data: null, error: { message: "fetch failed" } } });
+      await expect(
+        dadosViaSupabase(db, { janela: janelaSemPiso }).derivacaoPendente("org-1", "msg-1"),
+      ).rejects.toThrow("fetch failed");
     });
   });
 

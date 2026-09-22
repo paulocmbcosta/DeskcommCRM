@@ -63,6 +63,7 @@ import {
   type OrigemDoNascimento,
 } from "@/lib/leads/nascimento-do-lead";
 import { logger } from "@/lib/logger";
+import type { NascimentoDoCard } from "@/lib/schemas/settings";
 import { DERIVACAO_TERMINADA, TIPOS_DERIVAVEIS } from "@/lib/messaging/media/derivable";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -173,6 +174,28 @@ export function registrarNoLlmCalls(admin: SupabaseClient) {
 }
 
 /**
+ * A regra da organização deste EVENTO, lida uma vez só.
+ *
+ * O dispatcher chama o predicado `foraDaRequisicao` e o `handle` com o MESMO
+ * objeto `row` (lib/event-log/dispatcher.ts), então a chave é o próprio
+ * evento: sem TTL, sem risco de ler uma regra velha de outra mensagem, e o
+ * `WeakMap` some com o evento. Sem isto, TODA organização — inclusive a que
+ * nunca ligou a regra — pagava duas leituras de `organizations` por mensagem.
+ */
+const REGRA_DO_EVENTO = new WeakMap<EventRow, NascimentoDoCard>();
+
+async function regraDoEvento(
+  event: EventRow,
+  dados: Pick<DadosDoClassificador, "regra">,
+): Promise<NascimentoDoCard> {
+  const guardada = REGRA_DO_EVENTO.get(event);
+  if (guardada) return guardada;
+  const regra = await dados.regra(event.organization_id);
+  REGRA_DO_EVENTO.set(event, regra);
+  return regra;
+}
+
+/**
  * ESTE evento vai pagar a espera do Jev? — o predicado `foraDaRequisicao` do
  * handler (lib/event-log/dispatcher.ts).
  *
@@ -191,7 +214,7 @@ export async function ehOrganizacaoComClassificador(
   dados: Pick<DadosDoClassificador, "regra"> = dadosViaSupabase(createAdminClient()),
 ): Promise<boolean> {
   try {
-    const regra = await dados.regra(event.organization_id);
+    const regra = await regraDoEvento(event, dados);
     return regra.modo === "classificador";
   } catch (err) {
     logger.warn("classificador-comercial: regra ilegível ao decidir o adiamento — roda na requisição", {
@@ -302,8 +325,9 @@ export async function processarClassificacao(
   if (!messageId || !conversationId || !contactId) return { status: "pulado", motivo: "payload_incompleto" };
   const org = event.organization_id;
 
-  // 1 · a regra. No modo de sempre, o ingest já cuidou do card.
-  const regra = await deps.dados.regra(org);
+  // 1 · a regra. No modo de sempre, o ingest já cuidou do card. (Já lida pelo
+  // predicado do handler, quando houve um — `regraDoEvento` não lê duas vezes.)
+  const regra = await regraDoEvento(event, deps.dados);
   if (regra.modo !== "classificador") return { status: "pulado", motivo: "modo_toda_conversa" };
 
   // 2 · JÁ TEM CARD? Então não há o que decidir — e o Jev não é chamado.
@@ -342,15 +366,22 @@ export async function processarClassificacao(
       // não significa que a derivação morreu: Whisper com 5xx, ou a fila de
       // mídia atrasada depois de uma queda, entregam a transcrição minutos
       // depois — e o card teria nascido "sem classificar" por pressa nossa.
-      // Enquanto a derivação está PEDIDA e não terminou, espera-se, com o teto
-      // de falha temporária (10 min) como limite final; aí vale a decisão A.
+      // Enquanto o PEDIDO de derivação está na fila, espera-se, com o teto de
+      // falha temporária (10 min) como limite final; aí vale a decisão A.
       //
-      // Status NULO é outro caso: a derivação nunca foi pedida (vídeo com a
-      // descrição desligada, mídia sem storage) e não vai chegar nunca — esse
-      // segue pelo teto de idade do passo 3, sem esperar os 10 minutos.
-      const derivacaoPedida = disparadora.media_derived_status !== null;
+      // ⚠️ QUEM RESPONDE "ainda está vindo" É A FILA, NÃO A COLUNA: o produto
+      // só escreve `ready`/`failed` em `media_derived_status`, então `null`
+      // vale tanto para "derivando agora" quanto para "nunca foi pedida"
+      // (mídia não persistida, vídeo com a descrição desligada). A versão
+      // anterior deste bloco lia `status !== null` como "pedida" e, na
+      // prática, nunca esperava — e o teste passava porque escrevia um
+      // `pending` que o produto não grava. Ver `dados.derivacaoPendente`.
       const terminou = DERIVACAO_TERMINADA.has(disparadora.media_derived_status ?? "");
-      if (derivacaoPedida && !terminou && idadeMs < TETO_DE_FALHA_TEMPORARIA_MS) {
+      if (
+        !terminou &&
+        idadeMs < TETO_DE_FALHA_TEMPORARIA_MS &&
+        (await deps.dados.derivacaoPendente(org, messageId))
+      ) {
         return {
           status: "tentar_de_novo",
           em: new Date(agora + ESPERA_POR_TRANSCRICAO_MS),

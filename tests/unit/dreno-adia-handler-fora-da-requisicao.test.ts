@@ -114,6 +114,7 @@ describe("dispatchEvent — o predicado decide o adiamento", () => {
 /** Dublê mínimo do admin: registra os `update` em `event_log` e devolve as linhas no `select`. */
 function dublarAdmin(linhas: EventRow[]) {
   const updates: Array<Record<string, unknown>> = [];
+  const consultas: Array<[string, unknown]> = [];
   function cadeia() {
     let payload: Record<string, unknown> | null = null;
     const self: Record<string, unknown> = {
@@ -125,10 +126,16 @@ function dublarAdmin(linhas: EventRow[]) {
       select: () => self,
       eq: () => self,
       lt: () => self,
-      or: () => self,
+      or: (v: unknown) => {
+        consultas.push(["or", v]);
+        return self;
+      },
       in: () => self,
       order: () => self,
-      limit: () => self,
+      limit: (v: unknown) => {
+        consultas.push(["limit", v]);
+        return self;
+      },
       then: (resolve: (v: unknown) => void) => {
         if (payload?.status === "processing") return resolve({ data: [{ id: "e1" }], error: null });
         if (payload) return resolve({ data: [], error: null });
@@ -137,7 +144,7 @@ function dublarAdmin(linhas: EventRow[]) {
     };
     return self;
   }
-  return { admin: { from: () => cadeia() } as never, updates };
+  return { admin: { from: () => cadeia() } as never, updates, consultas };
 }
 
 describe("drainEventLog — o evento adiado volta à fila para o worker", () => {
@@ -187,5 +194,20 @@ describe("drainEventLog — o evento adiado volta à fila para o worker", () => 
     expect(resumo.done).toBe(4);
     expect(resumo.retried).toBe(0);
     expect(updates.some((u) => u.status === "pending" && u.next_attempt_at !== undefined)).toBe(false);
+  });
+
+  /**
+   * O caso acima prova que o handler não adiado roda no MESMO lote. O que
+   * segura o adiado fora do lote seguinte é a janela do próprio dreno — e ela
+   * é do SELECT, não do dublê: por isso este caso mede a consulta.
+   */
+  it("a janela do dreno respeita next_attempt_at e o teto do lote", async () => {
+    const { admin, consultas } = dublarAdmin([linha()]);
+    await drainEventLog(admin, { contexto: "requisicao", limit: 50 });
+
+    const janela = consultas.find(([m]) => m === "or")?.[1];
+    expect(String(janela), "o evento adiado só volta quando next_attempt_at vence").toContain("next_attempt_at");
+    expect(String(janela)).toContain("next_attempt_at.lte.");
+    expect(consultas).toContainEqual(["limit", 50]);
   });
 });

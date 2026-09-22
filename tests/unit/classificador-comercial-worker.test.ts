@@ -64,6 +64,7 @@ let perguntar: ReturnType<typeof vi.fn>;
 let garantir: ReturnType<typeof vi.fn>;
 let chave: ReturnType<typeof vi.fn>;
 let registrarChamada: ReturnType<typeof vi.fn>;
+let derivacaoPendente: ReturnType<typeof vi.fn>;
 
 function deps() {
   return {
@@ -79,11 +80,13 @@ function deps() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  derivacaoPendente = vi.fn(async () => false);
   dados = {
     regra: async () => ({ modo: "classificador", limiar: 0.7 }),
     temCardAberto: async () => false,
     contatoBloqueado: async () => false,
     mensagem: async () => ({ type: "text", media_derived_status: null }),
+    derivacaoPendente: derivacaoPendente as never,
     ultimasMensagens: async () => [{ direcao: "inbound", texto: "quero mudar meu plano para 500 mega" }],
   };
   perguntar = vi.fn(async () => RESPOSTA_SIM);
@@ -138,14 +141,16 @@ describe("processarClassificacao — quando NÃO chama o Jev", () => {
   });
 
   it("áudio ainda sendo transcrito: espera e tenta de novo em 15 s", async () => {
-    dados.mensagem = async () => ({ type: "audio", media_derived_status: "pending" });
+    // `null` é o estado REAL enquanto a derivação corre: a coluna não tem
+    // default e só recebe `ready`/`failed` (workers/media-derive-worker.ts).
+    dados.mensagem = async () => ({ type: "audio", media_derived_status: null });
     const r = await processarClassificacao(evento(), deps());
     expect(r).toEqual({ status: "tentar_de_novo", em: new Date(AGORA.getTime() + 15_000), motivo: "aguardando_transcricao" });
     expect(perguntar).not.toHaveBeenCalled();
   });
 
   it("áudio que passou de 2 min sem transcrição: classifica com o que houver", async () => {
-    dados.mensagem = async () => ({ type: "audio", media_derived_status: "pending" });
+    dados.mensagem = async () => ({ type: "audio", media_derived_status: null });
     const velho = evento({ created_at: new Date(AGORA.getTime() - 121_000).toISOString() });
     expect((await processarClassificacao(velho, deps())).status).toBe("classificado");
   });
@@ -252,6 +257,7 @@ describe("processarClassificacao — conversa só de mídia que não pôde ser l
     "áudio com a derivação terminada (%s) e sem texto: o card nasce sem classificar (midia_sem_texto), sem chave nem Jev",
     async (status) => {
       dados.mensagem = async () => ({ type: "audio", media_derived_status: status });
+      derivacaoPendente.mockResolvedValue(true); // nem consultado: o estado já é final
       expect(await processarClassificacao(evento(), deps())).toEqual({
         status: "card_sem_classificar",
         causa: "midia_sem_texto",
@@ -263,14 +269,17 @@ describe("processarClassificacao — conversa só de mídia que não pôde ser l
       });
       expect(chave).not.toHaveBeenCalled();
       expect(perguntar).not.toHaveBeenCalled();
+      expect(derivacaoPendente, "estado final não precisa perguntar pela fila").not.toHaveBeenCalled();
     },
   );
 
-  it("derivação ATRASADA (pendente depois dos 2 min): espera mais, não vira card sem classificar", async () => {
+  it("derivação AINDA NA FILA depois dos 2 min: espera mais, não vira card sem classificar", async () => {
     // Whisper com 5xx, fila de mídia atrasada depois de uma queda: a
     // transcrição ainda pode chegar, e o card nasceria "sem classificar" por
-    // pressa nossa.
-    dados.mensagem = async () => ({ type: "image", media_derived_status: "pending" });
+    // pressa nossa. O status segue `null` o tempo todo — quem sabe que o
+    // pedido existe é o `media.derive_requested` ainda na fila.
+    dados.mensagem = async () => ({ type: "image", media_derived_status: null });
+    derivacaoPendente.mockResolvedValue(true);
     const velho = evento({ created_at: new Date(AGORA.getTime() - 121_000).toISOString() });
     expect(await processarClassificacao(velho, deps())).toEqual({
       status: "tentar_de_novo",
@@ -280,8 +289,9 @@ describe("processarClassificacao — conversa só de mídia que não pôde ser l
     expect(garantir).not.toHaveBeenCalled();
   });
 
-  it("derivação pendente há mais de 10 min: aí sim vale a decisão A", async () => {
-    dados.mensagem = async () => ({ type: "audio", media_derived_status: "pending" });
+  it("derivação na fila há mais de 10 min: aí sim vale a decisão A", async () => {
+    dados.mensagem = async () => ({ type: "audio", media_derived_status: null });
+    derivacaoPendente.mockResolvedValue(true);
     const velho = evento({ created_at: new Date(AGORA.getTime() - 11 * 60_000).toISOString() });
     expect(await processarClassificacao(velho, deps())).toEqual({
       status: "card_sem_classificar",
@@ -290,8 +300,9 @@ describe("processarClassificacao — conversa só de mídia que não pôde ser l
     });
   });
 
-  it("status NULO (derivação nunca pedida: vídeo desligado, mídia sem storage): pelo teto de idade, sem esperar 10 min", async () => {
+  it("sem pedido de derivação na fila (vídeo com descrição desligada, mídia que nunca foi persistida): pelo teto de idade", async () => {
     dados.mensagem = async () => ({ type: "video", media_derived_status: null });
+    derivacaoPendente.mockResolvedValue(false);
     const velho = evento({ created_at: new Date(AGORA.getTime() - 121_000).toISOString() });
     expect(await processarClassificacao(velho, deps())).toEqual({
       status: "card_sem_classificar",
@@ -539,21 +550,47 @@ describe("llm_calls — a linha que IA › Execuções lê", () => {
 });
 
 describe("ehOrganizacaoComClassificador — o predicado que decide o adiamento", () => {
-  const evento1 = evento();
-
+  // Um evento NOVO por caso: a regra é guardada por evento (WeakMap), então
+  // reusar o mesmo objeto mediria o cache, não a decisão.
   it("regra ligada: true — este evento paga a espera do Jev, então vai para o worker", async () => {
-    expect(await ehOrganizacaoComClassificador(evento1, { regra: async () => ({ modo: "classificador", limiar: 0.7 }) })).toBe(true);
+    expect(
+      await ehOrganizacaoComClassificador(evento(), { regra: async () => ({ modo: "classificador", limiar: 0.7 }) }),
+    ).toBe(true);
   });
 
   it("regra desligada: false — o evento termina na requisição, como em toda a base instalada", async () => {
-    expect(await ehOrganizacaoComClassificador(evento1, { regra: async () => ({ modo: "toda_conversa", limiar: 0.7 }) })).toBe(false);
+    expect(
+      await ehOrganizacaoComClassificador(evento(), { regra: async () => ({ modo: "toda_conversa", limiar: 0.7 }) }),
+    ).toBe(false);
   });
 
   it("falha ao ler a regra: false — na dúvida roda na requisição (o pulo é barato), nunca entope a fila", async () => {
     const regra = async () => {
       throw new Error("organização inexistente");
     };
-    expect(await ehOrganizacaoComClassificador(evento1, { regra })).toBe(false);
+    expect(await ehOrganizacaoComClassificador(evento(), { regra })).toBe(false);
     expect(logger.warn).toHaveBeenCalled();
+  });
+});
+describe("a regra é lida UMA vez por evento", () => {
+  it("o predicado e o processamento do MESMO evento dividem a leitura", async () => {
+    const regra = vi.fn(async () => ({ modo: "classificador" as const, limiar: 0.7 }));
+    dados.regra = regra;
+    const ev = evento();
+
+    expect(await ehOrganizacaoComClassificador(ev, { regra })).toBe(true);
+    await processarClassificacao(ev, deps());
+
+    // O dispatcher chama o predicado e o `handle` com o MESMO objeto `row`;
+    // sem isso, toda organização pagava duas leituras por mensagem.
+    expect(regra).toHaveBeenCalledTimes(1);
+  });
+
+  it("evento diferente lê de novo — nada de cache por organização", async () => {
+    const regra = vi.fn(async () => ({ modo: "classificador" as const, limiar: 0.7 }));
+    dados.regra = regra;
+    await ehOrganizacaoComClassificador(evento(), { regra });
+    await ehOrganizacaoComClassificador(evento(), { regra });
+    expect(regra).toHaveBeenCalledTimes(2);
   });
 });
