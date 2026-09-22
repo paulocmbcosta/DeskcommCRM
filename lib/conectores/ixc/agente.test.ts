@@ -64,6 +64,10 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
     expect(r.cliente).toMatchObject({ primeiroNome: "Maria", situacao: "Bloqueado", motivoDaSituacao: "financeiro em atraso", bloqueado: true, plano: "Fibra 500 Mega", clienteDesde: "2024-03-10", conexao: "offline", temOsAberta: false });
     expect(r.financeiro?.daVez).toEqual({ vencimento: "2026-07-14", valorCents: 12990, diasDeAtraso: 70 });
     expect(r.financeiro?.proxima?.vencimento).toBe("2026-10-12");
+    // `auditoria` é o que o motor tem de tirar de propósito antes de montar o
+    // contexto da IA — não pode estar dentro do que já é a projeção do cliente.
+    expect(r.cliente).not.toHaveProperty("auditoria");
+    expect(r.financeiro).not.toHaveProperty("auditoria");
     const json = JSON.stringify(r);
     for (const proibido of ["529.982", "Rua das Flores", "100.64", "AA:BB", "segredo", "\"900\"", "\"10\"", "\"700\""]) expect(json).not.toContain(proibido);
     expect(vincular).not.toHaveBeenCalled();
@@ -81,7 +85,7 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
     const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
-    expect(r.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
+    expect(r.auditoria.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
   });
 
   it("chat do site com o MESMO telefone: não vincula, pede CPF + nascimento", async () => {
@@ -96,7 +100,7 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
     const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "52998224725" });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
-    expect(r.vinculou).toEqual({ verificadoPor: "documento", cadastros: ["10"] });
+    expect(r.auditoria.vinculou).toEqual({ verificadoPor: "documento", cadastros: ["10"] });
   });
 
   it("sem cadastro no telefone: CPF + nascimento que batem vinculam; qualquer recusa é nao_conferiu", async () => {
@@ -123,7 +127,7 @@ describe("consultar — CPF contraditório NÃO vincula pelo telefone (crítico 
     const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "529.982.247-25" });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
-    expect(r.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
+    expect(r.auditoria.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
   });
 
   it("controle: sem CPF informado, vincula por telefone normalmente (comportamento de sempre)", async () => {
@@ -131,7 +135,7 @@ describe("consultar — CPF contraditório NÃO vincula pelo telefone (crítico 
     const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
-    expect(r.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
+    expect(r.auditoria.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
   });
 
   it("CPF de OUTRA pessoa (telefone reciclado): não vincula a Maria — pede CPF + nascimento", async () => {
@@ -149,7 +153,7 @@ describe("consultar — CPF contraditório NÃO vincula pelo telefone (crítico 
     const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: JOSE.cnpj_cpf, dataNascimento: JOSE.data_nascimento });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
-    expect(r.vinculou).toEqual({ verificadoPor: "documento", cadastros: ["20"] });
+    expect(r.auditoria.vinculou).toEqual({ verificadoPor: "documento", cadastros: ["20"] });
   });
 });
 
@@ -207,7 +211,7 @@ describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (
     ixc({ fn_areceber: [fatura("902", "2026-09-10", { linha_digitavel: "0019 x" }), fatura("901", "2026-08-20"), fatura("950", "2026-10-12")] });
     const { portas: p, enviadas } = portas();
     const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
-    expect(r).toMatchObject({ resultado: "enviada", forma: "pix", faturaId: "901", enviadas: 2, previstas: 2, pixIndisponivel: false });
+    expect(r).toMatchObject({ resultado: "enviada", forma: "pix", enviadas: 2, previstas: 2, pixIndisponivel: false, auditoria: { faturaId: "901" } });
     expect(enviadas.map((m) => m.type)).toEqual(["image", "text"]);
     expect(buscarPix.mock.calls.map((c) => c[1])).toEqual(["901"]);
   });
@@ -216,7 +220,7 @@ describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (
     ixc({ fn_areceber: [fatura("900", "2026-07-14"), fatura("950", "2026-10-12")] }); // 70 dias
     const { portas: p } = portas();
     const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
-    expect(r).toMatchObject({ resultado: "encaminhar_para_cobranca", faturaId: "900", fatura: { diasDeAtraso: 70 } });
+    expect(r).toMatchObject({ resultado: "encaminhar_para_cobranca", fatura: { diasDeAtraso: 70 }, auditoria: { faturaId: "900" } });
     expect(p.enviar).not.toHaveBeenCalled();
     expect(buscarPix).not.toHaveBeenCalled();
   });
@@ -240,7 +244,7 @@ describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (
     buscarPix.mockResolvedValue({ ok: false, mensagemDoIxc: "carteira sem Pix" });
     const { portas: p, enviadas } = portas();
     const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
-    expect(r).toMatchObject({ resultado: "enviada", forma: "boleto", pixIndisponivel: true, faturaId: "901" });
+    expect(r).toMatchObject({ resultado: "enviada", forma: "boleto", pixIndisponivel: true, auditoria: { faturaId: "901" } });
     expect(enviadas[0]?.type).toBe("document");
   });
 
@@ -265,6 +269,6 @@ describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (
     ]);
     ixc({ fn_areceber: [fatura("901", "2026-08-20"), { ...fatura("801", "2026-08-01"), id_cliente: "20" }] });
     const { portas: p } = portas();
-    expect(await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).toMatchObject({ resultado: "enviada", faturaId: "801" });
+    expect(await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).toMatchObject({ resultado: "enviada", auditoria: { faturaId: "801" } });
   });
 });

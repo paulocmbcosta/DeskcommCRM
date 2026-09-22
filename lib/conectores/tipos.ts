@@ -137,14 +137,26 @@ export interface PedidoDeConsulta {
   agora?: Date;
 }
 
+/**
+ * O que uma consulta grava na AUDITORIA — o motor NUNCA repassa isto ao modelo.
+ * Agrupado à parte (em vez de campo solto ao lado de `cliente`/`financeiro`)
+ * de propósito: quem monta o contexto da IA a partir de `ResultadoDaConsulta`
+ * tem de tirar `auditoria` de propósito, nunca espalhar o objeto inteiro sem
+ * pensar — um `...resultado` desavisado não vaza `auditoria` pra dentro da
+ * mensagem do jeito que vazaria um campo solto.
+ */
+export interface AuditoriaDaConsulta {
+  /** Presente quando ESTA consulta criou OU promoveu o vínculo. */
+  vinculou?: { verificadoPor: FormaDeVerificacao; cadastros: string[] };
+}
+
 export type ResultadoDaConsulta =
   | {
       estado: "identificado";
       cliente: ClienteParaAgente;
       /** `null` quando o financeiro não pôde ser lido. */
       financeiro: FinanceiroParaAgente | null;
-      /** Presente quando ESTA consulta criou o vínculo — vai para a auditoria. */
-      vinculou: { verificadoPor: FormaDeVerificacao; cadastros: string[] } | null;
+      auditoria: AuditoriaDaConsulta;
     }
   | {
       estado: "precisa_cpf" | "precisa_cpf_e_nascimento" | "cpf_invalido" | "data_invalida" | "nao_conferiu";
@@ -171,22 +183,30 @@ export interface PedidoDeCobranca {
   agora?: Date;
 }
 
-/** `faturaId` é para a AUDITORIA — o motor nunca o repassa ao modelo. */
+/**
+ * O que um envio grava na AUDITORIA — o motor NUNCA repassa isto ao modelo.
+ * Mesmo racional de `AuditoriaDaConsulta`: agrupado à parte pra um
+ * `...resultado` desavisado não espalhar `faturaId` pro modelo.
+ */
+export interface AuditoriaDaCobranca {
+  faturaId: string;
+}
+
 export type ResultadoDaCobranca =
   | {
       resultado: "enviada";
       forma: FormaDeCobranca;
       fatura: FaturaParaAgente;
-      faturaId: string;
       enviadas: number;
       previstas: number;
       pixGeradoAgora: boolean;
       /** O Pix falhou e saiu o BOLETO da mesma fatura no lugar. */
       pixIndisponivel: boolean;
+      auditoria: AuditoriaDaCobranca;
     }
   | { resultado: "cliente_nao_identificado" | "sem_fatura_em_aberto" }
-  | { resultado: "encaminhar_para_cobranca" | "boleto_indisponivel"; fatura: FaturaParaAgente; faturaId: string }
-  | { resultado: "sem_como_cobrar"; fatura: FaturaParaAgente; faturaId: string; detalheDoErp?: string };
+  | { resultado: "encaminhar_para_cobranca" | "boleto_indisponivel"; fatura: FaturaParaAgente; auditoria: AuditoriaDaCobranca }
+  | { resultado: "sem_como_cobrar"; fatura: FaturaParaAgente; detalheDoErp?: string; auditoria: AuditoriaDaCobranca };
 
 export interface CapacidadeDoAgente {
   consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta>;

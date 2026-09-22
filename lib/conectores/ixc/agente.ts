@@ -17,6 +17,8 @@
  * motor, que é quem sabe de conversa, atendimento e agente.
  */
 import type {
+  AuditoriaDaCobranca,
+  AuditoriaDaConsulta,
   CapacidadeDoAgente,
   ClienteParaAgente,
   CredencialDeConector,
@@ -151,7 +153,8 @@ async function identificado(
   ]);
   if (!resumo) return null;
   const recorte = recorteDeTodos === undefined ? (resumo.financeiro.ok ? resumo.financeiro.dados : null) : recorteDeTodos;
-  return { estado: "identificado", cliente: clienteDe(resumo), financeiro: recorte ? financeiroDe(recorte) : null, vinculou };
+  const auditoria: AuditoriaDaConsulta = vinculou ? { vinculou } : {};
+  return { estado: "identificado", cliente: clienteDe(resumo), financeiro: recorte ? financeiroDe(recorte) : null, auditoria };
 }
 
 async function vincularE(p: PedidoDeConsulta, cadastros: string[], verificadoPor: FormaDeVerificacao): Promise<ResultadoDaConsulta> {
@@ -215,11 +218,11 @@ function enviada(r: Extract<ResultadoDoEnvio, { ok: true }>, pixIndisponivel: bo
     resultado: "enviada",
     forma: r.forma,
     fatura: paraAgente(r.fatura),
-    faturaId: r.fatura.id,
     enviadas: r.enviadas,
     previstas: r.previstas,
     pixGeradoAgora: r.pixGeradoAgora,
     pixIndisponivel,
+    auditoria: { faturaId: r.fatura.id },
   };
 }
 
@@ -232,7 +235,7 @@ async function enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca>
   const cobraveis = [...recorte.vencidas, ...recorte.proximas].filter((f) => f.valorCents > 0);
   const daVez = faturaDaVez(cobraveis);
   if (!daVez) return { resultado: "sem_fatura_em_aberto" };
-  const base = { fatura: paraAgente(daVez), faturaId: daVez.id };
+  const base: { fatura: FaturaParaAgente; auditoria: AuditoriaDaCobranca } = { fatura: paraAgente(daVez), auditoria: { faturaId: daVez.id } };
   // D5: acima do limite, a fatura é da Cobrança — nada sai.
   if (daVez.diasDeAtraso > p.limiteDeDias) return { resultado: "encaminhar_para_cobranca", ...base };
 
