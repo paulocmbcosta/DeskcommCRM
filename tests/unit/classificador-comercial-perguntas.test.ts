@@ -95,7 +95,13 @@ describe("PERGUNTAS", () => {
 });
 
 describe("decidir", () => {
-  const base = { assunto: "mudanca_de_plano", confiancaDoAssunto: 0.8, modelo: "jev-1.13.0", tokensDeEntrada: 500 };
+  const base = {
+    assunto: "mudanca_de_plano",
+    confiancaDoAssunto: 0.8,
+    modelo: "jev-1.13.0",
+    tokensDeEntrada: 500,
+    custoEmCentavos: null,
+  };
 
   it("cria quando a probabilidade alcança o limiar", () => {
     expect(decidir({ ...base, comercial: 0.7 }, 0.7)).toEqual({ criar: true, assunto: "mudanca_de_plano", probabilidade: 0.7 });
