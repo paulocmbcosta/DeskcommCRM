@@ -171,7 +171,11 @@ async function identificado(
 ): Promise<ResultadoDaConsulta | null> {
   const [principal = ""] = cadastros;
   const [resumo, recorteDeTodos] = await Promise.all([
-    montarResumo(p.credencial, principal, p.agora),
+    // Sem sinal (onda 2, por login) e sem atendimentos (`su_ticket`): a IA não
+    // lê nenhum dos dois em `clienteDe` — poupa até duas chamadas ao ERP por
+    // consulta. O painel (`painel.ts`) continua chamando sem este 4º argumento,
+    // então continua com as duas ondas ligadas.
+    montarResumo(p.credencial, principal, p.agora, { sinal: false, atendimentos: false }),
     cadastros.length > 1 ? recorteDe(p.credencial, cadastros, p.agora).catch(() => null) : Promise.resolve(undefined),
   ]);
   if (!resumo) return null;

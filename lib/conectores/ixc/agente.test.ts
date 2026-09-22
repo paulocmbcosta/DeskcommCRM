@@ -205,6 +205,29 @@ describe("clienteDe — primeiroNome de PJ nunca vaza o CPF embutido na razão (
   });
 });
 
+describe("consultar — sem a onda de sinal e sem su_ticket (importante 7, latência)", () => {
+  it("a consulta da IA não paga a 2ª onda (sinal da ONU) nem lê su_ticket", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]);
+    ixc({
+      cliente: [MARIA],
+      cliente_contrato: [CONTRATO],
+      radusuarios: [LOGIN],
+      radpop_radio_cliente_fibra: [{ id: "9", id_login: "5", sinal_rx: "-20" }],
+      su_ticket: [{ id: "1", id_cliente: "10", su_status: "N" }],
+    });
+    await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    const tabelasConsultadas = listar.mock.calls.map((c) => (c[1] as { tabela: string }).tabela);
+    expect(tabelasConsultadas).not.toContain("radpop_radio_cliente_fibra");
+    expect(tabelasConsultadas).not.toContain("su_ticket");
+    // Controle: `os` (su_oss_chamado) continua pedida — é dela que `temOsAberta` vem.
+    expect(tabelasConsultadas).toContain("su_oss_chamado");
+  });
+  // Controle do lado do painel (que precisa das duas ondas) mora em
+  // `painel.test.ts` ("a SENHA que o IXC devolve não aparece..."): ele chama
+  // `montarResumo` sem o 4º argumento e continua lendo o sinal — a suíte
+  // inteira prova que o default não mudou.
+});
+
 const PDF = Buffer.from("%PDF-1.4 boleto %%EOF", "latin1");
 const BR_CODE =
   "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";
