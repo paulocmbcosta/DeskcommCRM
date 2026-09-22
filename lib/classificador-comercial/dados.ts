@@ -32,6 +32,7 @@ import { janelaDoAtendimento } from "@/lib/atendimento/janela-do-atendimento";
 import { logger } from "@/lib/logger";
 import { ATENDIMENTO_VIGENTE } from "@/lib/schemas/messaging";
 import { nascimentoDoCard, type NascimentoDoCard } from "@/lib/schemas/settings";
+import { MARCADOR_NAO_LIDA } from "@/workers/media-derive-worker";
 
 import type { MensagemParaEstado } from "./perguntas";
 
@@ -120,7 +121,13 @@ const ROTULO_DE_MIDIA: Record<string, string> = {
  */
 function textoDaMensagem(type: string, body: string | null, derivado: string | null): string | null {
   const corpo = body?.trim() || null;
-  const derivadoLimpo = derivado?.trim() || null;
+  // O marcador de mídia NÃO LIDA (`MARCADOR_NAO_LIDA`, gravado como derivado
+  // com status `ready` quando falta chave para transcrever ou modelo para
+  // enxergar) é aviso do produto para o agente, não fala do cliente: entregue
+  // ao Jev, ele o lia como o cliente dizendo "não consegui interpretar" e
+  // respondia "não comercial". `replaceAll`, e não igualdade: o derivado de
+  // vídeo compõe transcrição e quadros, e só a parte ilegível sai.
+  const derivadoLimpo = derivado?.replaceAll(MARCADOR_NAO_LIDA, "").trim() || null;
 
   if (type === "audio") {
     return [corpo, derivadoLimpo].filter((t): t is string => t !== null).join(" — ") || null;

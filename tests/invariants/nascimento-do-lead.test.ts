@@ -583,6 +583,21 @@ describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", (
     expect(at!.payload.sem_classificacao).toBe("sem_chave");
   });
 
+  it("conversa só de mídia que não pôde ser lida: o card nasce, e a razão diz que não havia o que ler", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Carla Só Áudio");
+    const r = await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Carla Só Áudio" },
+      { tipo: "sem_classificacao", causa: "midia_sem_texto" },
+    );
+    expect(r.criado, JSON.stringify(r)).toBe(true);
+    const [at] = await atividadeDeCriacao(contato);
+    expect(at!.reason).toBe(
+      "card criado sem classificar a conversa — o cliente mandou só mídia que não pôde ser lida (sem transcrição)",
+    );
+    expect(at!.payload.sem_classificacao).toBe("midia_sem_texto");
+  });
+
   it("cliente conhecido: o sufixo aparece ao final da razão do classificador", async () => {
     const contato = await criarContato(ORG_CLASSIFICADOR_CLIENTE, "Duda Cliente");
     // `first_service_at` é a coluna que `garantirLeadDaConversa` lê para decidir

@@ -242,6 +242,49 @@ describe("processarClassificacao — quando o classificador falha (decisão A)",
   });
 });
 
+describe("processarClassificacao — conversa só de mídia que não pôde ser lida", () => {
+  beforeEach(() => {
+    // A mídia não virou texto (sem transcrição, ou marcador de não lida já
+    // descartado por `dadosViaSupabase`): o cliente falou, mas não há o que ler.
+    dados.ultimasMensagens = async () => [{ direcao: "inbound", texto: null }];
+  });
+
+  it.each(["ready", "failed"])(
+    "áudio com a derivação terminada (%s) e sem texto: o card nasce sem classificar (midia_sem_texto), sem chave nem Jev",
+    async (status) => {
+      dados.mensagem = async () => ({ type: "audio", media_derived_status: status });
+      expect(await processarClassificacao(evento(), deps())).toEqual({
+        status: "card_sem_classificar",
+        causa: "midia_sem_texto",
+        criouCard: true,
+      });
+      expect(garantir).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+        tipo: "sem_classificacao",
+        causa: "midia_sem_texto",
+      });
+      expect(chave).not.toHaveBeenCalled();
+      expect(perguntar).not.toHaveBeenCalled();
+    },
+  );
+
+  it("passado o teto de espera da transcrição: idem, com o que houver (nada)", async () => {
+    dados.mensagem = async () => ({ type: "image", media_derived_status: "pending" });
+    const velho = evento({ created_at: new Date(AGORA.getTime() - 121_000).toISOString() });
+    expect(await processarClassificacao(velho, deps())).toEqual({
+      status: "card_sem_classificar",
+      causa: "midia_sem_texto",
+      criouCard: true,
+    });
+  });
+
+  it("disparadora que NÃO é mídia (só o atendente falou): continua sem_texto_do_cliente, sem card", async () => {
+    dados.mensagem = async () => ({ type: "text", media_derived_status: null });
+    dados.ultimasMensagens = async () => [{ direcao: "outbound", texto: "Promoção!" }];
+    expect(await processarClassificacao(evento(), deps())).toEqual({ status: "pulado", motivo: "sem_texto_do_cliente" });
+    expect(garantir).not.toHaveBeenCalled();
+  });
+});
+
 describe("processarClassificacao — resposta fora do formato (contrato)", () => {
   it("o card nasce sem classificar, com a causa formato", async () => {
     perguntar.mockResolvedValue({

@@ -2,9 +2,12 @@
  * O CARD NASCE QUANDO A CONVERSA É COMERCIAL — o classificador (Jev).
  *
  * Consome `message.received` (emitido pelo gatilho `trg_messages_emit_event`
- * em TODO canal). O dispatcher roda os consumidores de um evento EM SÉRIE, e
- * este é registrado DEPOIS dos outros (lib/event-log/register-handlers.ts),
- * para não atrasar push e automações esperando o Jev. Só age quando a
+ * em TODO canal). Dentro de uma requisição (o dreno que corre no POST do
+ * webhook) ele é ADIADO para o worker — o handler declara `foraDaRequisicao` —,
+ * e o canal não espera o Jev. No worker, o dispatcher roda os consumidores de
+ * um evento em série, e este é registrado depois dos outros
+ * (lib/event-log/register-handlers.ts), para não atrasar push e automações.
+ * Só age quando a
  * organização ligou `settings.crm.nascimento_do_card.modo = 'classificador'`;
  * no modo de sempre quem abre o card é o ingest, e aqui é um `skipped` barato.
  *
@@ -298,9 +301,20 @@ export async function processarClassificacao(
 
   // 4 · o que o Jev lê.
   const estado = montarEstado(await deps.dados.ultimasMensagens(org, conversationId, LIMITE_DE_MENSAGENS * 2));
-  if (!estado) return { status: "pulado", motivo: "sem_texto_do_cliente" };
-
   const dadosDoCard: DadosDoNascimento = { organizationId: org, contactId, conversationId, nomeDoContato: null };
+  if (!estado) {
+    // Nenhuma fala do cliente com texto. Se quem disparou foi MÍDIA do cliente
+    // (já passamos da espera do passo 3: a derivação terminou ou venceu o
+    // teto), o cliente falou e não há o que ler — áudio sem transcrição,
+    // imagem que ninguém descreveu. Pular aqui era a conversa nunca virar
+    // card, em silêncio, a cada mensagem: decisão A, o card nasce e diz por quê.
+    if (disparadora && TIPOS_DERIVAVEIS.has(disparadora.type)) {
+      return criarSemClassificar(deps, dadosDoCard, "midia_sem_texto");
+    }
+    // Sem mídia do cliente (ex.: só o atendente falou — campanha, aviso): não
+    // há conversa a classificar.
+    return { status: "pulado", motivo: "sem_texto_do_cliente" };
+  }
 
   const chave = await deps.chave(deps.admin, org);
   if (!chave) return criarSemClassificar(deps, dadosDoCard, "sem_chave");

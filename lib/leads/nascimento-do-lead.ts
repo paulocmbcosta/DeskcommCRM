@@ -109,13 +109,14 @@ export interface DadosDoNascimento {
  * TEXTO mora só aqui, num único lugar, para a frase da timeline nunca
  * divergir da causa registrada.
  */
-export type CausaSemClassificacao = "sem_chave" | "conta" | "temporaria" | "formato";
+export type CausaSemClassificacao = "sem_chave" | "conta" | "temporaria" | "formato" | "midia_sem_texto";
 
 const TEXTO_DA_CAUSA: Record<CausaSemClassificacao, string> = {
   sem_chave: "sem chave da OpenRouter",
   conta: "a OpenRouter recusou o pedido: chave inválida, sem saldo ou pedido barrado",
   temporaria: "o classificador ficou fora do ar por mais de 10 minutos",
   formato: "o classificador respondeu num formato inesperado",
+  midia_sem_texto: "o cliente mandou só mídia que não pôde ser lida (sem transcrição)",
 };
 
 /**

@@ -12,6 +12,7 @@ vi.mock("@/lib/atendimento/janela-do-atendimento", () => ({ janelaDoAtendimento:
 const { dadosViaSupabase } = await import("@/lib/classificador-comercial/dados");
 const { logger } = await import("@/lib/logger");
 const { janelaDoAtendimento } = await import("@/lib/atendimento/janela-do-atendimento");
+const { MARCADOR_NAO_LIDA } = await import("@/workers/media-derive-worker");
 
 /** Builder falso: registra filtros e devolve `resultado` no fim da cadeia. */
 function dbQueDevolve(porTabela: Record<string, { data: unknown; error: { message: string } | null }>) {
@@ -164,6 +165,22 @@ describe("dadosViaSupabase", () => {
       const { db } = dbQueDevolve({ messages: { data: linhas, error: null } });
       const r = await dadosViaSupabase(db, { janela: janelaSemPiso }).ultimasMensagens("org-1", "conversa-1", 24);
       expect(r).toEqual([{ direcao: "inbound", texto: "urgente — preciso saber o valor" }]);
+    });
+
+    it("o marcador de mídia NÃO LIDA não é fala: sozinho vira texto null; com legenda, sobra só a legenda", async () => {
+      // Do mais novo para o mais velho, como o banco devolve (`order desc`).
+      const linhas = [
+        { direction: "inbound", type: "image", status: "received", body: "olha isso", media_derived_text: MARCADOR_NAO_LIDA, revoked_at: null },
+        { direction: "inbound", type: "audio", status: "received", body: null, media_derived_text: `  ${MARCADOR_NAO_LIDA} `, revoked_at: null },
+      ];
+      const { db } = dbQueDevolve({ messages: { data: linhas, error: null } });
+      const r = await dadosViaSupabase(db, { janela: janelaSemPiso }).ultimasMensagens("org-1", "conversa-1", 24);
+      // Sem isto, o Jev lia "[o cliente enviou uma mídia que não consegui
+      // interpretar]" como se fosse o cliente falando — e respondia "não comercial".
+      expect(r).toEqual([
+        { direcao: "inbound", texto: null },
+        { direcao: "inbound", texto: "olha isso" },
+      ]);
     });
 
     it("descarta linha com direction fora do CHECK (inbound/outbound), sem mentir o tipo, e avisa no log sem conteúdo da mensagem", async () => {
