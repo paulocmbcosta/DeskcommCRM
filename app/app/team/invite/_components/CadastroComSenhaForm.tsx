@@ -19,6 +19,7 @@ import {
 import { useT } from "@/hooks/i18n/useT";
 import { useCadastrarMembro, type MembroCadastrado } from "@/hooks/team/useCadastrarMembro";
 import { ApiError } from "@/lib/api/types";
+import { copyToClipboard } from "@/lib/clipboard";
 import {
   INTERFACE_COMPLETA,
   interfaceSettingsSchema,
@@ -93,12 +94,8 @@ export function CadastroComSenhaForm() {
     : "";
 
   const copiarAcesso = async () => {
-    try {
-      await navigator.clipboard.writeText(textoDeAcesso);
-      toast.success(t("Dados de acesso copiados."));
-    } catch {
-      toast.error(t("Não foi possível copiar. Selecione o texto e copie à mão."));
-    }
+    if (await copyToClipboard(textoDeAcesso)) toast.success(t("Dados de acesso copiados."));
+    else toast.error(t("Não foi possível copiar. Selecione o texto e copie à mão."));
   };
 
   return (

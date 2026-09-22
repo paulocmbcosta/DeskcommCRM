@@ -6,6 +6,7 @@ import { useT } from "@/hooks/i18n/useT";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { copyToClipboard } from "@/lib/clipboard";
 import { gerarSenha } from "@/lib/team/gerar-senha";
 
 /**
@@ -38,12 +39,8 @@ export function CampoDeSenha({
   const t = useT();
 
   const copiar = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success(t("Senha copiada."));
-    } catch {
-      toast.error(t("Não foi possível copiar. Selecione a senha e copie à mão."));
-    }
+    if (await copyToClipboard(value)) toast.success(t("Senha copiada."));
+    else toast.error(t("Não foi possível copiar. Selecione a senha e copie à mão."));
   };
 
   return (
