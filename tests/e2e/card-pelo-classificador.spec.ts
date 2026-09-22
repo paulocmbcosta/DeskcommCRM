@@ -308,6 +308,17 @@ test.describe("o card nasce quando a conversa é comercial", () => {
     expect(pedidos[0]!.ultimaDoCliente).toBe("minha internet caiu desde ontem");
 
     await loginComoManager(page);
+
+    // O gerente VÊ a regra em vigor (saber por que um card não nasceu é direito
+    // de quem opera), mas não recebe um Salvar que a action recusaria.
+    await page.goto("/app/settings/tenant/pipelines");
+    const secao = page.getByTestId("nascimento-do-card");
+    await expect(secao.getByRole("radio", { name: /só conversas comerciais/i })).toBeChecked({ timeout: 20_000 });
+    await expect(secao.getByRole("radio", { name: /só conversas comerciais/i })).toBeDisabled();
+    await expect(secao.getByRole("button", { name: /salvar/i })).toHaveCount(0);
+    await expect(secao.getByText("Só um administrador pode mudar essa regra.")).toBeVisible();
+    await page.screenshot({ path: "evidence/card-pelo-classificador/regra-vista-pelo-gerente.png", fullPage: true });
+
     await abrirQuadroDeEntrada(page);
     await expect(page.getByText(NOME, { exact: false }), "suporte não é conversa comercial").toHaveCount(0);
   });
