@@ -44,6 +44,8 @@ const ORG_SEM_FUNIL = "1ead7e00-0000-4000-8000-000000000002";
 const ORG_SO_FECHADAS = "1ead7e00-0000-4000-8000-000000000003";
 /** Org com etapa de GANHO na posição 0 — a armadilha do §6. */
 const ORG_GANHO_PRIMEIRO = "1ead7e00-0000-4000-8000-000000000004";
+/** Org com a regra "só conversas comerciais" ligada. */
+const ORG_CLASSIFICADOR = "1ead7e00-0000-4000-8000-000000000005";
 
 const CONVERSA = "1ead7e00-0000-4000-8000-00000000c001";
 
@@ -96,11 +98,20 @@ beforeAll(async () => {
        ($1, $2, 'Entrada', 'entrada-torta', 2, false, false)`,
     [ORG_GANHO_PRIMEIRO, funilTorto],
   );
+
+  await criarOrg(ORG_CLASSIFICADOR, "org-nascimento-classificador");
+  await pool.query(
+    `update organizations
+        set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{crm}',
+              '{"nascimento_do_card": {"modo": "classificador", "limiar": 0.7}}'::jsonb)
+      where id = $1`,
+    [ORG_CLASSIFICADOR],
+  );
 });
 
 afterAll(async () => {
   await pool.query("delete from organizations where id = any($1)", [
-    [ORG_VIVA, ORG_SEM_FUNIL, ORG_SO_FECHADAS, ORG_GANHO_PRIMEIRO],
+    [ORG_VIVA, ORG_SEM_FUNIL, ORG_SO_FECHADAS, ORG_GANHO_PRIMEIRO, ORG_CLASSIFICADOR],
   ]);
   await pool.end();
 });
@@ -466,5 +477,74 @@ describe("três mensagens seguidas NÃO viram três negócios", () => {
     expect(naoCriados[0] && "motivo" in naoCriados[0] ? naoCriados[0].motivo : "?").toBe(
       "ja_existe",
     );
+  });
+});
+
+describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", () => {
+  async function leadsDo(contato: string): Promise<number> {
+    const { rows } = await pool.query<{ n: number }>(
+      "select count(*)::int as n from crm_leads where organization_id = $1 and contact_id = $2",
+      [ORG_CLASSIFICADOR, contato],
+    );
+    return rows[0]!.n;
+  }
+
+  async function atividadeDeCriacao(contato: string) {
+    const { rows } = await pool.query<{ reason: string; source_module: string; payload: Record<string, unknown> }>(
+      `select reason, source_module, payload from crm_lead_activities
+        where organization_id = $1 and contact_id = $2 and type = 'lead_created'`,
+      [ORG_CLASSIFICADOR, contato],
+    );
+    return rows;
+  }
+
+  it("o ingest NÃO abre card — espera o classificador", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Pedro Suporte");
+    const r = await garantirLeadDaConversa(db, {
+      organizationId: ORG_CLASSIFICADOR,
+      contactId: contato,
+      conversationId: CONVERSA,
+      nomeDoContato: "Pedro Suporte",
+    });
+    expect(r).toEqual({ criado: false, motivo: "aguarda_classificador" });
+    expect(await leadsDo(contato)).toBe(0);
+  });
+
+  it("o classificador abre o card, e a linha do tempo diz por quê", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Ana Comercial");
+    const r = await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Ana Comercial" },
+      { tipo: "classificador", assunto: "mudanca_de_plano", rotuloDoAssunto: "mudança de plano", probabilidade: 0.93, modelo: "jev-1.13.0" },
+    );
+    expect(r.criado, JSON.stringify(r)).toBe(true);
+    expect(await leadsDo(contato)).toBe(1);
+
+    const [at] = await atividadeDeCriacao(contato);
+    expect(at!.reason).toBe("conversa identificada como comercial: mudança de plano (93%)");
+    expect(at!.source_module).toBe("crm.classificador_comercial");
+    expect(at!.payload.classificacao).toMatchObject({ assunto: "mudanca_de_plano", probabilidade: 0.93, modelo: "jev-1.13.0" });
+  });
+
+  it("sem classificação o card nasce mesmo assim, e a razão diz a causa (decisão A)", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Bruno Sem Chave");
+    const r = await garantirLeadDaConversa(
+      db,
+      { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Bruno Sem Chave" },
+      { tipo: "sem_classificacao", causa: "sem chave da OpenRouter" },
+    );
+    expect(r.criado).toBe(true);
+    const [at] = await atividadeDeCriacao(contato);
+    expect(at!.reason).toBe("card criado sem classificar a conversa (sem chave da OpenRouter)");
+  });
+
+  it("o classificador também respeita um por demanda: segundo 'sim' não abre segundo card", async () => {
+    const contato = await criarContato(ORG_CLASSIFICADOR, "Carla Duas Vezes");
+    const origem = { tipo: "classificador", assunto: "contratacao", rotuloDoAssunto: "contratação", probabilidade: 0.9, modelo: "jev-1.13.0" } as const;
+    const dados = { organizationId: ORG_CLASSIFICADOR, contactId: contato, conversationId: CONVERSA, nomeDoContato: "Carla Duas Vezes" };
+    await garantirLeadDaConversa(db, dados, origem);
+    const segundo = await garantirLeadDaConversa(db, dados, origem);
+    expect(segundo).toEqual({ criado: false, motivo: "ja_existe" });
+    expect(await leadsDo(contato)).toBe(1);
   });
 });

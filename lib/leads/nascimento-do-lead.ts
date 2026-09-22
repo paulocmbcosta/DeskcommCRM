@@ -47,6 +47,13 @@
  * Isto vale para o produto inteiro, não para uma organização: uma clínica, uma
  * imobiliária e um infoprodutor montam funis diferentes, e nenhum nome de funil
  * aparece neste arquivo.
+ *
+ * ⚠️ DESDE 2026-09-22 HÁ UM SEGUNDO JEITO DE NASCER, e a frase acima continua
+ * valendo. Com `settings.crm.nascimento_do_card.modo = 'classificador'`, o
+ * ingest recua e quem cria é `workers/classificador-comercial.ts` — ainda o
+ * SISTEMA, a cada mensagem de quem não tem card, e nunca o agente lembrando de
+ * chamar uma ferramenta. O modelo (o Jev) só responde "é comercial?"; funil,
+ * etapa, título e a trava contra duplicata continuam aqui.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -56,6 +63,7 @@ import { lerClientePelaAgenda } from "@/lib/contacts/cliente-pela-agenda";
 import { ehIdentificadorTecnico, rotuloDoContato, SEM_NOME } from "@/lib/contacts/rotulo-do-contato";
 
 import { emitLeadActivity } from "./activity-emitter";
+import { lerNascimentoDoCard } from "./modo-de-nascimento";
 
 /**
  * O rótulo que aparece no card do funil quando o lead nasceu de um clique em
@@ -77,6 +85,7 @@ const ROTULO_DE_ANUNCIO: Record<string, string> = {
 export type MotivoSemLead =
   | "ja_existe" // o contato já tem lead aberto: um por demanda, não um por mensagem
   | "contato_bloqueado" // pediu para sair; criar oportunidade seria desrespeito registrado
+  | "aguarda_classificador" // a organização só abre card para conversa comercial, e quem decide é o classificador
   | "sem_funil_de_entrada" // a organização não tem funil padrão — falha de configuração, visível
   | "sem_etapa" // o funil existe e não tem etapa utilizável
   | "erro"; // qualquer falha de escrita
@@ -92,6 +101,29 @@ export interface DadosDoNascimento {
   conversationId: string;
   /** nome do contato, para o título do card. */
   nomeDoContato: string | null;
+}
+
+/**
+ * QUEM decidiu que esta conversa vira card.
+ *
+ * `ingest`: a mensagem chegou (o caminho de sempre). É o ÚNICO que consulta a
+ * regra da organização — no modo `classificador` ele recua.
+ * `classificador`: o Jev disse que a conversa é comercial.
+ * `sem_classificacao`: o classificador não conseguiu decidir, e o card nasce
+ * assim mesmo (decisão A do plano 2026-09-22): card a mais se arquiva, card a
+ * menos é venda que some.
+ */
+export type OrigemDoNascimento =
+  | { tipo: "ingest" }
+  | { tipo: "classificador"; assunto: string; rotuloDoAssunto: string; probabilidade: number; modelo: string }
+  | { tipo: "sem_classificacao"; causa: string };
+
+function razaoDoNascimento(origem: OrigemDoNascimento, ehCliente: boolean): string {
+  if (origem.tipo === "classificador") {
+    return `conversa identificada como comercial: ${origem.rotuloDoAssunto} (${Math.round(origem.probabilidade * 100)}%)`;
+  }
+  if (origem.tipo === "sem_classificacao") return `card criado sem classificar a conversa (${origem.causa})`;
+  return ehCliente ? "cliente conhecido voltou a escrever" : "primeira mensagem recebida no WhatsApp";
 }
 
 /**
@@ -195,6 +227,7 @@ export async function funilDeEntrada(
 export async function garantirLeadDaConversa(
   db: SupabaseClient,
   dados: DadosDoNascimento,
+  origem: OrigemDoNascimento = { tipo: "ingest" },
 ): Promise<NascimentoDoLead> {
   const { organizationId, contactId, conversationId } = dados;
 
@@ -224,6 +257,16 @@ export async function garantirLeadDaConversa(
     .maybeSingle();
 
   if (existente) return { criado: false, motivo: "ja_existe" };
+
+  // 2b · quem decide se a conversa vira card (settings.crm.nascimento_do_card).
+  //
+  // Só o INGEST pergunta, e só depois do passo 2: quem já tem card não paga a
+  // consulta. O classificador não pergunta porque ELE é a decisão — e o caminho
+  // de falha dele (`sem_classificacao`) existe justamente para criar mesmo assim.
+  if (origem.tipo === "ingest") {
+    const regra = await lerNascimentoDoCard(db, organizationId);
+    if (regra.modo === "classificador") return { criado: false, motivo: "aguarda_classificador" };
+  }
 
   // 3 · onde entra
   //
@@ -334,20 +377,28 @@ export async function garantirLeadDaConversa(
     // canal (invariante 1) proíbe feature nomear provider — quem sabe qual é o
     // provider é `lib/channels/`. Aqui o que importa é o QUE originou (a
     // ingestão de uma mensagem de canal), não POR ONDE ela entrou.
-    sourceModule: "canal.ingest",
+    // `crm.classificador_comercial` quando quem decidiu foi o classificador; a
+    // linha do tempo da conversa (`app/api/v1/conversations/[id]/timeline/route.ts`)
+    // mostra esta razão.
+    sourceModule: origem.tipo === "ingest" ? "canal.ingest" : "crm.classificador_comercial",
     sourceId: conversationId,
     // `webhook_source` e não um "system" inventado: `actorParaAtividade` já
     // traduz esta variante para `kind: "system"` na timeline, e ela descreve o
     // que de fato aconteceu — a mensagem chegou por webhook, o produto agiu.
-    actor: { type: "webhook_source", id: "canal-inbound" },
+    actor: { type: "webhook_source", id: origem.tipo === "ingest" ? "canal-inbound" : "classificador-comercial" },
     // A timeline é o ÚNICO lugar onde quem abre o card descobre por que ele
     // nasceu naquele funil. Sem esta distinção, o cliente antigo aparece num
     // quadro diferente do resto sem explicação nenhuma, e quem vê conclui que
     // alguém arrastou.
-    reason: ehCliente
-      ? "cliente conhecido voltou a escrever"
-      : "primeira mensagem recebida no WhatsApp",
-    payload: { conversation_id: conversationId, cliente: ehCliente },
+    reason: razaoDoNascimento(origem, ehCliente),
+    payload: {
+      conversation_id: conversationId,
+      cliente: ehCliente,
+      ...(origem.tipo === "classificador"
+        ? { classificacao: { assunto: origem.assunto, probabilidade: origem.probabilidade, modelo: origem.modelo } }
+        : {}),
+      ...(origem.tipo === "sem_classificacao" ? { sem_classificacao: origem.causa } : {}),
+    },
   });
   if (!registro.ok) {
     // O lead existe e é o que importa; a linha da timeline falhou. Devolver erro
