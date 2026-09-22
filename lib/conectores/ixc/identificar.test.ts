@@ -196,19 +196,30 @@ describe("cadastrosQueConferem — CPF + nascimento, resposta única para toda r
       total: 1,
       registros: [Object.fromEntries(p.campos.map((c) => [c, (MARIA as Record<string, string>)[c] ?? ""]))],
     }));
-    const achados = await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12");
-    expect(achados.map((c) => c.id)).toEqual(["10"]);
-    expect(JSON.stringify(achados)).not.toContain("1985");
+    const { cadastros, dataIlegivel } = await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12");
+    expect(cadastros.map((c) => c.id)).toEqual(["10"]);
+    expect(dataIlegivel).toBe(false);
+    expect(JSON.stringify(cadastros)).not.toContain("1985");
     // pediu a data, e só pela lista da conferência
     expect(listar.mock.calls.at(-1)?.[1].campos).toContain("data_nascimento");
   });
 
-  it("data diferente e cadastro sem data dão a MESMA lista vazia", async () => {
+  it("data diferente e cadastro sem data dão a MESMA lista vazia, sem acusar ilegibilidade", async () => {
     listar.mockResolvedValueOnce({ total: 1, registros: [{ ...MARIA, data_nascimento: "1990-01-01" }] });
-    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual([]);
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual({ cadastros: [], dataIlegivel: false });
     listar.mockResolvedValueOnce({ total: 1, registros: [{ ...MARIA, data_nascimento: "0000-00-00" }] });
-    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual([]);
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual({ cadastros: [], dataIlegivel: false });
     listar.mockResolvedValueOnce({ total: 0, registros: [] });
-    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual([]);
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual({ cadastros: [], dataIlegivel: false });
+  });
+
+  it("ano de cadastro antigo (< 1900) é ausência conhecida, como 0000-00-00 — não é ilegível", async () => {
+    listar.mockResolvedValueOnce({ total: 1, registros: [{ ...MARIA, data_nascimento: "0001-01-01" }] });
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual({ cadastros: [], dataIlegivel: false });
+  });
+
+  it("data num formato que esta imagem não reconhece sinaliza dataIlegivel — o CLIENTE recebe a MESMA recusa (lista vazia)", async () => {
+    listar.mockResolvedValueOnce({ total: 1, registros: [{ ...MARIA, data_nascimento: "12/03/1985" }] });
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual({ cadastros: [], dataIlegivel: true });
   });
 });

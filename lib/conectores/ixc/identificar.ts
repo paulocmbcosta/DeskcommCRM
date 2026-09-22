@@ -143,26 +143,57 @@ export function dataInformada(bruto: string, hoje: string = hojeEmSaoPaulo()): s
 }
 
 /**
+ * A data bruta do IXC tem forma que `nascimentoDoIxc` não reconhece — e isso é
+ * DIFERENTE de "não tem data". Vazio, `0000-00-00` e ano < 1900 são ausência
+ * CONHECIDA (o próprio `nascimentoDoIxc` os trata como "sem data" — comentário
+ * acima); o que sobra — um formato que esta imagem nunca viu, por exemplo um
+ * clone que grava `DD/MM/AAAA` — é ILEGÍVEL: o dado existe, mas não dá para ler.
+ * `cadastrosQueConferem` usa isto só para AVISAR o log, nunca para mudar o que o
+ * cliente recebe.
+ */
+function dataEhIlegivel(bruto: string | undefined): boolean {
+  const v = (bruto ?? "").trim();
+  if (v === "") return false;
+  return !/^\d{4}-\d{2}-\d{2}$/.test(v.slice(0, 10));
+}
+
+export interface ConferenciaDeCadastro {
+  cadastros: ClienteIxc[];
+  /**
+   * Existe cadastro DESTE CPF cuja data de nascimento não é legível (ver
+   * `dataEhIlegivel`) — sinal para o LOG do turno, não para o cliente: a recusa
+   * dele continua sendo a MESMA lista vazia de sempre (nunca se diz qual dado
+   * falhou). Sem isto, um ERP que grave a data de outro jeito faria 100% das
+   * conferências recusarem em silêncio, sem pista nenhuma de por quê.
+   */
+  dataIlegivel: boolean;
+}
+
+/**
  * Os cadastros deste CPF/CNPJ cuja data de nascimento é a informada.
  *
- * Lista vazia para TODA recusa — CPF inexistente, data diferente, cadastro sem
- * data —, de propósito: quem chama não consegue distinguir, e por isso não tem
- * como contar a ninguém qual dos dois dados não conferiu. A data é lida,
+ * `cadastros` vazio para TODA recusa — CPF inexistente, data diferente,
+ * cadastro sem data —, de propósito: o CLIENTE não consegue distinguir, e por
+ * isso não tem como saber qual dos dois dados não conferiu. A data é lida,
  * comparada e descartada: nunca entra em `ClienteIxc`.
  */
 export async function cadastrosQueConferem(
   credencial: CredencialDeConector,
   documentoMascarado: string,
   nascimento: string,
-): Promise<ClienteIxc[]> {
+): Promise<ConferenciaDeCadastro> {
   const { registros } = await listarNoIxc(credencial, {
     tabela: "cliente",
     filtro: { campo: "cliente.cnpj_cpf", operador: "=", valor: documentoMascarado },
     campos: CAMPOS_DA_CONFERENCIA,
     limite: 20,
   });
-  return registros
-    .filter((r) => r.id && nascimentoDoIxc(r.data_nascimento) === nascimento)
-    .map(lerCliente)
-    .sort(ativosPrimeiro);
+  const doCpf = registros.filter((r) => r.id);
+  return {
+    cadastros: doCpf
+      .filter((r) => nascimentoDoIxc(r.data_nascimento) === nascimento)
+      .map(lerCliente)
+      .sort(ativosPrimeiro),
+    dataIlegivel: doCpf.some((r) => dataEhIlegivel(r.data_nascimento)),
+  };
 }
