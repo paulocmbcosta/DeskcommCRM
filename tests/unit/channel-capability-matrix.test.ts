@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHANNEL_CAPABILITIES,
   capabilitiesOf,
+  telefoneEhIdentidade,
   transportaMensagem,
   type ChannelProvider,
   type ProviderDeMensagem,
@@ -40,6 +41,7 @@ const CAPABILITIES = [
   "groups",
   "costPerMessage",
   "outboundFirst",
+  "telefoneEhIdentidade",
 ] as const;
 
 describe("matriz capability × provider é exaustiva", () => {
@@ -93,5 +95,21 @@ describe("matriz capability × provider é exaustiva", () => {
       const c = CHANNEL_CAPABILITIES[p];
       expect(c.banRisk && c.requiresTemplates, `${p} declara as duas famílias`).toBe(false);
     }
+  });
+
+  it("o telefone só é identidade onde o transporte É o número (chat do site: digitado)", () => {
+    expect(capabilitiesOf("waha").telefoneEhIdentidade).toBe(true);
+    expect(capabilitiesOf("meta_cloud").telefoneEhIdentidade).toBe(true);
+    expect(capabilitiesOf("zernio").telefoneEhIdentidade).toBe(true);
+    expect(capabilitiesOf("site_widget").telefoneEhIdentidade).toBe(false);
+  });
+
+  it("o helper falha fechado: provider ausente, de voz ou desconhecido não é identidade", () => {
+    expect(telefoneEhIdentidade("waha")).toBe(true);
+    expect(telefoneEhIdentidade("site_widget")).toBe(false);
+    expect(telefoneEhIdentidade("wacalls")).toBe(false);
+    expect(telefoneEhIdentidade("provider-que-nao-existe")).toBe(false);
+    expect(telefoneEhIdentidade(null)).toBe(false);
+    expect(telefoneEhIdentidade(undefined)).toBe(false);
   });
 });

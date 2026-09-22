@@ -30,6 +30,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     groups: "full",
     costPerMessage: false,
     outboundFirst: true,
+    telefoneEhIdentidade: true,
   },
   // Hetero-restrição: não me banem, mas a Meta me proíbe e me cobra.
   meta_cloud: {
@@ -46,6 +47,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     // Fala primeiro, mas só com definição aprovada — é `requiresTemplates` que
     // diz COMO; esta diz que DÁ.
     outboundFirst: true,
+    telefoneEhIdentidade: true,
   },
   // Mesma hetero-restrição do canal oficial, por baixo: é um BSP: a WABA é da
   // Meta, os templates são aprovados pela Meta e a janela de 24h é da Meta. O
@@ -82,6 +84,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     // Fala primeiro, mas só com definição aprovada — é `requiresTemplates` que
     // diz COMO; esta diz que DÁ.
     outboundFirst: true,
+    telefoneEhIdentidade: true,
   },
   // O primeiro canal que NÃO é WhatsApp: o widget de chat que o dono cola no
   // próprio site. O transporte somos nós — a mensagem do atendente é gravada e o
@@ -108,6 +111,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     groups: "none",
     costPerMessage: false,
     outboundFirst: false,
+    telefoneEhIdentidade: false,
   },
 };
 
@@ -260,4 +264,15 @@ export function capabilitiesOf(provider: ChannelProvider): ChannelCapabilities {
   // barra em compilação; isto barra o que vem do banco em runtime.
   if (!caps) throw new Error(`unknown_channel_provider: ${provider}`);
   return caps;
+}
+
+/**
+ * O telefone é identidade no canal deste provider? Fail-closed: provider
+ * ausente, de voz ou que esta imagem não conhece responde `false` — errar para o
+ * lado de "é identidade" entregaria dado de um cliente a quem só digitou o
+ * número dele.
+ */
+export function telefoneEhIdentidade(provider: string | null | undefined): boolean {
+  const linha = (CHANNEL_CAPABILITIES as Partial<Record<string, ChannelCapabilities>>)[provider ?? ""];
+  return linha?.telefoneEhIdentidade === true;
 }
