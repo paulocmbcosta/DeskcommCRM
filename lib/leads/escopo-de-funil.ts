@@ -134,6 +134,12 @@ export const ALVO_DE_FUNIL: Record<string, AlvoDeFunil> = {
   crm_create_webhook_source: "sem_funil",
   crm_set_webhook_source_active: "sem_funil",
   crm_set_automation_rule_active: "sem_funil",
+  // Ferramenta NATIVA do motor (`lib/agent-engine/agent/ferramentas-do-conector.ts`):
+  // `NATIVAS_DO_MOTOR` (lib/agent-engine/edge/crm/mcp-tools.ts) garante que a ponte
+  // MCP nunca a monta, então este gate nunca chega a ser perguntado para ela —
+  // mesma barreira OUTRA de `crm_send_whatsapp_message` acima. Entra aqui só para
+  // a vacuidade não acusar; não recebe `lead_id` nem `pipeline_id`.
+  crm_enviar_cobranca_erp: "sem_funil",
 };
 
 /**

@@ -109,6 +109,11 @@ const ESCRITA_QUE_E_TRABALHO_DE_ATENDENTE: ReadonlyArray<string> = [
   // `app/api/v1/conversation-tags` é leitura `viewer`; marcar conversa é trabalho
   // de atendente e o dano máximo é um filtro sujo, reversível na tela.
   "crm_manage_tags",
+  // `app/api/v1/contacts/[id]/conectores/ixc/faturas/[faturaId]/enviar/` — POST
+  // exige `agent` (`contextoIxc` → `requireRole("agent")`): mandar a cobrança é o
+  // botão do atendente. Pela ponte MCP a tool só recusa; quem envia é a ferramenta
+  // nativa do motor, pela cadeia de envio do turno.
+  "crm_enviar_cobranca_erp",
 ];
 
 function alcancavelPeloAgente(requiresRole: Role): boolean {
