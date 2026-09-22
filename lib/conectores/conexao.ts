@@ -16,6 +16,13 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { FAIXA_DO_LIMITE, LIMITE_PADRAO_DA_COBRANCA } from "./limite-de-cobranca";
 import { ehConectorId, type ConectorId, type CredencialDeConector, type EstadoDaConexao } from "./tipos";
 
+/**
+ * Reexportado só por COMPATIBILIDADE (LIMITE_PADRAO_DA_COBRANCA é usado
+ * internamente aqui embaixo). Quem precisa de `FAIXA_DO_LIMITE` do lado de
+ * fora — rota, tela, invariante — importa direto de `./limite-de-cobranca`,
+ * que é o módulo folha: dois caminhos de import para a mesma constante é
+ * exatamente o tipo de duplicação que a constante existe para evitar.
+ */
 export { FAIXA_DO_LIMITE, LIMITE_PADRAO_DA_COBRANCA };
 
 type Admin = ReturnType<typeof createAdminClient>;
