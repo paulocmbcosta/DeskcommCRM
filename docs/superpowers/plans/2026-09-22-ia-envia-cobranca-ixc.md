@@ -12,6 +12,23 @@
 
 ---
 
+## Correções decididas DURANTE a execução (leia antes das tarefas)
+
+1. **O telefone tem TRÊS estados, não dois.** As Tarefas 1 e 4 saíram com um booleano
+   `telefoneEhIdentidade(provider)`, e a revisão mostrou o buraco: `false` significava tanto
+   "canal de telefone digitado" quanto "não sei" (chamada sem `?conversa=`, provider que a
+   imagem não conhece, erro de leitura) — e, como o painel passou a ESCONDER vínculo por
+   telefone no `false`, uma aba antiga aberta depois de uma atualização faria todo contato de
+   WhatsApp aparecer como não vinculado. A régua virou
+   `identidadeDoTelefone(provider): "sim" | "nao" | "desconhecido"` (a capacidade booleana da
+   matriz continua): vincula sozinho só em `"sim"`; descarta vínculo `telefone` existente só em
+   `"nao"`. As Tarefas 5, 6, 7 e 13 abaixo já estão escritas com o tri-estado.
+2. **Promover, nunca duplicar.** `vincular` promove a linha existente quando o vínculo novo é
+   mais forte (`documento`/`manual` sobre `telefone`) em vez de devolver `false` no 23505 —
+   senão o contato que o furo antigo vinculou fica preso em "escolher" para sempre.
+3. **Fatura de valor zero não se cobra** (Tarefa 7): `reaisParaCents` devolve 0 para valor
+   ilegível, e a IA mandaria uma cobrança de R$ 0,00.
+
 ## Regras que valem para todas as tarefas
 
 - Worktree: `/Volumes/T9/Dyper/.claude/worktrees/bia-ixc-cobranca-tools-32a240`, branch `claude/bia-ixc-cobranca-tools-32a240`. Antes de começar e antes do PR: `git fetch origin && git merge origin/main`.
@@ -99,7 +116,7 @@ Em `lib/channels/types.ts`, dentro de `ChannelCapabilities`, depois de `outbound
   telefoneEhIdentidade: boolean;
 ```
 
-Em `lib/channels/capabilities.ts`, acrescente `telefoneEhIdentidade: true,` nas entradas `waha`, `meta_cloud` e `zernio` e `telefoneEhIdentidade: false,` em `site_widget`. Depois de `capabilitiesOf`, acrescente:
+Em `lib/channels/capabilities.ts`, acrescente `identidadeDoTelefone: "sim",` nas entradas `waha`, `meta_cloud` e `zernio` e `identidadeDoTelefone: "nao",` em `site_widget`. Depois de `capabilitiesOf`, acrescente:
 
 ```ts
 /**
@@ -360,7 +377,7 @@ describe("telefone que NÃO é identidade (chat do site: número digitado)", () 
   it("1 candidato pelo telefone NÃO vincula sozinho: cai em escolher", async () => {
     listarVinculos.mockResolvedValue([]);
     ixcFalso({ cliente: [MARIA] });
-    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: false });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "nao" });
     expect(estado.estado).toBe("escolher");
     if (estado.estado !== "escolher") throw new Error("inalcançável");
     expect(estado.candidatos.map((c) => c.id)).toEqual(["10"]);
@@ -371,7 +388,7 @@ describe("telefone que NÃO é identidade (chat do site: número digitado)", () 
     listarVinculos.mockResolvedValue([]);
     vincular.mockResolvedValue(true);
     ixcFalso({ cliente: [MARIA] });
-    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: true });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "sim" });
     expect(vincular).toHaveBeenCalledWith(expect.objectContaining({ externalId: "10", verificadoPor: "telefone" }));
     expect(estado.estado).not.toBe("escolher");
   });
@@ -553,8 +570,12 @@ export interface PedidoDeConsulta {
   orgId: string;
   contactId: string;
   telefone: string | null;
-  /** O telefone é identidade no canal desta conversa (`lib/channels/capabilities.ts`). */
-  telefoneEhIdentidade: boolean;
+  /**
+   * O telefone é identidade no canal desta conversa (`lib/channels/capabilities.ts`).
+   * "desconhecido" (canal ilegível, provider que esta imagem não conhece) NÃO é "nao":
+   * ele bloqueia vincular pelo telefone, mas não descarta vínculo que já existe.
+   */
+  identidadeDoTelefone: IdentidadeDoTelefone;
   cpfCnpj?: string;
   dataNascimento?: string;
   agora?: Date;
@@ -576,7 +597,7 @@ export interface PedidoDeCobranca {
   credencial: CredencialDeConector;
   orgId: string;
   contactId: string;
-  telefoneEhIdentidade: boolean;
+  identidadeDoTelefone: IdentidadeDoTelefone;
   forma: FormaDeCobranca;
   /** Fatura com MAIS dias de atraso que isto não é enviada: vai para a Cobrança. */
   limiteDeDias: number;
@@ -765,7 +786,7 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
   it("vínculo existente identifica, e a projeção não leva id, CPF, endereço, IP, MAC nem senha", async () => {
     listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]);
     ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO], fn_areceber: [fatura("900", "2026-07-14"), fatura("950", "2026-10-12")], radusuarios: [LOGIN] });
-    const r = await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: true });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
     expect(r.cliente).toMatchObject({ primeiroNome: "Maria", situacao: "Bloqueado", motivoDaSituacao: "financeiro em atraso", bloqueado: true, plano: "Fibra 500 Mega", clienteDesde: "2024-03-10", conexao: "offline", temOsAberta: false });
@@ -779,13 +800,13 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
   it("vínculo `telefone` num canal SEM telefone de identidade não conta", async () => {
     listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
     ixc({ cliente: [MARIA] });
-    const r = await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: false });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao" });
     expect(r.estado).toBe("precisa_cpf_e_nascimento");
   });
 
   it("WhatsApp com 1 cadastro no telefone: vincula como telefone", async () => {
     ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO] });
-    const r = await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: true });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
     expect(r.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
@@ -793,14 +814,14 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
 
   it("chat do site com o MESMO telefone: não vincula, pede CPF + nascimento", async () => {
     ixc({ cliente: [MARIA] });
-    expect((await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: false })).estado).toBe("precisa_cpf_e_nascimento");
+    expect((await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao" })).estado).toBe("precisa_cpf_e_nascimento");
     expect(vincular).not.toHaveBeenCalled();
   });
 
   it("2 cadastros no telefone: pede CPF; o CPF de um deles escolhe e vincula como documento", async () => {
     ixc({ cliente: [MARIA, JOSE], cliente_contrato: [CONTRATO] });
-    expect((await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: true })).estado).toBe("precisa_cpf");
-    const r = await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: true, cpfCnpj: "52998224725" });
+    expect((await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" })).estado).toBe("precisa_cpf");
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "52998224725" });
     expect(r.estado).toBe("identificado");
     if (r.estado !== "identificado") throw new Error("inalcançável");
     expect(r.vinculou).toEqual({ verificadoPor: "documento", cadastros: ["10"] });
@@ -808,18 +829,18 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
 
   it("sem cadastro no telefone: CPF + nascimento que batem vinculam; qualquer recusa é nao_conferiu", async () => {
     ixc({ cliente: [{ ...MARIA, telefone_celular: "(61) 98888-0000" }], cliente_contrato: [CONTRATO] });
-    const ok = await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: true, cpfCnpj: "529.982.247-25", dataNascimento: "12/03/1985" });
+    const ok = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "529.982.247-25", dataNascimento: "12/03/1985" });
     expect(ok.estado).toBe("identificado");
-    const errada = await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: true, cpfCnpj: "529.982.247-25", dataNascimento: "1985-03-13" });
-    const inexistente = await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: true, cpfCnpj: "390.533.447-05", dataNascimento: "1985-03-12" });
+    const errada = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "529.982.247-25", dataNascimento: "1985-03-13" });
+    const inexistente = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "390.533.447-05", dataNascimento: "1985-03-12" });
     expect(errada).toEqual({ estado: "nao_conferiu" });
     expect(inexistente).toEqual({ estado: "nao_conferiu" });
   });
 
   it("CPF com dígito errado e data impossível NÃO consultam o IXC (não gastam tentativa)", async () => {
     ixc({ cliente: [] });
-    expect((await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: false, cpfCnpj: "529.982.247-26", dataNascimento: "1985-03-12" })).estado).toBe("cpf_invalido");
-    expect((await agenteIxc.consultar({ ...BASE, telefoneEhIdentidade: false, cpfCnpj: "529.982.247-25", dataNascimento: "1985-02-30" })).estado).toBe("data_invalida");
+    expect((await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao", cpfCnpj: "529.982.247-26", dataNascimento: "1985-03-12" })).estado).toBe("cpf_invalido");
+    expect((await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao", cpfCnpj: "529.982.247-25", dataNascimento: "1985-02-30" })).estado).toBe("data_invalida");
     expect(listar).not.toHaveBeenCalled();
   });
 });
@@ -869,16 +890,20 @@ import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientesPorTelefone, dataInfo
 import { documentoNaMascara, soDigitos } from "./mascara";
 import { montarResumo, type ResumoIxc } from "./resumo";
 
-type Pedido = Pick<PedidoDeConsulta, "admin" | "orgId" | "contactId" | "telefoneEhIdentidade">;
+type Pedido = Pick<PedidoDeConsulta, "admin" | "orgId" | "contactId" | "identidadeDoTelefone">;
 
 /**
- * Os cadastros vinculados que VALEM para a IA. O vínculo `telefone` só conta
- * onde o telefone é identidade: antes do conserto de 22/09 o painel vinculava
- * pelo número DIGITADO no chat do site.
+ * Os cadastros vinculados que VALEM para a IA. O vínculo `telefone` é descartado
+ * onde o telefone SABIDAMENTE não é identidade (antes do conserto de 22/09 o
+ * painel vinculava pelo número DIGITADO no chat do site). Canal "desconhecido"
+ * NÃO descarta: "não sei" não é "não é" — esconder vínculo legítimo faria a IA
+ * pedir CPF a quem já está identificado.
  */
 async function cadastrosValidos(p: Pedido): Promise<string[]> {
   const vinculos = await listarVinculos(p.admin, p.orgId, p.contactId, "ixc");
-  return vinculos.filter((v) => v.verificado_por !== "telefone" || p.telefoneEhIdentidade).map((v) => v.external_id);
+  return vinculos
+    .filter((v) => v.verificado_por !== "telefone" || p.identidadeDoTelefone !== "nao")
+    .map((v) => v.external_id);
 }
 
 function paraAgente(f: Fatura): FaturaParaAgente {
@@ -984,7 +1009,8 @@ async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
   const nascimento = p.dataNascimento === undefined ? null : dataInformada(p.dataNascimento);
   if (p.dataNascimento !== undefined && nascimento === null) return { estado: "data_invalida" };
 
-  if (p.telefoneEhIdentidade) {
+  // Procurar pelo telefone só onde ele prova quem é — fail-closed em "desconhecido".
+  if (p.identidadeDoTelefone === "sim") {
     const candidatos = (await clientesPorTelefone(p.credencial, p.telefone)).slice(0, TETO_DE_CANDIDATOS);
     const [unico] = candidatos;
     if (candidatos.length === 1 && unico) return vincularE(p, [unico.id], "telefone");
@@ -1041,7 +1067,7 @@ function portas() {
     },
   };
 }
-const COBRAR = { ...BASE, telefoneEhIdentidade: true, forma: "pix" as const, limiteDeDias: 60 };
+const COBRAR = { ...BASE, identidadeDoTelefone: "sim" as const, forma: "pix" as const, limiteDeDias: 60 };
 
 describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (D3), sem como cobrar (D6)", () => {
   beforeEach(() => {
@@ -1102,7 +1128,7 @@ describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (
     ixc({ fn_areceber: [] });
     const { portas: p } = portas();
     expect((await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).resultado).toBe("sem_fatura_em_aberto");
-    expect((await agenteIxc.enviarCobranca({ ...COBRAR, telefoneEhIdentidade: false, portas: p })).resultado).toBe("cliente_nao_identificado");
+    expect((await agenteIxc.enviarCobranca({ ...COBRAR, identidadeDoTelefone: "nao", portas: p })).resultado).toBe("cliente_nao_identificado");
   });
 
   it("a mais atrasada entre DOIS cadastros vinculados", async () => {
@@ -1142,7 +1168,9 @@ async function enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca>
   if (cadastros.length === 0) return { resultado: "cliente_nao_identificado" };
 
   const recorte = await recorteDe(p.credencial, cadastros, p.agora);
-  const daVez = faturaDaVez([...recorte.vencidas, ...recorte.proximas]);
+  // Valor ilegível vira 0 em `reaisParaCents`: cobrar R$ 0,00 é pior que não cobrar.
+  const cobraveis = [...recorte.vencidas, ...recorte.proximas].filter((f) => f.valorCents > 0);
+  const daVez = faturaDaVez(cobraveis);
   if (!daVez) return { resultado: "sem_fatura_em_aberto" };
   const base = { fatura: paraAgente(daVez), faturaId: daVez.id };
   // D5: acima do limite, a fatura é da Cobrança — nada sai.
@@ -2167,11 +2195,11 @@ describe("crm_consultar_cliente_erp", () => {
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "conector.vinculo_criado", metadata: expect.objectContaining({ ator: "ai_agent", agente_id: "agente-1" }) }));
   });
 
-  it("passa ao conector se o telefone é identidade NESTE canal", async () => {
+  it("passa ao conector o estado do telefone NESTE canal (sim/nao/desconhecido)", async () => {
     consultar.mockResolvedValue({ estado: "precisa_cpf_e_nascimento" });
     provider = "site_widget";
     await rodar("crm_consultar_cliente_erp");
-    expect(consultar).toHaveBeenCalledWith(expect.objectContaining({ telefoneEhIdentidade: false, telefone: "+5561993040271" }));
+    expect(consultar).toHaveBeenCalledWith(expect.objectContaining({ identidadeDoTelefone: "nao", telefone: "+5561993040271" }));
   });
 
   it("recusa: audita (aguardando) e devolve as tentativas que sobram, sem dizer qual dado errou", async () => {
@@ -2277,7 +2305,7 @@ import type pg from 'pg';
 import { z } from 'zod';
 
 import { audit } from '@/lib/audit';
-import { telefoneEhIdentidade } from '@/lib/channels/capabilities';
+import { identidadeDoTelefone } from '@/lib/channels/capabilities';
 import { carimbarEstado, lerCredencial, lerLimiteDeCobranca } from '@/lib/conectores/conexao';
 import {
   DESCRICAO_CONSULTAR_CLIENTE,
@@ -2419,7 +2447,7 @@ export async function montarFerramentasDoConector(p: PedidoDeFerramentas): Promi
   return { tools, ausentes: [] };
 }
 
-async function conversa(p: PedidoDeFerramentas): Promise<{ telefone: string | null; telefoneEhIdentidade: boolean }> {
+async function conversa(p: PedidoDeFerramentas): Promise<{ telefone: string | null; identidadeDoTelefone: ReturnType<typeof identidadeDoTelefone> }> {
   const { rows } = await p.pool.query<{ phone_number: string | null; provider: string | null }>(
     `select c.phone_number, s.provider
        from contacts c
@@ -2427,7 +2455,7 @@ async function conversa(p: PedidoDeFerramentas): Promise<{ telefone: string | nu
       where c.organization_id = $1 and c.id = $2`,
     [p.tenantId, p.leadId, p.channelSessionId],
   );
-  return { telefone: rows[0]?.phone_number ?? null, telefoneEhIdentidade: telefoneEhIdentidade(rows[0]?.provider) };
+  return { telefone: rows[0]?.phone_number ?? null, identidadeDoTelefone: identidadeDoTelefone(rows[0]?.provider) };
 }
 
 /** Recusas de identidade no ATENDIMENTO atual — cliente que volta noutro atendimento recomeça do zero. */
@@ -2489,7 +2517,7 @@ async function consultar(
       orgId: p.tenantId,
       contactId: p.leadId,
       telefone: c.telefone,
-      telefoneEhIdentidade: c.telefoneEhIdentidade,
+      identidadeDoTelefone: c.identidadeDoTelefone,
       ...(cpf ? { cpfCnpj: cpf } : {}),
       ...(nascimento ? { dataNascimento: nascimento } : {}),
       agora: p.agora(),
@@ -2621,7 +2649,7 @@ async function enviarCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno,
       credencial,
       orgId: p.tenantId,
       contactId: p.leadId,
-      telefoneEhIdentidade: c.telefoneEhIdentidade,
+      identidadeDoTelefone: c.identidadeDoTelefone,
       forma,
       limiteDeDias: limite,
       agora: p.agora(),
