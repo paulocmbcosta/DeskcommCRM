@@ -202,3 +202,32 @@ digitável ou copia-e-cola), para copiar com um toque.
 - Tela: "Enviar" abre a escolha [Boleto] [Pix]; escolher é o segundo toque (envio é
   irreversível). Forma não registrada fica desligada, com o porquê no `title`.
 
+### 10.1 Correção de 2026-09-22 — o Pix é gerado SOB DEMANDA
+
+O §10 dizia "a tela só oferece a forma que o IXC JÁ registrou (`pix_txid` → Pix)". Para
+o Pix isso estava **errado**, e o dono achou em produção no primeiro teste: um cadastro
+ativo com quatro faturas abertas — duas com boleto registrado e **nenhuma com
+`pix_txid`** — ficava com o botão de Pix desligado em todas. (A amostra que sustentou a
+regra eram 200 faturas VENCIDAS, e nelas 164 tinham os dois: fatura vencida já passou
+pelo momento em que o IXC gera o Pix; fatura a vencer, não.)
+
+O IXC gera o Pix quando alguém pede — é o que `get_pix` faz, e é o que a central do
+assinante faz no "pagar com Pix". **Escolher Pix É pedir que ele seja gerado.** Então:
+
+- **Pix:** oferecido em toda fatura em aberto. Sem `pix_txid`, o botão avisa no `title`
+  que o Pix será gerado agora. O resultado carrega `pixGeradoAgora`, e a auditoria grava
+  `pix_gerado_agora` — é o ÚNICO efeito deste conector no ERP, e fica na trilha de quem pediu.
+- **Boleto:** continua exigindo registro (`linha_digitavel`). Sem registro não há PDF, e
+  pedir `get_boleto` faria o IXC registrar um boleto que ninguém pediu.
+- **Recusa com motivo:** quando `get_pix` não devolve o código, a frase do próprio IXC
+  (`message`, sem marcação, uma linha, ≤200 chars) vai até o atendente — carteira sem
+  Pix e usuário do token sem permissão são consertos de quem administra o IXC, e só o
+  IXC sabe dizer qual é.
+- **Segunda chamada, uma só:** resposta de SUCESSO que ainda não traz o código ganha
+  uma repetição depois de 1,5 s.
+
+**Não medido:** a resposta real de `get_pix` para fatura sem `pix_txid` — chamá-lo gera
+uma cobrança no gateway do cliente, e isso é ato do operador, não de sonda. A forma
+medida (fatura que já tinha Pix) é a que o código espera; o que vier diferente cai na
+recusa com a frase do IXC.
+

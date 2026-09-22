@@ -216,25 +216,55 @@ describe("buscarPixNoIxc — da resposta inteira saem TRÊS campos", () => {
 
   it("devolve copia-e-cola, status e valor — e NADA do devedor, da chave ou do txid", async () => {
     fetchFalso.mockResolvedValue(responder(JSON.stringify(RESPOSTA)));
-    const pix = await buscarPixNoIxc(CRED, "900");
+    const r = await buscarPixNoIxc(CRED, "900");
 
-    expect(pix).toEqual({ copiaECola: "000201-COPIA-E-COLA", status: "ATIVA", valorOriginal: "114.00" });
-    expect(JSON.stringify(pix)).not.toMatch(/52998224725|Maria|txid|chave|iVBORw0/);
+    expect(r).toEqual({ ok: true, pix: { copiaECola: "000201-COPIA-E-COLA", status: "ATIVA", valorOriginal: "114.00" } });
+    expect(JSON.stringify(r)).not.toMatch(/52998224725|Maria|txid|chave|iVBORw0/);
     expect(JSON.parse(String(fetchFalso.mock.calls[0]![1].body))).toEqual({ id_areceber: "900" });
+    expect(fetchFalso).toHaveBeenCalledTimes(1);
   });
 
-  it("fatura sem Pix responde HTTP 500 (medido) → null", async () => {
+  it("fatura sem Pix possível responde HTTP 500 (medido) → recusa, sem segunda chamada", async () => {
     fetchFalso.mockResolvedValue(responder("", { status: 500, tipo: "text/html" }));
-    expect(await buscarPixNoIxc(CRED, "999999999")).toBeNull();
+    expect(await buscarPixNoIxc(CRED, "999999999")).toEqual({ ok: false, mensagemDoIxc: "" });
+    expect(fetchFalso).toHaveBeenCalledTimes(1);
   });
+
+  it("quando o IXC diz POR QUE não devolveu, a frase dele volta — limpa, numa linha, e curta", async () => {
+    fetchFalso.mockResolvedValue(
+      responder(JSON.stringify({ type: "error", message: "<b>Carteira de cobrança</b>\n sem integração PIX configurada!" })),
+    );
+    expect(await buscarPixNoIxc(CRED, "900")).toEqual({
+      ok: false,
+      mensagemDoIxc: "Carteira de cobrança sem integração PIX configurada!",
+    });
+
+    fetchFalso.mockResolvedValue(responder(JSON.stringify({ type: "error", message: "x".repeat(900) })));
+    const longa = await buscarPixNoIxc(CRED, "900");
+    expect(longa.ok === false && longa.mensagemDoIxc.length).toBe(200);
+  });
+
+  it("SUCESSO que ainda não traz o código (Pix sendo gerado) ganha UMA segunda chamada — e só uma", async () => {
+    fetchFalso
+      .mockResolvedValueOnce(responder(JSON.stringify({ type: "success", message: "PIX gerado com sucesso" })))
+      .mockResolvedValueOnce(responder(JSON.stringify(RESPOSTA)));
+    const r = await buscarPixNoIxc(CRED, "900");
+    expect(r.ok).toBe(true);
+    expect(fetchFalso).toHaveBeenCalledTimes(2);
+
+    fetchFalso.mockReset();
+    // Uma Response NOVA por chamada: o corpo de uma Response só se lê uma vez.
+    fetchFalso.mockImplementation(async () => responder(JSON.stringify({ type: "success", message: "PIX gerado com sucesso" })));
+    expect(await buscarPixNoIxc(CRED, "900")).toEqual({ ok: false, mensagemDoIxc: "PIX gerado com sucesso" });
+    expect(fetchFalso).toHaveBeenCalledTimes(2);
+  }, 15_000);
 
   it.each([
-    ["JSON sem `pix`", JSON.stringify({ type: "error", message: "x" })],
     ["copia-e-cola vazio", JSON.stringify({ pix: { qrCode: { qrcode: "  " }, dadosPix: {} } })],
     ["não-JSON", "<html>erro</html>"],
-  ])("%s → null", async (_caso, corpo) => {
+  ])("%s → recusa", async (_caso, corpo) => {
     fetchFalso.mockResolvedValue(responder(corpo));
-    expect(await buscarPixNoIxc(CRED, "900")).toBeNull();
+    expect((await buscarPixNoIxc(CRED, "900")).ok).toBe(false);
   });
 
   it("as duas ações passam pela MESMA guarda anti-SSRF da listagem", async () => {

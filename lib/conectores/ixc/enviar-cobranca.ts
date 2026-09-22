@@ -11,9 +11,10 @@
  *   1. a fatura é RELIDA no IXC, e tem de ser de um cadastro vinculado ao
  *      contato — senão a cobrança de um cliente iria para o WhatsApp de outro;
  *   2. ainda está em aberto (o cliente pode ter pago um minuto atrás);
- *   3. a forma pedida EXISTE para ela (boleto registrado / Pix gerado) — pedir
- *      ao IXC o que não existe faria ele registrar a cobrança, efeito que
- *      ninguém pediu;
+ *   3. o BOLETO só é pedido quando o IXC já o registrou (sem registro não há
+ *      PDF, e pedir faria o IXC registrar um boleto que ninguém pediu). O PIX é
+ *      diferente: o IXC o gera SOB DEMANDA, então escolher Pix É pedir que ele
+ *      seja gerado — e o resultado diz se foi gerado agora, para a auditoria;
  *   4. o que sai foi conferido: o PDF começa com `%PDF`, o copia-e-cola fecha o
  *      CRC, o Pix está ATIVO. Nenhum número é digitado por ninguém.
  *
@@ -59,8 +60,17 @@ export type MotivoDaRecusa =
   | "pix_corrompido";
 
 export type ResultadoDoEnvio =
-  | { ok: true; forma: FormaDeCobranca; fatura: Fatura; enviadas: number; previstas: number }
-  | { ok: false; motivo: MotivoDaRecusa };
+  | {
+      ok: true;
+      forma: FormaDeCobranca;
+      fatura: Fatura;
+      enviadas: number;
+      previstas: number;
+      /** O Pix não existia e o IXC o gerou por causa DESTE pedido — vai para a auditoria. */
+      pixGeradoAgora: boolean;
+    }
+  /** `detalheDoErp`: a frase do próprio IXC, quando ele disse por que não devolveu. */
+  | { ok: false; motivo: MotivoDaRecusa; detalheDoErp?: string };
 
 export interface PedidoDeEnvio {
   credencial: CredencialDeConector;
@@ -89,7 +99,7 @@ export async function enviarCobrancaIxc(p: PedidoDeEnvio): Promise<ResultadoDoEn
 
   const fatura = lerFatura(registro, hojeEmSaoPaulo(p.agora));
   if (!fatura) return { ok: false, motivo: "fatura_nao_encontrada" };
-  if (p.forma === "boleto" ? !fatura.temBoleto : !fatura.temPix) return { ok: false, motivo: "forma_indisponivel" };
+  if (p.forma === "boleto" && !fatura.temBoleto) return { ok: false, motivo: "forma_indisponivel" };
 
   let arquivo: ArquivoDaCobranca;
   let legenda: string;
@@ -102,8 +112,11 @@ export async function enviarCobrancaIxc(p: PedidoDeEnvio): Promise<ResultadoDoEn
     legenda = legendaDoBoleto(fatura);
     codigo = fatura.linhaDigitavel;
   } else {
-    const pix = await buscarPixNoIxc(p.credencial, fatura.id);
-    if (!pix) return { ok: false, motivo: "cobranca_indisponivel" };
+    const resposta = await buscarPixNoIxc(p.credencial, fatura.id);
+    if (!resposta.ok) {
+      return { ok: false, motivo: "cobranca_indisponivel", ...(resposta.mensagemDoIxc ? { detalheDoErp: resposta.mensagemDoIxc } : {}) };
+    }
+    const { pix } = resposta;
     // Pix pago, expirado ou removido ainda volta na consulta — com outro status.
     // Mandar um QR que o banco vai recusar é pior que dizer que não deu.
     if (pix.status !== "ATIVA") return { ok: false, motivo: "pix_inativo" };
@@ -142,5 +155,12 @@ export async function enviarCobrancaIxc(p: PedidoDeEnvio): Promise<ResultadoDoEn
     // e o código não: devolve a contagem — a tela avisa, e o audit registra.
     if (enviadas === 0) throw err;
   }
-  return { ok: true, forma: p.forma, fatura, enviadas, previstas: mensagens.length };
+  return {
+    ok: true,
+    forma: p.forma,
+    fatura,
+    enviadas,
+    previstas: mensagens.length,
+    pixGeradoAgora: p.forma === "pix" && !fatura.pixJaGerado,
+  };
 }

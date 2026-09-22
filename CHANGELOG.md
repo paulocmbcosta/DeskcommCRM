@@ -8,6 +8,26 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.35.1] — 2026-09-22
+
+### Corrigido
+
+- **IXC — o Pix pode ser enviado mesmo quando o IXC ainda não o gerou para a fatura** Na aba **IXC**, a opção **Pix** ficava desligada em toda fatura para a qual o IXC ainda
+  não tinha gerado o Pix — o que é o caso normal de fatura a vencer. Num cadastro com
+  quatro faturas abertas e nenhum Pix gerado, o atendente não conseguia enviar Pix de
+  nenhuma.
+
+  O IXC gera o Pix quando alguém pede. Agora escolher **Pix** faz exatamente isso: o CRM
+  pede o Pix ao IXC na hora, confere o código e o envia com o QR code. O botão avisa quando
+  o Pix vai ser gerado naquele momento, e a auditoria registra que ele foi gerado por
+  aquele pedido.
+
+  O **Boleto** continua aparecendo só quando o IXC já o registrou — sem registro não há
+  PDF para baixar.
+
+  Quando o IXC recusa (carteira sem Pix, usuário do token sem permissão), a frase que ele
+  devolve passa a aparecer para o atendente, em vez de uma mensagem genérica.
+
 ## [1.35.0] — 2026-09-21
 
 ### Alterado
@@ -5253,7 +5273,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.1...HEAD
+[1.35.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.0...v1.35.1
 [1.35.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.2...v1.35.0
 [1.34.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.1...v1.34.2
 [1.34.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.0...v1.34.1

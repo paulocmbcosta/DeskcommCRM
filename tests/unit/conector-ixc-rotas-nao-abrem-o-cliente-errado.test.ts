@@ -129,7 +129,7 @@ beforeEach(() => {
   for (const m of [audit, listarNoIxc, baixarBoletoDoIxc, buscarPixNoIxc, listarVinculos, vincular, clientesPorTelefone, clientesPorDocumento, sendMessageHandler]) m.mockReset();
   subidos.length = 0;
   baixarBoletoDoIxc.mockResolvedValue(PDF);
-  buscarPixNoIxc.mockResolvedValue({ copiaECola: BR_CODE, status: "ATIVA", valorOriginal: "129.90" });
+  buscarPixNoIxc.mockResolvedValue({ ok: true, pix: { copiaECola: BR_CODE, status: "ATIVA", valorOriginal: "129.90" } });
   vincular.mockResolvedValue(true);
   sendMessageHandler.mockResolvedValue({ id: "msg" });
   listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
@@ -196,21 +196,39 @@ describe("POST …/ixc/faturas/[id]/enviar", () => {
     expect(sendMessageHandler).not.toHaveBeenCalled();
   });
 
-  it("forma que o IXC não registrou, cobrança que ele não devolveu, Pix inativo → 422 fatura_nao_enviavel, nada enviado", async () => {
+  it("Pix ainda NÃO gerado no IXC (o caso de produção): sai do mesmo jeito, e a auditoria registra que o CRM fez o IXC gerá-lo", async () => {
     listarNoIxc.mockResolvedValue({ total: 1, registros: [{ ...FATURA, pix_txid: "" }] });
-    let res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
+    const res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
+
+    expect(res.status).toBe(201);
+    expect(buscarPixNoIxc).toHaveBeenCalledTimes(1);
+    expect(sendMessageHandler).toHaveBeenCalledTimes(2);
+    expect((audit.mock.calls[0]![0] as { metadata: Record<string, unknown> }).metadata).toMatchObject({ forma: "pix", pix_gerado_agora: true });
+  });
+
+  it("boleto que o IXC não registrou, cobrança que ele não devolveu, Pix inativo → 422 fatura_nao_enviavel, nada enviado — e a frase do IXC chega à tela", async () => {
+    listarNoIxc.mockResolvedValue({ total: 1, registros: [{ ...FATURA, linha_digitavel: "" }] });
+    let res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "boleto" }), rotaDaFatura());
     expect(res.status).toBe(422);
     expect(((await res.json()) as { error: { code: string; details: { motivo: string } } }).error).toMatchObject({
       code: "fatura_nao_enviavel",
       details: { motivo: "forma_indisponivel" },
     });
+    expect(baixarBoletoDoIxc).not.toHaveBeenCalled();
 
     listarNoIxc.mockResolvedValue({ total: 1, registros: [FATURA] });
     baixarBoletoDoIxc.mockResolvedValue(null);
     res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "boleto" }), rotaDaFatura());
     expect(res.status).toBe(422);
 
-    buscarPixNoIxc.mockResolvedValue({ copiaECola: BR_CODE, status: "CONCLUIDA", valorOriginal: "129.90" });
+    buscarPixNoIxc.mockResolvedValue({ ok: false, mensagemDoIxc: "Carteira sem integração PIX" });
+    res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
+    expect(res.status).toBe(422);
+    const erro = ((await res.json()) as { error: { message: string; details: Record<string, string> } }).error;
+    expect(erro.message).toContain("Carteira sem integração PIX");
+    expect(erro.details).toMatchObject({ motivo: "cobranca_indisponivel", resposta_do_ixc: "Carteira sem integração PIX" });
+
+    buscarPixNoIxc.mockResolvedValue({ ok: true, pix: { copiaECola: BR_CODE, status: "CONCLUIDA", valorOriginal: "129.90" } });
     res = await enviarFatura(pedido({ conversation_id: CONVERSA, forma: "pix" }), rotaDaFatura());
     expect(res.status).toBe(422);
     expect(sendMessageHandler).not.toHaveBeenCalled();

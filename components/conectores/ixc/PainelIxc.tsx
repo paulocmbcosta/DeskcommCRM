@@ -187,10 +187,10 @@ function LinhaDeFatura({
                 ? t("vencida há 1 dia")
                 : `${t("vencida há")} ${fatura.diasDeAtraso} ${t("dias")}`
               : t("a vencer")}
-            {!fatura.enviavel && ` · ${t("cobrança ainda não gerada")}`}
+            {!fatura.temBoleto && ` · ${t("boleto ainda não gerado")}`}
           </p>
         </div>
-        {fatura.enviavel && !escolhendo && (
+        {!escolhendo && (
           <Button
             size="sm"
             variant="outline"
@@ -230,8 +230,9 @@ function LinhaDeFatura({
           <Button
             size="sm"
             className="h-7 shrink-0 gap-1 px-2 text-[11px]"
-            disabled={!fatura.temPix}
-            title={fatura.temPix ? undefined : t("O IXC ainda não gerou o Pix desta fatura.")}
+            // Sempre ligado: o IXC gera o Pix SOB DEMANDA. Quando ainda não existe,
+            // o `title` avisa que escolher aqui é o que vai gerá-lo.
+            title={fatura.pixJaGerado ? undefined : t("O IXC vai gerar o Pix desta fatura agora.")}
             data-testid="ixc-enviar-pix"
             onClick={() => mandar("pix")}
           >

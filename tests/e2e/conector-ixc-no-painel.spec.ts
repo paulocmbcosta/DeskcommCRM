@@ -46,6 +46,7 @@ const PDF_DO_BOLETO = Buffer.from(
 const COPIA_E_COLA =
   "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";
 const DEVEDOR_QUE_NAO_SAI = "Devedor Que Nao Sai 0271";
+const RECUSA_DO_IXC = "Fatura sem cobrança registrada na carteira 0271";
 
 type Linha = Record<string, string>;
 const HOJE = new Date();
@@ -65,9 +66,10 @@ const TABELAS: Record<string, Linha[]> = {
     { id: "701", id_cliente: "20", contrato: "Fibra 300 Mega", status: "A", status_internet: "A", data_ativacao: "2025-01-05", num_parcelas_atraso: "0", endereco: "", numero: "", bairro: "", desbloqueio_confianca_ativo: "N" },
   ],
   fn_areceber: [
-    // As vencidas têm boleto E Pix registrados — menos a terceira, que só tem boleto
-    // (é o caso que prova o botão de Pix desligado). `gateway_link` continua vindo do
-    // IXC, como na instância real: o conector é que não o pede mais.
+    // As vencidas têm boleto E Pix registrados — menos a terceira, que só tem boleto:
+    // é o caso MEDIDO EM PRODUÇÃO (2026-09-22), em que o IXC ainda não gerou o Pix e
+    // o gera quando `get_pix` é chamado. `gateway_link` continua vindo do IXC, como
+    // na instância real: o conector é que não o pede mais.
     ...[-70, -40, -9].map((d, i) => ({ id: String(900 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: `00190.00009 01234.567890 12345.678901 2 9999000001299${i}`, pix_txid: i === 2 ? "" : `txid0271${i}`, gateway_link: `https://download.exemplo.com.br/boleto/${900 + i}`, gerencianet_token: "tok-secreto" })),
     ...[20, 50, 80, 110, 140].map((d, i) => ({ id: String(950 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: i === 0 ? "00190.00009 01234.567890 12345.678901 2 99990000012999" : "", pix_txid: i === 0 ? "txid0271a" : "", gateway_link: "" })),
     { id: "990", id_cliente: "10", id_contrato: "700", status: "R", data_vencimento: dia(-100), valor: "129.90", valor_aberto: "0.00", linha_digitavel: "", pix_txid: "", gateway_link: "" },
@@ -136,11 +138,20 @@ function subirIxcFalso(): Promise<Server> {
         res.end(fatura?.linha_digitavel ? PDF_DO_BOLETO.toString("base64") : "");
         return;
       }
-      if (!fatura?.pix_txid) {
+      if (!fatura) {
         res.writeHead(500, { "content-type": "text/html" });
         res.end("");
         return;
       }
+      // Parcela SEM boleto registrado: aqui o IXC recusa, e diz por quê — a frase
+      // dele tem de chegar ao atendente.
+      if (!fatura.linha_digitavel) {
+        res.writeHead(200, { "content-type": "text/x-json; charset=utf-8" });
+        res.end(JSON.stringify({ type: "error", message: RECUSA_DO_IXC }));
+        return;
+      }
+      // O Pix é gerado SOB DEMANDA: a fatura que não tinha `pix_txid` passa a ter.
+      if (!fatura.pix_txid) fatura.pix_txid = `gerado-agora-${id}`;
       res.writeHead(200, { "content-type": "text/x-json; charset=utf-8" });
       res.end(
         JSON.stringify({
@@ -439,19 +450,36 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
     await imagemDoQr.scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${evidence}/07-pix-com-qr-code-enviado.png` });
 
-    // 3c. Fatura que só tem boleto registrado: o Pix fica DESLIGADO — pedir ao IXC
-    // o que ele não registrou faria ele registrar a cobrança.
+    // 3c. O CASO DE PRODUÇÃO: boleto registrado e Pix AINDA NÃO gerado. O botão de
+    // Pix está LIGADO, avisa que o Pix será gerado, e o envio sai inteiro.
     await vencidas.nth(2).getByTestId("ixc-enviar-fatura").click();
-    await expect(vencidas.nth(2).getByTestId("ixc-enviar-boleto")).toBeEnabled();
-    await expect(vencidas.nth(2).getByTestId("ixc-enviar-pix")).toBeDisabled();
-    // E parcela futura sem registro nenhum nem oferece o botão.
-    const semRegistro = painel.getByTestId("ixc-fatura-a-vencer").nth(1);
-    await expect(semRegistro).toContainText("cobrança ainda não gerada");
-    await expect(semRegistro.getByTestId("ixc-enviar-fatura")).toHaveCount(0);
+    const pixSobDemanda = vencidas.nth(2).getByTestId("ixc-enviar-pix");
+    await expect(pixSobDemanda).toBeEnabled();
+    await expect(pixSobDemanda).toHaveAttribute("title", "O IXC vai gerar o Pix desta fatura agora.");
+    await page.screenshot({ path: `${evidence}/07c-pix-ainda-nao-gerado-botao-ligado.png` });
+    await pixSobDemanda.click();
+    // Pelo BANCO, e não pelo aviso: o "Pix enviado" do envio anterior ainda pode
+    // estar na tela, e esperar por ele deixaria a conferência correr antes do envio.
+    await expect.poll(async () => (await saidas()).length, { timeout: 60_000 }).toBe(6);
+    mensagens = await saidas();
+    expect(mensagens[4]).toMatchObject({ type: "image", media_mime: "image/png" });
+    expect(mensagens[5]).toMatchObject({ type: "text", body: COPIA_E_COLA });
+    expect(acoesPedidas).toEqual(["get_boleto:900", "get_pix:901", "get_pix:902"]);
+
+    // 3d. Parcela futura SEM boleto registrado: Enviar aparece, o Boleto fica
+    // desligado, e o Pix é tentado — o IXC recusa, e a FRASE DELE chega ao atendente.
+    const semBoleto = painel.getByTestId("ixc-fatura-a-vencer").nth(1);
+    await expect(semBoleto).toContainText("boleto ainda não gerado");
+    await semBoleto.getByTestId("ixc-enviar-fatura").click();
+    await expect(semBoleto.getByTestId("ixc-enviar-boleto")).toBeDisabled();
+    await semBoleto.getByTestId("ixc-enviar-pix").click();
+    await expect(page.getByText(RECUSA_DO_IXC, { exact: false })).toBeVisible({ timeout: 60_000 });
+    await page.screenshot({ path: `${evidence}/07d-o-ixc-recusou-e-disse-por-que.png` });
+    expect(await saidas()).toHaveLength(6);
 
     // O canal recebeu os dois ARQUIVOS (receiver real na porta do WAHA), e o
     // nome/CPF do devedor que `get_pix` devolve não chegou a lugar nenhum.
-    expect(enviadasAoWaha.filter((r) => /sendFile|sendImage/i.test(r)).length).toBeGreaterThanOrEqual(2);
+    expect(enviadasAoWaha.filter((r) => /sendFile|sendImage/i.test(r)).length).toBeGreaterThanOrEqual(3);
     expect(await page.content()).not.toContain(DEVEDOR_QUE_NAO_SAI);
 
     // ── 4. Telefone que não está no IXC → CPF ─────────────────────────────────
@@ -496,10 +524,12 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
       }, { timeout: 20_000 })
       .toEqual(expect.arrayContaining(["conector.conexao_salva", "conector.fatura_enviada", "conector.vinculo_criado"]));
     const { data: trilha } = await db.from("api_audit_log").select("metadata").eq("organization_id", org).eq("action", "conector.fatura_enviada");
-    expect(trilha).toHaveLength(2);
+    expect(trilha).toHaveLength(3);
     expect(JSON.stringify(trilha)).not.toContain("00190.00009");
     expect(JSON.stringify(trilha)).not.toContain("br.gov.bcb.pix");
-    expect((trilha ?? []).map((l) => (l.metadata as { forma?: string }).forma).sort()).toEqual(["boleto", "pix"]);
+    expect((trilha ?? []).map((l) => (l.metadata as { forma?: string }).forma).sort()).toEqual(["boleto", "pix", "pix"]);
+    // Só UM dos dois Pix foi gerado por causa do pedido — e a trilha sabe qual.
+    expect((trilha ?? []).filter((l) => (l.metadata as { pix_gerado_agora?: boolean }).pix_gerado_agora === true)).toHaveLength(1);
   } finally {
     await new Promise<void>((r) => (ixc.listening ? ixc.close(() => r()) : r()));
     await new Promise<void>((r) => waha.close(() => r()));

@@ -12,8 +12,7 @@ const FATURA: Fatura = {
   diasDeAtraso: 9,
   linhaDigitavel: "00190.00009 01234.567890 12345.678901 2 99990000012990",
   temBoleto: true,
-  temPix: true,
-  enviavel: true,
+  pixJaGerado: true,
 };
 
 describe("legendaDoBoleto", () => {
