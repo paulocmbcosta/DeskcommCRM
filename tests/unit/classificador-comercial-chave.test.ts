@@ -29,9 +29,11 @@ function adminQueDevolve(linha: unknown, lanca?: Error) {
 
 /**
  * Imita o builder do PostgREST devolvendo um erro ESTRUTURADO — o caminho
- * real do postgrest-js instalado, que NÃO lança em erro HTTP/rede, e sim
- * devolve `{ data: null, error }`. Diferente de `adminQueDevolve(null, erro)`,
- * que simula uma exceção (ex.: falha de transporte antes de chegar à resposta).
+ * real do postgrest-js instalado, que NÃO lança em erro HTTP/rede/timeout/
+ * cancelamento (esses voltam como `{ data: null, error: { code: "", message:
+ * "FetchError: ..." } }`). Diferente de `adminQueDevolve(null, erro)`, que
+ * simula uma exceção DE VERDADE — o `catch` só pega falha de decifragem ou de
+ * conversão do texto cifrado, nunca falha de rede.
  */
 function adminComErroEstruturado(erro: { code: string; message: string }) {
   const cadeia: Record<string, unknown> = {};
@@ -90,7 +92,17 @@ describe("chaveDaOpenRouter", () => {
     expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain("tabela não encontrada");
   });
 
-  it("leitura que LANÇA (falha de transporte, não erro estruturado) cai para a da instalação, e o log leva só a CLASSE do erro — nunca a mensagem", async () => {
+  it("falha de rede/timeout/cancelamento (postgrest-js não lança; error.code vem vazio) loga codigo: \"rede\", nunca \"\"", async () => {
+    const { admin } = adminComErroEstruturado({ code: "", message: "FetchError: request to https://xyz.supabase.co failed" });
+    expect(await chaveDaOpenRouter(admin, "org-1", { OPENROUTER_API_KEY: "sk-or-x" })).toEqual({
+      apiKey: "sk-or-x",
+      origem: "instalacao",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ codigo: "rede" }));
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain("FetchError");
+  });
+
+  it("leitura que LANÇA de verdade (falha de decifragem/conversão, não erro estruturado nem falha de rede) cai para a da instalação, e o log leva só a CLASSE do erro — nunca a mensagem", async () => {
     const { admin } = adminQueDevolve(null, new Error("sk-or-segredo"));
     expect(await chaveDaOpenRouter(admin, "org-1", { OPENROUTER_API_KEY: "sk-or-x" })).toEqual({
       apiKey: "sk-or-x",

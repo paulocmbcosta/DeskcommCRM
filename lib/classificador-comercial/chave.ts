@@ -25,10 +25,11 @@ export type OrigemDaChave = "organizacao" | "instalacao";
  * porquê, não muda o de lá.
  *
  * Nunca lança. Plaintext só existe no retorno. O log leva só a CLASSE do erro
- * (falha de transporte/decifragem, pega no `catch`) ou o CÓDIGO Postgres (erro
- * ESTRUTURADO do PostgREST — o postgrest-js instalado não lança em erro
- * HTTP/rede, devolve `{ data: null, error }`) — nunca a mensagem: os dois
- * campos podem carregar material da credencial ou do schema.
+ * (falha de decifragem ou de conversão do texto cifrado, pega no `catch`) ou
+ * o CÓDIGO — do PostgREST, do Postgres, ou VAZIO quando é falha de
+ * rede/timeout/cancelamento (o postgrest-js instalado não lança nesses casos
+ * também: devolve `{ data: null, error }` com `code: ""`) — nunca a mensagem:
+ * os dois campos podem carregar material da credencial ou do schema.
  */
 export async function chaveDaOpenRouter(
   admin: SupabaseClient,
@@ -47,14 +48,18 @@ export async function chaveDaOpenRouter(
       .limit(1)
       .maybeSingle();
     if (error) {
-      // Sem este ramo, um erro ESTRUTURADO (baseline sem a tabela — `PGRST205`
-      // — ou qualquer outro código) virava "organização sem credencial" em
-      // silêncio, indistinguível do caso normal em que ela nunca cadastrou
-      // nada. `error.code` é o dado estável pra operar; `error.message` fica
-      // de fora do log de propósito.
+      // Sem este ramo, um erro ESTRUTURADO — baseline sem a tabela
+      // (`PGRST205`), qualquer outro código do Postgres, OU falha de
+      // rede/timeout/cancelamento (o postgrest-js instalado NÃO lança nesse
+      // caso: devolve `{ data: null, error }` com `code: ""`) — virava
+      // "organização sem credencial" em silêncio, indistinguível do caso
+      // normal em que ela nunca cadastrou nada. `error.code` é o dado estável
+      // pra operar; `|| "rede"` evita logar `codigo: ""` justamente no caso
+      // em que ele mais precisa dizer algo. `error.message` fica de fora do
+      // log de propósito.
       logger.warn(
         "classificador-comercial: não consegui ler a credencial da OpenRouter da organização; tentando a da instalação",
-        { organization_id: organizationId, codigo: error.code },
+        { organization_id: organizationId, codigo: error.code || "rede" },
       );
     } else if (data) {
       // Mesmo aprendizado da chave da instalação (abaixo): a rota que salva
@@ -72,9 +77,9 @@ export async function chaveDaOpenRouter(
       // não como resultado válido de uma credencial cadastrada.
     }
   } catch (erro) {
-    // Falha de TRANSPORTE (ou de decifragem) — diferente do `error`
-    // estruturado acima, isto é uma exceção de verdade. Mesma régua: nunca a
-    // mensagem, só a classe.
+    // Falha de DECIFRAGEM ou de CONVERSÃO do texto cifrado (`byteaToBuffer`) —
+    // não falha de rede: essa já volta pelo `error` estruturado acima, sem
+    // lançar. Mesma régua: nunca a mensagem, só a classe.
     logger.warn("classificador-comercial: credencial da OpenRouter da organização ilegível; tentando a da instalação", {
       organization_id: organizationId,
       erro: erro instanceof Error ? erro.name : typeof erro,
