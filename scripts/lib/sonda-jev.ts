@@ -11,15 +11,24 @@
  *    não pode vazar no stderr.
  *  - `analisarLimiar`: valida sem converter — "0,7" (vírgula) é rejeitado,
  *    não silenciosamente virar 0.7.
+ *  - `ehArquivoSinteticoPadrao`: só o arquivo sintético do repo pode virar
+ *    `tests/fixtures/jev/resposta-real.json` — um arquivo de conversas REAIS
+ *    (fora do repo, com dado de cliente) nunca pode.
  *  - `extrairContratoConhecido`: o que pode ir para
  *    `tests/fixtures/jev/resposta-real.json` — só os campos que o schema HTTP
- *    (`lib/classificador-comercial/jev.ts`) de fato lê. Nunca `id` de geração
- *    nem qualquer campo novo do provedor (podem repetir texto da conversa).
+ *    (`lib/classificador-comercial/jev.ts`) de fato lê, e dentro de
+ *    `answers.assunto.probabilities`, só as chaves CONHECIDAS de `ASSUNTOS`
+ *    com valor numérico. Nunca `id` de geração nem qualquer campo/chave novo
+ *    do provedor (podem repetir texto da conversa).
  *  - `calcularMetricas`: respondidas/falhas/acertos, mediana e máx (só das
  *    respondidas), matriz de confusão, e totais de tokens/custo que só somam
  *    quando TODAS as respondidas informam o dado — nunca 0 por omissão.
  */
+import * as path from "node:path";
+
 import { z } from "zod";
+
+import { ASSUNTOS } from "@/lib/classificador-comercial/perguntas";
 
 export const casoParaSondaSchema = z.object({
   esperado: z.enum(["sim", "nao"]),
@@ -54,6 +63,21 @@ export function analisarLimiar(bruto: string): ResultadoDoLimiar {
     return { ok: false, erro: `limiar precisa ser um número finito em (0, 1] — recebido "${bruto}"` };
   }
   return { ok: true, valor };
+}
+
+export const ARQUIVO_SINTETICO_PADRAO = "tests/fixtures/jev/conversas-de-exemplo.json";
+
+/**
+ * `--gravar-contrato` só pode sobrescrever a fixture do conjunto SINTÉTICO —
+ * nunca um arquivo de conversas REAIS (fora do repo, com dado de cliente).
+ * Compara pelo CAMINHO RESOLVIDO (`path.resolve`), não pela string crua:
+ * `./tests/fixtures/jev/conversas-de-exemplo.json` e o caminho absoluto
+ * equivalente têm que contar como o MESMO arquivo. `cwd` é parâmetro (não
+ * `process.cwd()` direto) só para o teste poder fixar um diretório sem tocar
+ * o processo real.
+ */
+export function ehArquivoSinteticoPadrao(arquivo: string, cwd: string = process.cwd()): boolean {
+  return path.resolve(cwd, arquivo) === path.resolve(cwd, ARQUIVO_SINTETICO_PADRAO);
 }
 
 /**
@@ -113,7 +137,17 @@ export function extrairContratoConhecido(bruto: unknown): ContratoConhecido | nu
     if (typeof assunto.type === "string") assuntoConhecido.type = assunto.type;
     if (typeof assunto.choice === "string") assuntoConhecido.choice = assunto.choice;
     if (typeof assunto.probabilities === "object" && assunto.probabilities !== null) {
-      assuntoConhecido.probabilities = assunto.probabilities as Record<string, number>;
+      // Filtra para chaves CONHECIDAS (as de `ASSUNTOS`) com valor numérico —
+      // `Object.hasOwn`, não `in` (herdaria "toString"/"constructor" etc.).
+      // Sem o filtro, um assunto novo do provedor (ou lixo com valor não
+      // numérico) ia direto para a fixture versionada.
+      const probsBrutas = assunto.probabilities as Record<string, unknown>;
+      const probsConhecidas: Record<string, number> = {};
+      for (const chave of Object.keys(probsBrutas)) {
+        const valor = probsBrutas[chave];
+        if (Object.hasOwn(ASSUNTOS, chave) && typeof valor === "number") probsConhecidas[chave] = valor;
+      }
+      assuntoConhecido.probabilities = probsConhecidas;
     }
     if (typeof assunto.confidence === "number") assuntoConhecido.confidence = assunto.confidence;
     resultado.answers.assunto = assuntoConhecido;

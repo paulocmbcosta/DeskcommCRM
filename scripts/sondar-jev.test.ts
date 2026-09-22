@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   analisarLimiar,
+  ARQUIVO_SINTETICO_PADRAO,
   calcularMetricas,
+  ehArquivoSinteticoPadrao,
   extrairContratoConhecido,
   nomeDoErro,
   validarCasos,
@@ -140,6 +142,58 @@ describe("extrairContratoConhecido", () => {
   it("sem answers.assunto nem usage, grava só o que existe", () => {
     const limpo = extrairContratoConhecido({ answers: { comercial: { noul: 0.1 } } });
     expect(limpo).toEqual({ answers: { comercial: { noul: 0.1 } } });
+  });
+
+  it("probabilities: só chaves CONHECIDAS de ASSUNTOS com valor NUMÉRICO — chave estranha e valor não numérico ficam de fora", () => {
+    const bruto = {
+      answers: {
+        comercial: { noul: 0.3 },
+        assunto: {
+          choice: "suporte",
+          probabilities: {
+            suporte: 0.7,
+            financeiro: 0.2,
+            assunto_novo_do_provedor: 0.5, // não é chave de ASSUNTOS
+            contratacao: "0.1", // string, não número
+          },
+        },
+      },
+    };
+    const limpo = extrairContratoConhecido(bruto);
+    expect(limpo?.answers.assunto?.probabilities).toEqual({ suporte: 0.7, financeiro: 0.2 });
+  });
+
+  it("probabilities ausente ou vazia depois do filtro não quebra — vira objeto vazio", () => {
+    const bruto = {
+      answers: {
+        comercial: { noul: 0.3 },
+        assunto: { choice: "outro", probabilities: { lixo_do_provedor: 1 } },
+      },
+    };
+    const limpo = extrairContratoConhecido(bruto);
+    expect(limpo?.answers.assunto?.probabilities).toEqual({});
+  });
+});
+
+describe("ehArquivoSinteticoPadrao", () => {
+  const CWD = "/Volumes/T9/Dyper/.claude/worktrees/crm-card-filter-conversation-type-4983d9";
+
+  it("aceita o caminho relativo padrão", () => {
+    expect(ehArquivoSinteticoPadrao(ARQUIVO_SINTETICO_PADRAO, CWD)).toBe(true);
+  });
+
+  it("aceita o mesmo arquivo por um caminho relativo EQUIVALENTE (./ na frente)", () => {
+    expect(ehArquivoSinteticoPadrao(`./${ARQUIVO_SINTETICO_PADRAO}`, CWD)).toBe(true);
+  });
+
+  it("aceita o caminho ABSOLUTO equivalente", () => {
+    expect(ehArquivoSinteticoPadrao(`${CWD}/${ARQUIVO_SINTETICO_PADRAO}`, CWD)).toBe(true);
+  });
+
+  it("rejeita qualquer outro arquivo — inclusive um de conversas reais fora do repo", () => {
+    expect(ehArquivoSinteticoPadrao("/tmp/conversas-reais-do-cliente.json", CWD)).toBe(false);
+    expect(ehArquivoSinteticoPadrao("tests/fixtures/jev/outra-coisa.json", CWD)).toBe(false);
+    expect(ehArquivoSinteticoPadrao("../conversas-de-exemplo.json", CWD)).toBe(false);
   });
 });
 

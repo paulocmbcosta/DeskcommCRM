@@ -8,13 +8,13 @@
       "type": "choice",
       "choice": "outro",
       "probabilities": {
-        "conhecer_planos": 0,
-        "suporte": 0,
-        "financeiro": 0,
         "cancelamento": 0,
+        "conhecer_planos": 0,
         "mudanca_de_plano": 0,
         "outro": 1,
-        "contratacao": 0
+        "financeiro": 0,
+        "contratacao": 0,
+        "suporte": 0
       },
       "confidence": 1
     }

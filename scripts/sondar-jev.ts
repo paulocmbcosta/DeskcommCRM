@@ -15,12 +15,16 @@
  *
  * `--gravar-contrato`: só com essa flag a sonda GRAVA a primeira resposta ok em
  * tests/fixtures/jev/resposta-real.json — e só os campos CONHECIDOS
- * (model, answers.comercial.{type,noul}, answers.assunto.{type,choice,probabilities,confidence},
+ * (model, answers.comercial.{type,noul}, answers.assunto.{type,choice,confidence}, e dentro de
+ * `probabilities`, só chaves conhecidas de `ASSUNTOS` com valor numérico;
  * usage.{input_tokens,output_tokens,cost} — ver `extrairContratoConhecido` em
- * `scripts/lib/sonda-jev.ts`), nunca o corpo inteiro: sem `id` de geração, sem campo novo do
+ * `scripts/lib/sonda-jev.ts`), nunca o corpo inteiro: sem `id` de geração, sem campo/chave novo do
  * provedor que possa repetir texto da conversa. Sem a flag, a sonda só IMPRIME — a fixture
  * versionada não é sobrescrita à toa (um revisor pode estar rodando o teste do contrato no
- * mesmo worktree).
+ * mesmo worktree). E a flag SÓ funciona com o arquivo sintético padrão
+ * (`tests/fixtures/jev/conversas-de-exemplo.json`, comparado pelo caminho RESOLVIDO —
+ * `ehArquivoSinteticoPadrao`); passar `--gravar-contrato` com outro arquivo (ex.: conversas reais
+ * de um cliente) é recusado antes de qualquer chamada.
  *
  * A chave nunca é impressa. Em FALHA, a linha mostra só `tipo` e `status` — nunca `detalhe`,
  * que pode ecoar parte do `state` (a conversa) num erro de contrato 4xx.
@@ -30,7 +34,7 @@
  * para conferir este arquivo também.
  *
  * Para calibrar com conversas reais de um cliente, use um arquivo FORA do repositório (tem dado
- * pessoal) e NUNCA passe `--gravar-contrato` nessa rodada — a fixture versionada é só para o
+ * pessoal) — a sonda recusa `--gravar-contrato` nesse caso; a fixture versionada é só para o
  * conjunto sintético.
  */
 import * as fs from "node:fs";
@@ -40,7 +44,9 @@ import { decidir, montarEstado, MODELO_DO_JEV } from "@/lib/classificador-comerc
 
 import {
   analisarLimiar,
+  ARQUIVO_SINTETICO_PADRAO,
   calcularMetricas,
+  ehArquivoSinteticoPadrao,
   extrairContratoConhecido,
   nomeDoErro,
   validarCasos,
@@ -56,7 +62,18 @@ async function main(): Promise<void> {
 
   const gravarContrato = process.argv.includes("--gravar-contrato");
   const posicionais = process.argv.slice(2).filter((a) => a !== "--gravar-contrato");
-  const arquivo = posicionais[0] ?? "tests/fixtures/jev/conversas-de-exemplo.json";
+  const arquivo = posicionais[0] ?? ARQUIVO_SINTETICO_PADRAO;
+
+  // Só a fixture SINTÉTICA do repo pode ser regravada. Um arquivo de
+  // conversas REAIS (fora do repo, com dado de cliente) nunca pode virar
+  // tests/fixtures/jev/resposta-real.json — recusa ANTES de gastar chamadas.
+  if (gravarContrato && !ehArquivoSinteticoPadrao(arquivo)) {
+    process.stderr.write(
+      `--gravar-contrato só grava a fixture sintética padrão (${ARQUIVO_SINTETICO_PADRAO}) — recebido "${arquivo}". ` +
+        "Um arquivo de conversas reais nunca deve virar fixture versionada.\n",
+    );
+    process.exit(2);
+  }
 
   const limiarLido = analisarLimiar(posicionais[1] ?? "0.7");
   if (!limiarLido.ok) {
