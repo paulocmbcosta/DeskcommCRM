@@ -10,9 +10,17 @@
  * `1..3650` não é mais um número escrito à mão aqui: vem de `FAIXA_DO_LIMITE`
  * (`lib/conectores/limite-de-cobranca.ts`), a MESMA constante que o Zod da rota,
  * a mensagem de erro e o `min`/`max` do input da tela usam. O caso "o CHECK do
- * banco cita a MESMA faixa" lê `pg_get_constraintdef` e compara com essa
- * constante — afrouxar só um dos dois lados (o TypeScript ou o SQL) fica
- * vermelho aqui.
+ * banco cita a MESMA faixa" lê `pg_get_constraintdef`, EXTRAI os dois números
+ * com regex e compara com `toBe` — não com `toContain`. `toContain` já foi
+ * medido verde com defeito: `"36500".includes("3650")` é `true`, então um CHECK
+ * de `between 1 and 36500` passava pela sonda antiga sem ela notar nada.
+ *
+ * A faixa tem uma TERCEIRA cópia, textual, no SQL: o `not between` do
+ * normalizador (roda ANTES do CHECK, doutrina de migrations item 8) é
+ * independente do `between` do próprio CHECK. Um caso à parte lê os dois
+ * números do texto do apêndice e compara com os do CHECK vivo no banco — se um
+ * dia só o CHECK mudar, o normalizador para de normalizar o que o CHECK passa
+ * a recusar, e o `update.sh` volta a falhar em silêncio.
  *
  * ─── O caso auto-curativo ───────────────────────────────────────────────────
  *
@@ -50,6 +58,22 @@ function blocoDa0274(): string {
   return BASELINE.slice(inicio, fim);
 }
 
+/**
+ * Os dois números do CHECK, LIDOS do banco (`pg_get_constraintdef`) — não do
+ * texto fonte da migration/apêndice. `EXATO`, não `toContain`: extrai com
+ * regex e devolve NÚMEROS, para a comparação ser `toBe`/`toEqual`.
+ */
+function numerosDoCheck(): { min: number; max: number } {
+  const def = sql(`
+    select pg_get_constraintdef(oid)
+      from pg_constraint
+     where conname = '${CONSTRAINT}' and conrelid = 'public.conector_conexoes'::regclass;`).trim();
+  const minimo = def.match(/>=\s*(\d+)/);
+  const maximo = def.match(/<=\s*(\d+)/);
+  if (!minimo || !maximo) throw new Error(`não consegui extrair min/max de "${def}"`);
+  return { min: Number(minimo[1]), max: Number(maximo[1]) };
+}
+
 function tenta(comando: string): string | null {
   try {
     sql(comando);
@@ -82,13 +106,19 @@ describe("conector_conexoes.cobranca_encaminha_apos_dias", () => {
     expect(linha).toBe(`integer|NO|${LIMITE_PADRAO_DA_COBRANCA}`);
   });
 
-  it("o CHECK do banco cita a MESMA faixa que o TypeScript (FAIXA_DO_LIMITE)", () => {
-    const def = sql(`
-      select pg_get_constraintdef(oid)
-        from pg_constraint
-       where conname = '${CONSTRAINT}' and conrelid = 'public.conector_conexoes'::regclass;`).trim();
-    expect(def, "o CHECK do banco não citou o mínimo do TypeScript").toContain(String(FAIXA_DO_LIMITE.min));
-    expect(def, "o CHECK do banco não citou o máximo do TypeScript").toContain(String(FAIXA_DO_LIMITE.max));
+  it("o CHECK do banco cita EXATAMENTE a faixa do TypeScript (FAIXA_DO_LIMITE) — não só 'contém'", () => {
+    // `toBe`/`toEqual` em NÚMERO, de propósito: `toContain` de string aprovaria
+    // um CHECK de `between 1 and 36500` (contém "3650") sem ninguém notar.
+    expect(numerosDoCheck()).toEqual({ min: FAIXA_DO_LIMITE.min, max: FAIXA_DO_LIMITE.max });
+  });
+
+  it("o normalizador do apêndice (o `update` que roda antes do CHECK) usa a MESMA faixa que o CHECK vivo no banco", () => {
+    const doUpdate = blocoDa0274().match(/not between (\d+) and (\d+)/);
+    expect(doUpdate, `não encontrei o "not between" do normalizador no bloco do apêndice:\n${blocoDa0274()}`).not.toBeNull();
+
+    const doCheck = numerosDoCheck();
+    expect(Number(doUpdate![1]), "o mínimo do normalizador diverge do CHECK vivo no banco").toBe(doCheck.min);
+    expect(Number(doUpdate![2]), "o máximo do normalizador diverge do CHECK vivo no banco").toBe(doCheck.max);
   });
 
   it("o CHECK recusa fora da faixa e aceita os extremos e o meio", () => {
