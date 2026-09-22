@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const listar = vi.fn();
 vi.mock("./http", () => ({ listarNoIxc: (...args: unknown[]) => listar(...args) }));
 
-import { clientesPorDocumento, clientesPorTelefone, documentoParcial } from "./identificar";
+import {
+  cadastrosQueConferem,
+  clientesPorDocumento,
+  clientesPorTelefone,
+  dataInformada,
+  documentoParcial,
+  nascimentoDoIxc,
+} from "./identificar";
 import { documentoNaMascara, mesmoTelefone, telefoneParaBusca } from "./mascara";
 
 const CRED = { baseUrl: "https://erp.exemplo.com.br", token: "1:x" };
@@ -24,7 +31,14 @@ function cliente(id: string, extra: Record<string, string> = {}): Record<string,
   };
 }
 
-beforeEach(() => listar.mockReset());
+// Chaves, não expressão: `mockReset()` devolve o próprio mock (é encadeável), e o
+// Vitest trata um `beforeEach` que RETORNA função como teardown implícito — ele
+// chamaria `listar()` de novo depois do teste, SEM ARGUMENTO NENHUM. Inofensivo
+// enquanto os testes usavam `mockResolvedValue` (ignora o que recebe); virou
+// `TypeError` no primeiro teste que leu um argumento dentro do mock.
+beforeEach(() => {
+  listar.mockReset();
+});
 
 describe("telefoneParaBusca — do E.164 do contato ao que o IXC consegue procurar", () => {
   it("usa os 8 finais NA MÁSCARA, que é como o IXC guarda", () => {
@@ -124,5 +138,49 @@ describe("documento", () => {
     expect(documentoParcial("529.982.247-25")).toBe("***.982.247-**");
     expect(documentoParcial("11.222.333/0001-81")).toBe("**.222.333/0001-**");
     expect(documentoParcial("")).toBe("");
+  });
+});
+
+describe("data de nascimento — como o IXC grava (medido em 22/09)", () => {
+  it("AAAA-MM-DD vale; 0000-00-00, vazio e ano < 1900 são 'sem data'", () => {
+    expect(nascimentoDoIxc("1985-03-12")).toBe("1985-03-12");
+    expect(nascimentoDoIxc("0000-00-00")).toBeNull();
+    expect(nascimentoDoIxc("")).toBeNull();
+    expect(nascimentoDoIxc(undefined)).toBeNull();
+    expect(nascimentoDoIxc("0001-01-01")).toBeNull();
+  });
+
+  it("a data que o cliente informa: AAAA-MM-DD ou DD/MM/AAAA, e tem de existir no calendário", () => {
+    expect(dataInformada("1985-03-12")).toBe("1985-03-12");
+    expect(dataInformada("12/03/1985")).toBe("1985-03-12");
+    expect(dataInformada("1985-02-30")).toBeNull();
+    expect(dataInformada("12/3/85")).toBeNull();
+    expect(dataInformada("ontem")).toBeNull();
+  });
+});
+
+describe("cadastrosQueConferem — CPF + nascimento, resposta única para toda recusa", () => {
+  const MARIA = { id: "10", razao: "Maria da Silva", cnpj_cpf: "529.982.247-25", tipo_pessoa: "F", ativo: "S", data_nascimento: "1985-03-12", senha: "x" };
+  const CRED = { baseUrl: "https://erp.exemplo.com.br", token: "1:x" };
+
+  it("confere quando CPF e data batem, e a data NÃO sai no ClienteIxc", async () => {
+    listar.mockImplementation(async (_c: unknown, p: { campos: readonly string[] }) => ({
+      total: 1,
+      registros: [Object.fromEntries(p.campos.map((c) => [c, (MARIA as Record<string, string>)[c] ?? ""]))],
+    }));
+    const achados = await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12");
+    expect(achados.map((c) => c.id)).toEqual(["10"]);
+    expect(JSON.stringify(achados)).not.toContain("1985");
+    // pediu a data, e só pela lista da conferência
+    expect(listar.mock.calls.at(-1)?.[1].campos).toContain("data_nascimento");
+  });
+
+  it("data diferente e cadastro sem data dão a MESMA lista vazia", async () => {
+    listar.mockResolvedValueOnce({ total: 1, registros: [{ ...MARIA, data_nascimento: "1990-01-01" }] });
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual([]);
+    listar.mockResolvedValueOnce({ total: 1, registros: [{ ...MARIA, data_nascimento: "0000-00-00" }] });
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual([]);
+    listar.mockResolvedValueOnce({ total: 0, registros: [] });
+    expect(await cadastrosQueConferem(CRED, "529.982.247-25", "1985-03-12")).toEqual([]);
   });
 });

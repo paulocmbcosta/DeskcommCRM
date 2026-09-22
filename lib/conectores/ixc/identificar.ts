@@ -9,7 +9,7 @@
  * chamador. Esta peça não escolhe por ninguém.
  */
 import type { CredencialDeConector } from "../tipos";
-import { CAMPOS_DO_CLIENTE } from "./campos";
+import { CAMPOS_DA_CONFERENCIA, CAMPOS_DO_CLIENTE } from "./campos";
 import { listarNoIxc } from "./http";
 import { mesmoTelefone, soDigitos, telefoneParaBusca } from "./mascara";
 
@@ -109,4 +109,50 @@ export async function clientePorId(
   });
   const achado = registros.find((r) => r.id === id);
   return achado ? lerCliente(achado) : null;
+}
+
+/**
+ * `data_nascimento` como o IXC grava. Medido em 22/09 (3 amostras de 1000): sempre
+ * `AAAA-MM-DD`, e "sem data" é `0000-00-00`. Ano antes de 1900 é lixo de cadastro
+ * antigo (medido: ano 1) e vale como "sem data".
+ */
+export function nascimentoDoIxc(bruto: string | undefined): string | null {
+  const v = (bruto ?? "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  return Number(v.slice(0, 4)) >= 1900 ? v : null;
+}
+
+/** A data que o cliente informou, em `AAAA-MM-DD` (aceita `DD/MM/AAAA`). `null` se não existir no calendário. */
+export function dataInformada(bruto: string): string | null {
+  const t = bruto.trim();
+  const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t);
+  const iso = br ? `${br[3]}-${br[2]}-${br[1]}` : t;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso) || Number(iso.slice(0, 4)) < 1900) return null;
+  const d = new Date(`${iso}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === iso ? iso : null;
+}
+
+/**
+ * Os cadastros deste CPF/CNPJ cuja data de nascimento é a informada.
+ *
+ * Lista vazia para TODA recusa — CPF inexistente, data diferente, cadastro sem
+ * data —, de propósito: quem chama não consegue distinguir, e por isso não tem
+ * como contar a ninguém qual dos dois dados não conferiu. A data é lida,
+ * comparada e descartada: nunca entra em `ClienteIxc`.
+ */
+export async function cadastrosQueConferem(
+  credencial: CredencialDeConector,
+  documentoMascarado: string,
+  nascimento: string,
+): Promise<ClienteIxc[]> {
+  const { registros } = await listarNoIxc(credencial, {
+    tabela: "cliente",
+    filtro: { campo: "cliente.cnpj_cpf", operador: "=", valor: documentoMascarado },
+    campos: CAMPOS_DA_CONFERENCIA,
+    limite: 20,
+  });
+  return registros
+    .filter((r) => r.id && nascimentoDoIxc(r.data_nascimento) === nascimento)
+    .map(lerCliente)
+    .sort(ativosPrimeiro);
 }

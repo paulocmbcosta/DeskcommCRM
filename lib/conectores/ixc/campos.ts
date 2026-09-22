@@ -22,6 +22,14 @@ export const CAMPOS_DO_CLIENTE = [
   "fone",
 ] as const;
 
+/**
+ * `cliente` + a data de nascimento — SÓ para a conferência de identidade da IA
+ * (CPF + nascimento, decisão do dono de 21/09). Lista separada de propósito: a
+ * data não entra em `CAMPOS_DO_CLIENTE`, que alimenta o painel e o navegador.
+ * Formato medido no IXC real em 22/09: sempre `AAAA-MM-DD`; vazio = `0000-00-00`.
+ */
+export const CAMPOS_DA_CONFERENCIA = [...CAMPOS_DO_CLIENTE, "data_nascimento"] as const;
+
 export const CAMPOS_DO_CONTRATO = [
   "id",
   "id_cliente",
@@ -108,6 +116,7 @@ export const CAMPOS_DO_TICKET = [
 /** Todas as listas, para o teste varrer de uma vez. */
 export const LISTAS_BRANCAS = {
   cliente: CAMPOS_DO_CLIENTE,
+  "cliente (conferência)": CAMPOS_DA_CONFERENCIA,
   cliente_contrato: CAMPOS_DO_CONTRATO,
   fn_areceber: CAMPOS_DA_FATURA,
   radusuarios: CAMPOS_DO_LOGIN,
