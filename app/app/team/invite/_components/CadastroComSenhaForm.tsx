@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { CampoDeSenha } from "@/components/team/CampoDeSenha";
@@ -47,6 +47,18 @@ export function CadastroComSenhaForm() {
   const [settings, setSettings] = useState(INTERFACE_COMPLETA);
   const [erro, setErro] = useState<string | null>(null);
   const [resultado, setResultado] = useState<Resultado | null>(null);
+  const cartaoRef = useRef<HTMLElement>(null);
+
+  // O botão de cadastrar fica no fim de um formulário longo (as áreas
+  // permitidas), e o cartão com a senha aparece no TOPO da coluna ao lado — ou
+  // abaixo do formulário, no celular. Sem isto, quem cadastra fica olhando para
+  // o botão e a senha que precisa copiar está fora da tela. Achado pela
+  // evidência do e2e, numa janela de 1280×720.
+  useEffect(() => {
+    if (!resultado) return;
+    cartaoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    cartaoRef.current?.focus({ preventScroll: true });
+  }, [resultado]);
 
   const areasValidas =
     interfaceSettingsSchema.safeParse(settings).success && interfaceTemDestino(settings, role);
@@ -165,8 +177,10 @@ export function CadastroComSenhaForm() {
       <div className="space-y-4">
         {resultado ? (
           <section
+            ref={cartaoRef}
+            tabIndex={-1}
             aria-label={t("Dados de acesso")}
-            className="space-y-3 rounded-md border p-4"
+            className="scroll-mt-20 space-y-3 rounded-md border p-4 outline-none"
           >
             <div>
               <h2 className="text-sm font-semibold">

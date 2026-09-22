@@ -771,12 +771,18 @@ ausentes, que é o estado de um primeiro deploy.
 |---|---|---|
 | J29.1 De **Equipe**, o botão **Adicionar membros** leva ao cadastro, e **Cadastrar com senha** é a aba aberta (`aria-selected=true`) | `[P0]` | **PASS** |
 | J29.2 **Gerar senha** preenche **e mostra** (o campo vira `type=text`), no formato de três blocos de quatro sem 0/O/1/l/I | `[P0]` | **PASS** |
-| J29.3 Depois de cadastrar, o cartão **Dados de acesso** mostra endereço (`…/login`), e-mail e a senha digitada; o formulário limpa | `[P0]` | **PASS** — `.superpowers/evidence/equipe-cadastro-com-senha/1-cartao-de-acesso.png` |
+| J29.3 Depois de cadastrar, o cartão **Dados de acesso** mostra endereço (`…/login`), e-mail e a senha digitada; o formulário limpa | `[P0]` | **PASS** |
+| J29.3b O cartão **vem para a vista** e recebe o foco: o botão fica no fim de um formulário longo e o cartão nasce no topo da coluna ao lado. Medido por `elementFromPoint` logo abaixo do topo do cartão (dentro da janela, não coberto pelo cabeçalho fixo). **Achado pela evidência desta própria jornada** — na primeira execução, a senha ficava fora da tela numa janela de 1280×720; a medida reprovou o build antigo e aprovou o consertado | `[P0]` | **PASS** |
 | J29.4 Banco: conta com e-mail **já confirmado** e `full_name`; vínculo `agent` aceito; **uma** `member.created` na auditoria, **sem a senha** | `[P0]` | **PASS** |
-| J29.5 A pessoa entra com a senha num navegador limpo e cai no app com o menu do papel dela (avatar com as iniciais do nome cadastrado) | `[P0]` | **PASS** — `2-membro-entrou.png` |
-| J29.6 Recadastrar o mesmo e-mail responde, ao lado do formulário, **"Esta pessoa já faz parte da equipe."** | `[P1]` | **PASS** — `3-ja-e-membro.png` |
-| J29.7 **Membros › ⋯ › Definir nova senha**: o diálogo nomeia a pessoa, gera a senha, salva e avisa | `[P0]` | **PASS** — `4-definir-nova-senha.png` |
-| J29.8 A senha **antiga** passa a dar "Email ou senha incorretos."; a **nova** entra | `[P0]` | **PASS** — `5-entrou-com-a-nova.png` |
+| J29.5 A pessoa entra com a senha num navegador limpo e cai no app com o menu do papel dela (avatar com as iniciais do nome cadastrado) | `[P0]` | **PASS** |
+| J29.6 Recadastrar o mesmo e-mail responde, ao lado do formulário, **"Esta pessoa já faz parte da equipe."** | `[P1]` | **PASS** |
+| J29.7 **Membros › ⋯ › Definir nova senha**: o diálogo nomeia a pessoa, gera a senha, salva e avisa | `[P0]` | **PASS** |
+| J29.8 A senha **antiga** passa a dar "Email ou senha incorretos."; a **nova** entra | `[P0]` | **PASS** |
+| J29.9 Em 390 px de largura, **Adicionar membros** não rola para o lado (`scrollWidth ≤ clientWidth + 1`, medido) e as duas abas cabem | `[P1]` | **PASS** |
+
+Evidência visual em `.superpowers/evidence/equipe-cadastro-com-senha/` (6 imagens: o
+cartão de acesso, o membro dentro do app, a recusa de recadastro, o diálogo de nova senha,
+a entrada com a senha nova e a tela em 390 px).
 
 Rodadas junto, sem regressão: `interface-por-vinculo` (o convite pela tela agora abre por
 `/app/team/invite?modo=convite`), `invite-lifecycle` (os 9 casos do ciclo do convite),

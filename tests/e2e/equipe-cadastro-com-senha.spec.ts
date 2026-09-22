@@ -95,6 +95,22 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   await expect(cartao).toContainText(email);
   await expect(cartao).toContainText(senha);
   await expect(cartao).toContainText("/login");
+  // O cartão VEM para a vista: o botão fica no fim de um formulário longo e o
+  // cartão nasce no topo da coluna ao lado. Medido, não a olho — o ponto logo
+  // abaixo do topo do cartão tem de estar dentro da janela E ser do próprio
+  // cartão (não coberto pelo cabeçalho fixo).
+  await expect
+    .poll(
+      () =>
+        cartao.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const noTopo = document.elementFromPoint(r.left + 24, r.top + 16);
+          return r.top >= 0 && r.top < window.innerHeight - 120 && !!noTopo && el.contains(noTopo);
+        }),
+      { timeout: 5_000 },
+    )
+    .toBe(true);
+  await expect(cartao).toBeFocused();
   // O formulário limpa para o próximo cadastro.
   await expect(page.getByLabel("E-mail", { exact: true })).toHaveValue("");
   await page.screenshot({ path: `${EVIDENCIA}/1-cartao-de-acesso.png` });
@@ -168,4 +184,13 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   await comNova.waitForLoadState("networkidle");
   await comNova.screenshot({ path: `${EVIDENCIA}/5-entrou-com-a-nova.png` });
   await comNova.context().close();
+
+  // No celular: a tela de adicionar membros não rola para o lado.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/app/team/invite");
+  await expect(page.getByRole("button", { name: "Gerar senha" })).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+  ).toBe(true);
+  await page.screenshot({ path: `${EVIDENCIA}/6-celular.png` });
 });
