@@ -20,7 +20,7 @@ import { generateText, stepCountIs, type ModelMessage, type ToolSet } from 'ai';
 import type pg from 'pg';
 import { z } from 'zod';
 
-import { scrubMessage } from '@/lib/sentry/scrub';
+import { redigirMensagemDoProvedor } from '@/lib/ai/redigir-mensagem-do-provedor';
 
 import type { Logger } from '../../obs/logger';
 import { decidirParaOSeam } from './binding-do-ponto';
@@ -614,27 +614,6 @@ export function normalizarErro(err: unknown): {
     error_message: redigirMensagemDoProvedor(bruto),
     http_status: typeof status === 'number' ? status : null,
   };
-}
-
-/**
- * Tira da mensagem do provedor o que não pode aparecer numa tela: segredo e
- * dado do titular. Trunca DEPOIS de redigir — cortar antes deixaria meia chave
- * passar, e meia chave ainda identifica de quem ela é.
- *
- * Os padrões de chave (`sk-…`, `Bearer …`) vêm daqui e não do
- * `lib/sentry/scrub.ts` porque lá o alvo é PII de titular; os dois se somam.
- */
-export function redigirMensagemDoProvedor(bruto: string): string {
-  const semSegredo = bruto
-    // Chaves de API dos provedores que este produto fala: `sk-ant-…`,
-    // `sk-or-v1-…`, `sk-proj-…`, `sk-…`, e as do Google (`AIza…`).
-    .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[CHAVE]')
-    .replace(/AIza[A-Za-z0-9_-]{10,}/g, '[CHAVE]')
-    // O header inteiro, em qualquer caixa, com ou sem `Authorization:` na
-    // frente — é assim que ele costuma aparecer ecoado num corpo de erro.
-    .replace(/[Bb]earer\s+[A-Za-z0-9._-]{8,}/g, 'Bearer [CHAVE]')
-    .replace(/(x-api-key|api[-_]?key|authorization)\s*[:=]\s*\S+/gi, '$1: [CHAVE]');
-  return scrubMessage(semSegredo).slice(0, 500);
 }
 
 /**

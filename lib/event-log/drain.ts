@@ -7,7 +7,12 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { avisoDeEventoMorto, IA_QUE_NAO_RESPONDEU } from "@/lib/event-log/aviso-de-evento-morto";
-import { dispatchEvent, getRegisteredHandlers, type EventRow } from "@/lib/event-log/dispatcher";
+import {
+  dispatchEvent,
+  getRegisteredHandlers,
+  type ContextoDoDreno,
+  type EventRow,
+} from "@/lib/event-log/dispatcher";
 import { logger } from "@/lib/logger";
 
 const MAX_ATTEMPTS = 5;
@@ -118,9 +123,16 @@ async function avisarEventoMorto(
 
 export async function drainEventLog(
   admin: SupabaseClient,
-  opts: { limit?: number } = {},
+  /**
+   * `contexto: "requisicao"` só para o dreno que corre DENTRO do POST de um
+   * webhook (lib/dev/kick-local-pipeline.ts): nele, o handler marcado
+   * `foraDaRequisicao` é adiado para o worker, em vez de segurar a resposta.
+   * O cron, o `drain-loop` do worker e o relógio usam o padrão, `worker`.
+   */
+  opts: { limit?: number; contexto?: ContextoDoDreno } = {},
 ): Promise<DrainSummary> {
   const limit = opts.limit ?? 50;
+  const contexto = opts.contexto ?? "worker";
   const summary: DrainSummary = {
     scanned: 0,
     done: 0,
@@ -203,7 +215,7 @@ export async function drainEventLog(
       .select("id");
     if (!claimed?.length) continue;
 
-    const results = await dispatchEvent(row);
+    const results = await dispatchEvent(row, { contexto });
 
     const okKeys = results
       .filter((r) => r.status === "ok" || r.status === "skipped")

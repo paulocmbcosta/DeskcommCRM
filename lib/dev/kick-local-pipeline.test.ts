@@ -8,7 +8,8 @@ vi.mock("@/lib/event-log/register-handlers", () => ({
   ensureHandlersRegistered: vi.fn(),
 }));
 
-import { kickLocalPipeline } from "@/lib/dev/kick-local-pipeline";
+import { acelerarPipelineDeEventos, kickLocalPipeline } from "@/lib/dev/kick-local-pipeline";
+import { drainEventLog } from "@/lib/event-log/drain";
 
 describe("kickLocalPipeline", () => {
   it("não propaga erro do tick do contato (contrato: nunca 5xx no webhook)", async () => {
@@ -30,5 +31,12 @@ describe("kickLocalPipeline", () => {
         contactId: "contact",
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("drena no contexto REQUISIÇÃO: handler lento é adiado para o worker, não segura o POST do webhook", async () => {
+    const admin = {} as SupabaseClient;
+    vi.mocked(drainEventLog).mockClear();
+    await acelerarPipelineDeEventos(admin);
+    expect(drainEventLog).toHaveBeenCalledWith(admin, { contexto: "requisicao" });
   });
 });

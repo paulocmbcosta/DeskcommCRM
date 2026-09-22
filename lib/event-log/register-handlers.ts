@@ -8,6 +8,7 @@ import { followupGatilhoPresencaHandler } from "@/lib/followup/gatilho-presenca.
 
 import { aiResponseHandler } from "@/workers/ai-response-worker.handler";
 import { aiSentimentHandler } from "@/workers/ai-sentiment-worker.handler";
+import { classificadorComercialHandler } from "@/workers/classificador-comercial.handler";
 import { aiHandoffFromSentimentHandler } from "@/workers/ai-handoff-from-sentiment.handler";
 import { ragIndexerHandler } from "@/workers/rag-indexer.handler";
 import { lgpdExportHandler } from "@/workers/lgpd-export-worker.handler";
@@ -42,6 +43,13 @@ export function ensureHandlersRegistered(): void {
   registerHandler(mediaPersistHandler);
   registerHandler(mediaDeriveHandler);
   registerHandler(webPushInboundHandler);
+  // Depois de TODO consumidor de `message.received`: o dispatcher roda os
+  // handlers de um evento em série, e o classificador espera o Jev (até 8 s).
+  // Antes da push, a notificação de mensagem nova esperaria junto. Ele é o
+  // único desse evento que devolve `retry`, e o drain lê o `retry_at` em
+  // qualquer posição; e uma automação que crie o card roda antes e o faz ver
+  // `ja_tem_card`, em vez de um segundo card.
+  registerHandler(classificadorComercialHandler);
   // Por último: reportar a venda ao anúncio é o consumidor mais externo do
   // fechamento — depende de rede de terceiro e não pode atrasar quem escreve
   // no banco. Falha dele nunca segura os handlers acima.

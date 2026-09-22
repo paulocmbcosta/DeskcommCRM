@@ -3,7 +3,9 @@
  *
  * ## Por que este arquivo existe
  *
- * O DeskcommCRM chama modelo de linguagem em 23 lugares. Até aqui, QUAL modelo
+ * O DeskcommCRM chama modelo de linguagem em vários lugares — para saber
+ * quantos hoje, conte `PONTOS_DE_IA`:
+ * `grep -c '^    id: "' lib/ai/pontos/registro.ts`. Até aqui, QUAL modelo
  * cada um usava estava espalhado por três pilhas que não se falavam
  * (`runModelCall` com BYOK por org, `lib/ai/gateway.ts` por variável de
  * ambiente, `lib/ai/runtime/agent.ts` com um terceiro `switch`) e por sete
@@ -257,6 +259,23 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     emissor: "lib/agent-engine/agent/stage-classifier.ts",
     sintomaDeFalha:
       "Os leads param de andar sozinhos pelo funil e ficam todos na etapa em que entraram.",
+    registraEm: "llm_calls",
+  },
+  {
+    id: "commercial_classify",
+    rotulo: "Decidir se a conversa vira card",
+    oQueFaz:
+      "Com a regra \"Só conversas comerciais\" ligada, lê a conversa de quem ainda não tem card e decide se o assunto é contratação, mudança de plano ou conhecer planos. Só então o card nasce no funil.",
+    papel: "entender",
+    exige: {},
+    emissor: "workers/classificador-comercial.ts",
+    fixo: {
+      razao:
+        "Usa o Jev, da TypeSafe: um modelo que devolve decisões com probabilidade em vez de texto. Ele não é um modelo de conversa e fala outra API (System One), por isso não entra na troca de modelos deste painel. Paga com a chave da OpenRouter cadastrada aqui, ou com a da instalação.",
+      usa: { provider: "openrouter", modelId: "typesafe/jev-1.13" },
+    },
+    sintomaDeFalha:
+      "Com \"Só conversas comerciais\" ligada, os cards voltam a nascer para toda conversa — o produto cria o card quando não consegue classificar — e a linha do tempo do card diz por quê.",
     registraEm: "llm_calls",
   },
   {

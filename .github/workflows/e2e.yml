@@ -340,6 +340,7 @@ jobs:
         rbac-roles.spec.ts inbox-scope.spec.ts reset-password-mfa.spec.ts
         degradacao-silenciosa.spec.ts vps-webhook-outbound-ssrf.spec.ts
         kanban-owner-filter.spec.ts queue-assign.spec.ts
+        card-pelo-classificador.spec.ts
         conversa-vira-lead.spec.ts contato-salva-email.spec.ts
         confirmar-dado-do-contato.spec.ts
         credenciais-de-ia.spec.ts
@@ -357,6 +358,15 @@ jobs:
         lote-no-quadro-do-funil.spec.ts
         importar-leads-planilha.spec.ts
         relatorio-de-atividades.spec.ts
+      # `card-pelo-classificador` mora na MESMA parte que `conversa-vira-lead` de
+      # propósito: ela liga "Só conversas comerciais" na organização compartilhada
+      # e o `afterAll` devolve o modo de sempre. Pela ordem por caminho (bloco
+      # abaixo), `card-` executa antes de `conversa-`, e `conversa-vira-lead` passa
+      # a ser o controle de que a restauração aconteceu: se a regra ficasse ligada,
+      # ela reprovaria (a primeira mensagem não abriria card). O Jev que ela chama
+      # é um receiver local no endereço de `CLASSIFICADOR_COMERCIAL_BASE_URL`, que
+      # nasce no `.env.e2e` (scripts/gerar-env-e2e.sh) — nenhuma chamada sai para
+      # a OpenRouter.
       # ⚠️ A ORDEM DESTA LISTA NÃO DECIDE A ORDEM DE EXECUÇÃO. O Playwright
       # ordena os arquivos por CAMINHO, não pela ordem em que são passados na
       # linha de comando. Medido no run 31838253496: `marca-logo.spec.ts` estava

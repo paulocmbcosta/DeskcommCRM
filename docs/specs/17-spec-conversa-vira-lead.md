@@ -57,6 +57,13 @@ mover.
 | **b** | **Funil de entrada é CONFIGURÁVEL**, nunca fixo | vale para o produto, não para uma org. Ver §3 |
 | **c** | **O sistema cria; o agente cria e move** | a criação de entrada é determinística (não depende de modelo); o agente pode abrir oportunidade nova e mover, **dentro do escopo marcado** |
 
+> ⚠️ **(a) deixou de ser absoluta desde 2026-09-22.** Com `settings.crm.nascimento_do_card.modo
+> = 'classificador'` ligado na organização, o ingest recua e não cria mais o lead na primeira
+> mensagem — quem decide se e quando o card nasce passa a ser o classificador (o Jev), plano em
+> `docs/superpowers/plans/2026-09-22-card-nasce-pelo-classificador-jev.md`. O padrão da
+> instalação continua sendo `toda_conversa` (esta decisão, sem mudança); a exceção é opt-in, por
+> organização, e nunca liga sozinha numa atualização.
+
 ### Sobre (b), que é a decisão estruturante
 
 Nada de "o funil é o Pedidos". O produto é self-host, multi-tenant e o funil é do dono do negócio —

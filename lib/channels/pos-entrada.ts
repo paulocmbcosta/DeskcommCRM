@@ -27,6 +27,16 @@
  *   3. despacho — o turno do agente resolve o lead ativo do contato. Emitir
  *                 antes do passo 2 faria o primeiro turno rodar sem lead.
  *
+ * ⚠️ O item 3 DEIXOU DE SER ABSOLUTO em 2026-09-22. Com
+ * `settings.crm.nascimento_do_card.modo = 'classificador'` ligado na
+ * organização, o passo 2 NÃO abre card (`garantirLeadDaConversa` recua com
+ * `aguarda_classificador`) — e os primeiros turnos do agente PODEM rodar sem
+ * lead nenhum. O card só nasce depois, quando o classificador
+ * (`workers/classificador-comercial.ts`, o Jev) decidir que a conversa é
+ * comercial, ou falhar ao decidir (decisão A: nasce mesmo assim, sem
+ * classificação). Isto não é regressão do passo 2 — é a mesma regra
+ * respeitando um interruptor que este arquivo não controla.
+ *
  * Trocar a ordem não quebra teste de tipo nem derruba nada em runtime: quebra
  * em silêncio, semanas depois, num card que não devia existir. Por isso está
  * escrito aqui e vigiado por `tests/unit/pos-entrada-*.test.ts`.

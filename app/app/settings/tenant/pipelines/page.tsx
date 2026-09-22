@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 
+import { SecaoNascimentoDoCard } from "@/components/crm/NascimentoDoCard";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import { traduzir } from "@/lib/i18n/dicionario";
+import { lerNascimentoDoCard } from "@/lib/leads/modo-de-nascimento";
 import { createClient } from "@/lib/supabase/server";
 import { PipelinesClient, type PipelineRow } from "./_client";
-import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
 
@@ -30,14 +32,23 @@ export default async function PipelinesSettingsPage() {
   }
   const podeEditarConfig =
     (user.is_platform_admin && !user.support) || ROLE_RANK[activeOrg.role] >= ROLE_RANK.admin;
+  // "Quando o card nasce" é decisão de CONTROLADOR (LGPD), mesma régua de
+  // `fn_definir_cliente_pela_agenda`: só admin do TENANT, SEM o atalho de
+  // platform admin que `podeEditarConfig` concede pro resto da tela — a
+  // action já recusa quem não é; aqui é só não oferecer um Salvar que ela vai
+  // barrar.
+  const podeEditarNascimento = ROLE_RANK[activeOrg.role] >= ROLE_RANK.admin;
 
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("crm_pipelines")
-    .select("id, name, slug, vocabulary, settings")
-    .eq("organization_id", activeOrg.orgId)
-    .eq("is_archived", false)
-    .order("position");
+  const [{ data }, regraDeNascimento] = await Promise.all([
+    supabase
+      .from("crm_pipelines")
+      .select("id, name, slug, vocabulary, settings")
+      .eq("organization_id", activeOrg.orgId)
+      .eq("is_archived", false)
+      .order("position"),
+    lerNascimentoDoCard(supabase, activeOrg.orgId),
+  ]);
 
   const pipelines = (data ?? []) as PipelineRow[];
   const idioma = user.idioma;
@@ -51,11 +62,15 @@ export default async function PipelinesSettingsPage() {
         <p className="text-sm text-muted-foreground">
           {traduzir("Para onde o agente leva o card em cada passo do atendimento", idioma)}
           {podeEditarConfig
-            ? traduzir(", vocabulário, custom fields e motivos de perda", idioma)
-            : ""}
+            ? traduzir(", vocabulário, custom fields, motivos de perda e quando o card nasce", idioma)
+            : traduzir(" e quando o card nasce", idioma)}
           .
         </p>
       </header>
+      {/* A `key` que remonta quando a regra SALVA muda por fora mora DENTRO
+          de `SecaoNascimentoDoCard` — ver o cabeçalho dela em
+          components/crm/NascimentoDoCard.tsx. */}
+      <SecaoNascimentoDoCard inicial={regraDeNascimento} podeEditar={podeEditarNascimento} />
       <PipelinesClient pipelines={pipelines} podeEditarConfig={podeEditarConfig} />
     </div>
   );

@@ -2583,6 +2583,35 @@ export const DICIONARIO: Traducoes = {
   "O agente responde de forma genérica, ignorando o que está escrito nos seus documentos.": {
     es: "El agente responde de forma genérica, ignorando lo que está escrito en tus documentos.",
   },
+  "Decidir se a conversa vira card": {
+    es: "Decidir si la conversación se convierte en tarjeta",
+  },
+  "Com a regra \"Só conversas comerciais\" ligada, lê a conversa de quem ainda não tem card e decide se o assunto é contratação, mudança de plano ou conhecer planos. Só então o card nasce no funil.": {
+    es: "Con la regla \"Solo conversaciones comerciales\" activada, lee la conversación de quien todavía no tiene tarjeta y decide si el asunto es contratación, cambio de plan o conocer planes. Solo entonces nace la tarjeta en el embudo.",
+  },
+  "Usa o Jev, da TypeSafe: um modelo que devolve decisões com probabilidade em vez de texto. Ele não é um modelo de conversa e fala outra API (System One), por isso não entra na troca de modelos deste painel. Paga com a chave da OpenRouter cadastrada aqui, ou com a da instalação.": {
+    es: "Usa el Jev, de TypeSafe: un modelo que devuelve decisiones con probabilidad en vez de texto. No es un modelo de conversación y habla otra API (System One), por eso no entra en el cambio de modelos de este panel. Se paga con la clave de OpenRouter registrada aquí, o con la de la instalación.",
+  },
+  "Com \"Só conversas comerciais\" ligada, os cards voltam a nascer para toda conversa — o produto cria o card quando não consegue classificar — e a linha do tempo do card diz por quê.": {
+    es: "Con \"Solo conversaciones comerciales\" activada, las tarjetas vuelven a nacer para toda conversación — el producto crea la tarjeta cuando no logra clasificar — y la línea de tiempo de la tarjeta dice por qué.",
+  },
+
+  // ─── components/crm/NascimentoDoCard.tsx (funis › "Quando o card nasce") ───
+  "Quando o card nasce": { es: "Cuándo nace la tarjeta" },
+  "Decide quais conversas abrem um card.": { es: "Decide qué conversaciones abren una tarjeta." },
+  "Toda conversa vira card": { es: "Toda conversación se vuelve tarjeta" },
+  "A primeira mensagem de quem não tem card abre um card.": { es: "El primer mensaje de quien no tiene tarjeta abre una." },
+  "Só conversas comerciais": { es: "Solo conversaciones comerciales" },
+  "Em vigor": { es: "Vigente" },
+  "A cada mensagem de quem ainda não tem card, a IA decide se o assunto é contratação, mudança de plano ou conhecer planos. Suporte, financeiro e cancelamento não contam como comerciais.": { es: "En cada mensaje de quien aún no tiene tarjeta, la IA decide si el asunto es contratación, cambio de plan o conocer planes. Soporte, finanzas y cancelación no cuentan como comerciales." },
+  "Certeza mínima para abrir o card": { es: "Certeza mínima para abrir la tarjeta" },
+  "Mais alto abre menos cards por engano, mas pode deixar passar uma venda. Se a IA não conseguir responder, o card nasce assim mesmo e a linha do tempo diz por quê.": { es: "Más alto abre menos tarjetas por error, pero puede dejar pasar una venta. Si la IA no logra responder, la tarjeta nace igual y la línea de tiempo dice por qué." },
+  "Para decidir, as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe (o Jev).": { es: "Para decidir, los últimos mensajes de la conversación se envían a OpenRouter y a TypeSafe (el Jev)." },
+  "Regra salva.": { es: "Regla guardada." },
+  "Escolha um modo e uma certeza mínima válidos.": { es: "Elige un modo y una certeza mínima válidos." },
+  "Cadastre e valide uma chave da OpenRouter em IA › Credenciais antes de ligar esta regra.": { es: "Registra y valida una clave de OpenRouter en IA › Credenciales antes de activar esta regla." },
+  "Outra pessoa mudou esta configuração agora. Confira e salve de novo.": { es: "Otra persona cambió esta configuración ahora. Revisa y guarda de nuevo." },
+
   "Ouvir o áudio do cliente": {
     es: "Escuchar el audio del cliente",
   },
@@ -4463,9 +4492,10 @@ export const DICIONARIO: Traducoes = {
   "Para onde o agente leva o card em cada passo do atendimento": {
     es: "Adónde lleva el agente la tarjeta en cada paso de la atención",
   },
-  ", vocabulário, custom fields e motivos de perda": {
-    es: ", vocabulario, custom fields y motivos de pérdida",
+  ", vocabulário, custom fields, motivos de perda e quando o card nasce": {
+    es: ", vocabulario, custom fields, motivos de pérdida y cuándo nace la tarjeta",
   },
+  " e quando o card nasce": { es: " y cuándo nace la tarjeta" },
   "Nada especial": { es: "Nada especial" },
   "Aqui o cliente fecha": { es: "Aquí el cliente cierra" },
   "Aqui o cliente desiste": { es: "Aquí el cliente desiste" },
@@ -8852,7 +8882,7 @@ export const DICIONARIO: Traducoes = {
   "Nuvemshop": { es: "Nuvemshop" },
   "Billing": { es: "Facturación" },
   "API Tokens": { es: "Tokens de API" },
-  "As colunas de cada funil, o vocabulário do negócio e os motivos de perda.": { es: "Las columnas de cada embudo, el vocabulario del negocio y los motivos de pérdida." },
+  "As colunas de cada funil, o vocabulário do negócio, os motivos de perda e quando o card nasce.": { es: "Las columnas de cada embudo, el vocabulario del negocio, los motivos de pérdida y cuándo nace la tarjeta." },
   "As conversas de WhatsApp, com você e a IA atendendo lado a lado.": { es: "Las conversaciones de WhatsApp, contigo y la IA atendiendo lado a lado." },
   "As pessoas do outro lado da conversa e seu histórico.": { es: "Las personas del otro lado de la conversación y su historial." },
   "Avise outros sistemas quando algo acontecer aqui dentro.": { es: "Avisa a otros sistemas cuando algo ocurra aquí dentro." },

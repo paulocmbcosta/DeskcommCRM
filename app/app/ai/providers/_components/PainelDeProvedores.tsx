@@ -5,9 +5,11 @@
  *
  * ## A decisão de desenho que manda em tudo aqui
  *
- * São 23 pontos configuráveis. Mostrar 23 seletores de uma vez transformaria a
- * tela num painel de avião para alguém que não é engenheiro — e o resultado
- * previsível seria ninguém tocar em nada, o que devolve o problema original.
+ * São muitos pontos configuráveis — para saber quantos hoje, conte
+ * `PONTOS_DE_IA` em `lib/ai/pontos/registro.ts`. Mostrar todos os seletores de
+ * uma vez transformaria a tela num painel de avião para alguém que não é
+ * engenheiro — e o resultado previsível seria ninguém tocar em nada, o que
+ * devolve o problema original.
  *
  * Então a tela abre agrupada por PAPEL ("Atender o cliente", "Entender a
  * conversa"…), mostrando o que cada grupo usa hoje. Quem quiser precisão

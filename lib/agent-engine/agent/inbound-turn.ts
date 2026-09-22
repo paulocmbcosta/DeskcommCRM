@@ -3054,6 +3054,9 @@ async function executarTurnoDoAgente(
               tenantId,
               leadId,
               toStage: update.transition.to,
+              // A conversa do turno: se o card nascer aqui (regra "Só conversas
+              // comerciais" e contato sem card), é ela que a linha do tempo cita.
+              conversationId: input.conversationId,
               ...(update.transition.reason !== undefined
                 ? { reason: update.transition.reason }
                 : {}),
