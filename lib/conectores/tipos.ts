@@ -20,6 +20,10 @@ export type EstadoDaConexao = (typeof ESTADOS_DA_CONEXAO)[number];
 export const FORMAS_DE_VERIFICACAO = ["telefone", "documento", "manual"] as const;
 export type FormaDeVerificacao = (typeof FORMAS_DE_VERIFICACAO)[number];
 
+/** Como a cobrança sai: o PDF do boleto ou o Pix. Vocabulário do produto, não do ERP. */
+export const FORMAS_DE_COBRANCA = ["boleto", "pix"] as const;
+export type FormaDeCobranca = (typeof FORMAS_DE_COBRANCA)[number];
+
 export function ehConectorId(valor: string): valor is ConectorId {
   return (IDS_DE_CONECTOR as readonly string[]).includes(valor);
 }
