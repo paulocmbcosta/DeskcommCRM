@@ -21,7 +21,14 @@ import { z } from "zod";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
-import { lerConexaoPublica, lerCredencial, removerConexao, salvarConexao, salvarLimiteDeCobranca } from "@/lib/conectores/conexao";
+import {
+  FAIXA_DO_LIMITE,
+  lerConexaoPublica,
+  lerCredencial,
+  removerConexao,
+  salvarConexao,
+  salvarLimiteDeCobranca,
+} from "@/lib/conectores/conexao";
 import { obterConector } from "@/lib/conectores/registro";
 import { FRASE_DA_FALHA } from "@/lib/conectores/tipos";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -127,7 +134,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ conecto
 }
 
 const preferenciasSchema = z
-  .object({ cobranca_encaminha_apos_dias: z.number().int().min(1).max(3650) })
+  .object({ cobranca_encaminha_apos_dias: z.number().int().min(FAIXA_DO_LIMITE.min).max(FAIXA_DO_LIMITE.max) })
   .strict();
 
 /**
@@ -156,18 +163,22 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ conector:
   }
   const parsed = preferenciasSchema.safeParse(corpo);
   if (!parsed.success) {
-    return fail("validation_failed", t("Informe um número inteiro de dias, entre 1 e 3650."), 422, {
-      requestId,
-      details: parsed.error.flatten(),
-    });
+    return fail(
+      "validation_failed",
+      t(`Informe um número inteiro de dias, entre ${FAIXA_DO_LIMITE.min} e ${FAIXA_DO_LIMITE.max}.`),
+      422,
+      { requestId, details: parsed.error.flatten() },
+    );
   }
 
   const admin = createAdminClient();
   const orgId = authz.org.orgId;
   try {
+    // Só a leitura "antes" (para o de/para do audit) + a gravação, que já devolve
+    // a linha atualizada — não há uma terceira ida ao banco para reler depois.
     const antes = await lerConexaoPublica(admin, orgId, conector.id);
-    const gravou = await salvarLimiteDeCobranca(admin, orgId, conector.id, parsed.data.cobranca_encaminha_apos_dias);
-    if (!gravou) return fail("conector_desligado", t("Este conector está desligado."), 404, { requestId });
+    const atualizada = await salvarLimiteDeCobranca(admin, orgId, conector.id, parsed.data.cobranca_encaminha_apos_dias);
+    if (!atualizada) return fail("conector_desligado", t("Este conector está desligado."), 404, { requestId });
 
     void audit({
       action: "conector.preferencias_alteradas",
@@ -183,7 +194,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ conector:
       },
       requestId,
     });
-    return ok(await lerConexaoPublica(admin, orgId, conector.id), { requestId });
+    return ok(atualizada, { requestId });
   } catch {
     return fail("internal_error", "Erro ao salvar a preferência.", 500, { requestId });
   }

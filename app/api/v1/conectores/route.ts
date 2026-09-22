@@ -28,6 +28,10 @@ export async function GET(): Promise<Response> {
         descricao: c.descricao,
         ajuda_do_endereco: c.ajudaDoEndereco,
         ajuda_do_token: c.ajudaDoToken,
+        // Preciso porque `CapacidadeDoAgente` exige `enviarCobranca`: se um dia
+        // entrar conector que só CONSULTA (sem cobrar), este nome passa a
+        // mentir — quem chegar aqui primeiro tem que desdobrar em duas
+        // capacidades (ex.: `consulta_pela_ia` / `cobra_pela_ia`).
         cobra_pela_ia: Boolean(c.agente),
         conexao: await lerConexaoPublica(admin, authz.org.orgId, c.id),
       })),
