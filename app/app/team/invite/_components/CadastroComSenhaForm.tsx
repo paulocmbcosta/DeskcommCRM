@@ -180,7 +180,7 @@ export function CadastroComSenhaForm() {
             ref={cartaoRef}
             tabIndex={-1}
             aria-label={t("Dados de acesso")}
-            className="scroll-mt-20 space-y-3 rounded-md border p-4 outline-none"
+            className="scroll-mt-20 space-y-3 rounded-md border p-4 outline-hidden"
           >
             <div>
               <h2 className="text-sm font-semibold">
