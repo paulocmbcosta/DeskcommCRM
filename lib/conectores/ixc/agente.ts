@@ -178,8 +178,61 @@ async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
   return vincularE(p, conferidos.slice(0, TETO_DE_CANDIDATOS).map((c) => c.id), "documento");
 }
 
-// `enviarCobranca` entra na Task 7.
-export const agenteIxc: CapacidadeDoAgente = {
-  consultar,
-  enviarCobranca: async () => ({ resultado: "cliente_nao_identificado" }),
-};
+const MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE = new Set(["cobranca_indisponivel", "pix_inativo", "pix_corrompido"]);
+
+function enviada(r: Extract<ResultadoDoEnvio, { ok: true }>, pixIndisponivel: boolean): ResultadoDaCobranca {
+  return {
+    resultado: "enviada",
+    forma: r.forma,
+    fatura: paraAgente(r.fatura),
+    faturaId: r.fatura.id,
+    enviadas: r.enviadas,
+    previstas: r.previstas,
+    pixGeradoAgora: r.pixGeradoAgora,
+    pixIndisponivel,
+  };
+}
+
+async function enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca> {
+  const cadastros = await cadastrosValidos(p);
+  if (cadastros.length === 0) return { resultado: "cliente_nao_identificado" };
+
+  const recorte = await recorteDe(p.credencial, cadastros, p.agora);
+  // Valor ilegível vira 0 em `reaisParaCents`: cobrar R$ 0,00 é pior que não cobrar.
+  const cobraveis = [...recorte.vencidas, ...recorte.proximas].filter((f) => f.valorCents > 0);
+  const daVez = faturaDaVez(cobraveis);
+  if (!daVez) return { resultado: "sem_fatura_em_aberto" };
+  const base = { fatura: paraAgente(daVez), faturaId: daVez.id };
+  // D5: acima do limite, a fatura é da Cobrança — nada sai.
+  if (daVez.diasDeAtraso > p.limiteDeDias) return { resultado: "encaminhar_para_cobranca", ...base };
+
+  const pedir = (forma: "pix" | "boleto") =>
+    enviarCobrancaIxc({
+      credencial: p.credencial,
+      cadastrosVinculados: new Set(cadastros),
+      faturaId: daVez.id,
+      forma,
+      portas: p.portas,
+      ...(p.agora ? { agora: p.agora } : {}),
+    });
+
+  if (p.forma === "boleto") {
+    const boleto = await pedir("boleto");
+    if (boleto.ok) return enviada(boleto, false);
+    // O cliente ESCOLHEU boleto: trocar pelo Pix sem perguntar desfaria a escolha dele.
+    if (boleto.motivo === "forma_indisponivel") return { resultado: "boleto_indisponivel", ...base };
+    return { resultado: "sem_como_cobrar", ...base, ...(boleto.detalheDoErp ? { detalheDoErp: boleto.detalheDoErp } : {}) };
+  }
+
+  const pix = await pedir("pix");
+  if (pix.ok) return enviada(pix, false);
+  // D3 + D6: o Pix falhou; se o boleto já está registrado, ele sai no lugar — só
+  // as DUAS formas falhando é que mandam a conversa para a Cobrança.
+  if (daVez.temBoleto && MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE.has(pix.motivo)) {
+    const boleto = await pedir("boleto");
+    if (boleto.ok) return enviada(boleto, true);
+  }
+  return { resultado: "sem_como_cobrar", ...base, ...(pix.detalheDoErp ? { detalheDoErp: pix.detalheDoErp } : {}) };
+}
+
+export const agenteIxc: CapacidadeDoAgente = { consultar, enviarCobranca };

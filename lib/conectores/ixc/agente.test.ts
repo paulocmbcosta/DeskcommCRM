@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ArquivoDaCobranca, MensagemDaCobranca } from "../tipos";
+
 const listar = vi.fn();
 const baixarBoleto = vi.fn();
 const buscarPix = vi.fn();
@@ -112,5 +114,94 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
     expect((await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao", cpfCnpj: "529.982.247-26", dataNascimento: "1985-03-12" })).estado).toBe("cpf_invalido");
     expect((await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "nao", cpfCnpj: "529.982.247-25", dataNascimento: "1985-02-30" })).estado).toBe("data_invalida");
     expect(listar).not.toHaveBeenCalled();
+  });
+});
+
+const PDF = Buffer.from("%PDF-1.4 boleto %%EOF", "latin1");
+const BR_CODE =
+  "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";
+
+function portas() {
+  const enviadas: MensagemDaCobranca[] = [];
+  return {
+    enviadas,
+    portas: {
+      guardarArquivo: vi.fn(async (a: ArquivoDaCobranca) => `org-1/conv/cobranca-x/${a.nome}.${a.extensao}`),
+      enviar: vi.fn(async (m: MensagemDaCobranca) => void enviadas.push(m)),
+    },
+  };
+}
+const COBRAR = { ...BASE, identidadeDoTelefone: "sim" as const, forma: "pix" as const, limiteDeDias: 60 };
+
+describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (D3), sem como cobrar (D6)", () => {
+  beforeEach(() => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
+    baixarBoleto.mockResolvedValue(PDF);
+    buscarPix.mockResolvedValue({ ok: true, pix: { copiaECola: BR_CODE, status: "ATIVA", valorOriginal: "129.90" } });
+  });
+
+  it("envia a vencida mais antiga, por Pix, em duas mensagens — e nunca pede a outra fatura", async () => {
+    ixc({ fn_areceber: [fatura("902", "2026-09-10", { linha_digitavel: "0019 x" }), fatura("901", "2026-08-20"), fatura("950", "2026-10-12")] });
+    const { portas: p, enviadas } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toMatchObject({ resultado: "enviada", forma: "pix", faturaId: "901", enviadas: 2, previstas: 2, pixIndisponivel: false });
+    expect(enviadas.map((m) => m.type)).toEqual(["image", "text"]);
+    expect(buscarPix.mock.calls.map((c) => c[1])).toEqual(["901"]);
+  });
+
+  it("acima do limite: NADA sai e o resultado é encaminhar_para_cobranca", async () => {
+    ixc({ fn_areceber: [fatura("900", "2026-07-14"), fatura("950", "2026-10-12")] }); // 70 dias
+    const { portas: p } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toMatchObject({ resultado: "encaminhar_para_cobranca", faturaId: "900", fatura: { diasDeAtraso: 70 } });
+    expect(p.enviar).not.toHaveBeenCalled();
+    expect(buscarPix).not.toHaveBeenCalled();
+  });
+
+  it("controle do limite: 60 dias exatos ainda saem (a regra é MAIS de N)", async () => {
+    ixc({ fn_areceber: [fatura("900", "2026-07-24")] }); // 60 dias
+    const { portas: p } = portas();
+    expect((await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).resultado).toBe("enviada");
+  });
+
+  it("boleto pedido sem registro: boleto_indisponivel, e o Pix NÃO é trocado sem perguntar", async () => {
+    ixc({ fn_areceber: [fatura("901", "2026-08-20")] });
+    const { portas: p } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, forma: "boleto", portas: p });
+    expect(r.resultado).toBe("boleto_indisponivel");
+    expect(buscarPix).not.toHaveBeenCalled();
+  });
+
+  it("Pix recusado e boleto registrado: sai o BOLETO da mesma fatura", async () => {
+    ixc({ fn_areceber: [fatura("901", "2026-08-20", { linha_digitavel: "00190.00009 01234.567890 12345.678901 2 99990000012990" })] });
+    buscarPix.mockResolvedValue({ ok: false, mensagemDoIxc: "carteira sem Pix" });
+    const { portas: p, enviadas } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toMatchObject({ resultado: "enviada", forma: "boleto", pixIndisponivel: true, faturaId: "901" });
+    expect(enviadas[0]?.type).toBe("document");
+  });
+
+  it("Pix recusado e sem boleto: sem_como_cobrar com a frase do IXC", async () => {
+    ixc({ fn_areceber: [fatura("901", "2026-08-20")] });
+    buscarPix.mockResolvedValue({ ok: false, mensagemDoIxc: "carteira sem Pix" });
+    const { portas: p } = portas();
+    expect(await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).toMatchObject({ resultado: "sem_como_cobrar", detalheDoErp: "carteira sem Pix" });
+  });
+
+  it("sem fatura aberta e sem vínculo válido", async () => {
+    ixc({ fn_areceber: [] });
+    const { portas: p } = portas();
+    expect((await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).resultado).toBe("sem_fatura_em_aberto");
+    expect((await agenteIxc.enviarCobranca({ ...COBRAR, identidadeDoTelefone: "nao", portas: p })).resultado).toBe("cliente_nao_identificado");
+  });
+
+  it("a mais atrasada entre DOIS cadastros vinculados", async () => {
+    listarVinculos.mockResolvedValue([
+      { external_id: "10", verificado_por: "documento", created_at: "" },
+      { external_id: "20", verificado_por: "documento", created_at: "" },
+    ]);
+    ixc({ fn_areceber: [fatura("901", "2026-08-20"), { ...fatura("801", "2026-08-01"), id_cliente: "20" }] });
+    const { portas: p } = portas();
+    expect(await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).toMatchObject({ resultado: "enviada", faturaId: "801" });
   });
 });
