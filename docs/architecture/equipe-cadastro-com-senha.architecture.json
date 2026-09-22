@@ -8,47 +8,301 @@
     "quality_profile": "standard"
   },
   "lanes": [
-    { "id": "humano", "label": "Pessoa" },
-    { "id": "app", "label": "Aplicativo" },
-    { "id": "auth", "label": "Provedor de auth" },
-    { "id": "db", "label": "Banco" }
+    {
+      "id": "humano",
+      "label": "Pessoa"
+    },
+    {
+      "id": "app",
+      "label": "Aplicativo"
+    },
+    {
+      "id": "auth",
+      "label": "Provedor de auth"
+    },
+    {
+      "id": "db",
+      "label": "Banco"
+    }
   ],
-  "mainPath": ["porta", "form", "rota", "criar", "vinculo", "cartao", "entrar"],
+  "mainPath": [
+    "porta",
+    "form",
+    "rota",
+    "criar",
+    "vinculo",
+    "cartao",
+    "entrar"
+  ],
   "nodes": [
-    { "id": "porta", "lane": "humano", "col": 0, "type": "ui", "label": "Equipe › Adicionar membros", "sublabel": "aba padrão: Cadastrar com senha" },
-    { "id": "form", "lane": "humano", "col": 1, "type": "ui", "label": "CadastroComSenhaForm", "sublabel": "nome, e-mail, senha (Gerar/Mostrar/Copiar), papel, áreas" },
-    { "id": "rota", "lane": "app", "col": 2, "type": "service", "label": "POST /api/v1/team/members", "sublabel": "admin + suporte + Zod; org do cookie, nunca do body" },
-    { "id": "regra", "lane": "app", "col": 3, "type": "service", "label": "cadastrarMembroComSenha", "sublabel": "lib/team/cadastro-direto.ts" },
-    { "id": "criar", "lane": "auth", "col": 3, "type": "service", "label": "auth.admin.createUser", "sublabel": "email_confirm: true; conta existente NUNCA tem a senha trocada" },
-    { "id": "vinculo", "lane": "db", "col": 4, "type": "database", "label": "fn_accept_team_invite", "sublabel": "a MESMA do aceite: reativação, áreas, entrega do provisório" },
-    { "id": "compensar", "lane": "auth", "col": 4, "type": "service", "label": "auth.admin.deleteUser", "sublabel": "só se o vínculo falhar — sem conta órfã" },
-    { "id": "convites", "lane": "db", "col": 5, "type": "database", "label": "team_invites", "sublabel": "pendente do mesmo e-mail é fechado" },
-    { "id": "auditoria", "lane": "db", "col": 5, "type": "database", "label": "api_audit_log", "sublabel": "member.created / member.password_set — sem a senha" },
-    { "id": "cartao", "lane": "humano", "col": 6, "type": "ui", "label": "Dados de acesso", "sublabel": "endereço + e-mail + senha DIGITADA; a API não a devolve" },
-    { "id": "entrar", "lane": "humano", "col": 7, "type": "ui", "label": "/login da pessoa", "sublabel": "entra com a senha, sem convite nem e-mail" },
-    { "id": "menu", "lane": "humano", "col": 6, "type": "ui", "label": "Membros › Definir nova senha", "sublabel": "DefinirSenhaDialog" },
-    { "id": "senha", "lane": "app", "col": 7, "type": "service", "label": "POST /api/v1/team/[user_id]/password", "sublabel": "recusa: a própria, revogado, outra org, admin de plataforma" },
-    { "id": "trocar", "lane": "auth", "col": 7, "type": "service", "label": "auth.admin.updateUserById", "sublabel": "a senha antiga para de valer" },
-    { "id": "telemetria", "lane": "app", "col": 8, "type": "service", "label": "sentryScrubHooks", "sublabel": "corpo da requisição: senha e segredo redigidos" }
+    {
+      "id": "porta",
+      "lane": "humano",
+      "col": 0,
+      "type": "ui",
+      "label": "Equipe › Adicionar membros",
+      "sublabel": "aba padrão: Cadastrar com senha"
+    },
+    {
+      "id": "form",
+      "lane": "humano",
+      "col": 1,
+      "type": "ui",
+      "label": "CadastroComSenhaForm",
+      "sublabel": "nome, e-mail, senha em texto (Gerar/Copiar), papel, áreas"
+    },
+    {
+      "id": "rota",
+      "lane": "app",
+      "col": 2,
+      "type": "service",
+      "label": "POST /api/v1/team/members",
+      "sublabel": "admin + suporte + Zod; org do cookie, nunca do body"
+    },
+    {
+      "id": "regra",
+      "lane": "app",
+      "col": 3,
+      "type": "service",
+      "label": "cadastrarMembroComSenha",
+      "sublabel": "lib/team/cadastro-direto.ts"
+    },
+    {
+      "id": "criar",
+      "lane": "auth",
+      "col": 3,
+      "type": "service",
+      "label": "auth.admin.createUser",
+      "sublabel": "email_confirm + marca em app_metadata; conta existente NUNCA tem a senha trocada"
+    },
+    {
+      "id": "vinculo",
+      "lane": "db",
+      "col": 4,
+      "type": "database",
+      "label": "fn_accept_team_invite",
+      "sublabel": "a MESMA do aceite: reativação e áreas; provisório não cria admin"
+    },
+    {
+      "id": "compensar",
+      "lane": "auth",
+      "col": 4,
+      "type": "service",
+      "label": "auth.admin.deleteUser",
+      "sublabel": "só se o vínculo falhar — sem conta órfã"
+    },
+    {
+      "id": "convites",
+      "lane": "db",
+      "col": 5,
+      "type": "database",
+      "label": "team_invites",
+      "sublabel": "pendente do mesmo e-mail é fechado"
+    },
+    {
+      "id": "auditoria",
+      "lane": "db",
+      "col": 5,
+      "type": "database",
+      "label": "api_audit_log",
+      "sublabel": "member.created / member.password_set — sem a senha"
+    },
+    {
+      "id": "cartao",
+      "lane": "humano",
+      "col": 6,
+      "type": "ui",
+      "label": "Dados de acesso",
+      "sublabel": "endereço + e-mail + senha DIGITADA; a API não a devolve"
+    },
+    {
+      "id": "entrar",
+      "lane": "humano",
+      "col": 7,
+      "type": "ui",
+      "label": "/login da pessoa",
+      "sublabel": "entra com a senha, sem convite nem e-mail"
+    },
+    {
+      "id": "menu",
+      "lane": "humano",
+      "col": 6,
+      "type": "ui",
+      "label": "Membros › Definir nova senha",
+      "sublabel": "DefinirSenhaDialog"
+    },
+    {
+      "id": "senha",
+      "lane": "app",
+      "col": 7,
+      "type": "service",
+      "label": "POST /api/v1/team/[user_id]/password",
+      "sublabel": "recusa: a própria, revogado, outra org, admin de plataforma"
+    },
+    {
+      "id": "trocar",
+      "lane": "auth",
+      "col": 7,
+      "type": "service",
+      "label": "auth.admin.updateUserById",
+      "sublabel": "a anterior para de valer em novas entradas"
+    },
+    {
+      "id": "telemetria",
+      "lane": "app",
+      "col": 8,
+      "type": "service",
+      "label": "sentryScrubHooks",
+      "sublabel": "corpo da requisição: senha e segredo redigidos"
+    },
+    {
+      "id": "marca",
+      "lane": "auth",
+      "col": 5,
+      "type": "database",
+      "label": "app_metadata.senha_definida_por_admin",
+      "sublabel": "lib/auth/senha-do-admin.ts — só a chave de serviço escreve"
+    },
+    {
+      "id": "aceite",
+      "lane": "app",
+      "col": 8,
+      "type": "service",
+      "label": "aplicarConvite",
+      "sublabel": "recusa convite de OUTRA org enquanto a marca existir"
+    },
+    {
+      "id": "minha",
+      "lane": "humano",
+      "col": 8,
+      "type": "ui",
+      "label": "Perfil › Trocar senha",
+      "sublabel": "exige a senha atual; apaga a marca"
+    }
   ],
   "edges": [
-    { "id": "e1", "from": "porta", "to": "form" },
-    { "id": "e2", "from": "form", "to": "rota" },
-    { "id": "e3", "from": "rota", "to": "regra" },
-    { "id": "e4", "from": "regra", "to": "criar" },
-    { "id": "e5", "from": "criar", "to": "vinculo" },
-    { "id": "e6", "from": "vinculo", "to": "compensar", "label": "falhou" },
-    { "id": "e7", "from": "vinculo", "to": "convites" },
-    { "id": "e8", "from": "rota", "to": "auditoria" },
-    { "id": "e9", "from": "rota", "to": "cartao" },
-    { "id": "e10", "from": "cartao", "to": "entrar" },
-    { "id": "e11", "from": "entrar", "to": "menu", "label": "esqueceu a senha" },
-    { "id": "e12", "from": "menu", "to": "senha" },
-    { "id": "e13", "from": "senha", "to": "trocar" },
-    { "id": "e14", "from": "senha", "to": "auditoria" },
-    { "id": "e15", "from": "trocar", "to": "entrar", "label": "entra com a nova" },
-    { "id": "e16", "from": "rota", "to": "telemetria", "label": "erro" },
-    { "id": "e17", "from": "senha", "to": "telemetria", "label": "erro" },
-    { "id": "e18", "from": "regra", "to": "compensar" }
+    {
+      "id": "e1",
+      "from": "porta",
+      "to": "form"
+    },
+    {
+      "id": "e2",
+      "from": "form",
+      "to": "rota"
+    },
+    {
+      "id": "e3",
+      "from": "rota",
+      "to": "regra"
+    },
+    {
+      "id": "e4",
+      "from": "regra",
+      "to": "criar"
+    },
+    {
+      "id": "e5",
+      "from": "criar",
+      "to": "vinculo"
+    },
+    {
+      "id": "e6",
+      "from": "vinculo",
+      "to": "compensar",
+      "label": "falhou"
+    },
+    {
+      "id": "e7",
+      "from": "vinculo",
+      "to": "convites"
+    },
+    {
+      "id": "e8",
+      "from": "rota",
+      "to": "auditoria"
+    },
+    {
+      "id": "e9",
+      "from": "rota",
+      "to": "cartao"
+    },
+    {
+      "id": "e10",
+      "from": "cartao",
+      "to": "entrar"
+    },
+    {
+      "id": "e11",
+      "from": "entrar",
+      "to": "menu",
+      "label": "esqueceu a senha"
+    },
+    {
+      "id": "e12",
+      "from": "menu",
+      "to": "senha"
+    },
+    {
+      "id": "e13",
+      "from": "senha",
+      "to": "trocar"
+    },
+    {
+      "id": "e14",
+      "from": "senha",
+      "to": "auditoria"
+    },
+    {
+      "id": "e15",
+      "from": "trocar",
+      "to": "entrar",
+      "label": "entra com a nova"
+    },
+    {
+      "id": "e16",
+      "from": "rota",
+      "to": "telemetria",
+      "label": "erro"
+    },
+    {
+      "id": "e17",
+      "from": "senha",
+      "to": "telemetria",
+      "label": "erro"
+    },
+    {
+      "id": "e18",
+      "from": "regra",
+      "to": "compensar"
+    },
+    {
+      "id": "e19",
+      "from": "criar",
+      "to": "marca"
+    },
+    {
+      "id": "e20",
+      "from": "trocar",
+      "to": "marca",
+      "label": "volta"
+    },
+    {
+      "id": "e21",
+      "from": "marca",
+      "to": "aceite",
+      "label": "lida no aceite"
+    },
+    {
+      "id": "e22",
+      "from": "entrar",
+      "to": "minha"
+    },
+    {
+      "id": "e23",
+      "from": "minha",
+      "to": "marca",
+      "label": "apaga"
+    }
   ]
 }

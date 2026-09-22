@@ -51,10 +51,14 @@ let outraOrgId: string | null = null;
 test.describe.configure({ mode: "serial", timeout: 240_000 });
 
 test.afterAll(async () => {
-  // O banco é compartilhado pelas specs: nada de teste fica para trás.
-  if (criadoId) {
-    await db.from("user_organizations").delete().eq("user_id", criadoId);
-    await db.auth.admin.deleteUser(criadoId);
+  // O banco é compartilhado pelas specs: nada de teste fica para trás. Pelo
+  // E-MAIL, e não só pelo id guardado: uma execução que falha entre o cadastro
+  // e a leitura do id deixava a conta para trás (medido — ela apareceu duplicada
+  // na lista de membros da execução seguinte).
+  const { data } = await db.auth.admin.listUsers({ perPage: 1000 });
+  for (const conta of data.users.filter((u) => u.email === email || u.id === criadoId)) {
+    await db.from("user_organizations").delete().eq("user_id", conta.id);
+    await db.auth.admin.deleteUser(conta.id);
   }
   if (outraOrgId) await db.from("organizations").delete().eq("id", outraOrgId);
 });

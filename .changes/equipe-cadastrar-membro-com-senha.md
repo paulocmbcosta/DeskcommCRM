@@ -12,16 +12,23 @@ com **Copiar dados de acesso**. A senha não fica guardada em lugar nenhum: copi
 
 No menu de cada membro (aba **Membros**) há **Definir nova senha**, para quando alguém
 esquece a senha — numa instalação sem envio de e-mail, "Esqueci a senha" não chega a lugar
-nenhum. A senha antiga para de valer na hora.
+nenhum. A senha anterior deixa de valer para novas entradas; quem já estiver conectado
+pode continuar até sair (para tirar a pessoa na hora, use **Revogar acesso**).
+
+Novo também: **Configurações › Perfil › Trocar senha**, para qualquer pessoa trocar a
+própria senha logada, informando a atual. É o jeito de o membro ficar com uma senha que só
+ele conhece.
 
 O convite por e-mail continua na aba **Convidar por e-mail**, para quem prefere que a
 pessoa escolha a própria senha. Sem e-mail configurado, a tela passa a dizer isso e a
 apontar para o cadastro com senha.
 
-Por segurança, o cadastro nunca troca a senha de um e-mail que já tem conta no sistema, e a
-nova senha não pode ser definida para quem também faz parte de outra organização da mesma
-instalação — nesses casos só a própria pessoa troca a senha. Numa instalação com uma
-organização só, isso nunca bloqueia.
+Proteções, para instalações com mais de uma organização: o cadastro nunca troca a senha de
+um e-mail que já tem conta no sistema; **Definir nova senha** não vale para quem também faz
+parte de outra organização; e uma conta cuja senha foi definida por um administrador só
+aceita convite de **outra** organização depois que a própria pessoa troca a senha. Quem
+abriu uma organização para outra pessoa entrega o cargo de administrador por convite, não
+por senha. Numa instalação com uma organização só, nada disso aparece.
 
 A telemetria de erros passou a apagar senhas e segredos do corpo das requisições antes de
 enviar qualquer evento.

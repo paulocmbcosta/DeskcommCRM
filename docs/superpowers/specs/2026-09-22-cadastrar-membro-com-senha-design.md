@@ -25,6 +25,30 @@ conta, confirma o e-mail (que também não chega) — burocracia com becos.
    e-mail configurado, "esqueci a senha" não funciona; sem esta ação, a pessoa que esquece a senha
    fica presa para sempre (a conta existe, então nem recadastrar dá). É o laço de retorno da
    feature (invariante 7).
+4. **Trocar senha** em Configurações › Perfil (entrou depois da revisão de segurança, abaixo) —
+   a pessoa troca a própria senha logada, informando a atual. É como ela toma posse da senha que
+   o admin escolheu.
+
+## Revisão de segurança (antes do merge) — o que mudou no desenho
+
+Uma revisão adversarial independente achou dois caminhos graves no desenho original:
+
+- **A senha escolhida pelo admin atravessava organizações.** O admin da org A conhece a senha;
+  se a pessoa depois aceitasse convite da org B com essa senha, o admin A entraria em B como
+  ela. Conserto: `app_metadata.senha_definida_por_admin = { organization_id }` gravado pelo
+  cadastro e pelo "Definir nova senha" (só a chave de serviço escreve em `app_metadata`);
+  `aplicarConvite` — a porta dos dois caminhos de aceite — recusa convite de outra org enquanto a
+  marca existir; a marca cai quando a própria pessoa troca a senha (Perfil ou recuperação por
+  e-mail). Módulo: `lib/auth/senha-do-admin.ts`.
+- **A entrega do criador provisório virava fachada.** O revendedor poderia cadastrar o dono como
+  `admin` com uma senha escolhida por ele e sair "entregando" a organização. Conserto: criador
+  provisório não cadastra `admin` com senha — a entrega é por convite. O `entregue` da resposta
+  saiu junto.
+
+E, menores: leituras com erro passaram a FECHAR as guardas; o id do alvo é validado como UUID e
+comparado em forma canônica; corpo que não é JSON leva 415 (CSRF por `text/plain`);
+acompanhamento (suporte) não cria credencial nem troca senha; o campo da senha é texto visível
+(não vai ao cofre do navegador do admin); mutações com `gcTime: 0`; limite de 72 **bytes**.
 
 ## Rotas
 
@@ -43,8 +67,8 @@ modo leitura barra (`requireSupportWrite`), `requireRole("admin")`, service role
    - Senha recusada pela política do provedor → 422 com a mensagem dele.
 3. Vínculo via `fn_accept_team_invite` (a MESMA função do aceite): org do cookie, papel e áreas do
    body validado, `invited_by` = quem cadastrou, `issued_at = now()`. Mesma semântica de entrega:
-   se quem cadastra é o criador provisório e o papel é `admin`, ele sai da organização — e a
-   resposta diz isso (`entregue: true`) para a tela não quebrar no próximo clique.
+   ~~o criador provisório que cadastra um `admin` sai da organização~~ — substituído pela
+   recusa `entrega_por_convite` (ver a revisão de segurança acima).
    - Falha no vínculo → apaga o usuário recém-criado (compensação) e 500. Sem isso sobraria uma
      conta órfã e o recadastro cairia em "conta existente".
 4. Convite pendente para o mesmo e-mail nesta org é fechado (`accepted_at`, `accepted_by`) — senão
@@ -52,7 +76,7 @@ modo leitura barra (`requireSupportWrite`), `requireRole("admin")`, service role
 5. Audita `member.created` (`target_user_id`, `email`, `role`). **Senha nunca vai para metadata,
    log ou resposta.**
 
-Resposta 201 `{ data: { user_id, email, full_name, role, entregue, login_url } }`.
+Resposta 201 `{ data: { user_id, email, full_name, role, login_url } }`.
 
 ### `POST /api/v1/team/[user_id]/password`
 
@@ -69,8 +93,6 @@ Body `{ password }`. Guardas: suporte, `requireRole("admin")`, service role.
 
 ## O que NÃO entra
 
-- Troca da própria senha pela pessoa logada (não existe tela para isso hoje, com ou sem esta
-  feature). Fica como tarefa separada.
 - Obrigar troca de senha no primeiro login — o pedido é justamente menos burocracia.
 - Encerrar sessões abertas do membro ao redefinir a senha: a API de admin do cliente JS não
   oferece isso por id. Quem precisa tirar alguém de dentro na hora usa "Revogar acesso".
