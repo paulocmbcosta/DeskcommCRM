@@ -219,6 +219,16 @@ export type ResultadoDaCobranca =
     }
   | { resultado: "sem_como_cobrar"; fatura: FaturaParaAgente; detalheDoErp?: string; auditoria: AuditoriaDaCobranca };
 
+/**
+ * O que o AGENTE DE IA faz com um conector: identificar o cliente da conversa e
+ * cobrar a fatura da vez.
+ *
+ * Ao contrário de `testar` (abaixo, em `DefinicaoDeConector` — "NUNCA lança"),
+ * as duas funções aqui PROPAGAM `FalhaDoConector` quando o sistema externo não
+ * responde, recusa a credencial etc. Tratar a falha (repetir, avisar a
+ * organização, cair pra atendimento humano) é decisão do MOTOR, que sabe de
+ * conversa e atendimento — não é decisão de quem implementa o conector.
+ */
 export interface CapacidadeDoAgente {
   consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta>;
   enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca>;
