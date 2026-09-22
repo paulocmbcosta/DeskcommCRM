@@ -78,13 +78,26 @@ async function recorteDe(credencial: CredencialDeConector, cadastros: readonly s
   return recortarFaturas(listas.flatMap((l) => l.registros), hojeEmSaoPaulo(agora));
 }
 
+/**
+ * As faturas que fazem sentido cobrar: sem valor ilegível (`reaisParaCents`
+ * devolve 0 pra isso, e cobrar — ou até ANUNCIAR — uma fatura de R$ 0,00 é pior
+ * que fingir que ela não existe). A MESMA régua vale pra consulta
+ * (`financeiroDe`, o que a IA anuncia) e pro envio (`enviarCobranca`, o que ela
+ * manda): antes só o envio filtrava, e a consulta podia anunciar como "a da
+ * vez" uma fatura que o envio jamais escolheria.
+ */
+function faturasCobraveis(r: RecorteDeFaturas): { vencidas: Fatura[]; proximas: Fatura[] } {
+  return { vencidas: r.vencidas.filter((f) => f.valorCents > 0), proximas: r.proximas.filter((f) => f.valorCents > 0) };
+}
+
 function financeiroDe(r: RecorteDeFaturas): FinanceiroParaAgente {
-  const daVez = faturaDaVez([...r.vencidas, ...r.proximas]);
-  const proxima = r.proximas[0];
+  const { vencidas, proximas } = faturasCobraveis(r);
+  const daVez = faturaDaVez([...vencidas, ...proximas]);
+  const proxima = proximas[0];
   return {
-    vencidas: r.vencidas.map(paraAgente),
+    vencidas: vencidas.map(paraAgente),
     proxima: proxima ? paraAgente(proxima) : null,
-    totalVencidoCents: r.totalVencidoCents,
+    totalVencidoCents: vencidas.reduce((soma, f) => soma + f.valorCents, 0),
     daVez: daVez ? paraAgente(daVez) : null,
   };
 }
@@ -231,9 +244,8 @@ async function enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca>
   if (cadastros.length === 0) return { resultado: "cliente_nao_identificado" };
 
   const recorte = await recorteDe(p.credencial, cadastros, p.agora);
-  // Valor ilegível vira 0 em `reaisParaCents`: cobrar R$ 0,00 é pior que não cobrar.
-  const cobraveis = [...recorte.vencidas, ...recorte.proximas].filter((f) => f.valorCents > 0);
-  const daVez = faturaDaVez(cobraveis);
+  const { vencidas, proximas } = faturasCobraveis(recorte);
+  const daVez = faturaDaVez([...vencidas, ...proximas]);
   if (!daVez) return { resultado: "sem_fatura_em_aberto" };
   const base: { fatura: FaturaParaAgente; auditoria: AuditoriaDaCobranca } = { fatura: paraAgente(daVez), auditoria: { faturaId: daVez.id } };
   // D5: acima do limite, a fatura é da Cobrança — nada sai.

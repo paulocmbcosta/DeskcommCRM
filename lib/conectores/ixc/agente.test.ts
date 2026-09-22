@@ -271,4 +271,23 @@ describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (
     const { portas: p } = portas();
     expect(await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).toMatchObject({ resultado: "enviada", auditoria: { faturaId: "801" } });
   });
+
+  it("valor zero não é escolhida mesmo sendo a mais antiga (importante 4, mesma régua da consulta)", async () => {
+    ixc({ fn_areceber: [fatura("900", "2026-07-01", { valor: "0", valor_aberto: "0" }), fatura("901", "2026-08-20")] });
+    const { portas: p } = portas();
+    expect(await agenteIxc.enviarCobranca({ ...COBRAR, portas: p })).toMatchObject({ resultado: "enviada", auditoria: { faturaId: "901" } });
+  });
+});
+
+describe("consultar × enviarCobranca — a MESMA fatura de valor zero não aparece em nenhum dos dois (importante 4)", () => {
+  it("a consulta não anuncia a mais antiga se ela tem valor zero", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]);
+    ixc({ cliente: [MARIA], fn_areceber: [fatura("900", "2026-07-01", { valor: "0", valor_aberto: "0" }), fatura("901", "2026-08-20")] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    expect(r.estado).toBe("identificado");
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.financeiro?.daVez?.vencimento).toBe("2026-08-20");
+    expect(r.financeiro?.vencidas.map((f) => f.vencimento)).toEqual(["2026-08-20"]);
+    expect(r.financeiro?.totalVencidoCents).toBe(12990);
+  });
 });
