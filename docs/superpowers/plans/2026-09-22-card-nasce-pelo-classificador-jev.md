@@ -8,6 +8,8 @@
 
 **Tech Stack:** Next.js 16 / TypeScript estrito, Supabase (admin client no worker), Zod 4, Vitest (unit + invariantes com Postgres real via `pnpm test:db`), Playwright (e2e), API System One do Jev pela OpenRouter.
 
+> **Registro da execução (22/09/2026):** as Tarefas 1–3 mudaram a interface prevista aqui. `RespostaDoJev` passou a ter `assunto: string | null`, `tokensDeEntrada: number | null` e `custoEmCentavos: number | null` (o custo real que a OpenRouter devolve em `usage.cost`); `FalhaDoJev.status` pode ser `null` em qualquer tipo; `custoEmCentavos()` recebe e devolve `number | null`. A redação do `detalhe` reusa `lib/ai/redigir-mensagem-do-provedor.ts` (extraída de `run-model-call.ts`), e a extração consertou um defeito antigo: desde a 1.2.0 a redação de chave em `llm_calls.error_message` nunca funcionava (byte 0x08 no lugar de `\b`). A sonda lê a chave de `.env.sonda`, e mediu 12/12 com mediana de ~315 ms. O texto das Tarefas 3 e 8 abaixo já reflete isso; o código de referência das Tarefas 1 e 2 é o que está no repositório.
+
 ---
 
 ## Decisões
@@ -594,7 +596,7 @@ git commit -m "feat(classificador-comercial): cliente do Jev pela OpenRouter, co
 - Create (gerado): `tests/fixtures/jev/resposta-real.json`
 - Modify: `tests/unit/classificador-comercial-jev.test.ts`
 
-**Pré-requisito:** uma chave da OpenRouter com saldo em `OPENROUTER_API_KEY` no `.env.local`. **Peça ao dono para colocá-la no arquivo; ela nunca passa pelo chat.**
+**Pré-requisito:** a chave da OpenRouter já está em `OPENROUTER_API_KEY` no arquivo `.env.sonda` na raiz do worktree (gitignored, criado pelo dono). NUNCA imprima, copie ou comite o valor; não leia o arquivo com `cat`. Ela fica fora do `.env.local` para não mudar o roteamento do chat nos testes.
 
 - [ ] **Step 1: Criar as conversas de exemplo (sintéticas, sem dado pessoal)**
 
@@ -629,7 +631,7 @@ git commit -m "feat(classificador-comercial): cliente do Jev pela OpenRouter, co
  * Jev diz que o português "não funciona igualmente bem" e manda testar.
  *
  * Uso:
- *   npx tsx --env-file=.env.local scripts/sondar-jev.ts [arquivo.json] [limiar]
+ *   npx tsx --env-file=.env.sonda scripts/sondar-jev.ts [arquivo.json] [limiar]
  *   (padrão: tests/fixtures/jev/conversas-de-exemplo.json, limiar 0.7)
  *
  * Grava a PRIMEIRA resposta crua em tests/fixtures/jev/resposta-real.json: o
@@ -651,7 +653,7 @@ interface Caso {
 async function main(): Promise<void> {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (!apiKey) {
-    process.stderr.write("OPENROUTER_API_KEY ausente — coloque no .env.local e rode com --env-file=.env.local\n");
+    process.stderr.write("OPENROUTER_API_KEY ausente — coloque no .env.sonda e rode com --env-file=.env.sonda\n");
     process.exit(2);
   }
   const arquivo = process.argv[2] ?? "tests/fixtures/jev/conversas-de-exemplo.json";
@@ -699,7 +701,7 @@ void main();
 
 - [ ] **Step 3: Rodar a sonda**
 
-Run: `npx tsx --env-file=.env.local scripts/sondar-jev.ts`
+Run: `npx tsx --env-file=.env.sonda scripts/sondar-jev.ts`
 Expected: 12 linhas `#n ...` e um rodapé `acertos: X/12`. Cole a saída inteira no relatório para o dono. Se aparecer `FALHA contrato`, a resposta real diverge da doc: abra `tests/fixtures/jev/resposta-real.json` (ou rode `curl` com a chave para ver o corpo) e ajuste `respostaSchema` na Task 2 antes de seguir.
 
 - [ ] **Step 4: Amarrar o schema ao contrato real**
@@ -1549,12 +1551,26 @@ function evento(over: Partial<EventRow> = {}, payload: Record<string, unknown> =
 const RESPOSTA_SIM: ResultadoDoJev = {
   ok: true,
   latenciaMs: 180,
-  resposta: { comercial: 0.93, assunto: "mudanca_de_plano", confiancaDoAssunto: 0.8, modelo: "jev-1.13.0", tokensDeEntrada: 700 },
+  resposta: {
+    comercial: 0.93,
+    assunto: "mudanca_de_plano",
+    confiancaDoAssunto: 0.8,
+    modelo: "jev-1.13.0",
+    tokensDeEntrada: 700,
+    custoEmCentavos: 0.00294,
+  },
 };
 const RESPOSTA_NAO: ResultadoDoJev = {
   ok: true,
   latenciaMs: 150,
-  resposta: { comercial: 0.08, assunto: "suporte", confiancaDoAssunto: 0.9, modelo: "jev-1.13.0", tokensDeEntrada: 650 },
+  resposta: {
+    comercial: 0.08,
+    assunto: "suporte",
+    confiancaDoAssunto: 0.9,
+    modelo: "jev-1.13.0",
+    tokensDeEntrada: 650,
+    custoEmCentavos: 0.00273,
+  },
 };
 
 let dados: DadosDoClassificador;
@@ -1672,6 +1688,7 @@ describe("processarClassificacao — a decisão", () => {
       contactId: "contato-1",
       modelo: "jev-1.13.0",
       tokensDeEntrada: 700,
+      custoEmCentavos: 0.00294,
       latenciaMs: 180,
       falha: null,
     });
@@ -1720,7 +1737,7 @@ describe("processarClassificacao — quando o classificador falha (decisão A)",
     const r = await processarClassificacao(evento(), deps());
     expect(r).toEqual({
       status: "card_sem_classificar",
-      causa: "a chave da OpenRouter foi recusada ou está sem saldo",
+      causa: "a OpenRouter recusou o pedido (chave inválida, sem saldo ou pedido barrado)",
       criouCard: true,
     });
   });
@@ -1770,7 +1787,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { cabecalhosDeAtribuicaoOpenRouter } from "@/lib/agent-engine/edge/llm/providers";
 import { chaveDaOpenRouter } from "@/lib/classificador-comercial/chave";
 import { dadosViaSupabase, type DadosDoClassificador } from "@/lib/classificador-comercial/dados";
-import { custoEmCentavos, perguntarAoJev, type FalhaDoJev } from "@/lib/classificador-comercial/jev";
+import { perguntarAoJev, type FalhaDoJev } from "@/lib/classificador-comercial/jev";
 import {
   decidir,
   LIMITE_DE_MENSAGENS,
@@ -1801,7 +1818,10 @@ export interface LinhaDeChamada {
   organizationId: string;
   contactId: string;
   modelo: string;
-  tokensDeEntrada: number;
+  /** `null` = o provedor não disse (e aí o custo também é desconhecido). */
+  tokensDeEntrada: number | null;
+  /** O custo que a própria resposta traz (`RespostaDoJev.custoEmCentavos`); `null` = desconhecido. */
+  custoEmCentavos: number | null;
   latenciaMs: number;
   falha: FalhaDoJev | null;
 }
@@ -1828,9 +1848,12 @@ function registrarNoLlmCalls(admin: SupabaseClient) {
         purpose: "commercial_classify",
         provider: "openrouter",
         model: l.modelo,
-        input_tokens: l.tokensDeEntrada,
+        // `input_tokens` é NOT NULL (default 0); quem diz "não sei" é `cost_cents`,
+        // que fica `null` quando o custo é desconhecido ou a chamada falhou —
+        // a coluna manda: "null = preço desconhecido — nunca inventar 0".
+        input_tokens: l.tokensDeEntrada ?? 0,
         output_tokens: 0,
-        cost_cents: l.falha ? 0 : custoEmCentavos(l.tokensDeEntrada),
+        cost_cents: l.falha ? null : l.custoEmCentavos,
         latency_ms: l.latenciaMs,
         status: l.falha ? "erro" : "ok",
         error_code: l.falha?.tipo ?? null,
@@ -1867,7 +1890,8 @@ function texto(v: unknown): string | null {
 }
 
 function causaLegivel(falha: FalhaDoJev): string {
-  if (falha.tipo === "conta") return "a chave da OpenRouter foi recusada ou está sem saldo";
+  // 403 na OpenRouter também é pedido barrado (moderação), não só chave ruim.
+  if (falha.tipo === "conta") return "a OpenRouter recusou o pedido (chave inválida, sem saldo ou pedido barrado)";
   if (falha.tipo === "temporaria") return "o classificador ficou fora do ar por mais de 10 minutos";
   return "o classificador respondeu num formato inesperado";
 }
@@ -1943,7 +1967,8 @@ export async function processarClassificacao(
     organizationId: org,
     contactId,
     modelo: r.ok ? r.resposta.modelo : MODELO_DO_JEV,
-    tokensDeEntrada: r.ok ? r.resposta.tokensDeEntrada : 0,
+    tokensDeEntrada: r.ok ? r.resposta.tokensDeEntrada : null,
+    custoEmCentavos: r.ok ? r.resposta.custoEmCentavos : null,
     latenciaMs: r.latenciaMs,
     falha: r.ok ? null : r.falha,
   });
@@ -1971,6 +1996,9 @@ export async function processarClassificacao(
     organization_id: org,
     conversation_id: conversationId,
     assunto: decisao.assunto,
+    // O que o Jev devolveu de fato. Se ele passar a responder fora da lista, todo
+    // card sai "sem assunto definido" — e é aqui que isso aparece.
+    assunto_recebido: r.resposta.assunto,
     probabilidade: Number(decisao.probabilidade.toFixed(3)),
     limiar: regra.limiar,
     criar: decisao.criar,
