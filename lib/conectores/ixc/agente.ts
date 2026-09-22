@@ -8,7 +8,8 @@
  *
  * Três regras do dono moram aqui porque dependem do que o IXC é:
  *   1. identidade antes de dinheiro (§6): telefone que bate com UM cadastro — e
- *      só num canal em que o telefone É a identidade —; o CPF escolhe entre os
+ *      só num canal em que o telefone É a identidade, e só se nenhum CPF
+ *      informado contradisser o cadastro do telefone —; o CPF escolhe entre os
  *      cadastros do telefone; fora disso, CPF + data de nascimento;
  *   2. UMA fatura por vez (§7): a vencida mais antiga, senão a próxima;
  *   3. fatura acima do limite de dias não sai (§7): vai para a Cobrança.
