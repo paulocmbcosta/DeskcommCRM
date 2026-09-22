@@ -10,8 +10,11 @@
  *                          outro número — é comum). A tela oferece o CPF/CNPJ.
  *   vinculo_sem_cadastro . o vínculo aponta para um id que o IXC não devolve mais.
  *
- * Um ÚNICO candidato pelo telefone vincula sozinho (`verificado_por = telefone`):
- * o número da conversa é a prova, e exigir um clique ali seria atrito sem ganho.
+ * Um ÚNICO candidato pelo telefone vincula sozinho (`verificado_por = telefone`)
+ * — mas SÓ onde o telefone é a identidade do canal (`telefoneEhIdentidade`, de
+ * `lib/channels/capabilities.ts`). No WhatsApp o número da conversa é a prova; no
+ * chat do site ele foi DIGITADO pelo visitante e não prova nada: lá o candidato
+ * aparece em "escolher", e quem confirma é o atendente.
  *
  * Quem chama resolve autenticação, organização e contato; esta peça recebe tudo
  * pronto e devolve o estado. É o que a fase da IA vai reusar sem passar por rota.
@@ -61,6 +64,8 @@ export interface PedidoDoPainel {
   orgId: string;
   contactId: string;
   telefone: string | null;
+  /** O telefone é identidade no canal da conversa aberta? Sem conversa conhecida: `false`. */
+  telefoneEhIdentidade: boolean;
   /** Qual dos cadastros vinculados mostrar; ignorado se não for um deles. */
   cadastroPedido?: string | null;
   agora?: Date;
@@ -75,7 +80,7 @@ export async function estadoDoPainelIxc(p: PedidoDoPainel): Promise<EstadoDoPain
     if (candidatos.length === 0) {
       return { estado: "nao_encontrado", procurou_por_telefone: Boolean(p.telefone) };
     }
-    const unico = candidatos.length === 1 ? candidatos[0] : undefined;
+    const unico = candidatos.length === 1 && p.telefoneEhIdentidade ? candidatos[0] : undefined;
     if (!unico) {
       return {
         estado: "escolher",

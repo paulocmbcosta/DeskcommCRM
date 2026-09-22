@@ -10,6 +10,7 @@
  * gravação é idempotente (unique + 23505) e auditada só quando de fato criou.
  *
  * `?cadastro=<id>` escolhe qual dos cadastros vinculados mostrar.
+ * `?conversa=<id>` diz em que canal o painel está aberto — o telefone só vincula sozinho onde é identidade.
  */
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
@@ -18,7 +19,7 @@ import { ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { estadoDoPainelIxc } from "@/lib/conectores/ixc/painel";
 
-import { contextoIxc, limparErroSeHavia, respostaDaFalha } from "./_contexto";
+import { contextoIxc, limparErroSeHavia, respostaDaFalha, telefoneEhIdentidadeNaConversa } from "./_contexto";
 
 export const dynamic = "force-dynamic";
 // Duas ondas de chamadas ao ERP, cada uma com prazo próprio de 12 s.
@@ -36,6 +37,7 @@ export async function GET(req: NextRequest, rota: { params: Promise<{ id: string
       orgId: ctx.orgId,
       contactId: ctx.contato.id,
       telefone: ctx.contato.phone_number,
+      telefoneEhIdentidade: await telefoneEhIdentidadeNaConversa(ctx, req.nextUrl.searchParams.get("conversa")),
       cadastroPedido: req.nextUrl.searchParams.get("cadastro"),
     });
     await limparErroSeHavia(ctx);

@@ -344,7 +344,7 @@ export function PainelIxc({ contactId, conversationId }: Props) {
   const [cadastro, setCadastro] = useState<string | null>(null);
   const [documento, setDocumento] = useState("");
 
-  const painel = usePainelIxc(contactId, cadastro);
+  const painel = usePainelIxc(contactId, cadastro, conversationId);
   const vincular = useVincularIxc(contactId);
   const desvincular = useDesvincularIxc(contactId);
 

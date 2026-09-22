@@ -22,6 +22,7 @@ const BASE = {
   orgId: "org-1",
   contactId: "contato-1",
   telefone: "+5511987654321",
+  telefoneEhIdentidade: true,
   agora: new Date("2026-09-19T15:00:00Z"),
 };
 
@@ -139,6 +140,27 @@ describe("estadoDoPainelIxc — já vinculado", () => {
     ixcFalso({ cliente: [MARIA, { ...MARIA, id: "999", razao: "Estranho" }] });
     const estado = await estadoDoPainelIxc({ ...BASE, cadastroPedido: "999" });
     expect(estado.estado === "vinculado" && estado.cadastro_em_tela).toBe("10");
+  });
+});
+
+describe("telefone que NÃO é identidade (chat do site: número digitado)", () => {
+  it("1 candidato pelo telefone NÃO vincula sozinho: cai em escolher", async () => {
+    listarVinculos.mockResolvedValue([]);
+    ixcFalso({ cliente: [MARIA] });
+    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: false });
+    expect(estado.estado).toBe("escolher");
+    if (estado.estado !== "escolher") throw new Error("inalcançável");
+    expect(estado.candidatos.map((c) => c.id)).toEqual(["10"]);
+    expect(vincular).not.toHaveBeenCalled();
+  });
+
+  it("controle: com telefone de identidade, o mesmo candidato vincula (o caso de antes)", async () => {
+    listarVinculos.mockResolvedValue([]);
+    vincular.mockResolvedValue(true);
+    ixcFalso({ cliente: [MARIA] });
+    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: true });
+    expect(vincular).toHaveBeenCalledWith(expect.objectContaining({ externalId: "10", verificadoPor: "telefone" }));
+    expect(estado.estado).not.toBe("escolher");
   });
 });
 

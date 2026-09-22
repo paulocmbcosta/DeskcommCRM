@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { telefoneEhIdentidade } from "@/lib/channels/capabilities";
 import { carimbarEstado, lerCredencial, type CredencialGuardada } from "@/lib/conectores/conexao";
 import { FRASE_DA_FALHA, FalhaDoConector } from "@/lib/conectores/tipos";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -105,4 +106,32 @@ export async function respostaDaFalha(
 /** A leitura funcionou e a conexão estava marcada `erro`: o ERP voltou — a marca sai. */
 export async function limparErroSeHavia(ctx: Extract<ContextoIxc, { ok: true }>): Promise<void> {
   if (ctx.credencial.status === "erro") await carimbarEstado(ctx.admin, ctx.orgId, "ixc", "ativa", null);
+}
+
+/**
+ * O telefone do contato é identidade no canal DESTA conversa? A conversa vem do
+ * navegador, então tem de ser deste contato e desta organização; sem conversa
+ * válida a resposta é `false` — fail-closed: o painel mostra o candidato para o
+ * atendente escolher em vez de vincular sozinho.
+ */
+export async function telefoneEhIdentidadeNaConversa(
+  ctx: Extract<ContextoIxc, { ok: true }>,
+  conversationId: string | null,
+): Promise<boolean> {
+  if (!conversationId || !z.string().uuid().safeParse(conversationId).success) return false;
+  const { data: conversa } = await ctx.admin
+    .from("conversations")
+    .select("channel_session_id")
+    .eq("id", conversationId)
+    .eq("contact_id", ctx.contato.id)
+    .eq("organization_id", ctx.orgId)
+    .maybeSingle();
+  if (!conversa?.channel_session_id) return false;
+  const { data: sessao } = await ctx.admin
+    .from("channel_sessions")
+    .select("provider")
+    .eq("id", conversa.channel_session_id)
+    .eq("organization_id", ctx.orgId)
+    .maybeSingle();
+  return telefoneEhIdentidade(sessao?.provider as string | undefined);
 }
