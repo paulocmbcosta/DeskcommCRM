@@ -247,9 +247,10 @@ async function enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca>
   const { vencidas, proximas } = faturasCobraveis(recorte);
   const daVez = faturaDaVez([...vencidas, ...proximas]);
   if (!daVez) return { resultado: "sem_fatura_em_aberto" };
-  const base: { fatura: FaturaParaAgente; auditoria: AuditoriaDaCobranca } = { fatura: paraAgente(daVez), auditoria: { faturaId: daVez.id } };
+  const fatura = paraAgente(daVez);
+  const auditoria = (motivoInterno?: string): AuditoriaDaCobranca => ({ faturaId: daVez.id, ...(motivoInterno ? { motivoInterno } : {}) });
   // D5: acima do limite, a fatura é da Cobrança — nada sai.
-  if (daVez.diasDeAtraso > p.limiteDeDias) return { resultado: "encaminhar_para_cobranca", ...base };
+  if (daVez.diasDeAtraso > p.limiteDeDias) return { resultado: "encaminhar_para_cobranca", fatura, auditoria: auditoria() };
 
   const pedir = (forma: "pix" | "boleto") =>
     enviarCobrancaIxc({
@@ -264,20 +265,36 @@ async function enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca>
   if (p.forma === "boleto") {
     const boleto = await pedir("boleto");
     if (boleto.ok) return enviada(boleto, false);
+    // A fatura fechou ENTRE a listagem e a releitura (`enviarCobrancaIxc` relê
+    // por id) — quem acabou de pagar não pode virar "encaminhar pra Cobrança"
+    // como se fosse inadimplente.
+    if (boleto.motivo === "fatura_fechada") return { resultado: "fatura_ja_paga", fatura, auditoria: auditoria() };
     // O cliente ESCOLHEU boleto: trocar pelo Pix sem perguntar desfaria a escolha dele.
-    if (boleto.motivo === "forma_indisponivel") return { resultado: "boleto_indisponivel", ...base };
-    return { resultado: "sem_como_cobrar", ...base, ...(boleto.detalheDoErp ? { detalheDoErp: boleto.detalheDoErp } : {}) };
+    if (boleto.motivo === "forma_indisponivel") return { resultado: "boleto_indisponivel", fatura, auditoria: auditoria() };
+    return {
+      resultado: "sem_como_cobrar",
+      fatura,
+      ...(boleto.detalheDoErp ? { detalheDoErp: boleto.detalheDoErp } : {}),
+      auditoria: auditoria(boleto.motivo === "fatura_nao_encontrada" ? boleto.motivo : undefined),
+    };
   }
 
   const pix = await pedir("pix");
   if (pix.ok) return enviada(pix, false);
+  if (pix.motivo === "fatura_fechada") return { resultado: "fatura_ja_paga", fatura, auditoria: auditoria() };
   // D3 + D6: o Pix falhou; se o boleto já está registrado, ele sai no lugar — só
   // as DUAS formas falhando é que mandam a conversa para a Cobrança.
   if (daVez.temBoleto && MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE.has(pix.motivo)) {
     const boleto = await pedir("boleto");
     if (boleto.ok) return enviada(boleto, true);
+    if (boleto.motivo === "fatura_fechada") return { resultado: "fatura_ja_paga", fatura, auditoria: auditoria() };
   }
-  return { resultado: "sem_como_cobrar", ...base, ...(pix.detalheDoErp ? { detalheDoErp: pix.detalheDoErp } : {}) };
+  return {
+    resultado: "sem_como_cobrar",
+    fatura,
+    ...(pix.detalheDoErp ? { detalheDoErp: pix.detalheDoErp } : {}),
+    auditoria: auditoria(pix.motivo === "fatura_nao_encontrada" ? pix.motivo : undefined),
+  };
 }
 
 export const agenteIxc: CapacidadeDoAgente = { consultar, enviarCobranca };

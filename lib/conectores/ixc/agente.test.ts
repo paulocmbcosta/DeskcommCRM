@@ -291,3 +291,37 @@ describe("consultar × enviarCobranca — a MESMA fatura de valor zero não apar
     expect(r.financeiro?.totalVencidoCents).toBe(12990);
   });
 });
+
+describe("enviarCobranca — fatura fecha ENTRE listar e reler (importante 5)", () => {
+  beforeEach(() => listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]));
+
+  it("status 'R' na releitura: fatura_ja_paga — não vira 'sem_como_cobrar' nem some pra Cobrança", async () => {
+    // A LISTAGEM (`recorteDe`, com filtro de status=A) ainda vê a fatura aberta;
+    // a RELEITURA por id (dentro de `enviarCobrancaIxc`, sem esse filtro) já vê
+    // que foi paga — a corrida que o importante 5 mede.
+    listar.mockImplementation(async (_c: unknown, p: { tabela: string; tambem?: Array<{ campo: string }> }) => {
+      if (p.tabela !== "fn_areceber") return { total: 0, registros: [] };
+      const eAListagemAberta = (p.tambem ?? []).some((f) => f.campo === "fn_areceber.status");
+      return { total: 1, registros: [fatura("901", "2026-08-20", { status: eAListagemAberta ? "A" : "R" })] };
+    });
+    const { portas: p } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toMatchObject({ resultado: "fatura_ja_paga", auditoria: { faturaId: "901" } });
+    expect(p.enviar).not.toHaveBeenCalled();
+  });
+
+  it("fatura sumiu na releitura: continua sem_como_cobrar, mas o motivo interno vai só pra auditoria", async () => {
+    listar.mockImplementation(async (_c: unknown, p: { tabela: string; tambem?: Array<{ campo: string }> }) => {
+      if (p.tabela !== "fn_areceber") return { total: 0, registros: [] };
+      const eAListagemAberta = (p.tambem ?? []).some((f) => f.campo === "fn_areceber.status");
+      return eAListagemAberta ? { total: 1, registros: [fatura("901", "2026-08-20")] } : { total: 0, registros: [] };
+    });
+    const { portas: p } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toMatchObject({ resultado: "sem_como_cobrar" });
+    if (r.resultado !== "sem_como_cobrar") throw new Error("inalcançável");
+    expect(r.auditoria.motivoInterno).toBe("fatura_nao_encontrada");
+    // O motivo interno é NOSSO, não do IXC — nunca em `detalheDoErp`.
+    expect(r.detalheDoErp).toBeUndefined();
+  });
+});

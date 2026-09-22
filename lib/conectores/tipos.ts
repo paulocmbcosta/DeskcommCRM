@@ -186,10 +186,16 @@ export interface PedidoDeCobranca {
 /**
  * O que um envio grava na AUDITORIA — o motor NUNCA repassa isto ao modelo.
  * Mesmo racional de `AuditoriaDaConsulta`: agrupado à parte pra um
- * `...resultado` desavisado não espalhar `faturaId` pro modelo.
+ * `...resultado` desavisado não espalhar `faturaId`/`motivoInterno` pro modelo.
  */
 export interface AuditoriaDaCobranca {
   faturaId: string;
+  /**
+   * Só quando a falha é NOSSA — a fatura nem foi achada na releitura
+   * (`fatura_nao_encontrada`). NUNCA é a frase do IXC: essa é `detalheDoErp`,
+   * ao lado, e essa sim pode valer a pena um humano ver no log da Cobrança.
+   */
+  motivoInterno?: string;
 }
 
 export type ResultadoDaCobranca =
@@ -205,7 +211,12 @@ export type ResultadoDaCobranca =
       auditoria: AuditoriaDaCobranca;
     }
   | { resultado: "cliente_nao_identificado" | "sem_fatura_em_aberto" }
-  | { resultado: "encaminhar_para_cobranca" | "boleto_indisponivel"; fatura: FaturaParaAgente; auditoria: AuditoriaDaCobranca }
+  | {
+      /** `fatura_ja_paga`: a fatura fechou ENTRE listar e reler — quem pagou não vira "encaminhar pra Cobrança". */
+      resultado: "encaminhar_para_cobranca" | "boleto_indisponivel" | "fatura_ja_paga";
+      fatura: FaturaParaAgente;
+      auditoria: AuditoriaDaCobranca;
+    }
   | { resultado: "sem_como_cobrar"; fatura: FaturaParaAgente; detalheDoErp?: string; auditoria: AuditoriaDaCobranca };
 
 export interface CapacidadeDoAgente {
