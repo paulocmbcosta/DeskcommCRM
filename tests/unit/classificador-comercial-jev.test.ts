@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { custoEmCentavos, perguntarAoJev } from "@/lib/classificador-comercial/jev";
@@ -217,5 +219,16 @@ describe("custoEmCentavos", () => {
 
   it("tokens desconhecidos é null, nunca 0 — 0 é 'grátis', null é 'não sei' (mesma régua de llm_calls.cost_cents)", () => {
     expect(custoEmCentavos(null)).toBeNull();
+  });
+});
+
+describe("contrato REAL medido pela sonda (tests/fixtures/jev/resposta-real.json)", () => {
+  it("o schema aceita a resposta que a OpenRouter devolveu de verdade", async () => {
+    const caminho = "tests/fixtures/jev/resposta-real.json";
+    expect(existsSync(caminho), "rode scripts/sondar-jev.ts (Task 3) — sem a resposta real este teste não prova nada").toBe(true);
+    const real = JSON.parse(readFileSync(caminho, "utf8")) as unknown;
+    const { f } = fetchQueDevolve(200, real);
+    const r = await perguntarAoJev({ apiKey: "k", estado: ESTADO, modelo: MODELO_DO_JEV, fetchImpl: f });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
   });
 });
