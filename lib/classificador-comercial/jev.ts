@@ -8,15 +8,23 @@
  *
  * NUNCA LANÇA. Toda falha volta classificada, porque quem chama decide coisas
  * diferentes para cada uma:
- *  - `conta` (401/402/403): chave recusada ou sem saldo. Tentar de novo não resolve.
- *  - `temporaria` (408/429/5xx/rede/tempo): tentar de novo resolve.
- *  - `contrato` (outro 4xx, ou 200 fora do formato): o pedido ou a resposta
- *    mudou. É defeito nosso ou do provedor, e precisa aparecer.
+ *  - `conta` (401/402/403, ou chave malformada detectada ANTES do fetch):
+ *    chave recusada, sem saldo ou nem sequer válida. Tentar de novo não resolve.
+ *  - `temporaria` (408/429/5xx/rede/tempo, incluindo falha ao LER o corpo
+ *    depois dos headers): tentar de novo resolve.
+ *  - `contrato` (outro 4xx, corpo que não é JSON, ou 200 fora do formato): o
+ *    pedido ou a resposta mudou. É defeito nosso ou do provedor, e precisa
+ *    aparecer.
  *
- * O `detalhe` nunca carrega a chave: vem do corpo de erro do provedor ou do
- * NOME do erro de rede.
+ * O `detalhe` nunca carrega a chave: passa por `redigirMensagemDoProvedor`
+ * (padrões conhecidos de chave) MAIS um `replaceAll` da chave usada nesta
+ * chamada (backstop para um formato que os padrões não cobrem), e o que sobra
+ * de erro de rede é só o NOME do erro (`TimeoutError`, `TypeError`...), nunca
+ * a mensagem crua.
  */
 import { z } from "zod";
+
+import { redigirMensagemDoProvedor } from "@/lib/ai/redigir-mensagem-do-provedor";
 
 import { PERGUNTAS, type EstadoDoJev, type RespostaDoJev } from "./perguntas";
 
@@ -26,35 +34,97 @@ export const TEMPO_LIMITE_MS = 8_000;
 /** US$ 0,042 por milhão de tokens de entrada; saída não é cobrada (catálogo da OpenRouter, 22/09/2026). */
 export const CENTAVOS_POR_MILHAO_DE_TOKENS = 4.2;
 
+/**
+ * Só ASCII imprimível, sem espaço: chave com quebra de linha, espaço ou
+ * caractere invisível (ex.: zero-width space colado sem querer ao copiar) é
+ * malformada — falhar ANTES do fetch evita ~10 tentativas inúteis contra um
+ * provedor que teria recusado de qualquer jeito.
+ */
+const CHAVE_VALIDA = /^[\x21-\x7e]+$/;
+
 export type FalhaDoJev =
   | { tipo: "temporaria"; status: number | null; detalhe: string }
-  | { tipo: "conta"; status: number; detalhe: string }
+  | { tipo: "conta"; status: number | null; detalhe: string }
   | { tipo: "contrato"; status: number | null; detalhe: string };
 
 export type ResultadoDoJev =
   | { ok: true; resposta: RespostaDoJev; latenciaMs: number }
   | { ok: false; falha: FalhaDoJev; latenciaMs: number };
 
-/** Só o que o produto usa. `passthrough` implícito: campo novo do provedor não quebra. */
+/**
+ * Só `answers.comercial.noul` é estrito — é a DECISÃO, e uma probabilidade
+ * fora de [0,1] não pode virar card (nem deixar de virar) por engano.
+ *
+ * `answers.assunto` e `usage` só EXPLICAM ou CUSTEIAM: `.optional().catch()`
+ * faz um campo ausente OU malformado (confidence fora da faixa, choice
+ * faltando) cair pra `undefined` em vez de reprovar a resposta inteira — os
+ * dois viram `null` na tradução, nunca vetam a decisão.
+ *
+ * Chave desconhecida do provedor é descartada em silêncio: é o padrão do
+ * `z.object` no Zod 4 (não é `passthrough` — passthrough PRESERVARIA a
+ * chave extra na saída). O efeito que importa: campo novo do provedor não
+ * quebra o parse.
+ */
 const respostaSchema = z.object({
   model: z.string().optional(),
   answers: z.object({
     comercial: z.object({ noul: z.number().min(0).max(1) }),
-    assunto: z.object({
-      choice: z.string(),
-      confidence: z.number().min(0).max(1).optional(),
-    }),
+    assunto: z
+      .object({
+        choice: z.string(),
+        confidence: z.number().min(0).max(1).optional(),
+      })
+      .optional()
+      .catch(undefined),
   }),
-  usage: z.object({ input_tokens: z.number().int().nonnegative() }).optional(),
+  usage: z
+    .object({ input_tokens: z.number().int().nonnegative() })
+    .optional()
+    .catch(undefined),
 });
 
 /**
- * Custo EXATO, fracionário. `computeCost` (lib/ai/cost.ts) arredonda para
- * cima em centavo inteiro — uma chamada de US$ 0,0001 viraria 1 centavo, cem
- * vezes o real, e o teto de orçamento da organização estouraria de mentira.
+ * Custo EXATO, fracionário, ou `null` se os tokens são desconhecidos — mesma
+ * régua de `llm_calls.cost_cents` ("null = preço desconhecido — nunca
+ * inventar 0"; `supabase/baseline.sql`, coluna `cost_cents`). `0` significa
+ * "grátis"; ausência de dado não é isso.
+ *
+ * `computeCost` (lib/ai/cost.ts) arredonda para cima em centavo inteiro — uma
+ * chamada de US$ 0,0001 viraria 1 centavo, cem vezes o real, e o teto de
+ * orçamento da organização estouraria de mentira.
  */
-export function custoEmCentavos(tokensDeEntrada: number): number {
+export function custoEmCentavos(tokensDeEntrada: number | null): number | null {
+  if (tokensDeEntrada === null) return null;
   return (tokensDeEntrada * CENTAVOS_POR_MILHAO_DE_TOKENS) / 1_000_000;
+}
+
+/**
+ * Nome do erro (`TimeoutError`, `AbortError`, `TypeError`...), nunca a
+ * mensagem. Checagem ESTRUTURAL do `.name`, não `instanceof Error`: sob
+ * jsdom (ambiente de teste) o `DOMException` do timeout NÃO é instância de
+ * `Error` — a checagem estrutural cobre `Error`, `DOMException` e qualquer
+ * erro de rede do `fetch`, nos dois ambientes.
+ */
+function nomeDoErro(err: unknown): string {
+  return typeof err === "object" && err !== null && "name" in err && typeof (err as { name: unknown }).name === "string"
+    ? (err as { name: string }).name
+    : "rede";
+}
+
+/**
+ * O corpo cru do provedor pode ecoar a própria chave (ex.: "Incorrect API key
+ * provided: Bearer sk-or-..."). `redigirMensagemDoProvedor` cobre os padrões
+ * conhecidos (`sk-…`, `AIza…`, `Bearer …`); o `replaceAll` da CHAVE USADA
+ * nesta chamada é o backstop para um provedor que ecoa a chave num formato
+ * que nenhum padrão cobre. Corte por CODE POINT (mesma razão de
+ * `perguntas.ts:cortarPorCodePoint`, deliberadamente não compartilhada — não
+ * vale acoplar o módulo HTTP ao módulo puro por uma função de 3 linhas):
+ * `slice`/`substring` por unidade UTF-16 pode partir um emoji ao meio.
+ */
+function redigirDetalhe(bruto: string, apiKey: string): string {
+  let texto = redigirMensagemDoProvedor(bruto);
+  if (apiKey.length >= 8) texto = texto.replaceAll(apiKey, "[CHAVE]");
+  return Array.from(texto).slice(0, 200).join("");
 }
 
 export async function perguntarAoJev(entrada: {
@@ -70,50 +140,81 @@ export async function perguntarAoJev(entrada: {
   const base = (entrada.baseUrl?.trim() || OPENROUTER_BASE_PADRAO).replace(/\/+$/, "");
   const f = entrada.fetchImpl ?? fetch;
 
+  if (!CHAVE_VALIDA.test(entrada.apiKey)) {
+    return {
+      ok: false,
+      latenciaMs: Date.now() - inicio,
+      falha: { tipo: "conta", status: null, detalhe: "chave malformada" },
+    };
+  }
+
   let resp: Response;
   try {
     resp = await f(`${base}/systemone`, {
       method: "POST",
       headers: {
+        // Extras PRIMEIRO: um chamador não pode sobrescrever autenticação
+        // nem o tipo de conteúdo passando `cabecalhosExtras.Authorization`.
+        ...(entrada.cabecalhosExtras ?? {}),
         Authorization: `Bearer ${entrada.apiKey}`,
         "Content-Type": "application/json",
-        ...(entrada.cabecalhosExtras ?? {}),
       },
       body: JSON.stringify({ model: entrada.modelo, state: entrada.estado, questions: PERGUNTAS }),
       signal: AbortSignal.timeout(entrada.tempoLimiteMs ?? TEMPO_LIMITE_MS),
     });
   } catch (err) {
-    // Não usar `instanceof Error`: sob jsdom (ambiente de teste) o
-    // `DOMException` do timeout NÃO é instância de `Error` — checagem
-    // estrutural do `.name` cobre `Error`, `DOMException` e qualquer erro de
-    // rede do `fetch`, nos dois ambientes.
-    const nome =
-      typeof err === "object" && err !== null && "name" in err && typeof (err as { name: unknown }).name === "string"
-        ? (err as { name: string }).name
-        : "rede";
     return {
       ok: false,
       latenciaMs: Date.now() - inicio,
-      falha: { tipo: "temporaria", status: null, detalhe: nome },
+      falha: { tipo: "temporaria", status: null, detalhe: nomeDoErro(err) },
     };
   }
 
+  // Ler o corpo é parte da requisição, não da interpretação: um stream que
+  // aborta no meio (o MESMO AbortSignal do timeout) é falha TEMPORÁRIA — não
+  // "resposta que não bate com o formato". Ler ANTES de checar `resp.ok`
+  // trata sucesso e erro HTTP pelo mesmo caminho.
+  let texto: string;
+  try {
+    texto = await resp.text();
+  } catch (err) {
+    return {
+      ok: false,
+      latenciaMs: Date.now() - inicio,
+      falha: { tipo: "temporaria", status: resp.status, detalhe: nomeDoErro(err) },
+    };
+  }
+
+  // Medida DEPOIS de ler o corpo: medir antes subestimaria a latência real —
+  // os headers podem chegar bem antes do corpo de uma resposta grande.
   const latenciaMs = Date.now() - inicio;
+
   if (!resp.ok) {
-    const detalhe = (await resp.text().catch(() => "")).slice(0, 200);
+    const detalhe = redigirDetalhe(texto, entrada.apiKey);
     const s = resp.status;
     if (s === 401 || s === 402 || s === 403) return { ok: false, latenciaMs, falha: { tipo: "conta", status: s, detalhe } };
     if (s === 408 || s === 429 || s >= 500) return { ok: false, latenciaMs, falha: { tipo: "temporaria", status: s, detalhe } };
     return { ok: false, latenciaMs, falha: { tipo: "contrato", status: s, detalhe } };
   }
 
-  const corpo: unknown = await resp.json().catch(() => null);
-  const lido = respostaSchema.safeParse(corpo);
-  if (!lido.success) {
+  let corpo: unknown;
+  try {
+    corpo = JSON.parse(texto);
+  } catch {
     return {
       ok: false,
       latenciaMs,
-      falha: { tipo: "contrato", status: resp.status, detalhe: "resposta fora do formato esperado" },
+      falha: { tipo: "contrato", status: resp.status, detalhe: "corpo não é JSON" },
+    };
+  }
+
+  const lido = respostaSchema.safeParse(corpo);
+  if (!lido.success) {
+    const caminhos = lido.error.issues.map((issue) => issue.path.join(".")).join(", ");
+    return {
+      ok: false,
+      latenciaMs,
+      falha: { tipo: "contrato", status: resp.status, detalhe: `resposta fora do formato esperado: ${caminhos}` },
     };
   }
 
@@ -123,10 +224,10 @@ export async function perguntarAoJev(entrada: {
     latenciaMs,
     resposta: {
       comercial: a.answers.comercial.noul,
-      assunto: a.answers.assunto.choice,
-      confiancaDoAssunto: a.answers.assunto.confidence ?? null,
+      assunto: a.answers.assunto?.choice ?? null,
+      confiancaDoAssunto: a.answers.assunto?.confidence ?? null,
       modelo: a.model ?? entrada.modelo,
-      tokensDeEntrada: a.usage?.input_tokens ?? 0,
+      tokensDeEntrada: a.usage?.input_tokens ?? null,
     },
   };
 }
