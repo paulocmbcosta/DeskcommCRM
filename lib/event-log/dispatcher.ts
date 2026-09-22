@@ -53,8 +53,40 @@ export interface EventHandler {
   key: string;
   /** Event types this handler consumes (`["message.received", "message.sent"]`). */
   events: string[];
+  /**
+   * Handler que chama serviço externo LENTO e não pode segurar a resposta de
+   * um webhook.
+   *
+   * O dreno também roda DENTRO do POST de todo canal
+   * (`acelerarPipelineDeEventos`, lib/dev/kick-local-pipeline.ts), e lá ele
+   * pega até 50 eventos — de qualquer organização. Um handler assim ali faria
+   * cada webhook esperar por ele, inclusive pelos eventos dos outros.
+   *
+   * Com `contexto: "requisicao"`, o dispatcher NÃO o chama: devolve `retry`
+   * para AGORA (`ADIADO_PARA_O_WORKER`). O dreno trata `retry` sem contar
+   * tentativa, guarda em `consumed_by` quem já rodou e devolve o evento a
+   * `pending` — e quem o pega é o dreno do serviço `worker`
+   * (`runEventLogDrainLoop`, lib/event-log/drain-loop.ts, ligado em
+   * workers/agent-worker/main.ts): em produção, a cada 2 s depois de um tick
+   * com trabalho e a cada 10 s ocioso (`EVENT_LOG_DRAIN_INTERVAL_MS` /
+   * `EVENT_LOG_DRAIN_IDLE_INTERVAL_MS`, lib/agent-engine/env.ts), com o cron
+   * `event-log-drain` (1×/min, docker/scheduler/entrypoint.sh) de rede de
+   * segurança. Os dois drenam no contexto padrão, `worker`.
+   *
+   * `skipped` NÃO serviria: marcaria o evento `done` e o trabalho se perderia.
+   */
+  foraDaRequisicao?: true;
   handle(row: EventRow): Promise<HandlerResult>;
 }
+
+/**
+ * Onde o dreno está rodando. `worker` (o padrão) é o serviço `worker`, o cron
+ * e o relógio; `requisicao` é o dreno que corre dentro do POST de um webhook.
+ */
+export type ContextoDoDreno = "requisicao" | "worker";
+
+/** `detail` do `retry` sintético de um handler `foraDaRequisicao` adiado. */
+export const ADIADO_PARA_O_WORKER = "adiado_para_o_worker";
 
 const _handlers: EventHandler[] = [];
 const _registeredKeys = new Set<string>();
@@ -78,7 +110,11 @@ export function getRegisteredHandlers(): readonly EventHandler[] {
  * in `consumed_by`. Returns the per-handler results so the cron driver can
  * decide how to update `consumed_by` / `status` / `attempts`.
  */
-export async function dispatchEvent(row: EventRow): Promise<HandlerResult[]> {
+export async function dispatchEvent(
+  row: EventRow,
+  opts: { contexto?: ContextoDoDreno } = {},
+): Promise<HandlerResult[]> {
+  const contexto = opts.contexto ?? "worker";
   const matches = _handlers.filter(
     (h) => h.events.includes(row.event_type) && !row.consumed_by.includes(h.key),
   );
@@ -86,6 +122,16 @@ export async function dispatchEvent(row: EventRow): Promise<HandlerResult[]> {
 
   const results: HandlerResult[] = [];
   for (const handler of matches) {
+    if (contexto === "requisicao" && handler.foraDaRequisicao) {
+      // Não chama: devolve o evento à fila para o worker (ver `foraDaRequisicao`).
+      results.push({
+        consumer_key: handler.key,
+        status: "retry",
+        retry_at: new Date().toISOString(),
+        detail: ADIADO_PARA_O_WORKER,
+      });
+      continue;
+    }
     try {
       const r = await handler.handle(row);
       results.push(r);

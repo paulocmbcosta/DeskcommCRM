@@ -48,12 +48,19 @@ describe("classificadorComercialHandler — a tradução de cada desfecho", () =
     expect(r).not.toHaveProperty("detail");
   });
 
-  it("os outros pulos guardam o motivo no detail", async () => {
+  it("contato que já tem card: skipped SEM detail — é quase toda mensagem de uma organização com a regra ligada", async () => {
     processar.mockResolvedValue({ status: "pulado", motivo: "ja_tem_card" });
+    const r = await classificadorComercialHandler.handle(evento());
+    expect(r).toEqual({ consumer_key, status: "skipped" });
+    expect(r).not.toHaveProperty("detail");
+  });
+
+  it("os outros pulos guardam o motivo no detail", async () => {
+    processar.mockResolvedValue({ status: "pulado", motivo: "contato_bloqueado" });
     expect(await classificadorComercialHandler.handle(evento())).toEqual({
       consumer_key,
       status: "skipped",
-      detail: "ja_tem_card",
+      detail: "contato_bloqueado",
     });
   });
 
@@ -127,6 +134,12 @@ describe("classificadorComercialHandler — a tradução de cada desfecho", () =
       status: "error",
       detail: "nascimento do card falhou: deadlock detected",
     });
+  });
+});
+
+describe("o classificador não roda dentro de uma requisição", () => {
+  it("declara foraDaRequisicao: o dreno do webhook o adia para o worker em vez de esperar o Jev", () => {
+    expect(classificadorComercialHandler.foraDaRequisicao).toBe(true);
   });
 });
 

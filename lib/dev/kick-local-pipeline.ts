@@ -151,7 +151,11 @@ export async function acelerarPipelineDeEventos(
     }
     ensureHandlersRegistered();
     try {
-      const drain = await drainEventLog(admin);
+      // `requisicao`: estamos dentro do POST do webhook. Handler que espera
+      // serviço externo lento (`foraDaRequisicao`) é adiado para o dreno do
+      // serviço `worker`, em vez de fazer o canal esperar por ele — e pelos
+      // eventos de outras organizações que este dreno também pega.
+      const drain = await drainEventLog(admin, { contexto: "requisicao" });
       logger.info("[dev.pipeline] event-log-drain", { ...drain });
     } catch (err) {
       logger.warn("[dev.pipeline] drain falhou; tick do follow-up segue", {
