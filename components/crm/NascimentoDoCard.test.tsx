@@ -43,6 +43,16 @@ describe("NascimentoDoCard", () => {
     expect(screen.queryByText(/certeza mínima/i)).toBeNull();
   });
 
+  it("no modo classificador, avisa que as últimas mensagens vão pra OpenRouter e TypeSafe — LGPD", () => {
+    render(<NascimentoDoCard inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />);
+    expect(screen.queryByTestId("aviso-lgpd-envio-terceiros")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText(/só conversas comerciais/i));
+    expect(screen.getByTestId("aviso-lgpd-envio-terceiros")).toHaveTextContent(
+      "Para decidir, as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe (o Jev).",
+    );
+  });
+
   it("Salvar começa desabilitado — nada foi mudado ainda", () => {
     render(<NascimentoDoCard inicial={{ modo: "toda_conversa", limiar: 0.7 }} podeEditar />);
     expect(screen.getByRole("button", { name: /salvar/i })).toBeDisabled();

@@ -223,6 +223,13 @@ export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; pode
               "Mais alto abre menos cards por engano, mas pode deixar passar uma venda. Se a IA não conseguir responder, o card nasce assim mesmo e a linha do tempo diz por quê.",
             )}
           </p>
+          {/* Aviso de LGPD: quem liga esta regra manda texto de conversa pra
+              fora da instalação. Fica aqui — dentro do bloco que só existe no
+              modo classificador — e não na descrição da opção, que já é longa
+              o bastante sem isto. */}
+          <p data-testid="aviso-lgpd-envio-terceiros" className="text-xs text-muted-foreground">
+            {t("Para decidir, as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe (o Jev).")}
+          </p>
           {semChaveOpenRouter ? (
             // SEM `role="alert"`: o toast já anuncia o mesmo texto quando o
             // erro chega — um `alert` aqui faria um leitor de tela ouvir a
