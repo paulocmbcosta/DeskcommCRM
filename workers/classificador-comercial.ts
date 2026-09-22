@@ -172,6 +172,36 @@ export function registrarNoLlmCalls(admin: SupabaseClient) {
   };
 }
 
+/**
+ * ESTE evento vai pagar a espera do Jev? — o predicado `foraDaRequisicao` do
+ * handler (lib/event-log/dispatcher.ts).
+ *
+ * Só a organização que LIGOU a regra tem evento adiado para o worker. Para
+ * todas as outras — a base instalada inteira, enquanto ninguém liga a regra —
+ * o handler devolve `skipped` em uma leitura, e adiar seria devolver à fila,
+ * a cada webhook, um evento que terminaria ali mesmo.
+ *
+ * ⚠️ FALHA LÊ COMO `false`, ao contrário do worker, onde a mesma leitura LANÇA
+ * para o drain tentar de novo: aqui não há decisão de card em jogo — só "adia
+ * ou não". Na dúvida, roda na requisição, que é o caminho de antes do
+ * adiamento existir; a decisão sobre o card continua inteira lá dentro.
+ */
+export async function ehOrganizacaoComClassificador(
+  event: EventRow,
+  dados: Pick<DadosDoClassificador, "regra"> = dadosViaSupabase(createAdminClient()),
+): Promise<boolean> {
+  try {
+    const regra = await dados.regra(event.organization_id);
+    return regra.modo === "classificador";
+  } catch (err) {
+    logger.warn("classificador-comercial: regra ilegível ao decidir o adiamento — roda na requisição", {
+      organization_id: event.organization_id,
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 160),
+    });
+    return false;
+  }
+}
+
 function dependenciasReais(): DependenciasDoClassificador {
   const admin = createAdminClient();
   return {
@@ -303,12 +333,30 @@ export async function processarClassificacao(
   const estado = montarEstado(await deps.dados.ultimasMensagens(org, conversationId, LIMITE_DE_MENSAGENS * 2));
   const dadosDoCard: DadosDoNascimento = { organizationId: org, contactId, conversationId, nomeDoContato: null };
   if (!estado) {
-    // Nenhuma fala do cliente com texto. Se quem disparou foi MÍDIA do cliente
-    // (já passamos da espera do passo 3: a derivação terminou ou venceu o
-    // teto), o cliente falou e não há o que ler — áudio sem transcrição,
-    // imagem que ninguém descreveu. Pular aqui era a conversa nunca virar
-    // card, em silêncio, a cada mensagem: decisão A, o card nasce e diz por quê.
+    // Nenhuma fala do cliente com texto. Se quem disparou foi MÍDIA do cliente,
+    // ele falou e não há o que ler — áudio sem transcrição, imagem que ninguém
+    // descreveu. Pular aqui era a conversa nunca virar card, em silêncio, a
+    // cada mensagem: decisão A, o card nasce e diz por quê.
     if (disparadora && TIPOS_DERIVAVEIS.has(disparadora.type)) {
+      // ⚠️ MAS SÓ QUANDO NÃO HÁ MAIS O QUE ESPERAR. Passar dos 2 min do passo 3
+      // não significa que a derivação morreu: Whisper com 5xx, ou a fila de
+      // mídia atrasada depois de uma queda, entregam a transcrição minutos
+      // depois — e o card teria nascido "sem classificar" por pressa nossa.
+      // Enquanto a derivação está PEDIDA e não terminou, espera-se, com o teto
+      // de falha temporária (10 min) como limite final; aí vale a decisão A.
+      //
+      // Status NULO é outro caso: a derivação nunca foi pedida (vídeo com a
+      // descrição desligada, mídia sem storage) e não vai chegar nunca — esse
+      // segue pelo teto de idade do passo 3, sem esperar os 10 minutos.
+      const derivacaoPedida = disparadora.media_derived_status !== null;
+      const terminou = DERIVACAO_TERMINADA.has(disparadora.media_derived_status ?? "");
+      if (derivacaoPedida && !terminou && idadeMs < TETO_DE_FALHA_TEMPORARIA_MS) {
+        return {
+          status: "tentar_de_novo",
+          em: new Date(agora + ESPERA_POR_TRANSCRICAO_MS),
+          motivo: "aguardando_transcricao",
+        };
+      }
       return criarSemClassificar(deps, dadosDoCard, "midia_sem_texto");
     }
     // Sem mídia do cliente (ex.: só o atendente falou — campanha, aviso): não

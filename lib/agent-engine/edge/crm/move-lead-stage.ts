@@ -100,13 +100,26 @@ async function conversaMaisRecente(
  * `null` = não é caso de nascer aqui (passo não comercial, regra de sempre, ou
  * a regra não pôde ser lida) — quem chama segue com o warn de hoje.
  *
- * ⚠️ A LEITURA DA REGRA AQUI FALHA FECHADA — não cria —, ao contrário do
- * worker do classificador, que LANÇA para o drain tentar de novo
- * (`lib/classificador-comercial/dados.ts`). Lá o evento volta à fila; aqui não
- * há fila: é o turno do agente, e lançar derrubaria o turno (o espelho NUNCA
- * reverte o harness nem falha o job). Não criar é o comportamento de antes da
- * decisão existir, e não perde o card: a próxima mensagem do cliente passa
- * pelo classificador, e o próximo avanço do agente pergunta de novo.
+ * ⚠️ AQUI A LEITURA DA REGRA FALHA FECHADA — não cria. `lerNascimentoDoCard`
+ * (lib/leads/modo-de-nascimento.ts) NUNCA lança: em erro ele loga e devolve
+ * `toda_conversa`, que neste ponto significa exatamente "não crie". O `catch`
+ * abaixo cobre o resto — a busca da conversa (`conversaMaisRecente`) e
+ * qualquer imprevisto —, e a escolha é a mesma: não criar.
+ *
+ * É o oposto do worker do classificador, onde a mesma leitura LANÇA para o
+ * drain tentar de novo (`lib/classificador-comercial/dados.ts`): lá o evento
+ * volta à fila; aqui não há fila — é o turno do agente, e lançar derrubaria o
+ * turno (o espelho NUNCA reverte o harness nem falha o job). Não criar é o
+ * comportamento de antes da decisão existir, e não perde o card: a próxima
+ * mensagem do cliente passa pelo classificador, e o próximo avanço do agente
+ * pergunta de novo.
+ *
+ * ⚠️ A RESSINCRONIZAÇÃO NÃO PASSA `escopoDeFunis`, como o caminho legado deste
+ * espelho: o card nasce no funil de ENTRADA da organização, mesmo que este
+ * assistente não cuide dele — e aí o movimento seguinte pode ser vetado por
+ * escopo. A spec 17 (c) fala em criar "dentro do escopo marcado"; a
+ * divergência fica registrada aqui, e o efeito é conservador (o card existe e
+ * aparece; quem não pode mexer nele é o agente).
  */
 async function nascerPeloAgente(
   admin: SupabaseClient,

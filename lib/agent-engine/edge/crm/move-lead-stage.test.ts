@@ -172,7 +172,10 @@ describe('mirrorLeadStageToCrm — o agente avançou e o contato não tem card',
     expect(garantir).not.toHaveBeenCalled();
   });
 
-  it('falha ao ler a regra: não cria, não quebra o turno, e segue o warn de hoje', async () => {
+  // `lerNascimentoDoCard` real NUNCA lança (loga e devolve `toda_conversa`);
+  // este caso cobre o imprevisto — a busca da conversa, um dublê que rejeita —
+  // e prova que o turno não quebra por causa dele.
+  it('leitura da regra que LANÇA (imprevisto): não cria, não quebra o turno, e segue o warn de hoje', async () => {
     const sync = vi.fn().mockResolvedValue(semNegocio);
     const garantir = vi.fn();
     const lerRegra = vi.fn().mockRejectedValue(new Error('organização inexistente: org-1'));

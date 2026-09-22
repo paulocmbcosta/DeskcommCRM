@@ -11,9 +11,8 @@ import type { EventRow } from "@/lib/event-log/dispatcher";
 import type { DadosDoClassificador } from "@/lib/classificador-comercial/dados";
 import type { FalhaDoJev, ResultadoDoJev } from "@/lib/classificador-comercial/jev";
 
-const { processarClassificacao, registrarNoLlmCalls, codigoDeErroDaFalha } = await import(
-  "@/workers/classificador-comercial"
-);
+const { processarClassificacao, registrarNoLlmCalls, codigoDeErroDaFalha, ehOrganizacaoComClassificador } =
+  await import("@/workers/classificador-comercial");
 const { classificadorComercialHandler } = await import("@/workers/classificador-comercial.handler");
 const { logger } = await import("@/lib/logger");
 
@@ -267,8 +266,32 @@ describe("processarClassificacao — conversa só de mídia que não pôde ser l
     },
   );
 
-  it("passado o teto de espera da transcrição: idem, com o que houver (nada)", async () => {
+  it("derivação ATRASADA (pendente depois dos 2 min): espera mais, não vira card sem classificar", async () => {
+    // Whisper com 5xx, fila de mídia atrasada depois de uma queda: a
+    // transcrição ainda pode chegar, e o card nasceria "sem classificar" por
+    // pressa nossa.
     dados.mensagem = async () => ({ type: "image", media_derived_status: "pending" });
+    const velho = evento({ created_at: new Date(AGORA.getTime() - 121_000).toISOString() });
+    expect(await processarClassificacao(velho, deps())).toEqual({
+      status: "tentar_de_novo",
+      em: new Date(AGORA.getTime() + 15_000),
+      motivo: "aguardando_transcricao",
+    });
+    expect(garantir).not.toHaveBeenCalled();
+  });
+
+  it("derivação pendente há mais de 10 min: aí sim vale a decisão A", async () => {
+    dados.mensagem = async () => ({ type: "audio", media_derived_status: "pending" });
+    const velho = evento({ created_at: new Date(AGORA.getTime() - 11 * 60_000).toISOString() });
+    expect(await processarClassificacao(velho, deps())).toEqual({
+      status: "card_sem_classificar",
+      causa: "midia_sem_texto",
+      criouCard: true,
+    });
+  });
+
+  it("status NULO (derivação nunca pedida: vídeo desligado, mídia sem storage): pelo teto de idade, sem esperar 10 min", async () => {
+    dados.mensagem = async () => ({ type: "video", media_derived_status: null });
     const velho = evento({ created_at: new Date(AGORA.getTime() - 121_000).toISOString() });
     expect(await processarClassificacao(velho, deps())).toEqual({
       status: "card_sem_classificar",
@@ -512,5 +535,25 @@ describe("llm_calls — a linha que IA › Execuções lê", () => {
       expect(codigo, `${falha.tipo}/${falha.status}`).toBe(esperado);
       expect(explicados.has(codigo), `${codigo} sem linha em O_QUE_FAZER`).toBe(true);
     }
+  });
+});
+
+describe("ehOrganizacaoComClassificador — o predicado que decide o adiamento", () => {
+  const evento1 = evento();
+
+  it("regra ligada: true — este evento paga a espera do Jev, então vai para o worker", async () => {
+    expect(await ehOrganizacaoComClassificador(evento1, { regra: async () => ({ modo: "classificador", limiar: 0.7 }) })).toBe(true);
+  });
+
+  it("regra desligada: false — o evento termina na requisição, como em toda a base instalada", async () => {
+    expect(await ehOrganizacaoComClassificador(evento1, { regra: async () => ({ modo: "toda_conversa", limiar: 0.7 }) })).toBe(false);
+  });
+
+  it("falha ao ler a regra: false — na dúvida roda na requisição (o pulo é barato), nunca entope a fila", async () => {
+    const regra = async () => {
+      throw new Error("organização inexistente");
+    };
+    expect(await ehOrganizacaoComClassificador(evento1, { regra })).toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
   });
 });

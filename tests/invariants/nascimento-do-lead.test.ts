@@ -593,7 +593,8 @@ describe("regra 'só conversas comerciais' (settings.crm.nascimento_do_card)", (
     expect(r.criado, JSON.stringify(r)).toBe(true);
     const [at] = await atividadeDeCriacao(contato);
     expect(at!.reason).toBe(
-      "card criado sem classificar a conversa — o cliente mandou só mídia que não pôde ser lida (sem transcrição)",
+      "card criado sem classificar a conversa — o cliente mandou só mídia que não pôde ser lida " +
+        "(áudio sem transcrição ou imagem/documento sem descrição)",
     );
     expect(at!.payload.sem_classificacao).toBe("midia_sem_texto");
   });
