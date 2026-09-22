@@ -117,6 +117,42 @@ describe("consultar — identidade antes de dinheiro (D1)", () => {
   });
 });
 
+describe("consultar — CPF contraditório NÃO vincula pelo telefone (crítico 1)", () => {
+  it("controle: CPF que BATE com o único candidato do telefone vincula por telefone normalmente", async () => {
+    ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: "529.982.247-25" });
+    expect(r.estado).toBe("identificado");
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
+  });
+
+  it("controle: sem CPF informado, vincula por telefone normalmente (comportamento de sempre)", async () => {
+    ixc({ cliente: [MARIA], cliente_contrato: [CONTRATO] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    expect(r.estado).toBe("identificado");
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.vinculou).toEqual({ verificadoPor: "telefone", cadastros: ["10"] });
+  });
+
+  it("CPF de OUTRA pessoa (telefone reciclado): não vincula a Maria — pede CPF + nascimento", async () => {
+    ixc({ cliente: [MARIA] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: JOSE.cnpj_cpf });
+    expect(r.estado).toBe("precisa_cpf_e_nascimento");
+    expect(vincular).not.toHaveBeenCalled();
+  });
+
+  it("CPF de outra pessoa + nascimento CERTO dela identifica ELA — nunca quem só tem o telefone", async () => {
+    // José tem OUTRO telefone: se ele aparecesse na busca por telefone, o teste
+    // não provaria nada (viraria o caminho de "2 candidatos", não o de 1).
+    const joseOutroTelefone = { ...JOSE, telefone_celular: "(11) 90000-0000" };
+    ixc({ cliente: [MARIA, joseOutroTelefone] });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim", cpfCnpj: JOSE.cnpj_cpf, dataNascimento: JOSE.data_nascimento });
+    expect(r.estado).toBe("identificado");
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.vinculou).toEqual({ verificadoPor: "documento", cadastros: ["20"] });
+  });
+});
+
 const PDF = Buffer.from("%PDF-1.4 boleto %%EOF", "latin1");
 const BR_CODE =
   "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-4266554400005204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D";

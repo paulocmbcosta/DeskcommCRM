@@ -163,7 +163,16 @@ async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
   if (p.identidadeDoTelefone === "sim") {
     const candidatos = (await clientesPorTelefone(p.credencial, p.telefone)).slice(0, TETO_DE_CANDIDATOS);
     const [unico] = candidatos;
-    if (candidatos.length === 1 && unico) return vincularE(p, [unico.id], "telefone");
+    if (candidatos.length === 1 && unico) {
+      // O CPF, quando informado, tem de ser DESTE cadastro. Telefone reciclado
+      // por operadora é comum, e vincular só porque o número bateu — com um CPF
+      // que CONTRADIZ na mesma mensagem — identificaria a pessoa ERRADA (medido:
+      // telefone da Maria + CPF de terceiro identificava a Maria, e a cobrança
+      // dela sairia pro WhatsApp de outro). Contradição cai pro caminho de CPF +
+      // nascimento, igual a quem não tem telefone nenhum batendo.
+      const contradiz = documento !== null && soDigitos(unico.documento) !== soDigitos(documento);
+      if (!contradiz) return vincularE(p, [unico.id], "telefone");
+    }
     if (candidatos.length > 1) {
       if (!documento) return { estado: "precisa_cpf" };
       const doTitular = candidatos.filter((c) => soDigitos(c.documento) === soDigitos(documento));
