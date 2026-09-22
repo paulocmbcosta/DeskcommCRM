@@ -11,6 +11,7 @@
     { "id": "tela", "label": "Tela" },
     { "id": "entrada", "label": "Entrada da mensagem" },
     { "id": "worker", "label": "Worker (event_log)" },
+    { "id": "agente", "label": "Turno do agente" },
     { "id": "banco", "label": "Banco" },
     { "id": "fora", "label": "Fora" }
   ],
@@ -23,7 +24,9 @@
     { "id": "evento", "lane": "entrada", "col": 2, "type": "messagebus", "label": "message.received (trg_messages_emit_event, todo canal)" },
     { "id": "worker", "lane": "worker", "col": 2, "type": "backend", "label": "classificador-comercial.v1 — roda POR ÚLTIMO entre os consumidores do evento; regra, card aberto?, bloqueado?, transcrição" },
     { "id": "gate", "lane": "worker", "col": 3, "type": "backend", "label": "JÁ TEM CARD? → para, sem chamar o Jev" },
-    { "id": "nascer", "lane": "worker", "col": 4, "type": "backend", "label": "garantirLeadDaConversa(origem classificador | sem_classificacao) — trava por contato; falha de escrita LANÇA" },
+    { "id": "nascer", "lane": "worker", "col": 4, "type": "backend", "label": "garantirLeadDaConversa(origem classificador | sem_classificacao | agente) — trava por contato; falha de escrita LANÇA" },
+    { "id": "turno", "lane": "agente", "col": 1, "type": "backend", "label": "turno do agente avança o funil dele (update_lead_state) — qualifying | qualified | negotiating | won" },
+    { "id": "espelho", "lane": "agente", "col": 2, "type": "backend", "label": "mirrorLeadStageToCrm — sem negócio aberto + passo comercial + regra 'classificador' → nascerPeloAgente" },
     { "id": "settings", "lane": "banco", "col": 1, "type": "database", "label": "organizations.settings.crm.nascimento_do_card" },
     { "id": "leads", "lane": "banco", "col": 3, "type": "database", "label": "crm_leads (open por contato) + crm_lead_activities (lead_created, reason)" },
     { "id": "llmcalls", "lane": "banco", "col": 4, "type": "database", "label": "llm_calls — custo real do provedor (usage.cost), cálculo por token como plano B" },
@@ -43,7 +46,10 @@
     { "from": "worker", "to": "nascer", "label": "passou do limiar, ou falhou (decisão A)" },
     { "from": "nascer", "to": "leads", "label": "card + lead_created com a razão" },
     { "from": "leads", "to": "timeline", "label": "a conversa mostra a atividade do negócio" },
-    { "from": "llmcalls", "to": "execucoes", "label": "o operador vê custo e falha" }
+    { "from": "llmcalls", "to": "execucoes", "label": "o operador vê custo e falha" },
+    { "from": "turno", "to": "espelho", "label": "sincroniza o card do CRM a cada passo do funil do agente" },
+    { "from": "espelho", "to": "settings", "label": "lê a regra; falha FECHADA — não cria (ao contrário do worker, que LANÇA)" },
+    { "from": "espelho", "to": "nascer", "label": "o classificador leu 'ainda não', e o agente viu o avanço — origem agente" }
   ],
   "cards": [
     {
@@ -56,7 +62,9 @@
         "O Jev lê só o ATENDIMENTO ATUAL (janelaDoAtendimento), não a conversa inteira — cliente antigo que volta não traz negociação velha para dentro da janela",
         "O worker roda por ÚLTIMO entre os consumidores de message.received, de propósito, para não atrasar push e automações esperando o Jev",
         "Card comercial que falha ao nascer não vira 'skipped' silencioso: a escrita LANÇA, o drain tenta de novo com backoff e, esgotado, abre aviso de evento morto na Central",
-        "Quando o dreno roda DENTRO do webhook (contexto: 'requisicao', lib/dev/kick-local-pipeline.ts), o classificador é ADIADO para o worker (foraDaRequisicao) — o canal não espera o Jev; quem de fato classifica é o serviço worker, o cron event-log-drain ou o relógio (contexto padrão)"
+        "Quando o dreno roda DENTRO do webhook (contexto: 'requisicao', lib/dev/kick-local-pipeline.ts), o classificador é ADIADO para o worker (foraDaRequisicao) — o canal não espera o Jev; quem de fato classifica é o serviço worker, o cron event-log-drain ou o relógio (contexto padrão)",
+        "O agente também abre o card: se ele qualifica, negocia ou fecha um contato sem card antes de o classificador decidir, o card nasce ali, já na etapa mapeada ao passo — decisão do dono, 22/09/2026 (commit 3bf9380f)",
+        "O espelho do agente FALHA FECHADO ao ler a regra (não cria), diferente do worker (que LANÇA): não há fila para tentar de novo ali, e lançar derrubaria o turno — o card não se perde, a próxima mensagem ou o próximo avanço tenta de novo"
       ]
     }
   ]

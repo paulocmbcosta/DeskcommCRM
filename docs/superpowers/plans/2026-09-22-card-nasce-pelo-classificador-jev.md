@@ -10,6 +10,8 @@
 
 > **Registro da execução (22/09/2026):** as Tarefas 1–3 mudaram a interface prevista aqui. `RespostaDoJev` passou a ter `assunto: string | null`, `tokensDeEntrada: number | null` e `custoEmCentavos: number | null` (o custo real que a OpenRouter devolve em `usage.cost`); `FalhaDoJev.status` pode ser `null` em qualquer tipo; `custoEmCentavos()` recebe e devolve `number | null`. A redação do `detalhe` reusa `lib/ai/redigir-mensagem-do-provedor.ts` (extraída de `run-model-call.ts`), e a extração consertou um defeito antigo: desde a 1.2.0 a redação de chave em `llm_calls.error_message` nunca funcionava (byte 0x08 no lugar de `\b`). A sonda lê a chave de `.env.sonda`, e mediu 12/12 com mediana de ~315 ms. O texto das Tarefas 3 e 8 abaixo já reflete isso; o código de referência das Tarefas 1 e 2 é o que está no repositório.
 
+> **Registro da execução (rodada final, 22/09/2026):** o handler `classificador-comercial.v1` ganhou `foraDaRequisicao: true` — quando o dreno do `event_log` roda DENTRO do POST de um webhook (`contexto: "requisicao"`, `lib/dev/kick-local-pipeline.ts`), o dispatcher não o chama e devolve o evento à fila para o worker, em vez de segurar a resposta do canal esperando o Jev. `CausaSemClassificacao` ganhou `midia_sem_texto`: conversa cujo único conteúdo do cliente é mídia sem texto derivado (áudio sem transcrição, por exemplo) faz o card nascer "sem classificar" em vez de nunca nascer. E o fragmento de release ganhou o aviso de LGPD: as últimas falas do atendimento viajam para a OpenRouter e para a TypeSafe, e a chave da instalação (quando é ela que paga) passa pela conta de quem administra a instalação.
+
 ---
 
 ## Decisões
@@ -31,6 +33,7 @@
 | E | O Jev lê as **últimas 12 mensagens** (cliente e atendente), cada uma cortada em 500 caracteres | A doc do Jev: estado grande com texto irrelevante derruba a acurácia |
 | F | Regra **por organização**, desligada por padrão. Nenhuma instalação muda sozinha | Self-host: atualização não pode mudar comportamento sem o operador pedir |
 | G | Classificação "não comercial" fica registrada em **IA › Execuções** (`llm_calls`, `purpose = commercial_classify`) e no log, **não** na linha do tempo | A linha do tempo registra mudança de estado; "ainda não é comercial" não muda nada |
+| H | Com a regra ligada, o avanço comercial do agente (qualifying/qualified/negotiating/won) num contato sem card abre o card | Decisão do dono, 22/09/2026, após a revisão final: o classificador pode ter lido "ainda não", mas o agente, que conversou, viu o avanço — implementado em `lib/agent-engine/edge/crm/move-lead-stage.ts` (commit `3bf9380f`) |
 
 **Riscos medidos na doc do Jev (e onde este plano os trata):**
 
