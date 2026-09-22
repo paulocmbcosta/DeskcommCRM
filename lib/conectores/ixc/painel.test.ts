@@ -22,7 +22,7 @@ const BASE = {
   orgId: "org-1",
   contactId: "contato-1",
   telefone: "+5511987654321",
-  telefoneEhIdentidade: true,
+  identidadeDoTelefone: "sim" as const,
   agora: new Date("2026-09-19T15:00:00Z"),
 };
 
@@ -54,7 +54,7 @@ beforeEach(() => {
   listar.mockReset();
   listarVinculos.mockReset();
   vincular.mockReset();
-  vincular.mockResolvedValue(true);
+  vincular.mockResolvedValue({ vinculou: true, promovido: false });
 });
 
 describe("estadoDoPainelIxc — sem vínculo ainda", () => {
@@ -144,45 +144,68 @@ describe("estadoDoPainelIxc — já vinculado", () => {
   });
 });
 
-describe("telefone que NÃO é identidade (chat do site: número digitado)", () => {
+describe('identidadeDoTelefone: "nao" (chat do site: número digitado)', () => {
   it("1 candidato pelo telefone NÃO vincula sozinho: cai em escolher, com o motivo certo", async () => {
     listarVinculos.mockResolvedValue([]);
     ixcFalso({ cliente: [MARIA] });
-    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: false });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "nao" });
     expect(estado.estado).toBe("escolher");
     if (estado.estado !== "escolher") throw new Error("inalcançável");
-    expect(estado.motivo).toBe("telefone_nao_prova");
+    expect(estado.motivo).toBe("telefone_digitado");
     expect(estado.candidatos.map((c) => c.id)).toEqual(["10"]);
     expect(vincular).not.toHaveBeenCalled();
   });
 
-  it("controle: com telefone de identidade, o mesmo candidato vincula (o caso de antes)", async () => {
+  it("controle: com identidadeDoTelefone='sim', o mesmo candidato vincula (o caso de antes)", async () => {
     listarVinculos.mockResolvedValue([]);
     ixcFalso({ cliente: [MARIA] });
-    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: true });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "sim" });
     expect(vincular).toHaveBeenCalledWith(expect.objectContaining({ externalId: "10", verificadoPor: "telefone" }));
     expect(estado.estado).toBe("vinculado");
     if (estado.estado === "vinculado") expect(estado.vinculou_agora).toBe(true);
   });
 });
 
-describe("vínculo por telefone perde validade quando o telefone deixa de ser identidade", () => {
-  it("vínculo antigo verificado_por=telefone, com telefoneEhIdentidade=false, é descartado — volta a escolher", async () => {
+describe('identidadeDoTelefone: "desconhecido" (aba antiga sem ?conversa=, provider fora da matriz)', () => {
+  it("1 candidato pelo telefone NÃO vincula sozinho, mas o motivo é NEUTRO — não afirma que foi digitado", async () => {
+    listarVinculos.mockResolvedValue([]);
+    ixcFalso({ cliente: [MARIA] });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "desconhecido" });
+    expect(estado.estado).toBe("escolher");
+    if (estado.estado !== "escolher") throw new Error("inalcançável");
+    expect(estado.motivo).toBe("canal_nao_identificado");
+    expect(vincular).not.toHaveBeenCalled();
+  });
+
+  it("NÃO esconde um vínculo por telefone já gravado — só 'nao' descarta, 'desconhecido' não", async () => {
+    // Esta é a razão de existir do tri-estado: uma aba antiga aberta sem
+    // ?conversa= (ou um provider que esta imagem ainda não conhece) não pode
+    // fazer um WhatsApp vinculado por telefone sumir e cair no beco do
+    // "escolher" — o contato segue vinculado, exatamente como estava.
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "2026-09-01T00:00:00Z" }]);
+    ixcFalso({ cliente: [MARIA] });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "desconhecido" });
+    expect(estado.estado).toBe("vinculado");
+  });
+});
+
+describe("vínculo por telefone perde validade SÓ quando identidadeDoTelefone === 'nao'", () => {
+  it("vínculo antigo verificado_por=telefone, com identidadeDoTelefone='nao', é descartado — volta a escolher", async () => {
     // O furo antigo: um visitante do chat do site digitou um número, o painel
     // vinculou sozinho, e esse vínculo continuava valendo para sempre. Agora ele
     // é descartado a cada leitura, e o contato volta ao fluxo de identificação.
     listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "2026-09-01T00:00:00Z" }]);
     ixcFalso({ cliente: [MARIA] });
-    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: false });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "nao" });
     expect(estado.estado).toBe("escolher");
     if (estado.estado !== "escolher") throw new Error("inalcançável");
-    expect(estado.motivo).toBe("telefone_nao_prova");
+    expect(estado.motivo).toBe("telefone_digitado");
   });
 
-  it("controle: vínculo por documento continua valendo mesmo com telefoneEhIdentidade=false", async () => {
+  it("controle: vínculo por documento continua valendo mesmo com identidadeDoTelefone='nao'", async () => {
     listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "2026-09-01T00:00:00Z" }]);
     ixcFalso({ cliente: [MARIA] });
-    const estado = await estadoDoPainelIxc({ ...BASE, telefoneEhIdentidade: false });
+    const estado = await estadoDoPainelIxc({ ...BASE, identidadeDoTelefone: "nao" });
     expect(estado.estado).toBe("vinculado");
   });
 });

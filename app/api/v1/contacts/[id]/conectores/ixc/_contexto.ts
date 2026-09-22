@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
-import { telefoneEhIdentidade } from "@/lib/channels/capabilities";
+import { identidadeDoTelefone, type IdentidadeDoTelefone } from "@/lib/channels/capabilities";
 import { carimbarEstado, lerCredencial, type CredencialGuardada } from "@/lib/conectores/conexao";
 import { FRASE_DA_FALHA, FalhaDoConector } from "@/lib/conectores/tipos";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -109,10 +109,15 @@ export async function limparErroSeHavia(ctx: Extract<ContextoIxc, { ok: true }>)
 }
 
 /**
- * O telefone do contato é identidade no canal DESTA conversa? A conversa vem do
- * navegador, então tem de ser deste contato e desta organização; sem conversa
- * válida a resposta é `false` — fail-closed: o painel mostra o candidato para o
- * atendente escolher em vez de vincular sozinho.
+ * O telefone do contato é identidade no canal DESTA conversa — tri-estado, não
+ * booleano. `"desconhecido"` é toda situação em que não dá para saber: sem
+ * `conversationId` (aba antiga aberta depois de uma atualização da VPS, antes
+ * de o navegador mandar `?conversa=`), id que não existe/não é deste contato
+ * ou desta organização, sessão sem `provider` reconhecido pela matriz. SÓ
+ * `"nao"` autoriza descartar um vínculo por telefone já gravado — colapsar
+ * "não sei" em `false` fazia uma aba desatualizada (ou um provider novo que
+ * esta imagem ainda não conhece) parecer prova de que o telefone NUNCA foi
+ * identidade, escondendo vínculo de WhatsApp de verdade.
  *
  * É ADMIN CLIENT, e não o de sessão — e o motivo, conferido no `baseline.sql`,
  * não é "channel_sessions é ilegível pro papel `agent`" (é legível: a policy
@@ -129,11 +134,11 @@ export async function limparErroSeHavia(ctx: Extract<ContextoIxc, { ok: true }>)
  * doutrina pede para admin client em request handler — RLS não teria nada a
  * acrescentar aqui além dessa mesma checagem.
  */
-export async function telefoneEhIdentidadeNaConversa(
+export async function identidadeDoTelefoneNaConversa(
   ctx: Extract<ContextoIxc, { ok: true }>,
   conversationId: string | null,
-): Promise<boolean> {
-  if (!conversationId || !z.string().uuid().safeParse(conversationId).success) return false;
+): Promise<IdentidadeDoTelefone> {
+  if (!conversationId || !z.string().uuid().safeParse(conversationId).success) return "desconhecido";
   const { data: conversa } = await ctx.admin
     .from("conversations")
     .select("channel_session_id")
@@ -141,12 +146,12 @@ export async function telefoneEhIdentidadeNaConversa(
     .eq("contact_id", ctx.contato.id)
     .eq("organization_id", ctx.orgId)
     .maybeSingle();
-  if (!conversa?.channel_session_id) return false;
+  if (!conversa?.channel_session_id) return "desconhecido";
   const { data: sessao } = await ctx.admin
     .from("channel_sessions")
     .select("provider")
     .eq("id", conversa.channel_session_id)
     .eq("organization_id", ctx.orgId)
     .maybeSingle();
-  return telefoneEhIdentidade(sessao?.provider as string | undefined);
+  return identidadeDoTelefone(sessao?.provider as string | undefined);
 }

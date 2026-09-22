@@ -1,13 +1,22 @@
 /**
- * `telefoneEhIdentidadeNaConversa` (`app/api/v1/contacts/[id]/conectores/ixc/_contexto.ts`)
+ * `identidadeDoTelefoneNaConversa` (`app/api/v1/contacts/[id]/conectores/ixc/_contexto.ts`)
  * — a pergunta que decide se o painel do IXC pode vincular um único candidato
- * sozinho: o telefone da conversa aberta é a identidade do canal, ou foi
- * DIGITADO pelo visitante (chat do site)?
+ * sozinho e se pode descartar um vínculo por telefone já gravado. É TRI-ESTADO,
+ * não booleano: `"sim"` (identidade), `"nao"` (chat do site — telefone
+ * DIGITADO) e `"desconhecido"` (sem `?conversa=`, id que não existe/não é
+ * deste contato-org, sessão sem provider reconhecido). Só `"nao"` autoriza
+ * descartar vínculo já gravado — colapsar em booleano fazia "não sei" se
+ * passar por "definitivamente não", escondendo vínculo de WhatsApp de verdade.
  *
  * O admin falso abaixo reproduz só o que a função usa: `from(tabela).select().
- * eq().eq()[.eq()].maybeSingle()`, registrando os filtros de cada chamada para
- * provar que `organization_id` e `contact_id` vêm do CONTEXTO (nunca do
- * pedido) — é a mesma garantia que a doutrina de admin client exige.
+ * eq().eq()[.eq()].maybeSingle()`, registrando os filtros de cada chamada. O
+ * `resolver` de cada tabela só devolve a linha quando TODO FILTRO QUE FOI
+ * REALMENTE APLICADO bate com o dono esperado — filtro que a implementação
+ * deixasse de aplicar (um `.eq()` removido) simplesmente não aparece em
+ * `filtros`, e por isso NÃO barra a devolução da linha: é assim que o teste de
+ * "conversa de outro contato" reprovaria de verdade se o `.eq("contact_id")`
+ * sumisse do código (a linha vazaria, a sessão devolveria "waha", e o
+ * resultado seria "sim" em vez de "desconhecido").
  *
  * Os quatro módulos que `_contexto.ts` importa e que esta função NÃO usa
  * (`require-role`, `supabase/server`, `supabase/admin`, `conectores/conexao`)
@@ -21,7 +30,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/conectores/conexao", () => ({ carimbarEstado: vi.fn(), lerCredencial: vi.fn() }));
 
-import { telefoneEhIdentidadeNaConversa, type ContextoIxc } from "@/app/api/v1/contacts/[id]/conectores/ixc/_contexto";
+import { identidadeDoTelefoneNaConversa, type ContextoIxc } from "@/app/api/v1/contacts/[id]/conectores/ixc/_contexto";
 
 const ORG_ID = "22222222-2222-4222-8222-222222222222";
 const OUTRA_ORG = "33333333-3333-4333-8333-333333333333";
@@ -63,6 +72,20 @@ function adminFalso(
   };
 }
 
+/**
+ * Só devolve `linha` se TODO filtro que a chamada de fato aplicou bate com o
+ * `esperado` (o dono de verdade). Uma chave de `esperado` que NÃO aparecer em
+ * `filtros` — porque o `.eq()` correspondente sumiu da implementação — não
+ * barra nada: é essa omissão que expõe o vazamento nos testes que simulam um
+ * pedido de fora do escopo.
+ */
+function linhaSeDonoCasa(filtros: Filtros, esperado: Filtros, linha: Record<string, unknown>): Record<string, unknown> | null {
+  for (const [chave, valor] of Object.entries(esperado)) {
+    if (chave in filtros && filtros[chave] !== valor) return null;
+  }
+  return linha;
+}
+
 function ctxCom(admin: ReturnType<typeof adminFalso>): Extract<ContextoIxc, { ok: true }> {
   return {
     ok: true,
@@ -76,52 +99,64 @@ function ctxCom(admin: ReturnType<typeof adminFalso>): Extract<ContextoIxc, { ok
   };
 }
 
-describe("telefoneEhIdentidadeNaConversa", () => {
-  it("sem conversationId → false, sem consultar o banco", async () => {
+describe("identidadeDoTelefoneNaConversa", () => {
+  it("sem conversationId → desconhecido, sem consultar o banco", async () => {
     const admin = adminFalso({});
-    expect(await telefoneEhIdentidadeNaConversa(ctxCom(admin), null)).toBe(false);
+    expect(await identidadeDoTelefoneNaConversa(ctxCom(admin), null)).toBe("desconhecido");
     expect(admin.chamadas).toEqual([]);
   });
 
-  it("conversationId que não é UUID → false, sem consultar o banco", async () => {
+  it("conversationId que não é UUID → desconhecido, sem consultar o banco", async () => {
     const admin = adminFalso({});
-    expect(await telefoneEhIdentidadeNaConversa(ctxCom(admin), "não-é-um-uuid")).toBe(false);
+    expect(await identidadeDoTelefoneNaConversa(ctxCom(admin), "não-é-um-uuid")).toBe("desconhecido");
     expect(admin.chamadas).toEqual([]);
   });
 
-  it("conversa de OUTRO contato → false (o admin falso só devolve a linha quando o contact_id filtrado é o do contexto)", async () => {
+  it("conversa de OUTRO contato → desconhecido (reprovaria com 'sim' se o .eq('contact_id') sumisse — ver linhaSeDonoCasa)", async () => {
     const admin = adminFalso({
       conversations: (f) =>
-        f.contact_id === CONTATO_ID ? { channel_session_id: SESSAO_ID } : null,
+        linhaSeDonoCasa(f, { id: CONVERSA_ID, contact_id: CONTATO_ID, organization_id: ORG_ID }, { channel_session_id: SESSAO_ID }),
+      // Provider bem "positivo": se o vazamento acontecer, o resultado final
+      // vira "sim" — um jeito difícil de não notar no CI.
+      channel_sessions: (f) => linhaSeDonoCasa(f, { id: SESSAO_ID, organization_id: ORG_ID }, { provider: "waha" }),
     });
-    // O contexto pede pelo contato OUTRO_CONTATO_ID: o admin falso não acha a linha
-    // porque simula uma conversa que pertence a um contato diferente.
+    // O contexto pede pelo contato OUTRO_CONTATO_ID: o filtro real aplicado é
+    // contact_id=OUTRO_CONTATO_ID, que diverge do dono esperado (CONTATO_ID) —
+    // e como a chave FOI aplicada, `linhaSeDonoCasa` barra.
     const ctx = { ...ctxCom(admin), contato: { id: OUTRO_CONTATO_ID, phone_number: null } };
-    expect(await telefoneEhIdentidadeNaConversa(ctx, CONVERSA_ID)).toBe(false);
+    expect(await identidadeDoTelefoneNaConversa(ctx, CONVERSA_ID)).toBe("desconhecido");
   });
 
-  it("sessão sem provider → false", async () => {
+  it("sessão sem provider → desconhecido", async () => {
     const admin = adminFalso({
       conversations: () => ({ channel_session_id: SESSAO_ID }),
       channel_sessions: () => ({ provider: null }),
     });
-    expect(await telefoneEhIdentidadeNaConversa(ctxCom(admin), CONVERSA_ID)).toBe(false);
+    expect(await identidadeDoTelefoneNaConversa(ctxCom(admin), CONVERSA_ID)).toBe("desconhecido");
   });
 
-  it("provider site_widget → false (o telefone foi digitado pelo visitante)", async () => {
+  it("provider site_widget → nao (o telefone foi digitado pelo visitante)", async () => {
     const admin = adminFalso({
       conversations: () => ({ channel_session_id: SESSAO_ID }),
       channel_sessions: () => ({ provider: "site_widget" }),
     });
-    expect(await telefoneEhIdentidadeNaConversa(ctxCom(admin), CONVERSA_ID)).toBe(false);
+    expect(await identidadeDoTelefoneNaConversa(ctxCom(admin), CONVERSA_ID)).toBe("nao");
   });
 
-  it("controle positivo: provider waha → true", async () => {
+  it("provider fora da matriz (imagem antiga que não conhece um canal novo) → desconhecido, não 'nao'", async () => {
+    const admin = adminFalso({
+      conversations: () => ({ channel_session_id: SESSAO_ID }),
+      channel_sessions: () => ({ provider: "provider-que-nao-existe" }),
+    });
+    expect(await identidadeDoTelefoneNaConversa(ctxCom(admin), CONVERSA_ID)).toBe("desconhecido");
+  });
+
+  it("controle positivo: provider waha → sim", async () => {
     const admin = adminFalso({
       conversations: () => ({ channel_session_id: SESSAO_ID }),
       channel_sessions: () => ({ provider: "waha" }),
     });
-    expect(await telefoneEhIdentidadeNaConversa(ctxCom(admin), CONVERSA_ID)).toBe(true);
+    expect(await identidadeDoTelefoneNaConversa(ctxCom(admin), CONVERSA_ID)).toBe("sim");
   });
 
   it("os filtros nas DUAS consultas vêm do CONTEXTO — organization_id e contact_id nunca do pedido", async () => {
@@ -129,7 +164,7 @@ describe("telefoneEhIdentidadeNaConversa", () => {
       conversations: () => ({ channel_session_id: SESSAO_ID }),
       channel_sessions: () => ({ provider: "waha" }),
     });
-    await telefoneEhIdentidadeNaConversa(ctxCom(admin), CONVERSA_ID);
+    await identidadeDoTelefoneNaConversa(ctxCom(admin), CONVERSA_ID);
 
     expect(admin.chamadas).toHaveLength(2);
     const [conversas, sessoes] = admin.chamadas;

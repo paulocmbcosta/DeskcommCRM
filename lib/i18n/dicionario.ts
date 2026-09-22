@@ -9122,6 +9122,9 @@ export const DICIONARIO: Traducoes = {
   "Este número foi digitado por quem está conversando — ele não confirma quem é. Confirme com a pessoa antes de vincular.": {
     es: "Este número lo escribió quien está conversando — no confirma quién es. Confirma con la persona antes de vincular.",
   },
+  "Neste canal, o telefone não confirma quem é a pessoa. Confirme antes de vincular.": {
+    es: "En este canal, el teléfono no confirma quién es la persona. Confirma antes de vincular.",
+  },
   "É este": { es: "Es este" },
   "Há mais cadastros com este telefone. Busque pelo CPF ou CNPJ.": { es: "Hay más registros con este teléfono. Busca por CPF o CNPJ." },
   "Não achei este telefone no IXC. O cliente pode estar escrevendo de outro número.": { es: "No encontré este teléfono en IXC. El cliente puede estar escribiendo desde otro número." },

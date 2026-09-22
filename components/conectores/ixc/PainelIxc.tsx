@@ -415,9 +415,11 @@ export function PainelIxc({ contactId, conversationId }: Props) {
         {cabecalho}
         <div className="space-y-2 p-3">
           <p className="text-xs text-text">
-            {estado.motivo === "telefone_nao_prova"
+            {estado.motivo === "telefone_digitado"
               ? t("Este número foi digitado por quem está conversando — ele não confirma quem é. Confirme com a pessoa antes de vincular.")
-              : t("Este telefone está em mais de um cadastro do IXC. Confirme com o cliente qual é o dele.")}
+              : estado.motivo === "canal_nao_identificado"
+                ? t("Neste canal, o telefone não confirma quem é a pessoa. Confirme antes de vincular.")
+                : t("Este telefone está em mais de um cadastro do IXC. Confirme com o cliente qual é o dele.")}
           </p>
           <ul className="space-y-1.5">
             {estado.candidatos.map((c) => (

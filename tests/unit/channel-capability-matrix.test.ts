@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHANNEL_CAPABILITIES,
   capabilitiesOf,
-  telefoneEhIdentidade,
+  identidadeDoTelefone,
   transportaMensagem,
   type ChannelProvider,
   type ProviderDeMensagem,
@@ -104,12 +104,17 @@ describe("matriz capability × provider é exaustiva", () => {
     expect(capabilitiesOf("site_widget").telefoneEhIdentidade).toBe(false);
   });
 
-  it("o helper falha fechado: provider ausente, de voz ou desconhecido não é identidade", () => {
-    expect(telefoneEhIdentidade("waha")).toBe(true);
-    expect(telefoneEhIdentidade("site_widget")).toBe(false);
-    expect(telefoneEhIdentidade("wacalls")).toBe(false);
-    expect(telefoneEhIdentidade("provider-que-nao-existe")).toBe(false);
-    expect(telefoneEhIdentidade(null)).toBe(false);
-    expect(telefoneEhIdentidade(undefined)).toBe(false);
+  it("o helper é tri-estado: 'sim'/'nao' só para provider CONHECIDO; ausente/voz/desconhecido é 'desconhecido', não 'nao'", () => {
+    expect(identidadeDoTelefone("waha")).toBe("sim");
+    expect(identidadeDoTelefone("meta_cloud")).toBe("sim");
+    expect(identidadeDoTelefone("zernio")).toBe("sim");
+    expect(identidadeDoTelefone("site_widget")).toBe("nao");
+    // As três formas de "não sei" — nunca "nao": "nao" autorizaria descartar
+    // um vínculo por telefone que pode muito bem ser um WhatsApp de verdade.
+    expect(identidadeDoTelefone("wacalls")).toBe("desconhecido");
+    expect(identidadeDoTelefone("provider-que-nao-existe")).toBe("desconhecido");
+    expect(identidadeDoTelefone(null)).toBe("desconhecido");
+    expect(identidadeDoTelefone(undefined)).toBe("desconhecido");
+    expect(identidadeDoTelefone("")).toBe("desconhecido");
   });
 });

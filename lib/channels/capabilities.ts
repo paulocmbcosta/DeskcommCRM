@@ -267,12 +267,25 @@ export function capabilitiesOf(provider: ChannelProvider): ChannelCapabilities {
 }
 
 /**
- * O telefone é identidade no canal deste provider? Fail-closed: provider
- * ausente, de voz ou que esta imagem não conhece responde `false` — errar para o
- * lado de "é identidade" entregaria dado de um cliente a quem só digitou o
- * número dele.
+ * `false` sozinho quer dizer três coisas diferentes — "o telefone foi
+ * digitado" (chat do site), "não sei que canal é este" (aba antiga aberta
+ * depois de uma atualização, provider fora da matriz) e "deu erro perguntando"
+ * — e só a PRIMEIRA autoriza descartar um vínculo já gravado por telefone.
+ * Colapsar as três em um booleano fazia uma atualização de canal "provar" que
+ * um WhatsApp vinculado nunca tinha sido identidade nenhuma.
  */
-export function telefoneEhIdentidade(provider: string | null | undefined): boolean {
+export type IdentidadeDoTelefone = "sim" | "nao" | "desconhecido";
+
+/**
+ * O telefone é identidade no canal deste provider? `"sim"`/`"nao"` só para
+ * provider CONHECIDO da matriz (pela capacidade `telefoneEhIdentidade`);
+ * `"desconhecido"` para ausente, vazio, de voz (`wacalls`) ou fora da matriz —
+ * fail-closed continua sendo NÃO VINCULAR sozinho, mas "desconhecido" agora se
+ * distingue de "nao": só "nao" autoriza descartar um vínculo por telefone já
+ * gravado.
+ */
+export function identidadeDoTelefone(provider: string | null | undefined): IdentidadeDoTelefone {
   const linha = (CHANNEL_CAPABILITIES as Partial<Record<string, ChannelCapabilities>>)[provider ?? ""];
-  return linha?.telefoneEhIdentidade === true;
+  if (!linha) return "desconhecido";
+  return linha.telefoneEhIdentidade ? "sim" : "nao";
 }
