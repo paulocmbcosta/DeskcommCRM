@@ -16,7 +16,7 @@
   ],
   "mainPath": ["ingest", "evento", "worker", "gate", "jev", "nascer", "timeline"],
   "nodes": [
-    { "id": "config", "lane": "tela", "col": 1, "type": "frontend", "label": "Configurações › Funis › Quando o card nasce (admin) — toda conversa | só comerciais + certeza mínima" },
+    { "id": "config", "lane": "tela", "col": 1, "type": "frontend", "label": "CRM › Etapas do funil › Quando o card nasce (admin) — toda conversa | só comerciais + certeza mínima" },
     { "id": "timeline", "lane": "tela", "col": 3, "type": "frontend", "label": "Linha do tempo da conversa — 'conversa identificada como comercial (93%) — assunto: mudança de plano'" },
     { "id": "execucoes", "lane": "tela", "col": 4, "type": "frontend", "label": "IA › Execuções — toda chamada ao Jev, com custo e falha (purpose commercial_classify)" },
     { "id": "ingest", "lane": "entrada", "col": 1, "type": "backend", "label": "pos-entrada → garantirLeadDaConversa(origem ingest) — recua com 'aguarda_classificador'" },
