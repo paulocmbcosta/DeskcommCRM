@@ -12,7 +12,7 @@ vi.mock("@/lib/atendimento/janela-do-atendimento", () => ({ janelaDoAtendimento:
 const { dadosViaSupabase } = await import("@/lib/classificador-comercial/dados");
 const { logger } = await import("@/lib/logger");
 const { janelaDoAtendimento } = await import("@/lib/atendimento/janela-do-atendimento");
-const { MARCADOR_NAO_LIDA } = await import("@/workers/media-derive-worker");
+const { MARCADOR_NAO_LIDA } = await import("@/lib/messaging/media/derivable");
 
 /** Builder falso: registra filtros e devolve `resultado` no fim da cadeia. */
 function dbQueDevolve(porTabela: Record<string, { data: unknown; error: { message: string } | null }>) {
@@ -181,6 +181,30 @@ describe("dadosViaSupabase", () => {
         { direcao: "inbound", texto: null },
         { direcao: "inbound", texto: "olha isso" },
       ]);
+    });
+
+    it("vídeo em que nada pôde ser lido: sem o marcador sobra só o rótulo, e só rótulo não é fala", async () => {
+      // O derivado de vídeo compõe "Rótulo: conteúdo" por trilha
+      // (lib/messaging/media/video-derive.ts); tirado o marcador, sobrariam
+      // "Transcrição do áudio do vídeo:" e "- Quadro 1:" — que o Jev leria
+      // como o cliente falando.
+      const soRotulo = `Transcrição do áudio do vídeo: ${MARCADOR_NAO_LIDA}`;
+      const tudoIlegivel =
+        `Transcrição do áudio do vídeo: ${MARCADOR_NAO_LIDA}\n\n` +
+        `Cenas do vídeo:\n- Quadro 1: ${MARCADOR_NAO_LIDA}\n- Quadro 2: ${MARCADOR_NAO_LIDA}`;
+      const comUmQuadro = `Transcrição do áudio do vídeo: ${MARCADOR_NAO_LIDA}\n\nCenas do vídeo:\n- Quadro 1: um roteador na mesa`;
+      const linhas = [
+        { direction: "inbound", type: "video", status: "received", body: null, media_derived_text: comUmQuadro, revoked_at: null },
+        { direction: "inbound", type: "video", status: "received", body: null, media_derived_text: tudoIlegivel, revoked_at: null },
+        { direction: "inbound", type: "video", status: "received", body: null, media_derived_text: soRotulo, revoked_at: null },
+      ];
+      const { db } = dbQueDevolve({ messages: { data: linhas, error: null } });
+      const r = await dadosViaSupabase(db, { janela: janelaSemPiso }).ultimasMensagens("org-1", "conversa-1", 24);
+      expect(r[0]).toEqual({ direcao: "inbound", texto: null });
+      expect(r[1]).toEqual({ direcao: "inbound", texto: null });
+      // Um quadro legível basta: o texto fica, sem o marcador.
+      expect(r[2]!.texto).toContain("um roteador na mesa");
+      expect(r[2]!.texto).not.toContain(MARCADOR_NAO_LIDA);
     });
 
     it("descarta linha com direction fora do CHECK (inbound/outbound), sem mentir o tipo, e avisa no log sem conteúdo da mensagem", async () => {

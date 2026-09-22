@@ -32,7 +32,7 @@ import { janelaDoAtendimento } from "@/lib/atendimento/janela-do-atendimento";
 import { logger } from "@/lib/logger";
 import { ATENDIMENTO_VIGENTE } from "@/lib/schemas/messaging";
 import { nascimentoDoCard, type NascimentoDoCard } from "@/lib/schemas/settings";
-import { MARCADOR_NAO_LIDA } from "@/workers/media-derive-worker";
+import { MARCADOR_NAO_LIDA } from "@/lib/messaging/media/derivable";
 
 import type { MensagemParaEstado } from "./perguntas";
 
@@ -97,6 +97,24 @@ const ROTULO_DE_MIDIA: Record<string, string> = {
   sticker: "figurinha",
 };
 
+/** Linha que é só um rótulo: "Cenas do vídeo:", "- Quadro 1:" — nada depois dos dois-pontos. */
+const LINHA_SO_ROTULO = /^(?:-\s*)?[^:\n]+:\s*$/;
+
+/**
+ * O derivado de vídeo compõe "Rótulo: conteúdo" por trilha
+ * (`lib/messaging/media/video-derive.ts`): tirado o marcador de não lida, uma
+ * trilha ilegível deixa o RÓTULO sozinho ("Transcrição do áudio do vídeo:").
+ * Se TODAS as linhas sobrantes forem só rótulo, não há nada que o cliente disse.
+ * Basta UMA linha com conteúdo (um quadro descrito) para o texto valer.
+ */
+function soRotulos(texto: string): boolean {
+  const linhas = texto
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+  return linhas.every((l) => LINHA_SO_ROTULO.test(l));
+}
+
 /**
  * O texto de UMA linha, como o Jev deveria lê-la.
  *
@@ -127,7 +145,8 @@ function textoDaMensagem(type: string, body: string | null, derivado: string | n
   // ao Jev, ele o lia como o cliente dizendo "não consegui interpretar" e
   // respondia "não comercial". `replaceAll`, e não igualdade: o derivado de
   // vídeo compõe transcrição e quadros, e só a parte ilegível sai.
-  const derivadoLimpo = derivado?.replaceAll(MARCADOR_NAO_LIDA, "").trim() || null;
+  const semMarcador = derivado?.replaceAll(MARCADOR_NAO_LIDA, "").trim() || null;
+  const derivadoLimpo = type === "video" && semMarcador !== null && soRotulos(semMarcador) ? null : semMarcador;
 
   if (type === "audio") {
     return [corpo, derivadoLimpo].filter((t): t is string => t !== null).join(" — ") || null;
