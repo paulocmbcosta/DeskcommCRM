@@ -171,8 +171,8 @@ compara provider.
   telemetria). Cliente que volta noutro atendimento recomeça do zero.
 - **A data de nascimento nunca entra em `ClienteIxc`**, que vai ao navegador no painel. Ela é
   lida só na conferência, com uma lista de campos própria (`CAMPOS_DA_CONFERENCIA` =
-  `CAMPOS_DO_CLIENTE` + `data_nascimento`), comparada e descartada. O formato é medido na
-  sonda de §12 antes de entrar na lista branca.
+  `CAMPOS_DO_CLIENTE` + `data_nascimento`), comparada e descartada. Formato medido na sonda de §12
+  (`AAAA-MM-DD`; `0000-00-00` = sem data).
 - Vínculo `telefone` num canal sem telefone verificado **não conta** para a IA (pode ter
   nascido do furo do painel antes deste conserto).
 
@@ -335,11 +335,21 @@ Evidência em `.superpowers/evidence/ia-cobranca-ixc/`.
 
 ## 12. Não medido (e o que falta medir antes do deploy)
 
-- **Formato de `cliente.data_nascimento` no IXC real** — sonda só-leitura AUTORIZADA pelo dono
-  em 22/09, que imprime só agregados (formato × tipo de pessoa, faixa de anos). Até ela rodar,
-  o campo não entra na lista branca.
-- Pessoa jurídica: o que o IXC guarda em `data_nascimento` para CNPJ. Se vazio, cliente PJ fora
-  do telefone vai para humano depois das recusas — aceitável na v1, declarado.
+- ~~Formato de `cliente.data_nascimento`~~ **MEDIDO em 2026-09-22** (sonda só-leitura
+  autorizada pelo dono, só agregados, 3 amostras de 1000 cadastros no IXC da Totus):
+  | amostra | `AAAA-MM-DD` | `0000-00-00` | outro |
+  |---|---|---|---|
+  | 1000 mais novos | 967 | 33 | 0 |
+  | 1000 mais antigos | 738 | 262 | 0 |
+  | 1000 **ativos** mais novos (de 2187) | **998** | 2 | 0 |
+
+  O formato é SEMPRE `AAAA-MM-DD`, e o vazio é `0000-00-00`. Nos antigos, 3 anos fora de
+  1900..hoje (mínimo: ano 1). Regra: `0000-00-00`, vazio ou ano < 1900 = cadastro **sem**
+  nascimento (recusa genérica, como qualquer outra).
+- **Pessoa jurídica** — 65 de 67 ativos PJ TÊM a data preenchida, mas os agregados não dizem se
+  é a data de abertura da empresa ou o nascimento do responsável. Um cliente PJ fora do
+  telefone pode informar a data "errada" para o IXC e ser recusado; depois de 3, vai para a
+  Cobrança. Aceitável na v1, declarado.
 - O envio real de documento/imagem pela saída do MOTOR no canal Meta. A rota do botão já envia
   mídia pela Meta em produção (Pix provado pelo dono em 22/09) pelo MESMO `sendMessageHandler`;
   o motor não foi medido contra a Meta real.
