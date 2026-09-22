@@ -11,7 +11,9 @@
 export const FERRAMENTA_CONSULTAR_CLIENTE = "crm_consultar_cliente_erp";
 export const FERRAMENTA_ENVIAR_COBRANCA = "crm_enviar_cobranca_erp";
 
-export const FERRAMENTAS_DO_CONECTOR: readonly string[] = [FERRAMENTA_CONSULTAR_CLIENTE, FERRAMENTA_ENVIAR_COBRANCA];
+export const FERRAMENTAS_DO_CONECTOR = [FERRAMENTA_CONSULTAR_CLIENTE, FERRAMENTA_ENVIAR_COBRANCA] as const;
+/** A mesma lista como `string[]`, para quem compara com id vindo do banco (`tool_ids`). */
+export const IDS_DAS_FERRAMENTAS_DO_CONECTOR: readonly string[] = FERRAMENTAS_DO_CONECTOR;
 
 export const DESCRICAO_CONSULTAR_CLIENTE =
   "Consulta o cliente DESTA conversa no sistema de gestão da empresa: situação do acesso, plano, " +

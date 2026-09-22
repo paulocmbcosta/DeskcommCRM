@@ -145,6 +145,10 @@ function clienteDe(resumo: ResumoIxc): ClienteParaAgente {
     situacao: situacao?.rotulo ?? null,
     motivoDaSituacao: situacao?.detalhe ?? null,
     bloqueado: situacao?.bloqueado ?? null,
+    // `null` tanto quando a seção de contratos FALHOU quanto quando ela leu
+    // certinho e simplesmente não há contrato vigente — os dois casos são
+    // "não dá pra afirmar plano/data" pra quem consome, que não precisa saber
+    // qual dos dois aconteceu.
     plano: vigentes.map((c) => c.plano).filter(Boolean).join(" + ") || null,
     clienteDesde:
       vigentes
@@ -187,6 +191,11 @@ async function identificado(
 async function vincularE(p: PedidoDeConsulta, cadastros: string[], verificadoPor: FormaDeVerificacao): Promise<ResultadoDaConsulta> {
   let criou = false;
   for (const externalId of cadastros) {
+    // O vínculo é GRAVADO aqui — ANTES de sabermos se `identificado()` consegue
+    // ler o resumo. Um IXC que falhe logo em seguida ainda deixa o contato
+    // vinculado: a consulta seguinte já entra por `cadastrosValidos`, sem gastar
+    // outra tentativa de CPF.
+    //
     // `vincular` devolve `{ vinculou, promovido }`: gravou agora OU promoveu a
     // linha que existia (o vínculo por telefone vira `documento` quando o CPF
     // confere). Os dois casos são "mudou o vínculo" e vão para a auditoria.

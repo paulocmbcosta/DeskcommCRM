@@ -170,6 +170,12 @@ export type ResultadoDaConsulta =
       dataIlegivel?: true;
     };
 
+/**
+ * De-duplicar — não cobrar a MESMA fatura duas vezes no mesmo atendimento — é
+ * do CHAMADOR, não deste conector: ele não guarda estado entre chamadas de
+ * `enviarCobranca`, e quem sabe quantas vezes o turno já mandou cobrança é o
+ * motor, que tem o teto de envios do turno.
+ */
 export interface PedidoDeCobranca {
   admin: SupabaseClient;
   credencial: CredencialDeConector;
