@@ -115,4 +115,8 @@ describe("decidir", () => {
       expect(decidir({ ...base, comercial: 0.9, assunto }, 0.7).assunto).toBe("outro");
     },
   );
+
+  it("assunto ausente (o Jev só respondeu a decisão, não o motivo) vira 'outro'", () => {
+    expect(decidir({ ...base, comercial: 0.9, assunto: null }, 0.7).assunto).toBe("outro");
+  });
 });

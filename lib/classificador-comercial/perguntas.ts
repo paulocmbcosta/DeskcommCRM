@@ -109,14 +109,23 @@ export const PERGUNTAS = {
   },
 } as const;
 
-/** A resposta do Jev já traduzida para o que o produto usa. */
+/**
+ * A resposta do Jev já traduzida para o que o produto usa.
+ *
+ * `assunto` e `tokensDeEntrada` são `| null`: só `comercial` (a decisão) vem
+ * de um campo estrito no schema HTTP (`lib/classificador-comercial/jev.ts`)
+ * — os outros dois só EXPLICAM ou CUSTEIAM, e um provedor que respondeu a
+ * pergunta certa mas errou o resto de um jeito imprevisto não pode fazer o
+ * card deixar de nascer.
+ */
 export interface RespostaDoJev {
   comercial: number;
-  assunto: string;
+  assunto: string | null;
   confiancaDoAssunto: number | null;
   /** Versão que respondeu, como o provedor a devolveu (ex.: `jev-1.13.0`). */
   modelo: string;
-  tokensDeEntrada: number;
+  /** `null` = o provedor não informou uso — nunca 0 (0 é "grátis", `null` é "não sei"). */
+  tokensDeEntrada: number | null;
 }
 
 export interface Decisao {
@@ -128,6 +137,9 @@ export interface Decisao {
 export function decidir(resposta: RespostaDoJev, limiar: number): Decisao {
   // Object.hasOwn (não `in`): `in` também é true para "toString", "constructor",
   // "__proto__" etc. — herdados de Object.prototype — e gravaria lixo na linha do tempo.
-  const assunto: Assunto = Object.hasOwn(ASSUNTOS, resposta.assunto) ? (resposta.assunto as Assunto) : "outro";
+  // `resposta.assunto === null` primeiro: `Object.hasOwn` não aceita `null` como
+  // chave (o tipo é `PropertyKey`), e sem o motivo não há como escolher um assunto.
+  const assunto: Assunto =
+    resposta.assunto !== null && Object.hasOwn(ASSUNTOS, resposta.assunto) ? (resposta.assunto as Assunto) : "outro";
   return { criar: resposta.comercial >= limiar, assunto, probabilidade: resposta.comercial };
 }
