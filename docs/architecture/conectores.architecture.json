@@ -127,7 +127,7 @@
       "lane": "conector",
       "col": 4,
       "type": "backend",
-      "label": "ixc/painel.ts — vinculado | escolher | nao_encontrado | vinculo_sem_cadastro; 1 candidato vincula sozinho"
+      "label": "ixc/painel.ts — vinculado | escolher | nao_encontrado | vinculo_sem_cadastro; 1 candidato vincula sozinho só onde identidadeDoTelefone='sim'; descarta vínculo por telefone só quando 'nao' (nunca em 'desconhecido')"
     },
     {
       "id": "identificar",

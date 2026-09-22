@@ -10,6 +10,7 @@
  */
 import type { CredencialDeConector } from "../tipos";
 import { CAMPOS_DA_CONFERENCIA, CAMPOS_DO_CLIENTE } from "./campos";
+import { hojeEmSaoPaulo } from "./faturas";
 import { listarNoIxc } from "./http";
 import { mesmoTelefone, soDigitos, telefoneParaBusca } from "./mascara";
 
@@ -126,10 +127,12 @@ export function nascimentoDoIxc(bruto: string | undefined): string | null {
  * A data que o cliente informou, em `AAAA-MM-DD` (aceita `DD/MM/AAAA`). `null`
  * se não existir no calendário OU se for no FUTURO — ninguém nasce depois de
  * hoje, e aceitar abriria a conferência para qualquer chute de quem não sabe a
- * data certa. `hoje` é injetável só para teste; em produção é o dia real em UTC
- * (a granularidade do dia já basta — não é hora de fechamento de fatura).
+ * data certa. `hoje` é injetável só para teste; em produção é `hojeEmSaoPaulo()`
+ * — a MESMA régua de "hoje" que `faturas.ts` usa neste conector. Duas réguas de
+ * data diferentes (uma em UTC, outra em São Paulo) no mesmo conector é dívida
+ * que só aparece perto da virada do dia, e ninguém a pegaria no teste.
  */
-export function dataInformada(bruto: string, hoje: string = new Date().toISOString().slice(0, 10)): string | null {
+export function dataInformada(bruto: string, hoje: string = hojeEmSaoPaulo()): string | null {
   const t = bruto.trim();
   const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t);
   const iso = br ? `${br[3]}-${br[2]}-${br[1]}` : t;
