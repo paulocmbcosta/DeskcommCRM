@@ -8,6 +8,37 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.37.0] — 2026-09-22
+
+### Adicionado
+
+- **Funil — o card pode nascer só para conversas comerciais** Em **CRM › Etapas do funil**, a seção nova **Quando o card nasce** tem duas opções. **Toda conversa vira card** é o comportamento de sempre e continua sendo o padrão: nada muda até alguém escolher a outra.
+
+  **Só conversas comerciais**: a primeira mensagem deixa de abrir card. A cada mensagem de quem ainda não tem card, a IA (o Jev, da TypeSafe, pela OpenRouter) lê as últimas falas do atendimento atual e decide se o assunto é contratação, mudança de plano ou conhecer planos. Suporte, financeiro e cancelamento não contam como comerciais. Quando abre, a linha do tempo da conversa diz por quê, por exemplo "conversa identificada como comercial (93%) — assunto: mudança de plano". Quem já tem card não gera consulta nenhuma. A **certeza mínima** (60 a 90%) regula o quanto a IA precisa estar segura.
+
+  Como a decisão é refeita a cada mensagem, o card pode nascer no MEIO da conversa — na mensagem em que ela vira comercial, não necessariamente na primeira. Automações de "card criado" (webhooks, follow-ups) disparam nesse momento, não antes. Quando a conversa só tem mídia que o sistema não conseguiu ler (áudio sem transcrição, imagem ou documento sem descrição, vídeo), o card também nasce, mas "sem classificar" — a linha do tempo diz que a mídia não pôde ser lida, em vez de dizer o assunto. O agente de IA também abre o card: se ele qualifica, negocia ou fecha a conversa antes de o classificador decidir, o card nasce nesse avanço, já na etapa certa do funil.
+
+  Com a regra ligada, o classificador roda FORA da resposta ao WhatsApp: a decisão chega poucos segundos depois da mensagem, não durante o atendimento — nenhuma conversa espera pela IA para receber resposta. Organização com a regra desligada (o padrão) não muda em nada: continua sendo o comportamento de sempre.
+
+  Precisa de uma chave da **OpenRouter** cadastrada e validada em **IA › Credenciais** (ou `OPENROUTER_API_KEY` na instalação) — sem chave, a tela recusa ligar a regra. Cada consulta custa uma fração de centavo de dólar e aparece em **IA › Execuções**. Se a IA não conseguir responder (chave sem saldo, serviço fora do ar), o card nasce como antes, e a linha do tempo registra a causa.
+
+  Para decidir, as últimas falas do atendimento são enviadas à OpenRouter e à TypeSafe (dona do Jev); se a chave usada for a da instalação (`OPENROUTER_API_KEY`), elas passam pela conta de quem administra a instalação.
+
+### Corrigido
+
+- **IA › Execuções — chave de API ecoada pelo provedor passa a ser apagada da mensagem de erro** Quando um provedor de IA recusa uma chave e devolve essa chave de volta na
+  própria mensagem de erro, o sistema deveria apagar a chave antes de gravar a
+  mensagem na tela de IA › Execuções. A mensagem de erro do provedor passou a
+  ser gravada em IA › Execuções na versão 1.2.0, junto com uma limpeza que
+  devia apagar a chave e, por um defeito, nunca apagou nada. Ou seja: da 1.2.0
+  à 1.36.0, se um provedor ecoou a chave num erro, ela pode ter ficado visível
+  ali — se você viu uma chave nessa tela, troque-a. Antes da 1.2.0 a mensagem
+  não era gravada nessa tela.
+
+  Para conferir se ficou algo visível: em **IA › Execuções**, clique em "Ver só
+  as falhas" e abra "Mensagem técnica do provedor" em cada execução com erro,
+  procurando por um trecho que pareça uma chave de API.
+
 ## [1.36.0] — 2026-09-22
 
 ### Adicionado
@@ -5306,7 +5337,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.36.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.37.0...HEAD
+[1.37.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.36.0...v1.37.0
 [1.36.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.1...v1.36.0
 [1.35.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.0...v1.35.1
 [1.35.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.34.2...v1.35.0
