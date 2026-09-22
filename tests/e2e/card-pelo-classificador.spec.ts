@@ -292,6 +292,9 @@ test.describe("o card nasce quando a conversa é comercial", () => {
     await expect(
       page.getByTestId("nascimento-do-card").getByRole("radio", { name: /só conversas comerciais/i }),
     ).toBeChecked({ timeout: 20_000 });
+    // O selo é de quem NÃO pode editar: para o admin, a opção marcada pode ser
+    // uma escolha ainda não salva, e chamá-la "Em vigor" seria mentira.
+    await expect(page.getByTestId("nascimento-do-card").getByText("Em vigor")).toHaveCount(0);
     fs.mkdirSync("evidence/card-pelo-classificador", { recursive: true });
     await page.screenshot({ path: "evidence/card-pelo-classificador/regra-ligada.png", fullPage: true });
   });
@@ -317,6 +320,9 @@ test.describe("o card nasce quando a conversa é comercial", () => {
     await expect(secao.getByRole("radio", { name: /só conversas comerciais/i })).toBeDisabled();
     await expect(secao.getByRole("button", { name: /salvar/i })).toHaveCount(0);
     await expect(secao.getByText("Só um administrador pode mudar essa regra.")).toBeVisible();
+    // Desabilitado não pode apagar QUAL regra vale: o selo fica na opção em vigor, e só nela.
+    await expect(secao.getByTestId("opcao-nascimento-classificador").getByText("Em vigor")).toBeVisible();
+    await expect(secao.getByText("Em vigor")).toHaveCount(1);
     await page.screenshot({ path: "evidence/card-pelo-classificador/regra-vista-pelo-gerente.png", fullPage: true });
 
     await abrirQuadroDeEntrada(page);
@@ -340,7 +346,10 @@ test.describe("o card nasce quando a conversa é comercial", () => {
       page.getByText(/conversa identificada como comercial \(93%\) — assunto: mudança de plano/i).first(),
     ).toBeVisible({ timeout: 20_000 });
     fs.mkdirSync("evidence/card-pelo-classificador", { recursive: true });
-    await page.screenshot({ path: "evidence/card-pelo-classificador/card-nascido-comercial.png", fullPage: true });
+    // Só a janela, não `fullPage`: o dossiê é um painel FIXO, e num quadro mais
+    // alto que a janela (banco compartilhado, cards de outras rodadas) a captura
+    // de página inteira desenhava o painel deslocado para o meio da imagem.
+    await page.screenshot({ path: "evidence/card-pelo-classificador/card-nascido-comercial.png" });
   });
 
   test("com o card aberto, a mensagem seguinte NÃO chama o Jev", async ({ page }) => {
