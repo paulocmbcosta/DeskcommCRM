@@ -113,6 +113,21 @@ export async function limparErroSeHavia(ctx: Extract<ContextoIxc, { ok: true }>)
  * navegador, então tem de ser deste contato e desta organização; sem conversa
  * válida a resposta é `false` — fail-closed: o painel mostra o candidato para o
  * atendente escolher em vez de vincular sozinho.
+ *
+ * É ADMIN CLIENT, e não o de sessão — e o motivo, conferido no `baseline.sql`,
+ * não é "channel_sessions é ilegível pro papel `agent`" (é legível: a policy
+ * `channel_sessions_tenant_select` não tem `fn_role_at_least`, só organização).
+ * O motivo é `conversations_select`: ela passa por `fn_can_view_conversation`,
+ * que decide VISIBILIDADE (papel + atribuição + `visibility_mode` da
+ * organização) — uma pergunta diferente da que esta função faz, que é
+ * ESTRUTURAL ("esta linha pertence a este contato e a esta organização?"). Se
+ * usasse o client de sessão, um agente sob `visibility_mode: 'own'` olhando uma
+ * conversa que passou a ser de outro atendente depois que ele a abriu perderia
+ * a prova de identidade por um motivo que não tem nada a ver com o IXC. O filtro
+ * manual por `contact_id` (lido antes, já escopado pela sessão) e
+ * `organization_id` (da sessão, nunca do pedido) é exatamente o padrão que a
+ * doutrina pede para admin client em request handler — RLS não teria nada a
+ * acrescentar aqui além dessa mesma checagem.
  */
 export async function telefoneEhIdentidadeNaConversa(
   ctx: Extract<ContextoIxc, { ok: true }>,
