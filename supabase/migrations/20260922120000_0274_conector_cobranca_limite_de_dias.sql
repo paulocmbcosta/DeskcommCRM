@@ -11,10 +11,19 @@
 -- Coluna tipada, não jsonb: é um número com faixa, e o CHECK é quem a guarda.
 --
 -- Idempotente: `add column if not exists` com default (preenche as linhas que já
--- existem — não há dado a corrigir) e o CHECK criado só se faltar.
+-- existem) e o CHECK criado só se faltar. O `update` normalizador roda ANTES do
+-- `add constraint` (doutrina de migrations, item 8): sem ele, um clone com linha
+-- fora da faixa (NULL de um `update.sh` antigo, ou um valor herdado de bug) faz
+-- o `add constraint` falhar — e como o `update.sh` roda SEM `ON_ERROR_STOP`, ele
+-- segue em frente com a coluna sem CHECK nenhum, e nenhum sintoma visível.
 
 alter table public.conector_conexoes
   add column if not exists cobranca_encaminha_apos_dias integer not null default 60;
+
+update public.conector_conexoes
+   set cobranca_encaminha_apos_dias = 60
+ where cobranca_encaminha_apos_dias is null
+    or cobranca_encaminha_apos_dias not between 1 and 3650;
 
 do $$
 begin
