@@ -25,7 +25,7 @@ type EventLike = {
   // `unknown` de propósito nos campos que o Sentry tipa mais largo que string
   // (`query_string` é `string | Record<string,string> | Array<[string,string]>`).
   // A checagem de `typeof === "string"` acontece em runtime, logo abaixo.
-  request?: { url?: unknown; query_string?: unknown; headers?: unknown };
+  request?: { url?: unknown; query_string?: unknown; headers?: unknown; data?: unknown };
   transaction?: string;
   contexts?: { trace?: { data?: Record<string, unknown> } };
   message?: string;
@@ -123,6 +123,66 @@ function scrubHeaders(headers: unknown): void {
 }
 
 /**
+ * Campo sensível do CORPO da requisição, por padrão — mesma ideia do header.
+ *
+ * O SDK anexa o corpo da requisição ao evento de erro, e a telemetria nasce
+ * ligada (DSN da comunidade). Até 2026-09-22 nenhum hook olhava o corpo; nesse
+ * dia entrou o cadastro de membro com senha (`POST /api/v1/team/members`), cujo
+ * corpo leva a senha que o admin escolheu para OUTRA pessoa. Um erro qualquer
+ * naquela rota a mandaria para fora do servidor de quem instalou. Login,
+ * cadastro e redefinição de senha já mandavam senha em corpo antes — ficam
+ * cobertos pelo mesmo padrão.
+ *
+ * A CHAVE fica e o VALOR sai: sem a chave não se sabe o que foi redigido.
+ */
+const SENSITIVE_FIELD = /pass(word)?|senha|secret|token|api[-_]?key|credential|authorization/i;
+const REDIGIDO = "[redigido]";
+
+function redigirValor(valor: unknown, profundidade = 0): unknown {
+  if (profundidade > 8) return valor;
+  if (Array.isArray(valor)) return valor.map((v) => redigirValor(v, profundidade + 1));
+  if (valor && typeof valor === "object") {
+    const saida: Record<string, unknown> = {};
+    for (const [chave, v] of Object.entries(valor as Record<string, unknown>)) {
+      saida[chave] = SENSITIVE_FIELD.test(chave) ? REDIGIDO : redigirValor(v, profundidade + 1);
+    }
+    return saida;
+  }
+  return valor;
+}
+
+function decodificar(texto: string): string {
+  try {
+    return decodeURIComponent(texto.replace(/\+/g, " "));
+  } catch {
+    return texto;
+  }
+}
+
+function redigirTexto(texto: string): string {
+  try {
+    return JSON.stringify(redigirValor(JSON.parse(texto)));
+  } catch {
+    // Corpo truncado pelo limite de tamanho do SDK, ou formulário: JSON
+    // quebrado não é salvo-conduto — o par chave/valor sai redigido igual.
+  }
+  return texto
+    .replace(/("([^"\\]*)"\s*:\s*)"(?:[^"\\]|\\.)*("?)/g, (par, prefixo: string, chave: string, fecha: string) =>
+      SENSITIVE_FIELD.test(chave) ? `${prefixo}"${REDIGIDO}${fecha}` : par,
+    )
+    .replace(/(^|[&?])([^=&]+)=([^&]*)/g, (par, separador: string, chave: string) =>
+      SENSITIVE_FIELD.test(decodificar(chave)) ? `${separador}${chave}=${REDIGIDO}` : par,
+    );
+}
+
+function scrubRequestData<T extends EventLike>(event: T): void {
+  const request = event.request;
+  if (!request || request.data === undefined || request.data === null) return;
+  request.data =
+    typeof request.data === "string" ? redigirTexto(request.data) : redigirValor(request.data);
+}
+
+/**
  * Limpa os campos que carregam URL em QUALQUER evento — erro ou transação.
  * O nome da transação entra aqui porque o `@sentry/node` puro não parametriza a
  * rota; só o wrapper do Next parametriza, e nem todo caminho passa por ele.
@@ -152,6 +212,7 @@ function scrubEventUrls<T extends EventLike>(event: T): T {
 export const sentryScrubHooks = {
   beforeSend<T extends EventLike>(event: T): T {
     scrubEventUrls(event);
+    scrubRequestData(event);
     if (typeof event.message === "string") {
       event.message = scrubMessage(event.message);
     }
@@ -164,6 +225,7 @@ export const sentryScrubHooks = {
   },
 
   beforeSendTransaction<T extends EventLike>(event: T): T {
+    scrubRequestData(event);
     return scrubEventUrls(event);
   },
 
