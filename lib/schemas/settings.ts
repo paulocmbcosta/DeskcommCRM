@@ -257,6 +257,15 @@ export const agendaSettingsSchema = agendaSettingsWriteSchema.catch({confirmatio
  * `fn_marcar_contato_como_cliente`. Ausente, `false`, a string `"true"` ou
  * qualquer lixo é desligado aqui E lá. Se os dois idiomas divergissem, a tela
  * mostraria o selo de uma regra que o trigger não aplica.
+ *
+ * `crm` também guarda `nascimento_do_card` (abaixo, lido por `nascimentoDoCard()`
+ * — ESTE schema não o conhece). ⚠️ `z.object()` sem `.passthrough()` DESCARTA
+ * chave desconhecida: `crmSettingsSchema.parse(crm)` devolve só
+ * `{ cliente_pela_agenda }`, sem `nascimento_do_card`. NUNCA regrave `crm` a
+ * partir da saída deste schema — quem grava uma regra do `crm` grava só a sua
+ * própria chave (`fn_definir_cliente_pela_agenda`,
+ * `app/actions/settings/definirNascimentoDoCard.ts`), nunca o objeto inteiro,
+ * senão a escrita de uma regra apaga a outra.
  */
 export const crmSettingsSchema = z
   .object({ cliente_pela_agenda: z.boolean().catch(false) })
@@ -286,20 +295,44 @@ export function clientePelaAgendaLigado(settings: unknown): boolean {
  */
 export const MODOS_DE_NASCIMENTO_DO_CARD = ["toda_conversa", "classificador"] as const;
 export type ModoDeNascimentoDoCard = (typeof MODOS_DE_NASCIMENTO_DO_CARD)[number];
-/** As opções da tela. A escrita só aceita estas; a leitura aceita qualquer valor em [0.5, 0.95]. */
+/**
+ * As únicas opções da tela (Tarefa 11) — a escrita só aceita estas. A leitura
+ * aceita qualquer número em [0.5, 0.95] mas ARREDONDA para a opção mais
+ * próxima (empate vai para a MENOR: menor limiar = mais cards = "na dúvida o
+ * card nasce"). Sem o arredondamento, um limiar gravado fora da tela (SQL,
+ * migration futura) deixaria o `Select` da Tarefa 11 vazio — e a escrita
+ * seguinte recusaria salvar sem o admin ter tocado no campo.
+ */
 export const LIMIARES_DO_CLASSIFICADOR = [0.6, 0.7, 0.8, 0.9] as const;
 export const NASCIMENTO_DO_CARD_PADRAO = { modo: "toda_conversa", limiar: 0.7 } as const satisfies {
   modo: ModoDeNascimentoDoCard;
   limiar: number;
 };
 
+/** A opção de `LIMIARES_DO_CLASSIFICADOR` mais próxima de `v`; empate → a menor. */
+function arredondarParaLimiarDaTela(v: number): number {
+  return LIMIARES_DO_CLASSIFICADOR.reduce((maisProximo, opcao) =>
+    Math.abs(v - opcao) < Math.abs(v - maisProximo) ? opcao : maisProximo,
+  );
+}
+
 export const nascimentoDoCardSchema = z
   .object({
     modo: z.enum(MODOS_DE_NASCIMENTO_DO_CARD).catch(NASCIMENTO_DO_CARD_PADRAO.modo),
-    limiar: z.number().min(0.5).max(0.95).catch(NASCIMENTO_DO_CARD_PADRAO.limiar),
+    limiar: z
+      .number()
+      .min(0.5)
+      .max(0.95)
+      .transform(arredondarParaLimiarDaTela)
+      .catch(NASCIMENTO_DO_CARD_PADRAO.limiar),
   })
-  .catch({ ...NASCIMENTO_DO_CARD_PADRAO });
-export type NascimentoDoCard = z.infer<typeof nascimentoDoCardSchema>;
+  // Função, não objeto: um `.catch({ ...padrao })` calcula UMA vez, no
+  // carregamento do módulo, e devolve essa MESMA instância em toda falha —
+  // provado, duas leituras de lixo eram `===` e mutar uma contaminava a
+  // próxima, entre organizações, no worker de vida longa. A função roda a
+  // cada `.parse()` e devolve um objeto novo.
+  .catch(() => ({ ...NASCIMENTO_DO_CARD_PADRAO }));
+export type NascimentoDoCard = Readonly<z.infer<typeof nascimentoDoCardSchema>>;
 
 export const nascimentoDoCardWriteSchema = z.object({
   modo: z.enum(MODOS_DE_NASCIMENTO_DO_CARD),
