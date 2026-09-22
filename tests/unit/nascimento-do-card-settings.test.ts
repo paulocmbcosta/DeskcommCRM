@@ -34,13 +34,26 @@ describe("nascimentoDoCard — leitura que perdoa", () => {
   });
 
   it("duas leituras de lixo NÃO compartilham instância, e mutar uma não contamina a outra", () => {
-    const a = nascimentoDoCard({ crm: "x" });
-    const b = nascimentoDoCard({ crm: "x" });
-    expect(a).toEqual(b);
-    expect(a).not.toBe(b);
-    (a as { modo: string }).modo = "classificador";
-    expect(b.modo).toBe("toda_conversa");
-    expect(nascimentoDoCard({ crm: "x" }).modo).toBe("toda_conversa");
+    // ⚠️ `{ crm: "x" }` NÃO serve de entrada aqui: `objeto("x")` é `undefined`,
+    // o `?? {}` assume antes do parse, e `{}` nunca alcança o `.catch` do
+    // OBJETO (onde a instância era compartilhada) — só os `.catch` por campo,
+    // que já eram independentes. É preciso um valor em `nascimento_do_card`
+    // que sobreviva até o `.parse()` e falhe lá: qualquer coisa que não seja
+    // um objeto plano.
+    const entradasQueFalhamNoParse = [
+      { crm: { nascimento_do_card: "x" } },
+      { crm: { nascimento_do_card: 42 } },
+      { crm: { nascimento_do_card: [] } },
+    ];
+    for (const entrada of entradasQueFalhamNoParse) {
+      const a = nascimentoDoCard(entrada);
+      const b = nascimentoDoCard(entrada);
+      expect(a).toEqual(b);
+      expect(a).not.toBe(b);
+      (a as { modo: string }).modo = "classificador";
+      expect(b.modo).toBe("toda_conversa");
+      expect(nascimentoDoCard(entrada).modo).toBe("toda_conversa");
+    }
   });
 
   describe("limiar fora das opções da tela arredonda para a mais próxima", () => {
@@ -49,6 +62,11 @@ describe("nascimentoDoCard — leitura que perdoa", () => {
       [0.76, 0.8],
       [0.5, 0.6],
       [0.95, 0.9],
+      // Empate em ponto flutuante: |0.65-0.6| e |0.65-0.7| não são iguais em
+      // IEEE 754 (0.050000000000000044 vs 0.04999999999999993) — comparar em
+      // centésimos inteiros é o que faz o empate cair na MENOR, como a regra manda.
+      [0.65, 0.6],
+      [0.85, 0.8],
       ...LIMIARES_DO_CLASSIFICADOR.map((limiar): [number, number] => [limiar, limiar]),
     ];
 

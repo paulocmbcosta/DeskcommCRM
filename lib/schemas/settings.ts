@@ -309,11 +309,22 @@ export const NASCIMENTO_DO_CARD_PADRAO = { modo: "toda_conversa", limiar: 0.7 } 
   limiar: number;
 };
 
-/** A opção de `LIMIARES_DO_CLASSIFICADOR` mais próxima de `v`; empate → a menor. */
+/**
+ * A opção de `LIMIARES_DO_CLASSIFICADOR` mais próxima de `v`; empate → a menor.
+ *
+ * ⚠️ Compara em CENTÉSIMOS INTEIROS (`Math.round(x * 100)`), nunca em ponto
+ * flutuante direto: `Math.abs(0.65 - 0.6)` e `Math.abs(0.65 - 0.7)` NÃO são
+ * iguais em IEEE 754 (`0.050000000000000044` contra `0.04999999999999993`) —
+ * o segundo vence por um erro de arredondamento invisível, e 0.65 cairia em
+ * 0.7 em vez de 0.6, quebrando "empate → a menor" bem no meio do intervalo.
+ */
 function arredondarParaLimiarDaTela(v: number): number {
-  return LIMIARES_DO_CLASSIFICADOR.reduce((maisProximo, opcao) =>
-    Math.abs(v - opcao) < Math.abs(v - maisProximo) ? opcao : maisProximo,
-  );
+  const centesimos = Math.round(v * 100);
+  return LIMIARES_DO_CLASSIFICADOR.reduce((maisProximo, opcao) => {
+    const distanciaAtual = Math.abs(centesimos - Math.round(maisProximo * 100));
+    const distanciaOpcao = Math.abs(centesimos - Math.round(opcao * 100));
+    return distanciaOpcao < distanciaAtual ? opcao : maisProximo;
+  });
 }
 
 export const nascimentoDoCardSchema = z
