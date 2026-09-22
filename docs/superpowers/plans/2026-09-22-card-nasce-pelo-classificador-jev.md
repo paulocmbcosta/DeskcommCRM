@@ -3105,7 +3105,7 @@ Expected: as duas verdes. A `conversa-vira-lead` é o controle: o modo de sempre
 - [ ] **Step 5: Evidência e gate de cobertura**
 
 Run: `pnpm vitest run tests/unit/e2e-cobertura-completa.test.ts && ls evidence/card-pelo-classificador/`
-Expected: PASS, e as duas imagens `regra-ligada.png` e `card-nascido-comercial.png`. Abra as duas e confira a olho que a seção e a razão estão legíveis.
+Expected: PASS, e as duas capturas de tela da spec (a regra ligada e o card nascido) em `evidence/card-pelo-classificador/`. Abra as duas e confira a olho que a seção e a razão estão legíveis. (Nomes de imagem citados em prosa num doc versionado precisam existir no `git ls-files` — `tests/unit/evidencia-citada.test.ts` reprova o contrário.)
 
 - [ ] **Step 6: Commit**
 
