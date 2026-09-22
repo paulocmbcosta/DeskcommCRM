@@ -124,6 +124,12 @@ WAHA_WEBHOOK_BASE_URL=http://127.0.0.1:3001
 CONECTORES_HOSTS_PRIVADOS=127.0.0.1
 UPSTASH_REDIS_REST_URL=http://127.0.0.1:3998
 UPSTASH_REDIS_REST_TOKEN=e2e-placeholder-nao-e-segredo
+# O Jev FALSO de \`tests/e2e/card-pelo-classificador.spec.ts\` (receiver HTTP que
+# a própria spec sobe). Sem esta linha o classificador comercial da suíte
+# chamaria a OpenRouter DE VERDADE (\`lib/classificador-comercial/jev.ts\`). A
+# porta NÃO é a 3998: essa é do UPSTASH acima, e um receiver ali atenderia as
+# chamadas do rate limit. A spec lê a porta DAQUI — uma fonte só.
+CLASSIFICADOR_COMERCIAL_BASE_URL=http://127.0.0.1:3997
 NEXT_TELEMETRY_DISABLED=1
 # Telemetria DESLIGADA na suíte, e não é preferência: sem isto o SDK do browser
 # assume o DSN da comunidade (\`lib/sentry/dsn.ts\` → DEFAULT_SENTRY_DSN) e a suíte
