@@ -94,7 +94,7 @@ function montarAdmin() {
       if (args.p_role === "admin") {
         const linhas = banco.linhas("user_organizations");
         for (let i = linhas.length - 1; i >= 0; i--) {
-          const l = linhas[i];
+          const l = linhas[i]!;
           if (l.organization_id === args.p_org && l.provisional_until_handover && l.user_id !== args.p_user)
             linhas.splice(i, 1);
         }
@@ -286,8 +286,8 @@ describe("POST /api/v1/team/members — o cadastro", () => {
     });
 
     expect(banco.rpcs).toHaveLength(1);
-    expect(banco.rpcs[0].nome).toBe("fn_accept_team_invite");
-    expect(banco.rpcs[0].args).toMatchObject({
+    expect(banco.rpcs[0]!.nome).toBe("fn_accept_team_invite");
+    expect(banco.rpcs[0]!.args).toMatchObject({
       p_user: NOVO_ID,
       p_org: ORG_ID,
       p_role: "agent",
@@ -342,7 +342,7 @@ describe("POST /api/v1/team/members — o cadastro", () => {
 
   it("criador PROVISÓRIO que cadastra um admin sai da organização — e a resposta diz", async () => {
     const linhas = banco.linhas("user_organizations");
-    linhas[0].provisional_until_handover = true;
+    linhas[0]!.provisional_until_handover = true;
     sessao();
     const { res, json } = await cadastrar({ ...corpoValido, role: "admin" });
     expect(res.status).toBe(201);

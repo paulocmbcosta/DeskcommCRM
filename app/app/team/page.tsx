@@ -56,7 +56,7 @@ export default async function TeamPage({
         </div>
         {isAdmin ? (
           <Button asChild className="shrink-0">
-            <Link href="/app/team/invite">{t("Convidar membros")}</Link>
+            <Link href="/app/team/invite">{t("Adicionar membros")}</Link>
           </Button>
         ) : null}
       </header>

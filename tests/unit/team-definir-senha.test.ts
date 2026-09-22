@@ -135,7 +135,7 @@ describe("POST /api/v1/team/[user_id]/password — o que ela recusa", () => {
   });
 
   it("membro revogado → 409 (devolver o acesso vem antes)", async () => {
-    banco.linhas("user_organizations")[1].revoked_at = "2026-09-01T00:00:00Z";
+    banco.linhas("user_organizations")[1]!.revoked_at = "2026-09-01T00:00:00Z";
     sessao();
     const { res } = await definir(MEMBRO);
     expect(res.status).toBe(409);
