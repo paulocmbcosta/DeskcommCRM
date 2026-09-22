@@ -32,15 +32,16 @@ export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
 
 /**
  * A senha que QUEM ADMINISTRA define para outra pessoa — no cadastro direto e
- * no "Definir nova senha". Mínimo 8, a mesma régua do login e do cadastro
- * (`lib/auth/schemas.ts`); máximo 72 porque é onde o bcrypt do provedor de
- * auth trunca: acima disso, a "senha" que a pessoa digita e a que vale divergem
- * em silêncio.
+ * no "Definir nova senha" — e a que a pessoa escolhe ao trocar a própria.
+ * Mínimo 8, a mesma régua do login e do cadastro (`lib/auth/schemas.ts`);
+ * máximo 72 **bytes**, não caracteres, porque é onde o bcrypt do provedor de
+ * auth corta: um "ç" ocupa dois. Acima disso, a senha que a pessoa digita e a
+ * que vale divergiriam em silêncio.
  */
 export const senhaDefinidaPeloAdminSchema = z
   .string()
   .min(8, "A senha precisa de pelo menos 8 caracteres.")
-  .max(72, "A senha pode ter no máximo 72 caracteres.");
+  .refine((s) => new TextEncoder().encode(s).length <= 72, "A senha é longa demais.");
 
 /**
  * Cadastro DIRETO: a pessoa entra na equipe com a senha que o administrador

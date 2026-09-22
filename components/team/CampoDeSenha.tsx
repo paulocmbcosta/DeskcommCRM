@@ -15,25 +15,23 @@ import { gerarSenha } from "@/lib/team/gerar-senha";
  *
  * Não é o campo de senha do login, e três escolhas saem disso:
  *
- * - **Gerar** preenche e MOSTRA: uma senha gerada que ninguém viu é uma senha
- *   que ninguém consegue passar adiante.
+ * - **Texto visível, não `type="password"`.** A senha existe para ser passada
+ *   adiante: esconder de quem a escolheu não protege nada. E um `password` ao
+ *   lado de um campo de e-mail, num formulário que limpa depois de enviar, é
+ *   exatamente o sinal para o navegador oferecer "salvar senha" — a senha do
+ *   MEMBRO iria parar no cofre de senhas do admin, associada a este site.
+ * - **Gerar** preenche uma senha fácil de ditar (sem 0/O nem 1/l/I).
  * - **Copiar** existe porque a próxima coisa que se faz com ela é mandá-la.
- * - `autoComplete="new-password"`: sem isso o navegador oferece salvar a senha
- *   DO MEMBRO como se fosse a de quem está logado.
  */
 export function CampoDeSenha({
   id,
   value,
   onChange,
-  mostrar,
-  onMostrarChange,
   disabled = false,
 }: {
   id: string;
   value: string;
   onChange: (senha: string) => void;
-  mostrar: boolean;
-  onMostrarChange: (mostrar: boolean) => void;
   disabled?: boolean;
 }) {
   const t = useT();
@@ -48,9 +46,15 @@ export function CampoDeSenha({
       <Label htmlFor={id}>{t("Senha")}</Label>
       <Input
         id={id}
-        type={mostrar ? "text" : "password"}
-        autoComplete="new-password"
+        type="text"
+        autoComplete="off"
         spellCheck={false}
+        autoCapitalize="off"
+        // Os gerenciadores de senha mais comuns respeitam estes atributos e não
+        // tratam o campo como credencial de quem está logado.
+        data-1p-ignore
+        data-lpignore="true"
+        data-form-type="other"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
@@ -62,22 +66,9 @@ export function CampoDeSenha({
           variant="outline"
           size="sm"
           disabled={disabled}
-          onClick={() => {
-            onChange(gerarSenha());
-            onMostrarChange(true);
-          }}
+          onClick={() => onChange(gerarSenha())}
         >
           {t("Gerar senha")}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={disabled}
-          aria-pressed={mostrar}
-          onClick={() => onMostrarChange(!mostrar)}
-        >
-          {mostrar ? t("Ocultar") : t("Mostrar")}
         </Button>
         <Button
           type="button"

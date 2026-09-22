@@ -70,11 +70,26 @@ interface Provedor {
 let banco: BancoEmMemoria;
 let provedor: Provedor;
 let erroNoVinculo: { code: string; message: string } | null;
+/** Tabela cuja LEITURA responde erro — o banco sob swap, que não é hipotético. */
+let leituraFalhaEm: string | null;
+
+function cadeiaQueFalha() {
+  const resposta = { data: null, error: { message: "canceling statement due to statement timeout" } };
+  const c: Record<string, unknown> = {};
+  for (const m of ["eq", "is", "in", "select"]) c[m] = () => c;
+  c.maybeSingle = async () => resposta;
+  c.then = (r: (v: unknown) => unknown) => Promise.resolve(resposta).then(r);
+  return c;
+}
 
 function montarAdmin() {
   const cliente = banco.cliente;
   return {
     ...cliente,
+    from: (tabela: string) =>
+      tabela === leituraFalhaEm
+        ? { ...cliente.from(tabela), select: () => cadeiaQueFalha() }
+        : cliente.from(tabela),
     rpc: async (nome: string, args: Record<string, unknown>) => {
       banco.rpcs.push({ nome, args });
       if (nome !== "fn_accept_team_invite") throw new Error(`rpc inesperada ${nome}`);
@@ -133,7 +148,7 @@ function montarAdmin() {
   };
 }
 
-function sessao(papel: "admin" | "agent" = "admin") {
+function sessao(papel: "admin" | "agent" = "admin", opcoes: { suporte?: boolean } = {}) {
   const user: AuthUser = {
     id: ADMIN_ID,
     email: "admin@example.com",
@@ -142,6 +157,16 @@ function sessao(papel: "admin" | "agent" = "admin") {
     is_platform_admin: false,
     idioma: "pt-BR" as const,
     organizations: [{ organization_id: ORG_ID, organization_name: "Org", role: papel }],
+    ...(opcoes.suporte
+      ? {
+          support: {
+            organization_id: ORG_ID,
+            status: "active",
+            access_mode: "full",
+            name: "Org",
+          } as unknown as AuthUser["support"],
+        }
+      : {}),
   };
   vi.mocked(loadAuthUser).mockResolvedValue(user);
   vi.mocked(resolveActiveOrg).mockResolvedValue({ orgId: ORG_ID, name: "Org", role: papel });
@@ -154,9 +179,10 @@ function sessao(papel: "admin" | "agent" = "admin") {
   vi.mocked(createAdminClient).mockReturnValue(montarAdmin() as any);
 }
 
-function pedido(body: Record<string, unknown>) {
+function pedido(body: Record<string, unknown>, contentType = "application/json") {
   return new NextRequest("http://localhost/api/v1/team/members", {
     method: "POST",
+    headers: { "content-type": contentType },
     body: JSON.stringify(body),
   });
 }
@@ -168,9 +194,9 @@ const corpoValido = {
   role: "agent",
 };
 
-async function cadastrar(body: Record<string, unknown> = corpoValido) {
+async function cadastrar(body: Record<string, unknown> = corpoValido, contentType?: string) {
   const { POST } = await import("@/app/api/v1/team/members/route");
-  const res = await POST(pedido(body));
+  const res = await POST(pedido(body, contentType));
   const texto = await res.text();
   return { res, texto, json: JSON.parse(texto) as Record<string, any> }; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
@@ -179,6 +205,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   serviceRole = true;
   erroNoVinculo = null;
+  leituraFalhaEm = null;
   banco = new BancoEmMemoria();
   banco.semear("user_organizations", {
     id: "vinculo-admin",
@@ -211,6 +238,26 @@ describe("POST /api/v1/team/members — quem pode", () => {
     const { res, json } = await cadastrar();
     expect(res.status).toBe(503);
     expect(json.error.code).toBe("unavailable");
+    expect(provedor.criadas).toHaveLength(0);
+  });
+
+  it("corpo que não é JSON leva 415 — um formulário de outro site não chega aqui", async () => {
+    // `request.json()` aceita `text/plain`, que um <form> de outro site manda
+    // sem preflight. Exigir JSON obriga o preflight de CORS, que o servidor não
+    // concede. Esta é a primeira rota em que um CSRF às cegas entregaria uma
+    // credencial que o atacante conhece.
+    sessao();
+    const { res } = await cadastrar(corpoValido, "text/plain");
+    expect(res.status).toBe(415);
+    expect(provedor.criadas).toHaveLength(0);
+  });
+
+  it("acompanhamento (suporte) não cria credencial — nem em acesso total", async () => {
+    // Uma sessão de acompanhamento tem prazo; uma conta com senha conhecida
+    // não. Criar uma daqui transformaria acesso temporário em permanente.
+    sessao("admin", { suporte: true });
+    const { res } = await cadastrar();
+    expect(res.status).toBe(403);
     expect(provedor.criadas).toHaveLength(0);
   });
 
@@ -271,6 +318,24 @@ describe("POST /api/v1/team/members — contas que já existem", () => {
   });
 });
 
+describe("POST /api/v1/team/members — o banco falhando fecha a porta", () => {
+  it("se a leitura dos membros falha, NÃO cria conta (a checagem não pode passar por omissão)", async () => {
+    leituraFalhaEm = "user_organizations";
+    sessao();
+    const { res } = await cadastrar();
+    expect(res.status).toBe(500);
+    expect(provedor.criadas).toHaveLength(0);
+  });
+
+  it("e-mail recusado pelo provedor vira 422 legível, não 500", async () => {
+    provedor.erroAoCriar = { code: "email_address_invalid", status: 400, message: "Email address is invalid" };
+    sessao();
+    const { res, json } = await cadastrar();
+    expect(res.status).toBe(422);
+    expect(json.error.message).toMatch(/e-mail/i);
+  });
+});
+
 describe("POST /api/v1/team/members — o cadastro", () => {
   it("cria a conta confirmada, vincula pela função do aceite com a org do COOKIE e audita sem a senha", async () => {
     sessao();
@@ -283,6 +348,11 @@ describe("POST /api/v1/team/members — o cadastro", () => {
       password: SENHA,
       email_confirm: true,
       user_metadata: { full_name: "Maria Souza" },
+      // A MARCA: esta senha foi escolhida por quem administra esta org. É o
+      // que impede o admin de entrar em OUTRA organização como esta pessoa
+      // (ver `lib/auth/aplicar-convite.ts`). `app_metadata`, e não
+      // `user_metadata`, porque só a chave de serviço escreve ali.
+      app_metadata: { senha_definida_por_admin: { organization_id: ORG_ID } },
     });
 
     expect(banco.rpcs).toHaveLength(1);
@@ -299,7 +369,6 @@ describe("POST /api/v1/team/members — o cadastro", () => {
       email: "maria@empresa.com",
       full_name: "Maria Souza",
       role: "agent",
-      entregue: false,
     });
     expect(String(json.data.login_url)).toMatch(/\/login$/);
     expect(texto).not.toContain(SENHA);
@@ -340,12 +409,23 @@ describe("POST /api/v1/team/members — o cadastro", () => {
     expect(provedor.apagadas).toEqual([NOVO_ID]);
   });
 
-  it("criador PROVISÓRIO que cadastra um admin sai da organização — e a resposta diz", async () => {
-    const linhas = banco.linhas("user_organizations");
-    linhas[0]!.provisional_until_handover = true;
+  it("criador PROVISÓRIO não cadastra ADMIN com senha — a entrega ao dono é por convite", async () => {
+    // Quem abriu a organização para outra pessoa sai dela quando o dono entra
+    // (migration 0237). Se o provisório escolhesse a senha do dono, sairia
+    // sabendo como entrar como ele — a entrega seria de fachada.
+    banco.linhas("user_organizations")[0]!.provisional_until_handover = true;
     sessao();
     const { res, json } = await cadastrar({ ...corpoValido, role: "admin" });
+    expect(res.status).toBe(409);
+    expect(json.error.details.motivo).toBe("entrega_por_convite");
+    expect(json.error.message).toMatch(/convite/i);
+    expect(provedor.criadas).toHaveLength(0);
+  });
+
+  it("o mesmo provisório cadastra um AGENTE normalmente — o par de controle", async () => {
+    banco.linhas("user_organizations")[0]!.provisional_until_handover = true;
+    sessao();
+    const { res } = await cadastrar();
     expect(res.status).toBe(201);
-    expect(json.data.entregue).toBe(true);
   });
 });

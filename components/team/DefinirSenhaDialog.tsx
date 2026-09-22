@@ -35,7 +35,6 @@ export function DefinirSenhaDialog({
   const t = useT();
   const definir = useDefinirSenha();
   const [senha, setSenha] = useState("");
-  const [mostrar, setMostrar] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const nome = member.full_name ?? member.email ?? t("membro");
 
@@ -64,7 +63,9 @@ export function DefinirSenhaDialog({
             {t("Definir nova senha")} — {nome}
           </DialogTitle>
           <DialogDescription>
-            {t("A senha antiga deixa de valer. Passe a nova para a pessoa; ela entra com o mesmo e-mail.")}
+            {t(
+              "A senha antiga deixa de valer para novas entradas. Quem já estiver conectado pode continuar até sair — para tirar a pessoa na hora, use Revogar acesso.",
+            )}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -78,8 +79,6 @@ export function DefinirSenhaDialog({
             id="definir-senha-campo"
             value={senha}
             onChange={setSenha}
-            mostrar={mostrar}
-            onMostrarChange={setMostrar}
             disabled={definir.isPending}
           />
         </form>

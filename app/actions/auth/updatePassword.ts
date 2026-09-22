@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { resetPasswordSchema, type ResetPasswordInput } from "@/lib/auth/schemas";
 import { audit } from "@/lib/audit";
+import { apagarMarcaDaSenhaDoAdmin } from "@/lib/auth/apagar-marca-da-senha";
 
 export type UpdatePasswordResult = {
   ok: false;
@@ -84,6 +85,10 @@ export async function updatePassword(
     });
     return { ok: false, error: "update_failed" };
   }
+
+  // A pessoa escolheu a senha sozinha: se um admin tinha definido a anterior,
+  // ele deixa de conhecê-la (ver `lib/auth/senha-do-admin.ts`).
+  await apagarMarcaDaSenhaDoAdmin(user);
 
   await audit({
     action: "auth.password_reset_completed",

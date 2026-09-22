@@ -42,7 +42,6 @@ export function CadastroComSenhaForm() {
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
-  const [mostrar, setMostrar] = useState(false);
   const [role, setRole] = useState<Role>("agent");
   const [settings, setSettings] = useState(INTERFACE_COMPLETA);
   const [erro, setErro] = useState<string | null>(null);
@@ -85,7 +84,6 @@ export function CadastroComSenhaForm() {
       setNome("");
       setEmail("");
       setSenha("");
-      setMostrar(false);
     } catch (err) {
       setErro(
         err instanceof ApiError
@@ -139,8 +137,6 @@ export function CadastroComSenhaForm() {
           id="membro-senha"
           value={senha}
           onChange={setSenha}
-          mostrar={mostrar}
-          onMostrarChange={setMostrar}
           disabled={cadastrar.isPending}
         />
         <div className="space-y-2">
@@ -204,24 +200,13 @@ export function CadastroComSenhaForm() {
               <Button type="button" onClick={() => void copiarAcesso()}>
                 {t("Copiar dados de acesso")}
               </Button>
-              {resultado.entregue ? null : (
-                <Button asChild variant="outline">
-                  <Link href="/app/team">{t("Ver a equipe")}</Link>
-                </Button>
-              )}
+              <Button asChild variant="outline">
+                <Link href="/app/team">{t("Ver a equipe")}</Link>
+              </Button>
             </div>
-            {resultado.entregue ? (
-              <div role="status" className="space-y-2 rounded-md bg-muted p-3 text-sm">
-                <p>
-                  {t(
-                    "Você criou esta organização para outra pessoa e acabou de cadastrar um administrador: a organização foi entregue a essa pessoa, e você saiu dela.",
-                  )}
-                </p>
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/app">{t("Continuar")}</Link>
-                </Button>
-              </div>
-            ) : null}
+            <p className="text-xs text-muted-foreground">
+              {t("A pessoa pode trocar esta senha por uma que só ela conhece, em Configurações › Perfil.")}
+            </p>
             <p className="text-xs text-muted-foreground">
               {t("Esqueceu a senha depois? Em Equipe › Membros, use “Definir nova senha” no menu da pessoa.")}
             </p>

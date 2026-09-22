@@ -14,12 +14,17 @@
  *     passa adiante;
  *  3. o cartão de dados de acesso mostra endereço, e-mail e a senha;
  *  4. a pessoa ENTRA com essa senha, num navegador limpo, e cai no app;
- *  5. "Definir nova senha" no menu do membro: a antiga para de valer, a nova
- *     entra — o laço de quem esqueceu a senha sem ter e-mail;
- *  6. recadastrar o mesmo e-mail explica, na tela, que a pessoa já é da equipe.
+ *  5. com a senha que o admin escolheu, a pessoa NÃO entra em outra
+ *     organização (o convite de lá é recusado, com a saída escrita); depois de
+ *     TROCAR a senha por uma só dela, em Configurações › Perfil, a marca cai e
+ *     o mesmo convite entra;
+ *  6. recadastrar o mesmo e-mail explica, na tela, que a pessoa já é da equipe;
+ *  7. "Definir nova senha" é RECUSADO enquanto a pessoa responde também à
+ *     outra organização; sem esse vínculo, a anterior para de valer, a nova
+ *     entra, e a marca volta — o laço de quem esqueceu a senha sem ter e-mail.
  *
  * E o banco confirma o que a tela não mostra: vínculo `agent` aceito na org do
- * admin, e a auditoria `member.created` sem a senha.
+ * admin, a marca em `app_metadata`, e a auditoria `member.created` sem a senha.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -27,6 +32,7 @@ import { mkdirSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
+import { signInviteToken } from "../../lib/auth/invite-token";
 import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
 import { lerCreds, loginComoAdmin } from "./helpers/login-admin";
 
@@ -39,16 +45,51 @@ const EVIDENCIA = ".superpowers/evidence/equipe-cadastro-com-senha";
 const email = `membro-senha-${randomUUID().slice(0, 8)}@deskcomm.test`;
 const nome = "Maria Cadastro Direto";
 let criadoId: string | null = null;
+/** A OUTRA organização da instalação — a que o admin da primeira não administra. */
+let outraOrgId: string | null = null;
 
 test.describe.configure({ mode: "serial", timeout: 240_000 });
 
 test.afterAll(async () => {
-  // O banco é compartilhado pelas specs: a conta de teste não fica para trás.
+  // O banco é compartilhado pelas specs: nada de teste fica para trás.
   if (criadoId) {
     await db.from("user_organizations").delete().eq("user_id", criadoId);
     await db.auth.admin.deleteUser(criadoId);
   }
+  if (outraOrgId) await db.from("organizations").delete().eq("id", outraOrgId);
 });
+
+async function criarOutraOrganizacao(dono: string): Promise<string> {
+  const slug = `outra-org-${randomUUID().slice(0, 8)}`;
+  const { data, error } = await db
+    .from("organizations")
+    .insert({ slug, display_name: "Outra Org", legal_name: "Outra Org", status: "active", created_by: dono })
+    .select("id")
+    .single();
+  if (error || !data) throw new Error(`criar outra org: ${error?.message}`);
+  return (data as { id: string }).id;
+}
+
+async function vinculoAtivoEm(orgId: string, userId: string): Promise<boolean> {
+  const { data } = await db
+    .from("user_organizations")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("user_id", userId)
+    .is("revoked_at", null)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+/** A organização cujo admin conhece a senha da conta, segundo o banco. */
+async function marcaDaSenha(userId: string): Promise<string | null> {
+  const { data } = await db.auth.admin.getUserById(userId);
+  const marca = (data.user?.app_metadata as Record<string, unknown> | undefined)?.senha_definida_por_admin as
+    | { organization_id?: string }
+    | null
+    | undefined;
+  return marca?.organization_id ?? null;
+}
 
 // `browser.newContext()` NÃO herda o `use` do config: sem o `baseURL`
 // explícito, `goto("/login")` não tem para onde ir.
@@ -129,6 +170,10 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   expect(conta!.email_confirmed_at, "e-mail já confirmado — sem caixa de entrada").toBeTruthy();
   expect(conta!.user_metadata?.full_name).toBe(nome);
   expect(vinculos?.some((v) => v.user_id === criadoId)).toBe(true);
+  const orgDoAdmin = vinculos?.find((v) => v.user_id === criadoId)?.organization_id;
+  expect(await marcaDaSenha(criadoId), "a conta nasce marcada: o admin conhece a senha").toBe(
+    orgDoAdmin,
+  );
 
   const { data: auditoria } = await db
     .from("api_audit_log")
@@ -144,6 +189,50 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   await expect(membro.getByText("Você não tem nenhuma organização ativa")).toHaveCount(0);
   await membro.waitForLoadState("networkidle");
   await membro.screenshot({ path: `${EVIDENCIA}/2-membro-entrou.png` });
+
+  // 5a. Com a senha que o admin escolheu, o convite de OUTRA org é recusado —
+  //     senão o admin daqui entraria lá como esta pessoa.
+  outraOrgId = await criarOutraOrganizacao(criadoId);
+  const conviteDeFora = signInviteToken({
+    invite_id: randomUUID(),
+    email,
+    organization_id: outraOrgId,
+    role: "agent",
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  await membro.goto(`/team/accept-invite/${conviteDeFora}`);
+  await membro.getByRole("button", { name: "Aceitar convite" }).click();
+  await expect(membro.getByRole("alert").filter({ hasText: "definida pelo administrador de outra equipe" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await membro.screenshot({ path: `${EVIDENCIA}/2a-convite-de-fora-recusado.png` });
+  expect(await vinculoAtivoEm(outraOrgId, criadoId), "o convite recusado não virou vínculo").toBe(false);
+
+  // 5b. A pessoa toma posse da senha: troca por uma só dela, no Perfil.
+  const minhaSenha = "So-Minha-Senha-77";
+  await membro.goto("/app/settings/profile");
+  const troca = membro.getByRole("form", { name: "Trocar senha" });
+  await troca.getByLabel("Senha atual").fill("errada-000");
+  await troca.getByLabel("Senha nova", { exact: true }).fill(minhaSenha);
+  await troca.getByLabel("Confirmar senha nova").fill(minhaSenha);
+  await troca.getByRole("button", { name: "Trocar senha" }).click();
+  await expect(troca.getByRole("alert")).toContainText("A senha atual não confere.");
+  await troca.getByLabel("Senha atual").fill(senha);
+  await troca.getByRole("button", { name: "Trocar senha" }).click();
+  await expect(membro.getByText("Senha trocada. Use a nova na próxima entrada.")).toBeVisible({
+    timeout: 20_000,
+  });
+  await membro.screenshot({ path: `${EVIDENCIA}/2b-trocou-a-propria-senha.png` });
+  expect(await marcaDaSenha(criadoId), "trocar a própria senha apaga a marca").toBeNull();
+  // A sessão de quem trocou continua de pé.
+  await membro.goto("/app/settings/profile");
+  await expect(troca).toBeVisible();
+
+  // 5c. Agora a senha é só dela: o mesmo convite entra.
+  await membro.goto(`/team/accept-invite/${conviteDeFora}`);
+  await membro.getByRole("button", { name: "Aceitar convite" }).click();
+  await membro.waitForURL(/\/app/, { timeout: 30_000 });
+  expect(await vinculoAtivoEm(outraOrgId, criadoId), "depois de trocar a senha, o convite entra").toBe(true);
   await membro.context().close();
 
   // 6. Recadastrar o mesmo e-mail explica, na tela.
@@ -157,7 +246,7 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   ).toBeVisible();
   await page.screenshot({ path: `${EVIDENCIA}/3-ja-e-membro.png` });
 
-  // 5. Definir nova senha pelo menu do membro.
+  // 7. Definir nova senha pelo menu do membro.
   await page.goto("/app/team?aba=membros");
   const linha = page.locator("tr").filter({ hasText: email });
   await expect(linha).toBeVisible({ timeout: 20_000 });
@@ -165,16 +254,39 @@ test("admin cadastra com senha gerada e a pessoa entra com ela", async ({ page, 
   await page.getByRole("menuitem", { name: "Definir nova senha" }).click();
   const dialogo = page.getByRole("dialog");
   await expect(dialogo).toContainText(nome);
+
+  // 7a. Ela responde também à outra org: o admin daqui NÃO troca a senha dela.
+  await dialogo.getByRole("button", { name: "Gerar senha" }).click();
+  await dialogo.getByRole("button", { name: "Salvar senha" }).click();
+  await expect(dialogo.getByRole("alert")).toContainText("também faz parte de outra organização", {
+    timeout: 20_000,
+  });
+  await page.screenshot({ path: `${EVIDENCIA}/4a-outra-organizacao-recusada.png` });
+  await dialogo.getByRole("button", { name: "Cancelar" }).click();
+  await expect(dialogo).toBeHidden();
+
+  // 7b. Sem o vínculo de fora, a troca passa.
+  await db
+    .from("user_organizations")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("organization_id", outraOrgId)
+    .eq("user_id", criadoId);
+  await linha.getByRole("button", { name: "Ações" }).click();
+  await page.getByRole("menuitem", { name: "Definir nova senha" }).click();
+  await expect(dialogo).toContainText(nome);
   await dialogo.getByRole("button", { name: "Gerar senha" }).click();
   const novaSenha = await dialogo.getByLabel("Senha", { exact: true }).inputValue();
-  expect(novaSenha).not.toBe(senha);
+  expect(novaSenha).not.toBe(minhaSenha);
   await page.screenshot({ path: `${EVIDENCIA}/4-definir-nova-senha.png` });
   await dialogo.getByRole("button", { name: "Salvar senha" }).click();
   await expect(dialogo).toBeHidden({ timeout: 20_000 });
   await expect(page.getByText(`Senha nova definida para ${nome}.`)).toBeVisible();
+  expect(await marcaDaSenha(criadoId), "a senha definida pelo admin volta a marcar a conta").toBe(
+    orgDoAdmin,
+  );
 
-  // A antiga não entra mais…
-  const comAntiga = await entrarComo(browser, baseURL, senha);
+  // A anterior — a que a própria pessoa tinha escolhido — não entra mais…
+  const comAntiga = await entrarComo(browser, baseURL, minhaSenha);
   await expect(comAntiga.getByText("Email ou senha incorretos.")).toBeVisible({ timeout: 20_000 });
   await comAntiga.context().close();
 

@@ -9,8 +9,6 @@ export interface MembroCadastrado {
   email: string;
   full_name: string;
   role: string;
-  /** true = quem cadastrou era o criador provisório e saiu na entrega. */
-  entregue: boolean;
   login_url: string;
 }
 
@@ -24,6 +22,9 @@ export interface MembroCadastrado {
 export function useCadastrarMembro() {
   const qc = useQueryClient();
   return useMutation({
+    // As variáveis da mutação carregam a senha; o cache do React Query as
+    // guardaria por minutos depois de a tela terminar com elas.
+    gcTime: 0,
     mutationFn: async (input: CadastrarMembroInput) =>
       apiClient.post<{ data: MembroCadastrado }>("/api/v1/team/members", input),
     onSuccess: () => {

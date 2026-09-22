@@ -3,6 +3,7 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { normalizarIdioma } from "@/lib/i18n/idiomas";
 import { SEM_PREFERENCIA_DE_IDIOMA } from "@/lib/schemas/settings";
 import { ProfileForm } from "./_form";
+import { TrocarSenhaForm } from "./_trocar-senha";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,7 @@ export default async function ProfilePage() {
         initialLocale={user.locale ? normalizarIdioma(user.locale) : SEM_PREFERENCIA_DE_IDIOMA}
         initialTimezone={meta.timezone ?? "America/Sao_Paulo"}
       />
+      <TrocarSenhaForm />
     </div>
   );
 }

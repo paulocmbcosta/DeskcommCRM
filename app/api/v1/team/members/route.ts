@@ -5,8 +5,9 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
  * A outra porta de entrada da equipe, ao lado do convite
  * (`../invite/route.ts`): em vez de um link que depende de e-mail, quem
  * administra escolhe a senha e a pessoa já entra. A regra inteira — o que se
- * recusa e por quê, a compensação, a entrega do criador provisório — mora em
- * `lib/team/cadastro-direto.ts`; aqui só se autentica, valida e traduz.
+ * recusa e por quê, a compensação, o criador provisório que não escolhe a senha
+ * do dono — mora em `lib/team/cadastro-direto.ts`; aqui só se autentica, valida
+ * e traduz.
  *
  * A senha entra no body e morre aqui: não volta na resposta, não vai para a
  * auditoria, não vai para log. A tela mostra a que a própria pessoa digitou.
@@ -29,9 +30,11 @@ import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { env } from "@/lib/env";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
 import { cadastrarMembroSchema, validateRequest } from "@/lib/schemas";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cadastrarMembroComSenha } from "@/lib/team/cadastro-direto";
+import { corpoEhJson, emAcompanhamento } from "@/lib/team/guardas-de-credencial";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +47,18 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!authz.ok) return authz.response;
   const { user: authUser, org: activeOrg } = authz;
   const t = (texto: string) => traduzir(texto, authUser.idioma);
+
+  if (emAcompanhamento(authUser)) {
+    return fail(
+      "forbidden",
+      t("O acompanhamento não cadastra membros com senha. Saia do acompanhamento ou use o convite."),
+      403,
+      { requestId },
+    );
+  }
+  if (!corpoEhJson(req)) {
+    return fail("unsupported_media_type", t("O corpo precisa ser JSON."), 415, { requestId });
+  }
 
   let input;
   try {
@@ -80,6 +95,14 @@ export async function POST(req: NextRequest): Promise<Response> {
   });
 
   if (!resultado.ok) {
+    if (resultado.motivo === "falha") {
+      // O detalhe nunca leva a senha: é a mensagem do banco ou do provedor.
+      logger.error("team.members: cadastro com senha falhou", {
+        requestId,
+        organization_id: activeOrg.orgId,
+        detalhe: resultado.detalhe ?? null,
+      });
+    }
     switch (resultado.motivo) {
       case "ja_membro":
         return fail("state_conflict", t("Esta pessoa já faz parte da equipe."), 409, {
@@ -95,6 +118,20 @@ export async function POST(req: NextRequest): Promise<Response> {
           409,
           { details: { motivo: "conta_existente" }, requestId },
         );
+      case "entrega_por_convite":
+        return fail(
+          "state_conflict",
+          t(
+            "Você abriu esta organização para outra pessoa. O administrador que vai assumi-la entra por convite, escolhendo a própria senha — assim só ele a conhece.",
+          ),
+          409,
+          { details: { motivo: "entrega_por_convite" }, requestId },
+        );
+      case "email_invalido":
+        return fail("unprocessable_entity", t("Este e-mail foi recusado. Confira se está escrito certo."), 422, {
+          details: { motivo: "email_invalido" },
+          requestId,
+        });
       case "senha_recusada":
         return fail(
           "unprocessable_entity",
@@ -122,7 +159,6 @@ export async function POST(req: NextRequest): Promise<Response> {
       target_user_id: resultado.userId,
       email: input.email,
       role: input.role,
-      entregue: resultado.entregue,
     },
   });
 
@@ -132,7 +168,6 @@ export async function POST(req: NextRequest): Promise<Response> {
       email: input.email,
       full_name: input.full_name,
       role: input.role,
-      entregue: resultado.entregue,
       login_url: `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "")}/login`,
     },
     { status: 201, requestId },

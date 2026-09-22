@@ -38,7 +38,10 @@ vi.mock("@/lib/audit", () => ({
   hashEmail: (e: string) => e,
 }));
 
-const ADMIN_ID = "11111111-1111-4111-8111-111111111111";
+// Com LETRAS de propósito: um id só de dígitos tornaria vazio o caso das
+// maiúsculas (`toUpperCase()` não mudaria nada) — medido, foi o que aconteceu
+// na primeira versão deste arquivo.
+const ADMIN_ID = "abcdef12-3456-4abc-8def-123456789abc";
 const ORG_ID = "22222222-2222-4222-8222-222222222222";
 const OUTRA_ORG = "99999999-9999-4999-8999-999999999999";
 const MEMBRO = "33333333-3333-4333-8333-333333333333";
@@ -47,8 +50,19 @@ const SENHA = "Nova-Senha-456";
 let banco: BancoEmMemoria;
 let senhasTrocadas: Array<{ id: string; attrs: Record<string, unknown> }>;
 let erroAoTrocar: { code?: string; status?: number; message: string } | null;
+/** Tabela cuja LEITURA responde erro — a guarda tem de fechar, não abrir. */
+let leituraFalhaEm: string | null;
 
-function sessao(papel: "admin" | "manager" = "admin") {
+function cadeiaQueFalha() {
+  const resposta = { data: null, error: { message: "canceling statement due to statement timeout" } };
+  const c: Record<string, unknown> = {};
+  for (const m of ["eq", "is", "in", "select"]) c[m] = () => c;
+  c.maybeSingle = async () => resposta;
+  c.then = (r: (v: unknown) => unknown) => Promise.resolve(resposta).then(r);
+  return c;
+}
+
+function sessao(papel: "admin" | "manager" = "admin", opcoes: { suporte?: boolean } = {}) {
   const user: AuthUser = {
     id: ADMIN_ID,
     email: "admin@example.com",
@@ -57,6 +71,16 @@ function sessao(papel: "admin" | "manager" = "admin") {
     is_platform_admin: false,
     idioma: "pt-BR" as const,
     organizations: [{ organization_id: ORG_ID, organization_name: "Org", role: papel }],
+    ...(opcoes.suporte
+      ? {
+          support: {
+            organization_id: ORG_ID,
+            status: "active",
+            access_mode: "full",
+            name: "Org",
+          } as unknown as AuthUser["support"],
+        }
+      : {}),
   };
   vi.mocked(loadAuthUser).mockResolvedValue(user);
   vi.mocked(resolveActiveOrg).mockResolvedValue({ orgId: ORG_ID, name: "Org", role: papel });
@@ -65,8 +89,13 @@ function sessao(papel: "admin" | "manager" = "admin") {
       fn === "fn_user_role_in_org" ? { data: papel, error: null } : { data: null, error: null },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
+  const cliente = banco.cliente;
   vi.mocked(createAdminClient).mockReturnValue({
-    ...banco.cliente,
+    ...cliente,
+    from: (tabela: string) =>
+      tabela === leituraFalhaEm
+        ? { ...cliente.from(tabela), select: () => cadeiaQueFalha() }
+        : cliente.from(tabela),
     auth: {
       admin: {
         updateUserById: async (id: string, attrs: Record<string, unknown>) => {
@@ -80,11 +109,16 @@ function sessao(papel: "admin" | "manager" = "admin") {
   } as any);
 }
 
-async function definir(alvo: string, body: Record<string, unknown> = { password: SENHA }) {
+async function definir(
+  alvo: string,
+  body: Record<string, unknown> = { password: SENHA },
+  contentType = "application/json",
+) {
   const { POST } = await import("@/app/api/v1/team/[user_id]/password/route");
   const res = await POST(
     new NextRequest(`http://localhost/api/v1/team/${alvo}/password`, {
       method: "POST",
+      headers: { "content-type": contentType },
       body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ user_id: alvo }) },
@@ -97,6 +131,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   serviceRole = true;
   erroAoTrocar = null;
+  leituraFalhaEm = null;
   senhasTrocadas = [];
   banco = new BancoEmMemoria().semear(
     "user_organizations",
@@ -119,6 +154,49 @@ describe("POST /api/v1/team/[user_id]/password — o que ela recusa", () => {
     expect(res.status).toBe(400);
     expect(senhasTrocadas).toHaveLength(0);
   });
+
+  it("o PRÓPRIO id em maiúsculas também é a própria senha — a comparação não é de texto", async () => {
+    // O Postgres converte o texto em uuid sem ligar para caixa, e o provedor
+    // de auth aceita maiúsculas: comparar string contra o id da sessão
+    // deixava o admin trocar a própria senha pela API de administração.
+    sessao();
+    expect(ADMIN_ID.toUpperCase()).not.toBe(ADMIN_ID);
+    const { res } = await definir(ADMIN_ID.toUpperCase());
+    expect(res.status).toBe(400);
+    expect(senhasTrocadas).toHaveLength(0);
+  });
+
+  it("id que não é UUID é recusado antes de qualquer consulta", async () => {
+    sessao();
+    const { res } = await definir(`{${MEMBRO}}`);
+    expect(res.status).toBe(400);
+    expect(senhasTrocadas).toHaveLength(0);
+  });
+
+  it("corpo que não é JSON leva 415", async () => {
+    sessao();
+    const { res } = await definir(MEMBRO, { password: SENHA }, "text/plain");
+    expect(res.status).toBe(415);
+    expect(senhasTrocadas).toHaveLength(0);
+  });
+
+  it("acompanhamento (suporte) não troca senha de ninguém", async () => {
+    sessao("admin", { suporte: true });
+    const { res } = await definir(MEMBRO);
+    expect(res.status).toBe(403);
+    expect(senhasTrocadas).toHaveLength(0);
+  });
+
+  it.each(["user_organizations", "platform_admins"])(
+    "leitura de %s com ERRO fecha a porta — não troca a senha",
+    async (tabela) => {
+      leituraFalhaEm = tabela;
+      sessao();
+      const { res } = await definir(MEMBRO);
+      expect(res.status).toBe(500);
+      expect(senhasTrocadas).toHaveLength(0);
+    },
+  );
 
   it("quem não é desta organização → 404", async () => {
     banco.semear("user_organizations", {
@@ -186,6 +264,14 @@ describe("POST /api/v1/team/[user_id]/password — o que ela recusa", () => {
     expect(senhasTrocadas).toHaveLength(0);
   });
 
+  it("senha igual à atual → 422 que diz isso, não 'política de senhas'", async () => {
+    erroAoTrocar = { code: "same_password", status: 422, message: "New password should be different from the old password." };
+    sessao();
+    const { res, json } = await definir(MEMBRO);
+    expect(res.status).toBe(422);
+    expect(json.error.message).toMatch(/igual/i);
+  });
+
   it("senha recusada pela política do provedor → 422 legível", async () => {
     erroAoTrocar = { code: "weak_password", status: 422, message: "Password is known to be weak" };
     sessao();
@@ -200,7 +286,15 @@ describe("POST /api/v1/team/[user_id]/password — quando passa", () => {
     sessao();
     const { res, texto } = await definir(MEMBRO);
     expect(res.status).toBe(200);
-    expect(senhasTrocadas).toEqual([{ id: MEMBRO, attrs: { password: SENHA } }]);
+    expect(senhasTrocadas).toHaveLength(1);
+    expect(senhasTrocadas[0]).toMatchObject({
+      id: MEMBRO,
+      attrs: {
+        password: SENHA,
+        // A marca volta a valer: esta senha, de novo, quem sabe é o admin.
+        app_metadata: { senha_definida_por_admin: { organization_id: ORG_ID } },
+      },
+    });
     expect(texto).not.toContain(SENHA);
 
     const auditorias = vi.mocked(audit).mock.calls.map(([e]) => e);

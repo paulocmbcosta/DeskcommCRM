@@ -598,6 +598,10 @@ export const AUDIT_ACTIONS = [
   // com que papel.
   "member.created",
   "member.password_set",
+  // A pessoa trocou a PRÓPRIA senha, logada (Configurações › Perfil). Par de
+  // `member.password_set`: é aqui que a senha escolhida pelo admin deixa de
+  // ser conhecida por ele. `metadata` diz se a marca caiu, nunca a senha.
+  "profile.password_changed",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

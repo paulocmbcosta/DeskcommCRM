@@ -54,6 +54,10 @@ const rpcDoAceite = vi.fn(async () => ({ data: { id: "m1", changed: true }, erro
  * Dublê do admin client. `select` devolve a linha de `team_invites` pedida;
  * `update` (o fechamento do convite) aceita e não diz nada.
  */
+/** O `app_metadata` da conta de quem aceita — onde mora a marca da senha. */
+let appMetadataDaConta: Record<string, unknown> = {};
+let erroAoLerConta: { message: string } | null = null;
+
 function adminComConvite(linha: { revoked_at: string | null } | null) {
   const cadeiaDeUpdate = () => {
     const c: Record<string, unknown> = {};
@@ -72,6 +76,14 @@ function adminComConvite(linha: { revoked_at: string | null } | null) {
       update: cadeiaDeUpdate,
     }),
     rpc: rpcDoAceite,
+    auth: {
+      admin: {
+        getUserById: async (id: string) =>
+          erroAoLerConta
+            ? { data: { user: null }, error: erroAoLerConta }
+            : { data: { user: { id, app_metadata: appMetadataDaConta } }, error: null },
+      },
+    },
   };
 }
 
@@ -83,7 +95,11 @@ async function aplicar(linha: { revoked_at: string | null } | null) {
 }
 
 describe("aplicarConvite consulta a LINHA, não só o token", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appMetadataDaConta = {};
+    erroAoLerConta = null;
+  });
 
   it("⭐ convite REVOGADO é recusado, e o vínculo nunca chega a ser tentado", async () => {
     const r = await aplicar({ revoked_at: "2026-09-13T10:00:00Z" });
@@ -130,5 +146,48 @@ describe("aplicarConvite consulta a LINHA, não só o token", () => {
       ok: false,
       motivo: "invalid_or_expired",
     });
+  });
+});
+
+/**
+ * SENHA ESCOLHIDA POR UM ADMIN NÃO ATRAVESSA PARA OUTRA ORGANIZAÇÃO.
+ *
+ * Desde 2026-09-22 o admin pode cadastrar um membro já com senha
+ * (`lib/team/cadastro-direto.ts`) — e quem escolheu a senha a conhece. Se essa
+ * conta aceitasse depois o convite de OUTRA organização da mesma instalação,
+ * o admin da primeira entraria na segunda como ela. A conta carrega a marca
+ * `app_metadata.senha_definida_por_admin` (só a chave de serviço escreve ali),
+ * e ela cai quando a pessoa troca a própria senha.
+ */
+describe("aplicarConvite recusa conta cuja senha um admin de OUTRA org conhece", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appMetadataDaConta = {};
+    erroAoLerConta = null;
+  });
+
+  it("⭐ marca de outra organização → recusa, e o vínculo nunca é tentado", async () => {
+    appMetadataDaConta = {
+      senha_definida_por_admin: { organization_id: "99999999-9999-4999-8999-999999999999" },
+    };
+    const r = await aplicar({ revoked_at: null });
+    expect(r).toEqual({ ok: false, motivo: "senha_definida_por_admin" });
+    expect(rpcDoAceite).not.toHaveBeenCalled();
+  });
+
+  it("marca da MESMA organização do convite passa — quem conhece a senha já é admin ali", async () => {
+    appMetadataDaConta = { senha_definida_por_admin: { organization_id: ORG } };
+    expect((await aplicar({ revoked_at: null })).ok).toBe(true);
+  });
+
+  it("sem marca passa — o par de vacuidade", async () => {
+    expect((await aplicar({ revoked_at: null })).ok).toBe(true);
+  });
+
+  it("não conseguir ler a conta FECHA a porta (erro interno, não aceite)", async () => {
+    erroAoLerConta = { message: "timeout" };
+    const r = await aplicar({ revoked_at: null });
+    expect(r).toEqual({ ok: false, motivo: "internal_error" });
+    expect(rpcDoAceite).not.toHaveBeenCalled();
   });
 });
