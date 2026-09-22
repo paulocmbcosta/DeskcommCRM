@@ -15,7 +15,10 @@
  *  - a mensagem entra pelo CAMINHO DE PRODUÇÃO (`POST /api/v1/webhooks/waha/[token]`,
  *    como em `conversa-vira-lead.spec.ts`), sem insert à mão;
  *  - o evento é drenado pela rota de cron de verdade (`/api/v1/cron/event-log-drain`),
- *    o mecanismo de produção acionado à mão em vez de esperar o relógio;
+ *    o mecanismo de produção acionado à mão em vez de esperar o relógio — e ela
+ *    drena no contexto `worker`, que é quem de fato chama o classificador: no
+ *    dreno que corre DENTRO do POST do webhook ele é ADIADO (ver
+ *    `VOLTAS_DO_DRENO` abaixo, que é o orçamento de espera desta spec);
  *  - o worker lê a chave da credencial `openrouter` da organização (semeada
  *    cifrada como o produto cifra) e chama um Jev FALSO local — um receiver HTTP
  *    de verdade, no endereço de `CLASSIFICADOR_COMERCIAL_BASE_URL` do `.env.e2e`.
@@ -45,6 +48,7 @@ import * as path from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
 
+import { ESPERA_DO_ADIAMENTO_MS } from "../../lib/event-log/dispatcher";
 import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
 import { lerCreds as lerCredsAdmin, loginComoAdmin } from "./helpers/login-admin";
 
@@ -188,12 +192,30 @@ async function drenar(page: Page): Promise<string> {
   return JSON.stringify(((await r.json()) as { data?: unknown }).data ?? null);
 }
 
+/**
+ * O ORÇAMENTO DE ESPERA DE TODO LAÇO DAQUI, e ele NÃO é um número escolhido.
+ *
+ * O dreno também roda DENTRO do POST do webhook (`acelerarPipelineDeEventos`,
+ * lib/dev/kick-local-pipeline.ts) e, nessa passagem, o classificador é ADIADO
+ * para o worker — só na organização que ligou a regra, que é a desta spec. O
+ * evento volta a `pending` com `next_attempt_at = agora + ESPERA_DO_ADIAMENTO_MS`,
+ * e o dreno do cron (contexto `worker`, que é o que esta spec chama) só pode
+ * pegá-lo depois disso.
+ *
+ * Um laço com orçamento MENOR que essa espera passa na máquina lenta e falha na
+ * rápida, e o vermelho leria como "o worker não criou o card". Por isso o
+ * orçamento sai da CONSTANTE do produto, mais a mesma folga de novo: se um dia
+ * o adiamento crescer, o laço cresce junto, sem ninguém lembrar de vir aqui.
+ */
+const PAUSA_ENTRE_DRENOS_MS = 750;
+const VOLTAS_DO_DRENO = Math.ceil((ESPERA_DO_ADIAMENTO_MS * 2) / PAUSA_ENTRE_DRENOS_MS);
+
 /** Drena até o Jev falso ter sido chamado `esperadas` vezes (ou desistir, dizendo o que viu). */
 async function drenarAte(page: Page, esperadas: number): Promise<void> {
   let ultimoResumo = "";
-  for (let i = 0; i < 15 && pedidos.length < esperadas; i++) {
+  for (let i = 0; i < VOLTAS_DO_DRENO && pedidos.length < esperadas; i++) {
     ultimoResumo = await drenar(page);
-    if (pedidos.length < esperadas) await page.waitForTimeout(500);
+    if (pedidos.length < esperadas) await page.waitForTimeout(PAUSA_ENTRE_DRENOS_MS);
   }
   expect(
     pedidos.length,
@@ -300,7 +322,7 @@ test.describe("o card nasce quando a conversa é comercial", () => {
   });
 
   test("mensagem de suporte NÃO abre card", async ({ page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(150_000);
     await mandarMensagem(page, "minha internet caiu desde ontem", idDaMensagem(1));
     await drenarAte(page, 1);
 
@@ -330,7 +352,7 @@ test.describe("o card nasce quando a conversa é comercial", () => {
   });
 
   test("mensagem de mudança de plano abre o card, e a linha do tempo diz por quê", async ({ page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(150_000);
     await mandarMensagem(page, "e queria aumentar meu plano pra 500 mega", idDaMensagem(2));
     await drenarAte(page, 2);
     expect(pedidos[1]!.ultimaDoCliente).toBe("e queria aumentar meu plano pra 500 mega");
@@ -353,7 +375,7 @@ test.describe("o card nasce quando a conversa é comercial", () => {
   });
 
   test("com o card aberto, a mensagem seguinte NÃO chama o Jev", async ({ page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(150_000);
     const id = idDaMensagem(3);
     await mandarMensagem(page, "quanto fica por mês?", id);
 
@@ -362,16 +384,27 @@ test.describe("o card nasce quando a conversa é comercial", () => {
     // CLASSIFICADOR ter consumido o evento DESTA mensagem — aí sim "não chamou"
     // significa "decidiu não chamar".
     let evento: Awaited<ReturnType<typeof eventoDaMensagem>> = null;
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < VOLTAS_DO_DRENO; i++) {
       await drenar(page);
       evento = await eventoDaMensagem(id);
+      // `consumed_by` é a prova de que ele RODOU. O adiamento na requisição
+      // devolve `retry`, que NÃO entra em `consumed_by` — então a chave só
+      // aparece depois que o dreno de contexto `worker` chamou o handler.
       if (evento?.consumed_by.includes(CHAVE_DO_HANDLER)) break;
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(PAUSA_ENTRE_DRENOS_MS);
     }
-    expect(evento?.consumed_by, "o classificador tem de ter consumido o evento desta mensagem").toContain(
-      CHAVE_DO_HANDLER,
-    );
-    if (evento?.status === "done") expect(evento.last_error ?? "").toContain("ja_tem_card");
+    expect(
+      evento?.consumed_by,
+      `o classificador tem de ter consumido o evento desta mensagem (status=${evento?.status ?? "sem evento"}, ` +
+        `last_error=${evento?.last_error ?? "null"})`,
+    ).toContain(CHAVE_DO_HANDLER);
+    // O evento terminou: nenhum handler pediu para tentar de novo. Esta era a
+    // linha que cobrava `ja_tem_card` no `last_error`, e ela morreu de morte
+    // MORRIDA — `ja_tem_card` é um dos pulos de TODA mensagem e perdeu o
+    // `detail` de propósito (workers/classificador-comercial.handler.ts), para
+    // não encher `event_log.last_error` de rotina e apagar o que é problema.
+    // Quem prova o pulo aqui é o par "consumiu" + "não chamou o Jev".
+    expect(evento?.status, "o evento tem de ter terminado").toBe("done");
     expect(pedidos.length, "quem já tem card não gera chamada ao Jev").toBe(2);
   });
 });
