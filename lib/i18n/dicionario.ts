@@ -2602,6 +2602,7 @@ export const DICIONARIO: Traducoes = {
   "Toda conversa vira card": { es: "Toda conversación se vuelve tarjeta" },
   "A primeira mensagem de quem não tem card abre um card.": { es: "El primer mensaje de quien no tiene tarjeta abre una." },
   "Só conversas comerciais": { es: "Solo conversaciones comerciales" },
+  "Em vigor": { es: "Vigente" },
   "A cada mensagem de quem ainda não tem card, a IA decide se o assunto é contratação, mudança de plano ou conhecer planos. Suporte, financeiro e cancelamento não contam como comerciais.": { es: "En cada mensaje de quien aún no tiene tarjeta, la IA decide si el asunto es contratación, cambio de plan o conocer planes. Soporte, finanzas y cancelación no cuentan como comerciales." },
   "Certeza mínima para abrir o card": { es: "Certeza mínima para abrir la tarjeta" },
   "Mais alto abre menos cards por engano, mas pode deixar passar uma venda. Se a IA não conseguir responder, o card nasce assim mesmo e a linha do tempo diz por quê.": { es: "Más alto abre menos tarjetas por error, pero puede dejar pasar una venta. Si la IA no logra responder, la tarjeta nace igual y la línea de tiempo dice por qué." },

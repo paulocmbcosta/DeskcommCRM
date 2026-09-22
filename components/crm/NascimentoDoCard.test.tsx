@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const definir = vi.fn();
@@ -111,6 +111,20 @@ describe("NascimentoDoCard", () => {
     render(<NascimentoDoCard inicial={{ modo: "classificador", limiar: 0.8 }} podeEditar={false} />);
     expect(screen.getByLabelText(/só conversas comerciais/i)).toBeDisabled();
     expect(screen.queryByRole("button", { name: /salvar/i })).toBeNull();
+  });
+
+  it("quem não é admin vê o selo 'Em vigor' na opção marcada — sem ele a prova pela tela não mostra qual regra vale", () => {
+    render(<NascimentoDoCard inicial={{ modo: "classificador", limiar: 0.8 }} podeEditar={false} />);
+    const marcada = screen.getByTestId("opcao-nascimento-classificador");
+    const naoMarcada = screen.getByTestId("opcao-nascimento-toda_conversa");
+    expect(within(marcada).getByText("Em vigor")).toBeInTheDocument();
+    expect(within(naoMarcada).queryByText("Em vigor")).toBeNull();
+  });
+
+  it("admin vê o rádio marcado e o destaque de sempre, sem o selo — ele já sabe que pode mudar", () => {
+    render(<NascimentoDoCard inicial={{ modo: "classificador", limiar: 0.8 }} podeEditar />);
+    expect(screen.queryByText("Em vigor")).toBeNull();
+    expect(screen.getByLabelText(/só conversas comerciais/i)).toBeChecked();
   });
 });
 

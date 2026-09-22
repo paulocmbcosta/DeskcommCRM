@@ -63,6 +63,7 @@ function Opcao({
   corpo,
   onPick,
   disabled,
+  podeEditar,
 }: {
   id: string;
   descricaoId: string;
@@ -72,15 +73,29 @@ function Opcao({
   corpo: string;
   onPick: (v: ModoDeNascimentoDoCard) => void;
   disabled: boolean;
+  podeEditar: boolean;
 }) {
+  const t = useT();
   const marcado = atual === valor;
+  // Quem NÃO pode editar só vê o rádio — nunca clica, então `atual` nunca sai
+  // de `inicial.modo`, e "marcado" AQUI é sempre "é a regra em vigor". Gira
+  // em `podeEditar`, não em `disabled`: durante o `salvando` de um ADMIN,
+  // `disabled` também é `true`, mas a opção marcada ali é a escolha ainda NÃO
+  // confirmada — rotulá-la "Em vigor" nesse instante seria mentira.
+  const emVigor = !podeEditar && marcado;
   return (
     <label
       data-testid={`opcao-nascimento-${valor}`}
       data-marcada={marcado ? "sim" : "nao"}
       className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
         disabled
-          ? "cursor-not-allowed border-border opacity-60"
+          ? marcado
+            ? // Desabilitado E marcado: o destaque FICA (atenuado na borda, não
+              // no texto) — é exatamente esta opção que a seção existe pra
+              // dizer a quem não pode mudar. Sem isto, a tela de quem só
+              // acompanha não mostra qual regra vale.
+              "cursor-not-allowed border-primary/60 bg-primary/5"
+            : "cursor-not-allowed border-border opacity-60"
           : marcado
             ? "cursor-pointer border-primary bg-primary/5"
             : "cursor-pointer border-border hover:bg-muted/40"
@@ -103,7 +118,14 @@ function Opcao({
         className="mt-1 h-4 w-4 shrink-0 accent-primary"
       />
       <span className="space-y-1">
-        <span className="block text-sm font-medium">{titulo}</span>
+        <span className="block text-sm font-medium">
+          {titulo}
+          {emVigor ? (
+            <span className="ml-2 inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+              {t("Em vigor")}
+            </span>
+          ) : null}
+        </span>
         <span id={descricaoId} className="block text-xs text-muted-foreground">
           {corpo}
         </span>
@@ -164,6 +186,7 @@ export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; pode
           corpo={t("A primeira mensagem de quem não tem card abre um card.")}
           onPick={setModo}
           disabled={bloqueado}
+          podeEditar={podeEditar}
         />
         <Opcao
           id="nascimento-classificador"
@@ -176,6 +199,7 @@ export function NascimentoDoCard({ inicial, podeEditar }: { inicial: Regra; pode
           )}
           onPick={setModo}
           disabled={bloqueado}
+          podeEditar={podeEditar}
         />
       </fieldset>
 
