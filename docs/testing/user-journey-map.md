@@ -471,11 +471,12 @@ ganha um receiver para provar o que saiu. Banco:
 | J26.6 O painel não rola para o lado (`scrollWidth − clientWidth ≤ 1`, medido) | `[P1]` | **PASS** |
 | J26.7 Enviar a cobrança — **Boleto**: "Enviar" só ABRE a escolha [Boleto] [Pix] (nada sai e nada é pedido ao IXC); escolher Boleto manda o **PDF que o IXC devolve em `get_boleto`** como documento, com valor e vencimento na legenda, e a linha digitável sozinha em seguida. O PDF guardado no Storage é o do IXC **byte a byte**; nenhum link sai; o conector pediu `get_boleto` e NÃO `get_pix` | `[P1]` | **PASS** — `evidence/conector-ixc/05-escolher-boleto-ou-pix.png`, `evidence/conector-ixc/06-boleto-em-pdf-enviado.png` |
 | J26.7b **Pix**: manda o **QR code** (PNG gerado aqui a partir do copia-e-cola de `get_pix`, CRC conferido) como imagem, e o copia-e-cola sozinho em seguida; a imagem aparece carregada na conversa | `[P1]` | **PASS** — `evidence/conector-ixc/07-pix-com-qr-code-enviado.png`, `evidence/conector-ixc/07b-qr-code-que-foi-para-o-cliente.png` |
-| J26.7c Fatura que só tem boleto registrado: o botão **Pix fica desligado**; parcela futura sem registro nenhum diz "cobrança ainda não gerada" e não oferece Enviar. O canal (receiver real na porta do WAHA) recebeu os dois arquivos; o nome e o CPF do devedor que `get_pix` devolve não chegam à página | `[P1]` | **PASS** |
+| J26.7c **Pix ainda NÃO gerado no IXC** (o caso achado em produção): o botão Pix está LIGADO, o `title` avisa "O IXC vai gerar o Pix desta fatura agora.", e o envio sai inteiro (QR code + copia-e-cola); a auditoria marca `pix_gerado_agora: true` só nesse envio | `[P1]` | **PASS** — `evidence/conector-ixc/07c-pix-ainda-nao-gerado-botao-ligado.png` |
+| J26.7d Parcela futura SEM boleto registrado: diz "boleto ainda não gerado", o Boleto fica desligado, o Pix é tentado — o IXC recusa, e **a frase dele chega ao atendente**; nada é enviado. O canal (receiver real na porta do WAHA) recebeu os três arquivos; nome e CPF do devedor que `get_pix` devolve não chegam à página | `[P1]` | **PASS** — `evidence/conector-ixc/07d-o-ixc-recusou-e-disse-por-que.png` |
 | J26.8 Telefone que não está no IXC → "Não achei este telefone…", busca por CPF vincula e mostra "Liberado" e "Nenhuma fatura vencida." | `[P1]` | **PASS** — `evidence/conector-ixc/08-nao-encontrado-busca-cpf.png` |
 | J26.9 Celular de DOIS cadastros → a tela lista os dois com documento PARCIAL (`***.995.350-**`), ninguém é vinculado sozinho; "É este" vincula | `[P1]` | **PASS** — `evidence/conector-ixc/09-escolher-entre-dois.png` |
 | J26.10 ERP fora do ar: o painel diz o erro com "Tentar de novo", e Configurações › Conectores passa a mostrar "Com problema" — o admin vê o que o atendente viu | `[P1]` | **PASS** — `evidence/conector-ixc/10-erp-fora-do-ar.png`, `evidence/conector-ixc/11-admin-ve-o-erro.png` |
-| J26.11 Auditoria: `conector.conexao_salva`, `conector.vinculo_criado`, e DUAS `conector.fatura_enviada` (`forma: boleto` e `forma: pix`) — sem a linha digitável e sem o copia-e-cola no metadata | `[P1]` | **PASS** |
+| J26.11 Auditoria: `conector.conexao_salva`, `conector.vinculo_criado`, e TRÊS `conector.fatura_enviada` (um boleto e dois Pix, só um com `pix_gerado_agora`) — sem a linha digitável e sem o copia-e-cola no metadata | `[P1]` | **PASS** |
 
 Execução (2026-09-19): `pnpm e2e:build` (produção) + `next start`, Supabase local
 próprio com o `baseline.sql` aplicado (`ON_ERROR_STOP=1`, 0 erros), Chromium real.
@@ -489,6 +490,14 @@ evidências 05–11 foram refeitas. `get_boleto` e `get_pix` foram medidos na in
 194 caracteres com **CRC16 conferido**, Pix `ATIVA`, valor igual ao `valor_aberto`.
 Execução: build de produção + `next start`, Supabase local com o `baseline.sql` de
 2026-09-21 (`ON_ERROR_STOP=1`, 0 erros), Chromium real — 1 passed.
+
+**Achado do DONO em produção, 2026-09-22 (v1.35.0), consertado:** com um cadastro real, a
+opção Pix ficava desligada em todas as faturas — o IXC ainda não tinha gerado o Pix delas
+(`pix_txid` vazio em 4 de 4 abertas), e a regra só oferecia Pix já gerado. A regra veio de
+uma amostra de faturas VENCIDAS, onde 164 de 200 já tinham Pix; fatura a vencer não tem.
+O IXC gera o Pix sob demanda: escolher Pix passou a pedi-lo (J26.7c), e a recusa traz a
+frase do IXC (J26.7d). **A spec antiga AFIRMAVA o defeito** ("o Pix fica DESLIGADO") — o
+teste estava verde porque media a regra errada, não o que o atendente precisa.
 
 **Achado da execução, consertado:** o selo "Bloqueado — financeiro em atraso"
 quebrava em DUAS linhas dentro de um selo redondo e espremia o nome do cliente na

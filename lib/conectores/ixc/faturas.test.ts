@@ -75,17 +75,20 @@ describe("lerFatura", () => {
     expect(lerFatura(fatura("1", "2026-09-01", { valor: "100.00", valor_aberto: "" }), HOJE)?.valorCents).toBe(10000);
   });
 
-  it("as formas disponíveis saem do que o IXC JÁ registrou: linha digitável = boleto, pix_txid = Pix", () => {
-    const soBoleto = lerFatura(fatura("1", "2026-09-01", { pix_txid: "" }), HOJE);
-    expect([soBoleto?.temBoleto, soBoleto?.temPix, soBoleto?.enviavel]).toEqual([true, false, true]);
+  it("boleto só existe quando o IXC já o registrou (linha digitável); o Pix já gerado é só INFORMAÇÃO", () => {
+    const comOsDois = lerFatura(fatura("1", "2026-09-01"), HOJE);
+    expect([comOsDois?.temBoleto, comOsDois?.pixJaGerado]).toEqual([true, true]);
 
-    const soPix = lerFatura(fatura("1", "2026-09-01", { linha_digitavel: "", pix_txid: "abc123" }), HOJE);
-    expect([soPix?.temBoleto, soPix?.temPix, soPix?.enviavel]).toEqual([false, true, true]);
+    // O caso medido em produção (2026-09-22): boleto registrado e NENHUM `pix_txid`.
+    // A fatura continua podendo ir por Pix — o IXC o gera quando `get_pix` é chamado.
+    const soBoleto = lerFatura(fatura("1", "2026-09-25", { pix_txid: "" }), HOJE);
+    expect([soBoleto?.temBoleto, soBoleto?.pixJaGerado]).toEqual([true, false]);
   });
 
-  it("parcela futura sem registro no gateway existe, mas não é enviável — pedir a cobrança faria o IXC registrá-la", () => {
+  it("parcela futura sem registro no gateway não tem boleto para baixar — e não há campo nenhum que a declare 'não enviável'", () => {
     const f = lerFatura(fatura("1", "2026-12-01", { linha_digitavel: "", pix_txid: "  " }), HOJE);
-    expect([f?.temBoleto, f?.temPix, f?.enviavel]).toEqual([false, false, false]);
+    expect([f?.temBoleto, f?.pixJaGerado]).toEqual([false, false]);
+    expect(f).not.toHaveProperty("enviavel");
   });
 
   it("o link do boleto no site do banco NÃO faz mais parte da fatura — o que se envia é o PDF do IXC", () => {

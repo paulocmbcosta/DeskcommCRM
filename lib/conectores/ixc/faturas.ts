@@ -29,16 +29,23 @@ export interface Fatura {
   /** Vazio quando o boleto ainda não foi registrado no gateway. */
   linhaDigitavel: string;
   /**
-   * As FORMAS que o IXC já tem prontas para esta fatura. Parcela futura costuma
-   * não ter nenhuma: o carnê é gerado com meses de antecedência e o registro no
-   * gateway só acontece perto do vencimento. Pedir `get_boleto`/`get_pix` de uma
-   * fatura sem registro faria o IXC registrar a cobrança — efeito que ninguém
-   * pediu —, então a tela só oferece o que já existe.
+   * O IXC já registrou o BOLETO desta fatura no gateway? Parcela futura costuma
+   * não ter: o carnê é gerado com meses de antecedência e o registro só acontece
+   * perto do vencimento. Sem registro não há PDF para baixar — e pedir
+   * `get_boleto` assim mesmo faria o IXC registrar um boleto, que é cobrança com
+   * custo e que ninguém pediu. Por isso o boleto só é oferecido quando existe.
    */
   temBoleto: boolean;
-  temPix: boolean;
-  /** Tem o que enviar? Sem boleto E sem Pix registrados, a fatura é só uma linha. */
-  enviavel: boolean;
+  /**
+   * O Pix desta fatura JÁ foi gerado? É só informação — NÃO é condição para
+   * enviar. O IXC gera o Pix SOB DEMANDA (é o que `get_pix` faz, e é o que a
+   * central do assinante faz quando o cliente clica em "pagar com Pix"). Medido
+   * em produção em 2026-09-22: um cadastro com quatro faturas abertas, duas com
+   * boleto registrado, NENHUMA com `pix_txid` — e a primeira versão, que só
+   * oferecia Pix já gerado, deixava o botão desligado para ele inteiro. Escolher
+   * Pix É pedir que ele seja gerado.
+   */
+  pixJaGerado: boolean;
 }
 
 export const FORMAS_DE_COBRANCA = ["boleto", "pix"] as const;
@@ -90,7 +97,7 @@ export function lerFatura(registro: Record<string, string>, hoje: string): Fatur
   const vencida = vencimento < hoje;
   const linhaDigitavel = (registro.linha_digitavel ?? "").trim();
   const temBoleto = linhaDigitavel !== "";
-  const temPix = (registro.pix_txid ?? "").trim() !== "";
+  const pixJaGerado = (registro.pix_txid ?? "").trim() !== "";
   return {
     id: registro.id,
     idContrato: registro.id_contrato ?? "",
@@ -100,8 +107,7 @@ export function lerFatura(registro: Record<string, string>, hoje: string): Fatur
     diasDeAtraso: vencida ? diasEntre(vencimento, hoje) : 0,
     linhaDigitavel,
     temBoleto,
-    temPix,
-    enviavel: temBoleto || temPix,
+    pixJaGerado,
   };
 }
 

@@ -43,7 +43,7 @@ const RECUSAS: Record<MotivoDaRecusa, { codigo: string; status: number; frase: s
   forma_indisponivel: {
     codigo: "fatura_nao_enviavel",
     status: 422,
-    frase: "O IXC ainda não gerou esta forma de pagamento para a fatura. Escolha a outra ou gere por lá.",
+    frase: "O IXC ainda não registrou o boleto desta fatura. Envie por Pix ou gere o boleto por lá.",
   },
   cobranca_indisponivel: {
     codigo: "fatura_nao_enviavel",
@@ -140,7 +140,16 @@ export async function POST(
 
   if (!resultado.ok) {
     const recusa = RECUSAS[resultado.motivo];
-    return fail(recusa.codigo, ctx.t(recusa.frase), recusa.status, { requestId, details: { motivo: resultado.motivo } });
+    // Quando o IXC disse POR QUE não devolveu (carteira sem Pix, usuário do token
+    // sem permissão…), a frase dele vai junto: é ela que diz ao atendente — ou a
+    // quem administra o IXC — o que consertar.
+    const frase = resultado.detalheDoErp
+      ? `${ctx.t(recusa.frase)} ${ctx.t("O IXC respondeu:")} “${resultado.detalheDoErp}”`
+      : ctx.t(recusa.frase);
+    return fail(recusa.codigo, frase, recusa.status, {
+      requestId,
+      details: { motivo: resultado.motivo, ...(resultado.detalheDoErp ? { resposta_do_ixc: resultado.detalheDoErp } : {}) },
+    });
   }
 
   void audit({
@@ -158,6 +167,9 @@ export async function POST(
       valor_cents: resultado.fatura.valorCents,
       mensagens_enviadas: resultado.enviadas,
       mensagens_previstas: resultado.previstas,
+      // O CRM fez o IXC GERAR um Pix que não existia: é o único efeito deste
+      // conector no ERP, e tem de estar na trilha de quem pediu.
+      pix_gerado_agora: resultado.pixGeradoAgora,
     },
     requestId,
   });
