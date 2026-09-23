@@ -26,7 +26,7 @@ const DIR = path.join(process.cwd(), ".changes");
 
 function arquivos(): string[] {
   if (!fs.existsSync(DIR)) return [];
-  return fs.readdirSync(DIR).filter((f) => f.endsWith(".md")).sort();
+  return fs.readdirSync(DIR).filter((f) => f.endsWith(".md") && !f.startsWith("._")).sort();
 }
 
 /** kebab-case: o nome vira parte do diff, e maiúscula/espaço quebram em outro SO. */
