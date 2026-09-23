@@ -8,6 +8,31 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.41.0] — 2026-09-23
+
+### Adicionado
+
+- **Reagir com emoji às mensagens do WhatsApp oficial** Na conversa, o botão ao lado do balão abre "Responder" e "Reagir". O Reagir
+  mostra os seis emojis do WhatsApp e um "+" com mais opções (ou qualquer emoji
+  colado); clicar de novo na mesma reação a tira. A reação do cliente aparece
+  colada ao balão da mensagem — antes ela virava uma mensagem vazia na conversa e
+  acordava o agente de IA. Disponível no número da API Oficial (Meta), com a janela
+  de 24 horas aberta. A migration 0276 é aplicada sozinha pelo `update.sh`.
+
+### Alterado
+
+- **O balão mostra o nome de quem respondeu** Mensagens enviadas pelo CRM por outro atendente mostravam só "Atendente". Agora
+  o balão traz o nome da pessoa (o nome cadastrado no perfil ou, sem ele, o início
+  do e-mail). As suas próprias mensagens continuam como "Você".
+
+### Corrigido
+
+- **Os checks de entregue e lido aparecem no canal oficial** No número da API Oficial (Meta), a mensagem enviada ficava para sempre com um
+  check só: a confirmação de entrega e a de leitura chegavam e eram gravadas como
+  "enviada". Agora a bolha mostra um check (enviada), dois checks (entregue) e dois
+  checks azuis (lida), e um aviso atrasado nunca rebaixa o que já foi lido. Quando
+  a Meta recusa a entrega, o motivo aparece em "Falhou" em vez de um código vazio.
+
 ## [1.40.0] — 2026-09-23
 
 ### Adicionado
@@ -5387,7 +5412,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.40.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.0...HEAD
+[1.41.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.40.0...v1.41.0
 [1.40.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.39.0...v1.40.0
 [1.39.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.38.0...v1.39.0
 [1.38.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.37.0...v1.38.0
