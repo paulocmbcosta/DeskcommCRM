@@ -82,6 +82,16 @@ export interface MensagemDaCobranca {
   media_storage_path?: string;
   media_mime?: string;
   media_size_bytes?: number;
+  /**
+   * `body` é CÓDIGO PARA COPIAR (linha digitável, copia-e-cola do Pix), relido
+   * do ERP — nunca prosa. O motor passa isto a `runBeforeSend` como
+   * `corpoImutavel` (lib/agent-engine/guardrails/before-send.ts): a única
+   * emenda de corpo que existe hoje (o aviso de IA do disclosure) NÃO pode
+   * prependar nada aqui, porque `isFirstOutbound` é por CONTATO — se a
+   * mensagem anterior desta MESMA cobrança saiu `queued`, o código ainda
+   * aparenta ser "1º outbound" e ganharia o aviso, corrompendo o BR Code.
+   */
+  corpoImutavel?: boolean;
 }
 
 export interface PortasDoEnvio {

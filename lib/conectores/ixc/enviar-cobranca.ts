@@ -121,7 +121,10 @@ export async function enviarCobrancaIxc(p: PedidoDeEnvio): Promise<ResultadoDoEn
       media_mime: arquivo.mime,
       media_size_bytes: arquivo.conteudo.length,
     },
-    ...(codigo ? [{ type: "text" as const, body: codigo }] : []),
+    // `corpoImutavel`: isto é a linha digitável/copia-e-cola relido do IXC, não
+    // prosa — o disclosure de IA nunca pode prependar nada aqui (ver o campo em
+    // `../tipos.ts` e `corpoImutavel` em `before-send.ts`).
+    ...(codigo ? [{ type: "text" as const, body: codigo, corpoImutavel: true as const }] : []),
   ];
 
   let enviadas = 0;
