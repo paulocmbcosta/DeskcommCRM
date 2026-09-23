@@ -612,6 +612,9 @@ export const AUDIT_ACTIONS = [
   // `member.password_set`: é aqui que a senha escolhida pelo admin deixa de
   // ser conhecida por ele. `metadata` diz se a marca caiu, nunca a senha.
   "profile.password_changed",
+  // O atendente reagiu (ou tirou a reação) com emoji a uma mensagem da
+  // conversa (DYD-16, migration 0276). `metadata` traz o emoji e a mensagem alvo.
+  "message.reaction_sent",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

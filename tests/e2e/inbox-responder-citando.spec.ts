@@ -69,20 +69,30 @@ async function abrirConversaComMensagens(page: Page): Promise<boolean> {
   return (await bolhas.count()) > 0;
 }
 
+/**
+ * No canal que reage (DYD-16) o atalho de responder mora dentro do menu
+ * "Ações da mensagem"; nos outros continua sendo o botão direto. A spec
+ * serve aos dois: abre o menu quando ele existe.
+ */
+async function clicarResponder(page: import("@playwright/test").Page) {
+  const acoes = page.getByRole("button", { name: /Ações da mensagem/i }).first();
+  if (await acoes.count()) await acoes.click();
+  const responder = page.getByRole("button", { name: /Responder a esta mensagem/i }).first();
+  await expect(responder).toBeVisible();
+  await responder.click();
+}
+
 test.describe("responder citando", () => {
   test("o botão de responder revela a faixa, e o × a desfaz", async ({ page }) => {
     await login(page, creds.users.agent!.email);
     const temMensagens = await abrirConversaComMensagens(page);
     test.skip(!temMensagens, "ambiente sem conversa com mensagens — nada a citar");
 
-    const responder = page.getByRole("button", { name: /Responder a esta mensagem/i }).first();
-
     // O botão vive em `opacity-0` até o hover. `toBeVisible` do Playwright
     // considera opacidade 0 como visível, então o hover é o que prova de
     // verdade que ele é alcançável — e o clique, que é clicável.
     await page.locator("[class*='rounded-2xl']").first().hover();
-    await expect(responder).toBeVisible();
-    await responder.click();
+    await clicarResponder(page);
 
     // A faixa aparece acima do campo, com o botão de cancelar.
     const cancelar = page.getByRole("button", { name: /Cancelar resposta/i });
@@ -104,8 +114,7 @@ test.describe("responder citando", () => {
     test.skip(!temMensagens, "ambiente sem conversa com mensagens");
 
     await page.locator("[class*='rounded-2xl']").first().hover();
-    const responder = page.getByRole("button", { name: /Responder a esta mensagem/i }).first();
-    await responder.click();
+    await clicarResponder(page);
     await expect(page.getByRole("button", { name: /Cancelar resposta/i })).toBeVisible();
 
     // Volta para a lista e entra em OUTRA conversa.

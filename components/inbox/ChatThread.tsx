@@ -13,6 +13,7 @@ import { NoteCard } from "./NoteCard";
 import { useMessagesRealtime } from "@/hooks/inbox/useMessagesRealtime";
 import { useConversationNotes } from "@/hooks/inbox/useConversationNotes";
 import { useDeleteNote } from "@/hooks/inbox/useDeleteNote";
+import { useReagir } from "@/hooks/inbox/useReagir";
 import { useDebugToggle } from "@/hooks/ai/useDebugToggle";
 import { useActiveOrg, useUser } from "@/hooks/auth/AuthProvider";
 import { ROLE_RANK } from "@/lib/auth/types";
@@ -24,6 +25,12 @@ interface Props {
   atendimentoId?: string | null;
   /** Escolher uma mensagem para responder. Sobe até o composer. */
   onResponder?: (m: Message) => void;
+  /**
+   * O canal desta conversa aceita reação AGORA (canal que reage + janela de
+   * 24h aberta + contato não bloqueado)? Quem decide é o layout, que já
+   * conhece o canal — a thread só liga ou desliga o "Reagir" (DYD-16).
+   */
+  podeReagir?: boolean;
 }
 
 /** Onda 5.2: union de item do thread — mensagem real ou nota interna (nunca vai ao cliente). */
@@ -49,7 +56,7 @@ function dayLabel(d: Date, t: (texto: string) => string = (texto) => texto, loca
   return format(d, "dd/MM/yyyy", { locale: locale });
 }
 
-export function ChatThread({ conversationId, atendimentoId = null, onResponder }: Props) {
+export function ChatThread({ conversationId, atendimentoId = null, onResponder, podeReagir = false }: Props) {
   const localeDaData = useLocaleDeData();
   const t = useT();
   const q = useMessagesRealtime(conversationId, atendimentoId);
@@ -61,6 +68,12 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder }
   const activeOrg = useActiveOrg();
   const currentUser = useUser();
   const deleteNote = useDeleteNote(conversationId ?? "");
+  const reagir = useReagir(conversationId, currentUser.id);
+  // Só no atendimento VIGENTE: um episódio antigo é leitura, não conversa viva.
+  const onReagir =
+    podeReagir && !atendimentoId
+      ? (m: Message, emoji: string) => reagir.mutate({ messageId: m.id, emoji })
+      : undefined;
   const canManage = activeOrg != null && ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager;
   const { enabled: debugCitations } = useDebugToggle(activeOrg?.role ?? null);
 
@@ -254,6 +267,7 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder }
                   // CRM — inclusive nas do colega, porque `sent_via='user'` só
                   // registra que um humano digitou, nunca qual.
                   viewerUserId={currentUser.id}
+                  onReagir={onReagir}
                 />
               ),
             )}

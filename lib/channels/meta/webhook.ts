@@ -134,9 +134,38 @@ export interface MessageStatusEvent {
   recipient: string | null;
   errorCode: number | null;
   errorTitle: string | null;
+  /** `error_data.details` — o campo que diz o PORQUÊ; o título sozinho é genérico. */
+  errorDetail: string | null;
+  /** Quando a Meta registrou o status (epoch em segundos no fio). */
+  at: Date | null;
 }
 
-export type MetaWebhookEvent = TemplateStatusEvent | MessageStatusEvent | InboundMessageEvent;
+/**
+ * O cliente reagiu (ou tirou a reação) a uma mensagem da conversa.
+ *
+ * NÃO é `inbound_message`: até a migration 0276 era, e a reação virava balão
+ * vazio, prévia "[reaction]" e turno do agente de IA. Agora ela é gravada na
+ * mensagem alvo (`lib/messaging/reacoes.ts`).
+ */
+export interface InboundReactionEvent {
+  kind: "inbound_reaction";
+  wabaId: string;
+  phoneNumberId: string;
+  /** wamid da PRÓPRIA reação. */
+  externalId: string;
+  from: string;
+  /** wamid da mensagem que recebeu a reação. */
+  targetExternalId: string;
+  /** `""` = o cliente tirou a reação. */
+  emoji: string;
+  at: Date;
+}
+
+export type MetaWebhookEvent =
+  | TemplateStatusEvent
+  | MessageStatusEvent
+  | InboundMessageEvent
+  | InboundReactionEvent;
 
 /**
  * O formato do fio mora em `./envelope.ts`, onde é um schema Zod — e o tipo
@@ -203,8 +232,24 @@ export function parseMetaWebhook(envelope: MetaWebhookEnvelope): MetaWebhookEven
           const from = str(raw.from);
           if (!id || !from) continue; // payload capenga não vira linha meia-boca
 
-          const perfil = contatos.find((c) => str(c.wa_id) === from);
           const tipo = str(raw.type) ?? "unknown";
+          if (tipo === "reaction") {
+            const reacao = (raw.reaction ?? {}) as Record<string, unknown>;
+            const alvo = str(reacao.message_id);
+            if (!alvo) continue;
+            out.push({
+              kind: "inbound_reaction",
+              wabaId,
+              phoneNumberId: str(meta.phone_number_id) ?? "",
+              externalId: id,
+              from,
+              targetExternalId: alvo,
+              emoji: typeof reacao.emoji === "string" ? reacao.emoji : "",
+              at: new Date(Number(str(raw.timestamp) ?? "0") * 1000),
+            });
+            continue;
+          }
+          const perfil = contatos.find((c) => str(c.wa_id) === from);
           const corpoMidia = tipo !== "contacts" ? (raw[tipo] as Record<string, unknown> | undefined) : undefined;
           const sharedContact = tipo === "contacts" ? parseMetaInboundContact(raw) : null;
           const tipoCrm = tipo === "contacts" ? "contact" : tipo;
@@ -246,6 +291,8 @@ export function parseMetaWebhook(envelope: MetaWebhookEnvelope): MetaWebhookEven
             ? (raw.errors as Record<string, unknown>[])
             : [];
           const first = errors[0] ?? {};
+          const dadosDoErro = (first.error_data ?? {}) as Record<string, unknown>;
+          const ts = Number(str(raw.timestamp) ?? "");
           out.push({
             kind: "message_status",
             wabaId,
@@ -253,7 +300,9 @@ export function parseMetaWebhook(envelope: MetaWebhookEnvelope): MetaWebhookEven
             status: str(raw.status) ?? "unknown",
             recipient: str(raw.recipient_id),
             errorCode: typeof first.code === "number" ? first.code : null,
-            errorTitle: str(first.title),
+            errorTitle: str(first.title) ?? str(first.message),
+            errorDetail: str(dadosDoErro.details),
+            at: Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000) : null,
           });
         }
       }

@@ -27801,6 +27801,67 @@ comment on column public.channel_sessions.meta_app_secret_encrypted is
 
 notify pgrst, 'reload schema';
 
+-- ---- reação com emoji nas mensagens (migration 0276) ----
+-- A reação é estado da mensagem alvo (metadata.reacoes.{contato|empresa}), não
+-- mensagem nova. Racional completo no cabeçalho da migration 0276.
+create or replace function public.fn_registrar_reacao(
+  p_org uuid,
+  p_alvo_id uuid,
+  p_alvo_external_id text,
+  p_lado text,
+  p_emoji text,
+  p_user uuid,
+  p_external_id text,
+  p_em timestamptz
+)
+returns uuid
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_id uuid;
+begin
+  if p_lado is null or p_lado not in ('contato', 'empresa') then
+    raise exception 'lado_invalido: %', p_lado using errcode = '22023';
+  end if;
+
+  update public.messages m
+     set metadata = case
+           when coalesce(p_emoji, '') = '' then
+             coalesce(m.metadata, '{}'::jsonb) #- array['reacoes', p_lado]
+           else
+             jsonb_set(
+               coalesce(m.metadata, '{}'::jsonb)
+                 || jsonb_build_object('reacoes', coalesce(m.metadata -> 'reacoes', '{}'::jsonb)),
+               array['reacoes', p_lado],
+               jsonb_strip_nulls(jsonb_build_object(
+                 'emoji', p_emoji,
+                 'em', coalesce(p_em, now()),
+                 'user_id', p_user,
+                 'external_id', p_external_id
+               ))
+             )
+         end,
+         updated_at = now()
+   where m.organization_id = p_org
+     and case
+           when p_alvo_id is not null then m.id = p_alvo_id
+           else m.external_id = p_alvo_external_id
+         end
+  returning m.id into v_id;
+
+  return v_id;
+end;
+$$;
+
+comment on function public.fn_registrar_reacao(uuid, uuid, text, text, text, uuid, text, timestamptz) is
+  'Grava (ou tira, com emoji vazio) a reação de um lado — contato ou empresa — em messages.metadata.reacoes, num UPDATE só. Um lado tem UMA reação por mensagem, como no WhatsApp: a nova substitui a anterior. Devolve o id da mensagem alvo, ou NULL quando ela não está nesta organização (migration 0276).';
+
+revoke execute on function public.fn_registrar_reacao(uuid, uuid, text, text, text, uuid, text, timestamptz) from public, anon, authenticated;
+grant  execute on function public.fn_registrar_reacao(uuid, uuid, text, text, text, uuid, text, timestamptz) to service_role;
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

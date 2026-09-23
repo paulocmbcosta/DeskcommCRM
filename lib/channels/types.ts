@@ -79,6 +79,14 @@ export interface ChannelCapabilities {
    * quem digitasse o celular de outra pessoa receberia a fatura dela.
    */
   telefoneEhIdentidade: boolean;
+  /**
+   * O atendente consegue REAGIR com emoji a uma mensagem por este canal?
+   *
+   * `true` só onde o adapter implementa `sendReaction` — a tela pergunta isto
+   * para decidir se mostra "Reagir", e a rota recusa com 422 onde é `false`,
+   * em vez de gravar no balão uma reação que o cliente nunca vai ver.
+   */
+  reacoes: boolean;
 }
 
 /**
@@ -241,6 +249,21 @@ export interface ChannelAdapter {
    * quem chama cai no próprio `externalId`.
    */
   echoExternalIds?(input: { externalId: string; recipient: string }): string[];
+
+  /**
+   * Reage com emoji à mensagem `targetExternalId` (o id do provider). `emoji`
+   * vazio REMOVE a reação do nosso lado. LANÇA quando o provider recusa — quem
+   * chama não grava a reação no balão sem o aceite.
+   *
+   * OPCIONAL, e casado com a capability `reacoes`: canal sem este método
+   * declara `reacoes: false` (vigiado em tests/unit/reacoes.test.ts).
+   */
+  sendReaction?(input: ChannelTenantScope & {
+    sessionRef: string;
+    to: string;
+    targetExternalId: string;
+    emoji: string;
+  }): Promise<{ externalId: string | null }>;
 
   /**
    * O telefone por trás de um identificador opaco, quando o canal souber.

@@ -89,3 +89,34 @@ export async function nomesDosAtendentes(
   );
   return new Map(pares);
 }
+
+/**
+ * O nome de EXIBIÇÃO de quem enviou uma mensagem pelo CRM (DYD-13): o nome
+ * cadastrado e, na falta dele, o que vem antes do `@` do e-mail — a MESMA
+ * régua de `fn_nome_do_usuario` (migration 0270), que é quem responde. Sem o
+ * degrau do e-mail, quem instalou antes de o `bootstrap-owner.ts` gravar
+ * `full_name` voltaria a aparecer como "Atendente", que é o defeito.
+ *
+ * Uma chamada por id ÚNICO da página (numa conversa, 1 a 3 pessoas), ao banco
+ * e não ao GoTrue. Sem service role o mapa volta vazio e a tela cai no rótulo
+ * genérico — declarado, como em `nomesDosAtendentes`.
+ */
+export async function nomesDeExibicao(
+  userIds: Array<string | null | undefined>,
+): Promise<Map<string, string | null>> {
+  const unicos = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
+  if (unicos.length === 0 || !isServiceRoleConfigured()) return new Map();
+
+  const admin = createAdminClient();
+  const pares = await Promise.all(
+    unicos.map(async (id): Promise<readonly [string, string | null]> => {
+      const { data, error } = await admin.rpc("fn_nome_do_usuario" as never, { p_user: id } as never);
+      if (error) {
+        logger.warn("[nome-do-atendente] nome de exibição falhou", { user_id: id, erro: error.message });
+        return [id, null] as const;
+      }
+      return [id, (data as string | null) ?? null] as const;
+    }),
+  );
+  return new Map(pares);
+}

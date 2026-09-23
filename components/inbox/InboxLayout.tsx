@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { estadoDaJanela, formatarDecorrido } from "@/lib/channels/janela";
+import { canalReage } from "@/lib/channels/capabilities";
 import { JanelaFechadaAviso } from "@/components/inbox/JanelaFechadaAviso";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
 import { useCloseConversation } from "@/hooks/inbox/useCloseConversation";
@@ -408,6 +409,14 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       ? t("Contato anonimizado — não é possível enviar mensagens.")
       : null;
 
+  // Reagir com emoji (DYD-16): o canal precisa reagir, a janela de 24h estar
+  // aberta (para a plataforma, reação é mensagem livre) e o contato não pode
+  // estar bloqueado/anonimizado. A rota confere as mesmas três coisas.
+  const podeReagir =
+    canalReage(selectedConversation?.channel_sessions?.provider ?? null) &&
+    janela.tipo !== "fechada" &&
+    !blockedReason;
+
   // A grade ENCOSTA nas quatro bordas do <main>, e é por isso que a altura é a que é.
   //
   // O `<main>` do AppShell tem `p-6`, e uma grade posta dentro dele deixava 24px
@@ -669,6 +678,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 // otimista escreve (ver `useMessagesRealtime`).
                 atendimentoId={vendoAtendimentoAntigo ? atendimentoId : null}
                 onResponder={setRespondendo}
+                podeReagir={podeReagir}
               />
             </div>
             <RetentionNotice conversationId={selectedConversation.id} />

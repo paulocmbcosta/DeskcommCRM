@@ -93,6 +93,12 @@ export interface Message {
   // não conseguia nem NOMEAR o valor para exibi-lo (ver MessageBubble).
   sent_via: "user" | "ai" | "system" | "external_device" | "automation" | "crm";
   sent_by_user_id: string | null;
+  /**
+   * Nome de exibição de `sent_by_user_id` (DYD-13), resolvido pela leitura do
+   * histórico — não é coluna. Ausente na mensagem otimista e onde a leitura não
+   * resolve nomes; a bolha então cai em "Você"/"Atendente".
+   */
+  sent_by_name?: string | null;
   sent_at: string;
   delivered_at: string | null;
   read_at: string | null;

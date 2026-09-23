@@ -263,6 +263,50 @@ export const metaCloudAdapter: ChannelAdapter = {
     return { buffer, mime };
   },
 
+  /**
+   * Reação com emoji: `type: "reaction"` apontando o wamid da mensagem alvo.
+   * `emoji: ""` remove a nossa reação — é o formato documentado pela Meta.
+   * Reação é mensagem livre para a Meta: com a janela de 24h fechada, ela
+   * aceita (200) e recusa a entrega depois (131047). Quem chama confere a
+   * janela antes, por isso este método não sabe dela.
+   */
+  async sendReaction(input): Promise<{ externalId: string | null }> {
+    const creds = await resolveMetaCreds(createAdminClient(), {
+      organizationId: input.organizationId,
+      phoneNumberId: input.sessionRef,
+    });
+    if (!creds) {
+      throw new Error("meta_not_configured: nenhuma credencial para esta sessão.");
+    }
+    const res = await fetch(
+      `https://graph.facebook.com/${creds.graphVersion}/${creds.phoneNumberId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${creds.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: input.to,
+          type: "reaction",
+          reaction: { message_id: input.targetExternalId, emoji: input.emoji },
+        }),
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    const body = (await res.json().catch(() => ({}))) as {
+      messages?: { id?: string }[];
+      error?: { code?: number; message?: string; error_data?: { details?: string } };
+    };
+    if (!res.ok || body.error) {
+      const detalhe = body.error?.error_data?.details ?? body.error?.message ?? `http_${res.status}`;
+      throw new Error(`meta_${body.error?.code ?? res.status}: ${detalhe}`);
+    }
+    return { externalId: body.messages?.[0]?.id ?? null };
+  },
+
   async send(envelope: OutboundEnvelope): Promise<{ externalId: string | null }> {
     // Sessão primeiro, env como fallback. O `sessionRef` do canal oficial É o
     // `phone_number_id` (ver `resolveSessionRef`), então ele é a chave da busca.

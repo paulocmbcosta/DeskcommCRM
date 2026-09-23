@@ -34,6 +34,7 @@ import { describe, expect, it } from "vitest";
  */
 
 const BOLHA = readFileSync("components/inbox/MessageBubble.tsx", "utf8");
+const ACOES = readFileSync("components/inbox/AcoesDaMensagem.tsx", "utf8");
 
 describe("no celular o botão de responder aparece", () => {
   it("o padrão é VISÍVEL — esconder é a exceção", () => {
@@ -55,11 +56,18 @@ describe("no celular o botão de responder aparece", () => {
     expect(trechos.map((m) => m[0]), "largura não responde 'tem hover?'").toEqual([]);
   });
 
-  it("os DOIS botões (entrada e saída) seguem a mesma regra", () => {
-    // São dois elementos espelhados. Consertar um e esquecer o outro deixaria a
-    // metade da conversa sem resposta possível no celular.
+  it("os DOIS lados (entrada e saída) e os DOIS botões seguem a mesma regra", () => {
+    // Era um botão espelhado em dois lugares. Desde o DYD-16 é UM elemento
+    // (`acoes`) posto dos dois lados — o atalho de responder ou o menu de
+    // ações (Responder / Reagir), que mora em AcoesDaMensagem. Os dois botões
+    // precisam da regra, e o elemento tem de aparecer nos dois lados: esquecer
+    // um deixaria metade da conversa sem resposta possível no celular.
     const comRegra = [...BOLHA.matchAll(/\[@media\(hover:hover\)\]:opacity-0/g)];
-    expect(comRegra.length, "um dos dois botões ficou de fora").toBe(2);
+    expect(comRegra.length, "o atalho de responder perdeu a regra").toBe(1);
+    const acoes = [...ACOES.matchAll(/\[@media\(hover:hover\)\]:opacity-0/g)];
+    expect(acoes.length, "o botão de ações perdeu a regra").toBe(1);
+    expect(BOLHA).toMatch(/\{isOutbound && acoes\}/);
+    expect(BOLHA).toMatch(/\{!isOutbound && acoes\}/);
   });
 
   it("o teclado também alcança", () => {
