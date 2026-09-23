@@ -47,6 +47,13 @@
  * Isto vale para o produto inteiro, não para uma organização: uma clínica, uma
  * imobiliária e um infoprodutor montam funis diferentes, e nenhum nome de funil
  * aparece neste arquivo.
+ *
+ * ⚠️ DESDE 2026-09-22 HÁ UM SEGUNDO JEITO DE NASCER, e a frase acima continua
+ * valendo. Com `settings.crm.nascimento_do_card.modo = 'classificador'`, o
+ * ingest recua e quem cria é `workers/classificador-comercial.ts` — ainda o
+ * SISTEMA, a cada mensagem de quem não tem card, e nunca o agente lembrando de
+ * chamar uma ferramenta. O modelo (o Jev) só responde "é comercial?"; funil,
+ * etapa, título e a trava contra duplicata continuam aqui.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -56,6 +63,7 @@ import { lerClientePelaAgenda } from "@/lib/contacts/cliente-pela-agenda";
 import { ehIdentificadorTecnico, rotuloDoContato, SEM_NOME } from "@/lib/contacts/rotulo-do-contato";
 
 import { emitLeadActivity } from "./activity-emitter";
+import { lerNascimentoDoCard } from "./modo-de-nascimento";
 
 /**
  * O rótulo que aparece no card do funil quando o lead nasceu de um clique em
@@ -77,6 +85,7 @@ const ROTULO_DE_ANUNCIO: Record<string, string> = {
 export type MotivoSemLead =
   | "ja_existe" // o contato já tem lead aberto: um por demanda, não um por mensagem
   | "contato_bloqueado" // pediu para sair; criar oportunidade seria desrespeito registrado
+  | "aguarda_classificador" // a organização só abre card para conversa comercial, e quem decide é o classificador
   | "sem_funil_de_entrada" // a organização não tem funil padrão — falha de configuração, visível
   | "sem_etapa" // o funil existe e não tem etapa utilizável
   | "erro"; // qualquer falha de escrita
@@ -92,6 +101,101 @@ export interface DadosDoNascimento {
   conversationId: string;
   /** nome do contato, para o título do card. */
   nomeDoContato: string | null;
+}
+
+/**
+ * Por que o classificador NÃO decidiu — vocabulário fechado, não free-text:
+ * quem chama aponta o CÓDIGO (contável em `payload.sem_classificacao`); o
+ * TEXTO mora só aqui, num único lugar, para a frase da timeline nunca
+ * divergir da causa registrada.
+ */
+export type CausaSemClassificacao = "sem_chave" | "conta" | "temporaria" | "formato" | "midia_sem_texto";
+
+const TEXTO_DA_CAUSA: Record<CausaSemClassificacao, string> = {
+  sem_chave: "sem chave da OpenRouter",
+  conta: "a OpenRouter recusou o pedido: chave inválida, sem saldo ou pedido barrado",
+  temporaria: "o classificador ficou fora do ar por mais de 10 minutos",
+  formato: "o classificador respondeu num formato inesperado",
+  midia_sem_texto:
+    "o cliente mandou só mídia que não pôde ser lida (áudio sem transcrição ou imagem/documento sem descrição)",
+};
+
+/**
+ * Os passos do funil do AGENTE (`LEAD_STAGES`, lib/agent-engine/agent/lead-state.ts)
+ * que são avanço comercial — e o rótulo em português de cada um, para a razão
+ * da linha do tempo. `new`, `contacted` e `lost` ficam de fora: não dizem que a
+ * conversa é comercial. O teste do espelho (`move-lead-stage.test.ts`) confere
+ * que toda chave daqui é um passo real do agente.
+ */
+const ROTULO_DO_PASSO_DO_AGENTE = {
+  qualifying: "qualificando",
+  qualified: "qualificado",
+  negotiating: "em negociação",
+  won: "fechado",
+} as const;
+
+export type PassoDeAvancoComercial = keyof typeof ROTULO_DO_PASSO_DO_AGENTE;
+
+export const PASSOS_DE_AVANCO_COMERCIAL: ReadonlySet<string> = new Set(Object.keys(ROTULO_DO_PASSO_DO_AGENTE));
+
+export function ehAvancoComercial(passo: string): passo is PassoDeAvancoComercial {
+  return PASSOS_DE_AVANCO_COMERCIAL.has(passo);
+}
+
+/**
+ * QUEM decidiu que esta conversa vira card.
+ *
+ * `ingest`: a mensagem chegou (o caminho de sempre). É o ÚNICO que consulta a
+ * regra da organização — no modo `classificador` ele recua.
+ * `classificador`: o Jev disse que a conversa é comercial.
+ * `sem_classificacao`: o classificador não conseguiu decidir, e o card nasce
+ * assim mesmo (decisão A do plano 2026-09-22): card a mais se arquiva, card a
+ * menos é venda que some.
+ * `agente`: com a regra ligada, o AGENTE avançou a conversa no funil dele
+ * (`update_lead_state`) e o contato ainda não tinha card — decisão do dono,
+ * 2026-09-22. Quem chama é o espelho de etapa
+ * (`lib/agent-engine/edge/crm/move-lead-stage.ts`), só no modo `classificador`.
+ */
+export type OrigemDoNascimento =
+  | { tipo: "ingest" }
+  | { tipo: "classificador"; assunto: string; rotuloDoAssunto: string; probabilidade: number; modelo: string }
+  | { tipo: "sem_classificacao"; causa: CausaSemClassificacao }
+  | { tipo: "agente"; passo: PassoDeAvancoComercial };
+
+/** `crm_lead_activities.source_module` por origem — vocabulário aberto, uma constante por valor. */
+const MODULO_DA_ORIGEM: Record<OrigemDoNascimento["tipo"], string> = {
+  ingest: "canal.ingest",
+  classificador: "crm.classificador_comercial",
+  sem_classificacao: "crm.classificador_comercial",
+  agente: "agente.avanco_comercial",
+};
+
+/** O `id` do ator `webhook_source` por origem: quem, no sistema, agiu. */
+const ATOR_DA_ORIGEM: Record<OrigemDoNascimento["tipo"], string> = {
+  ingest: "canal-inbound",
+  classificador: "classificador-comercial",
+  sem_classificacao: "classificador-comercial",
+  agente: "agente-avanco-comercial",
+};
+
+function razaoDoNascimento(origem: OrigemDoNascimento, ehCliente: boolean): string {
+  // O ingest já tem a frase própria para cliente conhecido; nas origens novas
+  // o sufixo só se soma ao final, sem esconder o motivo principal (classificação
+  // ou falta dela) atrás da observação sobre o contato.
+  const sufixoCliente = ehCliente ? " — cliente conhecido" : "";
+  if (origem.tipo === "classificador") {
+    // `min(99, …)` porque 0.999 não é 100%: o card nasceu de uma PROBABILIDADE,
+    // nunca de certeza, e "100%" leria como se o sistema tivesse certeza.
+    const pct = Math.min(99, Math.round(origem.probabilidade * 100));
+    return `conversa identificada como comercial (${pct}%) — assunto: ${origem.rotuloDoAssunto}${sufixoCliente}`;
+  }
+  if (origem.tipo === "sem_classificacao") {
+    return `card criado sem classificar a conversa — ${TEXTO_DA_CAUSA[origem.causa]}${sufixoCliente}`;
+  }
+  if (origem.tipo === "agente") {
+    return `o agente identificou avanço comercial (etapa: ${ROTULO_DO_PASSO_DO_AGENTE[origem.passo]})${sufixoCliente}`;
+  }
+  return ehCliente ? "cliente conhecido voltou a escrever" : "primeira mensagem recebida no WhatsApp";
 }
 
 /**
@@ -195,6 +299,7 @@ export async function funilDeEntrada(
 export async function garantirLeadDaConversa(
   db: SupabaseClient,
   dados: DadosDoNascimento,
+  origem: OrigemDoNascimento = { tipo: "ingest" },
 ): Promise<NascimentoDoLead> {
   const { organizationId, contactId, conversationId } = dados;
 
@@ -224,6 +329,16 @@ export async function garantirLeadDaConversa(
     .maybeSingle();
 
   if (existente) return { criado: false, motivo: "ja_existe" };
+
+  // 2b · quem decide se a conversa vira card (settings.crm.nascimento_do_card).
+  //
+  // Só o INGEST pergunta, e só depois do passo 2: quem já tem card não paga a
+  // consulta. O classificador não pergunta porque ELE é a decisão — e o caminho
+  // de falha dele (`sem_classificacao`) existe justamente para criar mesmo assim.
+  if (origem.tipo === "ingest") {
+    const regra = await lerNascimentoDoCard(db, organizationId);
+    if (regra.modo === "classificador") return { criado: false, motivo: "aguarda_classificador" };
+  }
 
   // 3 · onde entra
   //
@@ -334,20 +449,38 @@ export async function garantirLeadDaConversa(
     // canal (invariante 1) proíbe feature nomear provider — quem sabe qual é o
     // provider é `lib/channels/`. Aqui o que importa é o QUE originou (a
     // ingestão de uma mensagem de canal), não POR ONDE ela entrou.
-    sourceModule: "canal.ingest",
+    // `crm.classificador_comercial` quando quem decidiu foi o classificador; a
+    // linha do tempo da conversa (`app/api/v1/conversations/[id]/timeline/route.ts`)
+    // mostra esta razão.
+    // `agente.avanco_comercial` quando quem viu o avanço foi o agente —
+    // distinto do classificador, para as métricas separarem quem abriu o card.
+    sourceModule: MODULO_DA_ORIGEM[origem.tipo],
     sourceId: conversationId,
     // `webhook_source` e não um "system" inventado: `actorParaAtividade` já
     // traduz esta variante para `kind: "system"` na timeline, e ela descreve o
-    // que de fato aconteceu — a mensagem chegou por webhook, o produto agiu.
-    actor: { type: "webhook_source", id: "canal-inbound" },
+    // que de fato aconteceu — no ingest, a mensagem chegou por webhook e o
+    // produto agiu; nas origens do classificador, quem agiu foi o WORKER
+    // (`workers/classificador-comercial.ts`), rodando fora do request; na do
+    // agente, o espelho de etapa do turno (`move-lead-stage.ts`).
+    actor: { type: "webhook_source", id: ATOR_DA_ORIGEM[origem.tipo] },
     // A timeline é o ÚNICO lugar onde quem abre o card descobre por que ele
     // nasceu naquele funil. Sem esta distinção, o cliente antigo aparece num
     // quadro diferente do resto sem explicação nenhuma, e quem vê conclui que
     // alguém arrastou.
-    reason: ehCliente
-      ? "cliente conhecido voltou a escrever"
-      : "primeira mensagem recebida no WhatsApp",
-    payload: { conversation_id: conversationId, cliente: ehCliente },
+    reason: razaoDoNascimento(origem, ehCliente),
+    payload: {
+      conversation_id: conversationId,
+      cliente: ehCliente,
+      // O único registro durável da probabilidade exata, do código do assunto
+      // e da versão do modelo por card — é o que a Tarefa 15 do plano lê para
+      // calibrar o limiar (contando falso positivo por card do classificador
+      // que foi perdido/arquivado sem nunca ser comercial de fato).
+      ...(origem.tipo === "classificador"
+        ? { classificacao: { assunto: origem.assunto, probabilidade: origem.probabilidade, modelo: origem.modelo } }
+        : {}),
+      ...(origem.tipo === "sem_classificacao" ? { sem_classificacao: origem.causa } : {}),
+      ...(origem.tipo === "agente" ? { avanco_do_agente: { passo: origem.passo } } : {}),
+    },
   });
   if (!registro.ok) {
     // O lead existe e é o que importa; a linha da timeline falhou. Devolver erro

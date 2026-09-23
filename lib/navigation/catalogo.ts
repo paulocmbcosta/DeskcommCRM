@@ -257,7 +257,7 @@ export const NAV_CATALOG = [
     // que ele significa.
     href: "/app/settings/tenant/pipelines",
     label: "Etapas do funil",
-    description: "As colunas de cada funil, o vocabulário do negócio e os motivos de perda.",
+    description: "As colunas de cada funil, o vocabulário do negócio, os motivos de perda e quando o card nasce.",
     icon: "Funnel",
     group: "crm",
     section: "Preparar a venda",
