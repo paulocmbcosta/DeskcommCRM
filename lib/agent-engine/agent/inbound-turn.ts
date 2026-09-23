@@ -152,9 +152,9 @@ import {
 } from './skills';
 import { readSkillReference, skillHasReferences } from './skill-references';
 import { READ_ONLY_TOOLS, wrapToolsWithBreaker, type ToolBreakerThresholds } from './tool-breaker';
-import { loadChannelProvider, runBeforeSend } from '../guardrails/before-send';
+import { loadChannelProviderRaw, runBeforeSend } from '../guardrails/before-send';
 import { isStatusSendable } from '../../channels/meta/template-binding';
-import { capabilitiesOf, identidadeDoTelefone } from '@/lib/channels/capabilities';
+import { capabilitiesOf, identidadeDoTelefone, type ChannelProvider } from '@/lib/channels/capabilities';
 import { renderTemplateBody } from '@/lib/channels/meta/render-template';
 import { esperarComoHumano } from './atraso-humano';
 import { sendInBubbles } from './split-message';
@@ -1564,6 +1564,16 @@ export async function avisarCapacidadesAusentes(
   // qualidade do Lote E). Default = o título histórico, para não mudar o
   // comportamento de quem já chama esta função sem o parâmetro.
   titulo = 'O agente atendeu sem as capacidades que você ligou',
+  // Corpo próprio por CAUSA, mesmo racional do título: "não pude carregar" (o
+  // default, um bug/falha transiente) e "não está configurado" (a causa é
+  // config, não falha de carga) são histórias diferentes para quem lê a
+  // Central — dizer "não puderam ser carregadas" quando a causa real é "você
+  // não conectou o sistema de gestão" manda o dono procurar um bug que não
+  // existe (achado de revisão de qualidade; mesmo padrão de `avisarFalhaInterna`
+  // em ferramentas-do-conector.ts).
+  corpo = 'As ferramentas configuradas na tela do agente não puderam ser carregadas neste ' +
+    'atendimento, e ele respondeu ao cliente sem elas. A conversa não foi interrompida. ' +
+    `Motivo técnico: ${detalhe}`,
 ): Promise<void> {
   try {
     await db.query(
@@ -1573,14 +1583,7 @@ export async function avisarCapacidadesAusentes(
           select 1 from agent_inbox_items
            where organization_id = $1 and kind = 'capabilities_missing' and status = 'open' and title = $2
         )`,
-      [
-        tenantId,
-        titulo,
-        'As ferramentas configuradas na tela do agente não puderam ser carregadas neste ' +
-          'atendimento, e ele respondeu ao cliente sem elas. A conversa não foi interrompida. ' +
-          `Motivo técnico: ${detalhe}`,
-        conversationId,
-      ],
+      [tenantId, titulo, corpo, conversationId],
     );
   } catch (err) {
     log.warn('aviso de capacidades ausentes não foi gravado', {
@@ -3585,16 +3588,30 @@ async function executarTurnoDoAgente(
   // Num canal que fala livre a qualquer hora ela nunca teria uso — e tool inútil no
   // prompt não é neutra: gasta contexto e degrada a escolha do modelo.
   //
-  // `provider` NÃO é bloco-escopado: as ferramentas do conector, logo abaixo,
+  // `providerCru` NÃO é bloco-escopado: as ferramentas do conector, logo abaixo,
   // reusam esta MESMA leitura para saber se o telefone é identidade neste canal
   // — sem isso, cada chamada de `crm_consultar_cliente_erp` faria uma consulta
   // extra a `contacts`/`channel_sessions` só para redescobrir o que o turno já
   // sabe (achado "menor" da revisão de qualidade do Lote E).
-  const provider =
-    preview && !preview.channelId
-      ? DEFAULT_CHANNEL_PROVIDER
-      : await loadChannelProvider(pool, tenantId, input.channelSessionId);
-  if (!capabilitiesOf(provider).requiresTemplates) {
+  //
+  // ⚠️ CRU (`string | null`), não `loadChannelProvider` (que devolve o default
+  // `waha` quando a sessão não existe): o default de `send_template` e o de
+  // `identidadeDoTelefone` são DIFERENTES E NÃO PODEM COMPARTILHAR FONTE.
+  // `send_template` quer o conservador `waha` (banRisk armado) quando não sabe
+  // o canal; o conector quer `"desconhecido"` — que só `identidadeDoTelefone`
+  // devolve a partir de `null`. Alimentar `waha` nela fazia sessão ausente virar
+  // `"sim"` (waha tem `telefoneEhIdentidade: true`) e o conector vincular um
+  // contato pelo telefone no EXATO caso em que não se sabe de que canal se está
+  // falando (fail-open na identidade, achado de revisão de qualidade — nasceu
+  // exatamente desta otimização, na rodada anterior de consertos).
+  const providerCru: string | null =
+    preview && !preview.channelId ? null : await loadChannelProviderRaw(pool, tenantId, input.channelSessionId);
+  // `capabilitiesOf` só aceita provider CONHECIDO; o cast é seguro porque a
+  // função falha fechado em runtime (lança `unknown_channel_provider`) para
+  // qualquer string que a matriz não reconheça — o mesmo runtime-check que já
+  // valia quando `loadChannelProvider` devolvia o tipo estreito.
+  const providerParaTemplate = (providerCru ?? DEFAULT_CHANNEL_PROVIDER) as ChannelProvider;
+  if (!capabilitiesOf(providerParaTemplate).requiresTemplates) {
     delete rawTools.send_template;
   }
 
@@ -3614,7 +3631,7 @@ async function executarTurnoDoAgente(
         conversationId: input.conversationId,
         channelSessionId: input.channelSessionId,
         telefone: openingContext.context.contact.phone,
-        identidadeDoTelefone: identidadeDoTelefone(provider),
+        identidadeDoTelefone: identidadeDoTelefone(providerCru),
         toolIds: agentConfig.toolIds,
         agentId: agentConfig.agentId,
         agora: clock,
@@ -3661,6 +3678,16 @@ async function executarTurnoDoAgente(
             detalhe,
             runLog,
             'O agente atendeu sem o sistema de gestão conectado',
+            // Corpo PRÓPRIO: aqui a causa é CONFIGURAÇÃO (a capacidade foi
+            // ligada, mas nenhum sistema de gestão foi conectado em
+            // Configurações), não uma falha ao carregar algo que já existia —
+            // o default (usado no `catch` logo abaixo, uma falha de verdade)
+            // diria "não puderam ser carregadas" e mandaria o dono procurar
+            // bug onde não há.
+            'O agente tem uma capacidade de sistema de gestão ligada, mas nenhum sistema de gestão ' +
+              'está conectado nesta organização — ele respondeu ao cliente sem consultar nem cobrar. ' +
+              'Conecte um sistema de gestão em Configurações › Conectores, ou desligue a capacidade no ' +
+              `agente. Detalhe: ${detalhe}`,
           );
         }
       }

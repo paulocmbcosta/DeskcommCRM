@@ -1197,6 +1197,35 @@ export async function loadChannelProvider(
   return provider === undefined ? DEFAULT_CHANNEL_PROVIDER : (provider as ChannelProvider);
 }
 
+/**
+ * O provider CRU da sessão — `null` quando a linha não existe (sessão apagada,
+ * id de outra organização). Ao contrário de `loadChannelProvider` (usado pela
+ * cadeia de guardrails, que precisa de um provider SEMPRE — o default dela é
+ * `DEFAULT_CHANNEL_PROVIDER`, o canal com banRisk armado, a escolha
+ * conservadora para "assumir o pior" contra banimento), este existe para quem
+ * precisa DISTINGUIR "não sei que canal é" de "é este canal". Hoje quem
+ * precisa é `identidadeDoTelefone` (`lib/channels/capabilities.ts`), que trata
+ * `null`/desconhecido como `"desconhecido"` — nunca `"sim"` nem `"nao"`.
+ *
+ * ⚠️ Alimentar o default de `loadChannelProvider` ali é o defeito que este
+ * helper existe para não repetir: `DEFAULT_CHANNEL_PROVIDER` tem
+ * `telefoneEhIdentidade: true` na matriz de capabilities, então sessão ausente
+ * virava `"sim"` — o conector vinculava um contato pelo telefone no EXATO caso
+ * em que não se sabe de que canal se está falando (fail-open na identidade,
+ * achado de revisão de qualidade).
+ */
+export async function loadChannelProviderRaw(
+  db: Queryable,
+  organizationId: string,
+  channelSessionId: string,
+): Promise<string | null> {
+  const { rows } = await db.query<{ provider: string }>(
+    'select provider from channel_sessions where organization_id = $1 and id = $2',
+    [organizationId, channelSessionId],
+  );
+  return rows[0]?.provider ?? null;
+}
+
 async function readStopFlags(
   db: Queryable,
   organizationId: string,

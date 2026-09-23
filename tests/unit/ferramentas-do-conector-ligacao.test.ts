@@ -9,6 +9,8 @@ vi.mock("@/lib/agent-engine/guardrails/before-send", async (importOriginal) => {
   return { ...real, runBeforeSend: (...a: unknown[]) => runBeforeSendMock(...(a as [never])) };
 });
 
+import type pg from "pg";
+
 import type { ChannelSendResult } from "@/lib/agent-engine/channel-adapter";
 import { FERRAMENTAS_DE_ENVIO } from "@/lib/agent-engine/edge/llm/fila-de-envio";
 import {
@@ -17,6 +19,8 @@ import {
   type DepsDaPortaDeEnvioDoConector,
 } from "@/lib/agent-engine/agent/inbound-turn";
 import { applyPreviewPolicy } from "@/lib/agent-engine/agent/preview";
+import { loadChannelProvider, loadChannelProviderRaw } from "@/lib/agent-engine/guardrails/before-send";
+import { identidadeDoTelefone } from "@/lib/channels/capabilities";
 
 /**
  * A LIGAÇÃO das ferramentas do conector no turno — o que nenhum teste das peças toca.
@@ -32,6 +36,46 @@ import { applyPreviewPolicy } from "@/lib/agent-engine/agent/preview";
  * (`tests/e2e/conector-ixc-no-painel.spec.ts`).
  */
 const TURNO = fs.readFileSync(path.join(process.cwd(), "lib/agent-engine/agent/inbound-turn.ts"), "utf8");
+
+/**
+ * FAIL-OPEN NA IDENTIDADE (regressão nascida na rodada anterior de consertos) —
+ * a otimização de reaproveitar o provider do turno trocou a FONTE: antes vinha
+ * de um `left join channel_sessions` (sessão ausente ⇒ `provider = null` ⇒
+ * `identidadeDoTelefone` = `"desconhecido"`); passou a vir de
+ * `loadChannelProvider`, que devolve `DEFAULT_CHANNEL_PROVIDER = "waha"`
+ * quando a sessão não existe — e `waha` tem `telefoneEhIdentidade: true`, então
+ * sessão ausente virava `"sim"`. O conector então procurava pelo telefone e,
+ * com um candidato só, VINCULAVA sozinho e devolvia identificado — no EXATO
+ * caso em que não se sabe de que canal se está falando. É o colapso "não sei"
+ * ⇄ "não é" que o tri-estado de `identidadeDoTelefone` existe para impedir,
+ * agora na direção insegura.
+ *
+ * Um teste textual não pegaria isto: ele só provaria que ALGUMA função é
+ * chamada, não qual delas. Por isso aqui é comportamento: a composição real
+ * `identidadeDoTelefone(await loadChannelProviderRaw(...))`, contra a
+ * composição que causava o defeito.
+ */
+describe("providerCru — a fonte de identidadeDoTelefone não pode ser loadChannelProvider (item crítico, fail-open na identidade)", () => {
+  const poolSemSessao = { query: vi.fn(async () => ({ rows: [] })) } as unknown as pg.Pool;
+
+  it("sessão inexistente: loadChannelProviderRaw devolve null, e identidadeDoTelefone(null) é 'desconhecido' — NUNCA 'sim'", async () => {
+    const providerCru = await loadChannelProviderRaw(poolSemSessao, "org-1", "sessao-inexistente");
+    expect(providerCru).toBeNull();
+    expect(identidadeDoTelefone(providerCru)).toBe("desconhecido");
+  });
+
+  it("a REGRESSÃO que este teste existe pra impedir: loadChannelProvider preenche 'waha', que É identidade — a mesma sessão ausente viraria 'sim' por ali", async () => {
+    const provider = await loadChannelProvider(poolSemSessao, "org-1", "sessao-inexistente");
+    expect(provider).toBe("waha");
+    expect(identidadeDoTelefone(provider)).toBe("sim");
+  });
+
+  it("controle: sessão real com provider conhecido segue identificando normalmente", async () => {
+    const poolComSessao = { query: vi.fn(async () => ({ rows: [{ provider: "meta_cloud" }] })) } as unknown as pg.Pool;
+    const providerCru = await loadChannelProviderRaw(poolComSessao, "org-1", "sessao-1");
+    expect(identidadeDoTelefone(providerCru)).toBe("sim");
+  });
+});
 
 describe("resultadoDoEnvioNoTurno — um caso por kind de ChannelSendResult (item crítico da revisão)", () => {
   it.each([
@@ -227,11 +271,18 @@ describe("ferramentas do conector no turno — a fiação que só o turno inteir
     expect(trecho).toContain("noteRunError,");
   });
 
-  it("o telefone e a identidade do canal vêm do turno (get_lead_context + provider já lido) — não de uma consulta nova", () => {
+  it("o telefone vem do turno (get_lead_context), e a identidade vem do provider CRU (loadChannelProviderRaw) — nunca de loadChannelProvider", () => {
     const bloco = TURNO.slice(TURNO.indexOf("montarFerramentasDoConector("));
     const trecho = bloco.slice(0, 1500);
     expect(trecho).toContain("telefone: openingContext.context.contact.phone");
-    expect(trecho).toContain("identidadeDoTelefone: identidadeDoTelefone(provider)");
+    // `providerCru`, não `provider`: é o nome que distingue da versão que
+    // `loadChannelProvider` preenche com o default `waha` (fail-open na
+    // identidade — achado crítico de revisão de qualidade, ver o describe
+    // abaixo para a prova de comportamento).
+    expect(trecho).toContain("identidadeDoTelefone: identidadeDoTelefone(providerCru)");
+    const antes = TURNO.slice(TURNO.indexOf("// A ferramenta de template só entra"), TURNO.indexOf("montarFerramentasDoConector("));
+    expect(antes).toContain("loadChannelProviderRaw(pool, tenantId, input.channelSessionId)");
+    expect(antes).not.toContain("loadChannelProvider(pool");
   });
 
   it("capacidade ligada sem conector vira aviso na Central, com título que a distingue do aviso de tools MCP", () => {

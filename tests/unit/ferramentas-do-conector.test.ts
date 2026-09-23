@@ -310,9 +310,16 @@ describe("crm_enviar_cobranca_erp", () => {
   });
 
   describe("uma cobrança por turno (item 6 da revisão de qualidade)", () => {
+    const cobrancaCompleta = async (p: { portas: { guardarArquivo: (a: object) => Promise<string>; enviar: (m: object) => Promise<void> } }) => {
+      const caminho = await p.portas.guardarArquivo({ nome: "pix-x", extensao: "png", mime: "image/png", conteudo: Buffer.from("x") });
+      await p.portas.enviar({ type: "image", body: "x", media_storage_path: caminho });
+      await p.portas.enviar({ type: "text", body: "codigo" });
+      return { resultado: "enviada", forma: "pix", fatura: { vencimento: "2026-07-14", valorCents: 100, diasDeAtraso: 1 }, enviadas: 2, previstas: 2, pixGeradoAgora: false, pixIndisponivel: false, auditoria: { faturaId: "1" } };
+    };
+
     it("a 2ª chamada no MESMO turno é recusada, mesmo com vagas de sobra (teto elevado)", async () => {
       saida.vagas.mockReturnValue(10);
-      enviarCobranca.mockResolvedValue({ resultado: "enviada", forma: "pix", fatura: { vencimento: "2026-07-14", valorCents: 100, diasDeAtraso: 1 }, enviadas: 2, previstas: 2, pixGeradoAgora: false, pixIndisponivel: false, auditoria: { faturaId: "1" } });
+      enviarCobranca.mockImplementation(cobrancaCompleta);
       const { tools } = await construir();
       const r1 = await rodarCom(tools, "crm_enviar_cobranca_erp");
       expect(r1).toMatchObject({ ok: true, estado: "enviada" });
@@ -321,14 +328,73 @@ describe("crm_enviar_cobranca_erp", () => {
       expect(enviarCobranca).toHaveBeenCalledTimes(1);
     });
 
-    it("mesmo latch trava depois de uma tentativa que FALHOU (não é só depois do sucesso)", async () => {
+    it("o latch trava depois de uma tentativa que FALHOU NO MEIO do envio (o arquivo já tinha subido)", async () => {
       saida.vagas.mockReturnValue(10);
-      enviarCobranca.mockRejectedValue(new Error("boom"));
+      enviarCobranca.mockImplementation(async (p: { portas: { guardarArquivo: (a: object) => Promise<string> } }) => {
+        await p.portas.guardarArquivo({ nome: "pix-x", extensao: "png", mime: "image/png", conteudo: Buffer.from("x") });
+        throw new Error("boom");
+      });
       const { tools } = await construir();
-      await rodarCom(tools, "crm_enviar_cobranca_erp");
+      const r1 = await rodarCom(tools, "crm_enviar_cobranca_erp");
+      expect(r1.ok).toBe(false);
       const r2 = await rodarCom(tools, "crm_enviar_cobranca_erp");
       expect(r2).toMatchObject({ ok: false, error: { code: "cobranca_ja_tentada_no_turno" } });
       expect(enviarCobranca).toHaveBeenCalledTimes(1);
+    });
+
+    it("controle: desfecho de PRÉ-VOO (cliente_nao_identificado) NÃO trava — nada foi tentado, e uma chamada nova no mesmo turno passa", async () => {
+      // O caso caro que a regressão causava: a descrição manda chamar a
+      // ferramenta ANTES de escrever texto; o cliente abre com "me manda o
+      // boleto"; o cliente ainda não foi identificado; a IA consulta, identifica
+      // e chama de nova — essa 2ª chamada JAMAIS pode ver o latch armado, porque
+      // a 1ª não chegou a tentar nada de verdade.
+      saida.vagas.mockReturnValue(10);
+      enviarCobranca.mockResolvedValueOnce({ resultado: "cliente_nao_identificado" });
+      enviarCobranca.mockImplementationOnce(cobrancaCompleta);
+      const { tools } = await construir();
+      const r1 = await rodarCom(tools, "crm_enviar_cobranca_erp");
+      expect(r1).toMatchObject({ ok: false, estado: "cliente_nao_identificado" });
+      const r2 = await rodarCom(tools, "crm_enviar_cobranca_erp");
+      expect(r2).toMatchObject({ ok: true, estado: "enviada" });
+      expect(enviarCobranca).toHaveBeenCalledTimes(2);
+    });
+
+    it("controle: credencial ausente (pré-voo) também não trava", async () => {
+      saida.vagas.mockReturnValue(10);
+      lerCredencial.mockResolvedValueOnce(null);
+      const { tools } = await construir();
+      const r1 = await rodarCom(tools, "crm_enviar_cobranca_erp");
+      expect(r1.estado).toBe("sistema_indisponivel");
+      enviarCobranca.mockImplementation(cobrancaCompleta);
+      const r2 = await rodarCom(tools, "crm_enviar_cobranca_erp");
+      expect(r2).toMatchObject({ ok: true, estado: "enviada" });
+    });
+  });
+
+  describe("outcome 'queued' não pode virar 'a cobrança foi enviada' (item menor da revisão de qualidade)", () => {
+    it("uma das duas mensagens sai queued: estado vira 'aceita_aguardando_canal', não 'enviada'", async () => {
+      saida.enviar.mockResolvedValueOnce({ ok: true, outcome: { kind: "queued", idempotencyKey: "k", messageId: null } } as never);
+      enviarCobranca.mockImplementation(async (p: { portas: { guardarArquivo: (a: object) => Promise<string>; enviar: (m: object) => Promise<void> } }) => {
+        const caminho = await p.portas.guardarArquivo({ nome: "pix-x", extensao: "png", mime: "image/png", conteudo: Buffer.from("x") });
+        await p.portas.enviar({ type: "image", body: "x", media_storage_path: caminho });
+        await p.portas.enviar({ type: "text", body: "codigo" });
+        return { resultado: "enviada", forma: "pix", fatura: { vencimento: "2026-07-14", valorCents: 100, diasDeAtraso: 1 }, enviadas: 2, previstas: 2, pixGeradoAgora: false, pixIndisponivel: false, auditoria: { faturaId: "1" } };
+      });
+      const r = await rodar("crm_enviar_cobranca_erp");
+      expect(r).toMatchObject({ ok: true, estado: "aceita_aguardando_canal" });
+      expect(r.estado).not.toBe("enviada");
+      expect(String(r.orientacao)).toMatch(/NÃO diga que já chegou/);
+    });
+
+    it("controle: as duas saem 'sent' — estado continua 'enviada'", async () => {
+      enviarCobranca.mockImplementation(async (p: { portas: { guardarArquivo: (a: object) => Promise<string>; enviar: (m: object) => Promise<void> } }) => {
+        const caminho = await p.portas.guardarArquivo({ nome: "pix-x", extensao: "png", mime: "image/png", conteudo: Buffer.from("x") });
+        await p.portas.enviar({ type: "image", body: "x", media_storage_path: caminho });
+        await p.portas.enviar({ type: "text", body: "codigo" });
+        return { resultado: "enviada", forma: "pix", fatura: { vencimento: "2026-07-14", valorCents: 100, diasDeAtraso: 1 }, enviadas: 2, previstas: 2, pixGeradoAgora: false, pixIndisponivel: false, auditoria: { faturaId: "1" } };
+      });
+      const r = await rodar("crm_enviar_cobranca_erp");
+      expect(r).toMatchObject({ ok: true, estado: "enviada" });
     });
   });
 });

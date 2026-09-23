@@ -546,12 +546,16 @@ async function enviarCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno,
       },
     };
   }
-  estado.cobrancaTentadaNoTurno.valor = true;
   // Guardado FORA do try para o catch alcançar: se algo estourar depois do
   // upload (veto da saída, bug no conector), o arquivo não pode ficar órfão no
   // Storage — e um PDF/PNG com o nome e a legenda do cliente sobrevive à
   // anonimização de LGPD, porque nunca virou linha em `messages`.
   let caminhoDoArquivo: string | null = null;
+  // Se ALGUMA das mensagens saiu `queued` (canal aceitou, ainda não confirmou —
+  // sessão fora do ar), a resposta não pode dizer "enviada": `send_message` já
+  // distingue os dois ("o canal aceitou... não reenvie"); a cobrança tem de
+  // dizer o mesmo, não afirmar entrega concluída ao cliente.
+  let houveQueued = false;
   try {
     const credencial = await lerCredencial(p.supabase, p.tenantId, conector.id);
     if (!credencial) return indisponivel();
@@ -568,7 +572,20 @@ async function enviarCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno,
       portas: {
         // Storage-first, no prefixo que o handler de envio confere (`<org>/<conversa>/…`).
         // O ÚLTIMO segmento é o nome que o cliente vê — igual à rota do botão.
+        //
+        // O LATCH arma AQUI, não antes do `try`: é o primeiro efeito de
+        // verdade rumo ao cliente (um arquivo com nome e legenda dele sobe ao
+        // Storage). Desfecho de PRÉ-VOO (`cliente_nao_identificado`,
+        // `sem_fatura_em_aberto`, credencial ausente, `lerLimiteDeCobranca`
+        // lançando…) nunca chega a chamar isto — e continua re-tentável no
+        // mesmo turno. Armar antes do `try` travava até esses casos: a
+        // descrição da ferramenta manda chamá-la ANTES de escrever texto, e um
+        // `cliente_nao_identificado` seguido de identificação + nova tentativa
+        // — o caminho normal de um cliente que abre com "me manda o boleto" —
+        // levava `cobranca_ja_tentada_no_turno` sem nunca ter enviado nada
+        // (regressão da revisão de qualidade anterior).
         guardarArquivo: async (arquivo) => {
+          estado.cobrancaTentadaNoTurno.valor = true;
           const caminho = `${p.tenantId}/${p.conversationId}/cobranca-${randomUUID().slice(0, 8)}/${arquivo.nome}.${arquivo.extensao}`;
           const { error } = await p.supabase.storage
             .from('whatsapp-media')
@@ -578,8 +595,13 @@ async function enviarCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno,
           return caminho;
         },
         enviar: async (mensagem) => {
+          // Também arma aqui (e não só em `guardarArquivo`): a forma de
+          // cobrança pode um dia não levar arquivo, e mesmo hoje é esta porta
+          // que de fato alcança o cliente.
+          estado.cobrancaTentadaNoTurno.valor = true;
           const envio = await p.saida.enviar(mensagem);
           if (!envio.ok) throw new VetoDaSaida(envio.code, envio.message);
+          if (envio.outcome.kind === 'queued') houveQueued = true;
         },
       },
     });
@@ -587,7 +609,7 @@ async function enviarCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno,
     if (r.resultado !== 'enviada' && caminhoDoArquivo !== null) {
       await removerArquivoOrfao(p, caminhoDoArquivo);
     }
-    return respostaDaCobranca(p, conector, r, limite);
+    return respostaDaCobranca(p, conector, r, limite, houveQueued);
   } catch (err) {
     if (caminhoDoArquivo !== null) await removerArquivoOrfao(p, caminhoDoArquivo);
     if (err instanceof VetoDaSaida) return { ok: false, error: { code: err.code, message: err.message } };
@@ -595,7 +617,7 @@ async function enviarCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno,
   }
 }
 
-function respostaDaCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno, r: ResultadoDaCobranca, limite: number): Resposta {
+function respostaDaCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno, r: ResultadoDaCobranca, limite: number, houveQueued: boolean): Resposta {
   switch (r.resultado) {
     case 'enviada': {
       // A mesma ação do botão, com o agente como ator. O id, a forma e o valor —
@@ -626,6 +648,20 @@ function respostaDaCobranca(p: PedidoDeFerramentas, conector: ConectorDoTurno, r
             `A cobrança saiu incompleta (${r.enviadas} de ${r.previstas} mensagens) — não dá para saber ` +
             'exatamente o que chegou ao cliente. Avise que pode faltar uma parte e transfira a conversa ' +
             'para uma pessoa.',
+        };
+      }
+      if (houveQueued) {
+        // Igual a `send_message` com `queued`: o canal ACEITOU, ainda não
+        // ENTREGOU (sessão fora do ar) — dizer "enviada" aqui seria a IA
+        // afirmar ao cliente uma entrega que ainda não aconteceu.
+        return {
+          ok: true,
+          estado: 'aceita_aguardando_canal',
+          forma: r.forma,
+          fatura: faturaDoModelo(r.fatura),
+          orientacao:
+            'O canal aceitou a cobrança e vai entregá-la quando a sessão voltar. NÃO diga que já chegou ' +
+            'ao cliente, e não chame esta ferramenta de novo agora.',
         };
       }
       return {
