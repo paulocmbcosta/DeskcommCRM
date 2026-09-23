@@ -32,6 +32,8 @@ const ingeridos: unknown[] = [];
 /** O que o dublê do banco devolve na leitura da credencial. */
 let linhaDoBanco: { app_secret_encrypted: string | null; verify_token_encrypted: string | null } | null = null;
 let erroDaLeitura: { code: string; message: string } | null = null;
+/** `channel_sessions.meta_app_secret_encrypted` da sessão (0275). `null` = vale o da instalação. */
+let segredoDoNumero: string | null = null;
 
 vi.mock("@/lib/channels/meta/session", () => ({
   metaSessionByWebhookToken: async () => SESSAO,
@@ -47,6 +49,22 @@ vi.mock("@/lib/channels/meta/ingest", () => ({
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (tabela: string) => {
+      if (tabela === "channel_sessions") {
+        // O segredo PRÓPRIO do número (migration 0275), lido pela sessão que o
+        // token do path já resolveu — organização e id à mão.
+        return {
+          select: () => ({
+            eq: (_c1: string, org: string) => ({
+              eq: (_c2: string, id: string) => ({
+                maybeSingle: async () =>
+                  org === SESSAO.organizationId && id === SESSAO.id
+                    ? { data: { meta_app_secret_encrypted: segredoDoNumero }, error: null }
+                    : { data: null, error: null },
+              }),
+            }),
+          }),
+        };
+      }
       if (tabela !== "platform_meta_app") {
         // A rota também escreve status de mensagem/modelo depois de ingerir;
         // este arquivo só exercita o caminho de entrada.
@@ -115,6 +133,7 @@ function entrega(segredo: string) {
 }
 
 beforeEach(() => {
+  segredoDoNumero = null;
   linhaDoBanco = null;
   erroDaLeitura = null;
   decifrado = {};
@@ -206,5 +225,63 @@ describe("o caminho ANTIGO fica intacto — instalação que só tem .env", () =
   it("sem nenhuma das duas fontes, o desfecho é o de hoje: 403 no handshake", async () => {
     const res = await GET(handshake("qualquer"), ctx);
     expect(res.status).toBe(403);
+  });
+});
+
+/**
+ * O segundo número oficial pode entregar por OUTRO app da Meta (migration 0275):
+ * cada entrega dele chega assinada com o segredo desse app. Medido na primeira
+ * instalação com dois números (2026-09-23) — com um segredo só, toda mensagem do
+ * segundo número morria em 401 calado.
+ *
+ * Para ver morder: em `appSecretDaEntrega` (`lib/channels/meta/app.ts`), devolva
+ * direto `(await appDaMeta()).appSecret` — o primeiro caso reprova com 401.
+ */
+describe("o número com app PRÓPRIO da Meta (0275)", () => {
+  const SEGREDO_DO_OUTRO_APP = "segredo-do-app-do-segundo-numero";
+
+  it("⭐ entrega assinada com o segredo do número: 200 e a mensagem é ingerida", async () => {
+    linhaDoBanco = LINHA_CHEIA;
+    segredoDoNumero = "\\xSEGREDO_DO_NUMERO";
+    decifrado = {
+      "\\xSEGREDO_CIFRADO": SEGREDO_DO_BANCO,
+      "\\xTOKEN_CIFRADO": TOKEN_DO_BANCO,
+      "\\xSEGREDO_DO_NUMERO": SEGREDO_DO_OUTRO_APP,
+    };
+
+    const res = await POST(entrega(SEGREDO_DO_OUTRO_APP), ctx);
+    expect(res.status).toBe(200);
+    expect(ingeridos).toHaveLength(1);
+  });
+
+  it("com segredo próprio, o da instalação NÃO vale para este número", async () => {
+    // Cada entrega vem de UM app: aceitar os dois seria aceitar corpo assinado
+    // por um app que não é o deste número.
+    linhaDoBanco = LINHA_CHEIA;
+    segredoDoNumero = "\\xSEGREDO_DO_NUMERO";
+    decifrado = {
+      "\\xSEGREDO_CIFRADO": SEGREDO_DO_BANCO,
+      "\\xTOKEN_CIFRADO": TOKEN_DO_BANCO,
+      "\\xSEGREDO_DO_NUMERO": SEGREDO_DO_OUTRO_APP,
+    };
+
+    const res = await POST(entrega(SEGREDO_DO_BANCO), ctx);
+    expect(res.status).toBe(401);
+    expect(ingeridos).toHaveLength(0);
+  });
+
+  it("sem segredo próprio, vale o da instalação — o caso de todo número de hoje", async () => {
+    linhaDoBanco = LINHA_CHEIA;
+    decifrado = { "\\xSEGREDO_CIFRADO": SEGREDO_DO_BANCO, "\\xTOKEN_CIFRADO": TOKEN_DO_BANCO };
+
+    expect((await POST(entrega(SEGREDO_DO_BANCO), ctx)).status).toBe(200);
+  });
+
+  it("segredo próprio que não decifra cai no da instalação, em vez de derrubar a rota", async () => {
+    linhaDoBanco = LINHA_CHEIA;
+    segredoDoNumero = "\\xCIFRA_QUEBRADA";
+    decifrado = { "\\xSEGREDO_CIFRADO": SEGREDO_DO_BANCO, "\\xTOKEN_CIFRADO": TOKEN_DO_BANCO };
+
+    expect((await POST(entrega(SEGREDO_DO_BANCO), ctx)).status).toBe(200);
   });
 });

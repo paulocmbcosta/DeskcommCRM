@@ -46,6 +46,13 @@ export interface MetaCredentials {
   phoneNumberId: string;
   token: string;
   graphVersion: string;
+  /**
+   * A conta (WABA) do número. É a outra metade da chave de um modelo: dois
+   * números de CONTAS diferentes podem ter modelos de mesmo nome e idioma, e o
+   * envio tem de achar o da conta que vai enviar. Opcional — o ambiente pode
+   * não trazer (`META_WABA_ID`), e quem lê trata ausência como "não sei".
+   */
+  wabaId?: string | null;
   /** De onde veio — aparece no log de diagnóstico, nunca no payload. */
   source: "session" | "env";
 }
@@ -68,7 +75,8 @@ export function metaCredsFromEnv(): MetaCredentials | null {
   const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
   const token = process.env.META_SYSTEM_USER_TOKEN;
   if (!phoneNumberId || !token) return null;
-  return { phoneNumberId, token, graphVersion: graphVersion(), source: "env" };
+  const wabaId = process.env.META_WABA_ID?.trim() || null;
+  return { phoneNumberId, token, graphVersion: graphVersion(), wabaId, source: "env" };
 }
 
 /**
@@ -99,7 +107,7 @@ export async function metaCredsForPhoneNumberId(
   const base = () =>
     admin
       .from("channel_sessions")
-      .select("meta_phone_number_id, meta_token_encrypted")
+      .select("meta_phone_number_id, meta_waba_id, meta_token_encrypted")
       .eq("organization_id", organizationId)
       .eq("meta_phone_number_id", phoneNumberId);
   const { data, error } = await queryTolerantToMissingArchived(
@@ -125,6 +133,7 @@ export async function metaCredsForPhoneNumberId(
     phoneNumberId: data.meta_phone_number_id as string,
     token,
     graphVersion: graphVersion(),
+    wabaId: (data.meta_waba_id as string | null | undefined) ?? null,
     source: "session",
   };
 }

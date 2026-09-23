@@ -63,6 +63,14 @@ export function TemplatesClient() {
 
   const waba = data?.data.waba ?? null;
   const templates = data?.data.templates ?? null;
+  const contas = data?.data.contas ?? [];
+  /**
+   * Com números de contas DIFERENTES, cada modelo diz de qual conta é: um modelo
+   * só sai pelo número da conta que o aprovou, e a mesma lista misturada faria o
+   * operador procurar no número errado um modelo que ali não existe.
+   */
+  const variasContas = contas.length > 1;
+  const rotuloDaConta = new Map(contas.map((c) => [c.wabaId, c.rotulo]));
 
   async function sincronizar() {
     const res = await sync.mutateAsync();
@@ -94,7 +102,16 @@ export function TemplatesClient() {
     <div className="flex flex-col gap-4" data-testid="templates-root">
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm text-muted-foreground">
-          {t("Espelho da conta")} <span className="font-mono text-xs">{waba}</span> ·{" "}
+          {variasContas ? (
+            <>
+              {t("Espelho de")} {contas.length} {t("contas")} (
+              {contas.map((c) => c.rotulo).join(", ")}) ·{" "}
+            </>
+          ) : (
+            <>
+              {t("Espelho da conta")} <span className="font-mono text-xs">{waba}</span> ·{" "}
+            </>
+          )}
           {templates.length} {t("template(s)")}
         </p>
         <Button onClick={sincronizar} disabled={sync.isPending} data-testid="btn-sync">
@@ -114,9 +131,18 @@ export function TemplatesClient() {
       ) : (
         <div className="flex flex-col gap-3">
           {templates.map((tpl) => (
-            <Card key={`${tpl.name}:${tpl.language}`} className="p-4" data-testid="template-card">
+            <Card
+              key={`${tpl.wabaId ?? ""}:${tpl.name}:${tpl.language}`}
+              className="p-4"
+              data-testid="template-card"
+            >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{tpl.name}</span>
+                {variasContas && tpl.wabaId ? (
+                  <Badge variant="secondary" className="text-xs" data-testid="template-conta">
+                    {rotuloDaConta.get(tpl.wabaId) ?? tpl.wabaId}
+                  </Badge>
+                ) : null}
                 <Badge variant="outline" className="font-mono text-xs">
                   {tpl.language}
                 </Badge>

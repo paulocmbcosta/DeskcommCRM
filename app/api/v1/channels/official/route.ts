@@ -20,12 +20,30 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
  *
  * O token é cifrado pelas MESMAS RPCs do resto do repo (`lib/webhooks/secrets.ts`) e
  * **nunca volta** num GET: uma vez gravado, a tela mostra que existe, não qual é.
+ *
+ * ─── N números por organização (a chave é o `phone_number_id`) ───────────────
+ *
+ * Até 2026-09-23 esta rota conhecia UM canal oficial por organização: o POST
+ * procurava "o canal oficial da org" e, achando, ATUALIZAVA essa linha com o
+ * número novo. Conectar um segundo número sobrescrevia o primeiro — as conversas
+ * dele passavam a apontar para outro número — e o GET, com `maybeSingle()` sobre
+ * duas linhas, dizia "não conectado". O resto do canal (webhook, ingestão, envio,
+ * saúde, mídia) já era por número; a porta de entrada é que não era.
+ *
+ * Agora a linha é achada pelo NÚMERO: o mesmo `phone_number_id` é troca de
+ * credencial (ou ressurreição, se foi excluído); número novo é canal novo. O
+ * índice único parcial da 0165 impede o mesmo número ativo em duas linhas.
+ *
+ * `app_secret` é opcional (migration 0275): só para número que entrega por OUTRO
+ * app da Meta, diferente do cadastrado na instalação. Conferido com a Meta por
+ * `appsecret_proof` antes de gravar, como o token.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/api/wrappers";
+import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import { CHANNEL_PROVIDER_META } from "@/lib/channels/capabilities";
@@ -41,11 +59,29 @@ import { traduzir } from "@/lib/i18n/dicionario";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+/** Campo opcional do formulário: string vazia é "não informado", não erro. */
+const opcional = (schema: z.ZodString) =>
+  z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), schema.optional());
+
 const conectarSchema = z.object({
-  phone_number_id: z.string().min(5),
-  waba_id: z.string().min(5),
-  token: z.string().min(20),
+  phone_number_id: z.string().trim().min(5),
+  waba_id: z.string().trim().min(5),
+  token: z.string().trim().min(20),
+  app_secret: opcional(z.string().trim().min(16)),
 });
+
+/** Uma linha oficial, na projeção que a tela usa. */
+interface LinhaOficial {
+  id: string;
+  meta_phone_number_id: string | null;
+  meta_waba_id: string | null;
+  meta_token_encrypted: unknown;
+  meta_app_secret_encrypted?: unknown;
+  phone_number: string | null;
+  display_name: string | null;
+  webhook_path_token: string;
+  status: string | null;
+}
 
 /**
  * Base pública desta instalação — é o que o operador cola no dashboard da Meta.
@@ -113,41 +149,75 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // de excluir — e oferecia "Trocar credencial" onde deveria oferecer "Conectar".
   // O POST, ao contrário, PRECISA enxergar a linha arquivada: é ela que ele
   // ressuscita.
-  const consultar = () =>
+  //
+  // Lista, não `maybeSingle()`: com dois números o `maybeSingle()` devolvia
+  // `null` (PGRST116) e a tela dizia "não conectado" a quem tinha dois.
+  const colunas =
+    "id, meta_phone_number_id, meta_waba_id, meta_token_encrypted, phone_number, display_name, webhook_path_token, status";
+  const consultar = (cols: string) =>
     admin
       .from("channel_sessions")
-      .select("id, meta_phone_number_id, meta_waba_id, meta_token_encrypted, phone_number, display_name, webhook_path_token, status")
+      .select(cols)
       .eq("organization_id", orgId)
-      .eq("provider", CHANNEL_PROVIDER_META);
-  const { data } = await queryTolerantToMissingArchived(
-    () => consultar().is(ARCHIVED_AT, null).maybeSingle(),
-    () => consultar().maybeSingle(),
+      .eq("provider", CHANNEL_PROVIDER_META)
+      .order("created_at", { ascending: true });
+  // A coluna da 0275 é pedida à parte: num clone sem ela, a leitura inteira
+  // falharia e a tela diria "não conectado" a quem está conectado.
+  let { data, error } = await queryTolerantToMissingArchived(
+    () => consultar(`${colunas}, meta_app_secret_encrypted`).is(ARCHIVED_AT, null),
+    () => consultar(`${colunas}, meta_app_secret_encrypted`),
   );
+  if (error) {
+    ({ data, error } = await queryTolerantToMissingArchived(
+      () => consultar(colunas).is(ARCHIVED_AT, null),
+      () => consultar(colunas),
+    ));
+  }
+  if (error) {
+    return fail("internal_error", error.message ?? "channel_session_read_failed", 500, { requestId });
+  }
 
   const base = publicBase(req);
-  return ok({
-    connected: Boolean(data),
-    channel_session_id: data?.id ?? null,
+  const verificacao = await tokenDeVerificacaoParaATela();
+  const linhas = (data ?? []) as unknown as LinhaOficial[];
+  const channels = linhas.map((linha) => ({
+    channel_session_id: linha.id,
     // `hasToken` em vez do token: uma vez gravado, a tela mostra que EXISTE, nunca
     // qual é. Devolver o segredo para preencher o campo seria vazá-lo a cada render.
-    hasToken: Boolean(data?.meta_token_encrypted),
-    phoneNumberId: data?.meta_phone_number_id ?? null,
-    wabaId: data?.meta_waba_id ?? null,
-    displayName: data?.display_name ?? null,
-    phoneNumber: data?.phone_number ?? null,
-    status: data?.status ?? null,
+    hasToken: Boolean(linha.meta_token_encrypted),
+    /** O número entrega por um app PRÓPRIO (0275)? O segredo nunca volta. */
+    hasOwnAppSecret: Boolean(linha.meta_app_secret_encrypted),
+    phoneNumberId: linha.meta_phone_number_id ?? null,
+    wabaId: linha.meta_waba_id ?? null,
+    displayName: linha.display_name ?? null,
+    phoneNumber: linha.phone_number ?? null,
+    status: linha.status ?? null,
     /** O que o operador precisa colar do NOSSO lado no dashboard da Meta. */
-    webhook: data
-      ? {
-          callbackUrl: `${base}/api/v1/webhooks/meta/${data.webhook_path_token}`,
-          ...(await tokenDeVerificacaoParaATela()),
-          // A porta para quem PODE abrir a tela da instalação — mesma regra do
-          // link de `/admin/google` na Agenda. Para o admin de um tenant qualquer
-          // o link seria um 404; a tela diz a ele quem procurar.
-          configurarEm: authz.user.is_platform_admin && !authz.user.support ? "/admin/meta" : null,
-          fields: ["messages", "message_template_status_update"],
-        }
-      : null,
+    webhook: {
+      callbackUrl: `${base}/api/v1/webhooks/meta/${linha.webhook_path_token}`,
+      ...verificacao,
+      // A porta para quem PODE abrir a tela da instalação — mesma regra do
+      // link de `/admin/google` na Agenda. Para o admin de um tenant qualquer
+      // o link seria um 404; a tela diz a ele quem procurar.
+      configurarEm: authz.user.is_platform_admin && !authz.user.support ? "/admin/meta" : null,
+      fields: ["messages", "message_template_status_update"],
+    },
+  }));
+
+  // Os campos de topo repetem o PRIMEIRO canal: é o contrato de quem lia um
+  // canal só, e continua verdadeiro para a organização que tem um só.
+  const primeiro = channels[0] ?? null;
+  return ok({
+    connected: channels.length > 0,
+    channels,
+    channel_session_id: primeiro?.channel_session_id ?? null,
+    hasToken: primeiro?.hasToken ?? false,
+    phoneNumberId: primeiro?.phoneNumberId ?? null,
+    wabaId: primeiro?.wabaId ?? null,
+    displayName: primeiro?.displayName ?? null,
+    phoneNumber: primeiro?.phoneNumber ?? null,
+    status: primeiro?.status ?? null,
+    webhook: primeiro?.webhook ?? null,
   });
 }
 
@@ -168,11 +238,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       requestId,
     });
   }
-  const { phone_number_id, waba_id, token } = parsed.data;
+  const { phone_number_id, waba_id, token, app_secret } = parsed.data;
 
   // VALIDA ANTES DE GRAVAR — a rota não sabe com quem fala; ela pergunta se a
-  // credencial presta e o canal responde.
-  const validacao = await validateMetaCredentials({ phoneNumberId: phone_number_id, token });
+  // credencial presta e o canal responde. Com `app_secret`, a mesma chamada
+  // confere o segredo (`appsecret_proof`): colado errado, ele só se revelaria
+  // como 401 calado na primeira mensagem do cliente.
+  const validacao = await validateMetaCredentials({
+    phoneNumberId: phone_number_id,
+    token,
+    appSecret: app_secret ?? null,
+  });
   if (!validacao.ok) {
     return fail("invalid_request", validacao.motivo, 422, { requestId });
   }
@@ -189,17 +265,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { requestId },
     );
   }
+  const segredoCifrado = app_secret ? await encryptWebhookSecret(admin, app_secret) : null;
+  if (app_secret && !segredoCifrado) {
+    return fail(
+      "invalid_request",
+      t("cifra indisponível nesta instalação (GUC app.nuvemshop_oauth_key ausente) — o token não foi gravado"),
+      422,
+      { requestId },
+    );
+  }
 
-  // A busca NÃO filtra `archived_at`: um canal oficial excluído é exatamente o
-  // que este POST precisa achar para trazer de volta. Ignorá-lo criaria uma
-  // SEGUNDA linha oficial na org — e a linha velha continuaria segurando o par
-  // (org, número) na trava da 0106.
+  // A busca é pelo NÚMERO: o mesmo `phone_number_id` é troca de credencial;
+  // número novo é canal novo (ver o cabeçalho). Buscar "o canal oficial da org"
+  // era o que fazia o segundo número sobrescrever o primeiro.
+  //
+  // NÃO filtra `archived_at`: um canal oficial excluído é exatamente o que este
+  // POST precisa achar para trazer de volta. Ignorá-lo criaria uma segunda linha
+  // para o mesmo número — e a velha continuaria segurando o par (org, número)
+  // na trava da 0106. Mais recente primeiro: se o número foi conectado,
+  // excluído e conectado de novo, é a última que volta.
   const buscarExistente = (colunas: string) =>
     admin
       .from("channel_sessions")
       .select(colunas)
       .eq("organization_id", orgId)
       .eq("provider", CHANNEL_PROVIDER_META)
+      .eq("meta_phone_number_id", phone_number_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
   const { data: existenteRaw } = await queryTolerantToMissingArchived(
     () => buscarExistente(`id, ${ARCHIVED_AT}`),
@@ -216,6 +309,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     phone_number: validacao.displayPhoneNumber ? `+${validacao.displayPhoneNumber.replace(/\D/g, "")}` : null,
     display_name: validacao.verifiedName ?? "Canal oficial",
     status: "WORKING",
+    // Só entra no patch quando foi informado: trocar o token de um número que
+    // entrega por app próprio não pode apagar o segredo desse app.
+    ...(segredoCifrado ? { meta_app_secret_encrypted: segredoCifrado } : {}),
   };
 
   // `update` quando já existe em vez de upsert: a trava única de (org,
@@ -253,8 +349,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       });
 
   if (error) {
+    // O índice único parcial da 0165: o número já está ativo noutra organização
+    // desta instalação. Dizer isso, e não um 500 com o nome do índice.
+    if ((error as { code?: string }).code === "23505") {
+      return fail(
+        "state_conflict",
+        t("Este número já está conectado em outra organização desta instalação."),
+        409,
+        { requestId },
+      );
+    }
     return fail("internal_error", error.message ?? "channel_session_write_failed", 500, {
       requestId,
+    });
+  }
+
+  // Número novo é canal novo e merece a sua linha na trilha. A troca de
+  // credencial de um canal ativo também; a ressurreição já foi auditada por
+  // `reactivateChannelSession`, junto do ato.
+  if (!existente || !existente.archived_at) {
+    void audit({
+      action: existente ? "channel.reconnected" : "channel.connected",
+      actorUserId: userId,
+      organizationId: orgId,
+      resourceType: "channel_session",
+      resourceId: existente?.id ?? null,
+      requestId,
+      metadata: {
+        provider: CHANNEL_PROVIDER_META,
+        phone_number: linha.phone_number,
+        app_secret_proprio: Boolean(segredoCifrado),
+      },
     });
   }
 

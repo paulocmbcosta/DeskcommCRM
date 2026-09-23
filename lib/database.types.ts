@@ -3227,6 +3227,7 @@ export type Database = {
           is_warmup_complete: boolean | null
           last_health_check_at: string | null
           last_status_change_at: string
+          meta_app_secret_encrypted: string | null
           meta_phone_number_id: string | null
           meta_token_encrypted: string | null
           meta_waba_id: string | null
@@ -3264,6 +3265,7 @@ export type Database = {
           is_warmup_complete?: boolean | null
           last_health_check_at?: string | null
           last_status_change_at?: string
+          meta_app_secret_encrypted?: string | null
           meta_phone_number_id?: string | null
           meta_token_encrypted?: string | null
           meta_waba_id?: string | null
@@ -3301,6 +3303,7 @@ export type Database = {
           is_warmup_complete?: boolean | null
           last_health_check_at?: string | null
           last_status_change_at?: string
+          meta_app_secret_encrypted?: string | null
           meta_phone_number_id?: string | null
           meta_token_encrypted?: string | null
           meta_waba_id?: string | null

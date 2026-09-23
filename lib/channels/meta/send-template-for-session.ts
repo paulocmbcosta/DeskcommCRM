@@ -81,13 +81,19 @@ export async function sendTemplateForSession(
     );
   }
 
-  const { data: linha, error } = await db
+  // A CONTA de quem envia entra no filtro: com dois números oficiais de contas
+  // (WABAs) diferentes, o mesmo nome+idioma existe nas duas, o `maybeSingle()`
+  // casava duas linhas e o envio morria em `template_lookup_failed` — ou, pior,
+  // conferia o contrato contra o modelo da OUTRA conta. Sem conta conhecida
+  // (ambiente sem `META_WABA_ID`), a busca é a de sempre.
+  let consulta = db
     .from("meta_templates")
     .select("name, language, status, contract_hash, components")
     .eq("organization_id", input.organizationId)
     .eq("name", input.name)
-    .eq("language", input.language)
-    .maybeSingle();
+    .eq("language", input.language);
+  if (creds.wabaId) consulta = consulta.eq("waba_id", creds.wabaId);
+  const { data: linha, error } = await consulta.maybeSingle();
 
   if (error) throw new Error(`template_lookup_failed: ${error.message}`);
 

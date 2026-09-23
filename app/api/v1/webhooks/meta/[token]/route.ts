@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { fail } from "@/lib/api/wrappers";
-import { appDaMeta } from "@/lib/channels/meta/app";
+import { appDaMeta, appSecretDaEntrega } from "@/lib/channels/meta/app";
 import { lerEnvelopeMeta } from "@/lib/channels/meta/envelope";
 import { parseMetaWebhook, verificationChallenge, verifyMetaSignature } from "@/lib/channels/meta/webhook";
 import { ingestMetaInbound } from "@/lib/channels/meta/ingest";
@@ -73,10 +73,11 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
   if (!session) return fail("not_found", "unknown webhook token", 404, { requestId });
 
   const rawBody = await req.text();
-  // Do mesmo lugar que o handshake: BANCO primeiro, `.env` como piso (0257). Sem
-  // segredo nenhum configurado a verificação devolve `false` e a entrega morre em
-  // 401 — que é o desfecho de hoje, e não um 500.
-  const { appSecret } = await appDaMeta();
+  // O segredo do NÚMERO, se ele entrega por outro app da Meta (0275); senão o
+  // da instalação — BANCO primeiro, `.env` como piso (0257). Sem segredo nenhum
+  // configurado a verificação devolve `false` e a entrega morre em 401 — que é
+  // o desfecho de hoje, e não um 500.
+  const appSecret = await appSecretDaEntrega(session);
   if (!verifyMetaSignature(rawBody, req.headers.get("x-hub-signature-256"), appSecret ?? "")) {
     return fail("unauthorized", "invalid_signature", 401, { requestId });
   }

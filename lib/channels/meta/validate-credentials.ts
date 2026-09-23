@@ -10,22 +10,41 @@
  * entender que não na primeira mensagem que não sai, com o lead esperando do outro
  * lado. Esta é a mesma chamada que provou o ambiente na Fase 3b.
  */
+import { createHmac } from "node:crypto";
+
 import { graphVersion } from "@/lib/graph-version";
 
 export type ValidacaoCredencial =
   | { ok: true; displayPhoneNumber: string | null; verifiedName: string | null; qualityRating: string | null }
   | { ok: false; motivo: string };
 
+/**
+ * `appsecret_proof` da Graph API: HMAC-SHA256 do token com o App Secret.
+ *
+ * É a única forma de conferir um App Secret ANTES de uma entrega de webhook
+ * chegar: a Graph recusa a chamada quando o segredo não é do app dono do token
+ * ("Invalid appsecret_proof"). Sem esta conferência, um segredo colado errado só
+ * se revelaria como 401 calado na primeira mensagem do cliente (migration 0275).
+ */
+export function appSecretProof(token: string, appSecret: string): string {
+  return createHmac("sha256", appSecret).update(token, "utf8").digest("hex");
+}
+
 export async function validateMetaCredentials(input: {
   phoneNumberId: string;
   token: string;
+  /** Opcional: quando vem, é conferido junto (ver `appSecretProof`). */
+  appSecret?: string | null;
   graphVersion?: string;
 }): Promise<ValidacaoCredencial> {
   const version = input.graphVersion ?? graphVersion();
+  const prova = input.appSecret
+    ? `&appsecret_proof=${appSecretProof(input.token, input.appSecret)}`
+    : "";
   try {
     const res = await fetch(
       `https://graph.facebook.com/${version}/${input.phoneNumberId}` +
-        `?fields=display_phone_number,verified_name,quality_rating`,
+        `?fields=display_phone_number,verified_name,quality_rating${prova}`,
       { headers: { Authorization: `Bearer ${input.token}` } },
     );
     const body = (await res.json().catch(() => ({}))) as {

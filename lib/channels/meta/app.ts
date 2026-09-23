@@ -190,3 +190,51 @@ export async function fontesDoAppDaMeta(): Promise<Record<string, string | undef
     META_WEBHOOK_VERIFY_TOKEN: verifyToken ?? undefined,
   };
 }
+
+/**
+ * O App Secret que confere a assinatura DESTA entrega — o do número, se ele
+ * tiver um; senão, o da instalação. Nunca lança.
+ *
+ * ─── Por que um segredo por número (migration 0275) ─────────────────────────
+ *
+ * O segredo é do APP da Meta, e a instalação guarda um só (`platform_meta_app`).
+ * Vale enquanto todo número entrega pelo mesmo app. A primeira instalação com
+ * dois números oficiais mediu o contrário: o segundo número está noutra WABA,
+ * inscrita noutro app, e cada entrega dele chega assinada com o segredo desse
+ * outro app. Sem esta porta, toda mensagem dele morreria em 401 calado.
+ *
+ * A sessão já foi resolvida pelo TOKEN DO PATH quando isto é chamado — o
+ * segredo sai da linha dela, nunca do corpo. `organizationId` acompanha o id
+ * porque o client é de service role e bypassa RLS.
+ *
+ * Falha de leitura (clone sem a 0275 devolve 42703) ou de decifra cai no
+ * segredo da instalação: é o comportamento anterior a esta coluna, e um número
+ * que entrega pelo app da instalação continua sendo aceito.
+ */
+export async function appSecretDaEntrega(sessao: {
+  id: string;
+  organizationId: string;
+}): Promise<string | null> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from("channel_sessions")
+      .select("meta_app_secret_encrypted")
+      .eq("organization_id", sessao.organizationId)
+      .eq("id", sessao.id)
+      .maybeSingle();
+    const cifrado = error ? "" : texto((data as { meta_app_secret_encrypted?: unknown } | null)?.meta_app_secret_encrypted);
+    if (cifrado) {
+      const segredo = texto(await decryptWebhookSecret(admin, cifrado));
+      if (segredo) return segredo;
+      logger.warn("[meta.app] segredo do número não decifrou; vale o da instalação", {
+        channel_session_id: sessao.id,
+      });
+    }
+  } catch (err) {
+    logger.warn("[meta.app] leitura do segredo do número falhou; vale o da instalação", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return (await appDaMeta()).appSecret;
+}

@@ -112,7 +112,7 @@ export async function modelosParaEnvio(
 ): Promise<ModelosDaConexao> {
   const { data: sessao, error: erroSessao } = await db
     .from("channel_sessions")
-    .select("id, provider")
+    .select("id, provider, meta_waba_id")
     .eq("organization_id", organizationId)
     .eq("id", channelSessionId)
     .maybeSingle();
@@ -154,7 +154,23 @@ export async function modelosParaEnvio(
    *   select channel_session_id is null as sem_dono, count(*)
    *     from meta_templates group by 1;
    */
-  const filtroDeSessao = `channel_session_id.eq.${channelSessionId},channel_session_id.is.null`;
+  /**
+   * ...E o órfão só vale se for DA CONTA desta conexão, quando ela tem conta.
+   *
+   * O canal oficial grava a conta (`waba_id`) e não a conexão. Com dois números
+   * oficiais de contas DIFERENTES na mesma organização (medido: a primeira
+   * instalação com dois números, 2026-09-23), o "ou sem dono" puro oferecia ao
+   * número A os modelos da conta do número B — que a plataforma recusa, porque
+   * o modelo não existe na conta de quem envia. Dois números da MESMA conta
+   * continuam vendo os mesmos modelos, que é o certo: o modelo é da conta.
+   */
+  // Só dígitos entram no filtro: o valor vai interpolado na sintaxe do
+  // PostgREST, e uma vírgula ou parêntese mudaria a expressão.
+  const wabaLida = (sessao as { meta_waba_id?: string | null }).meta_waba_id ?? null;
+  const wabaDaSessao = wabaLida && /^\d+$/.test(wabaLida) ? wabaLida : null;
+  const filtroDeSessao = wabaDaSessao
+    ? `channel_session_id.eq.${channelSessionId},and(channel_session_id.is.null,waba_id.eq.${wabaDaSessao})`
+    : `channel_session_id.eq.${channelSessionId},channel_session_id.is.null`;
   let { data, error } = await db
     .from("meta_templates")
     .select(colunas)

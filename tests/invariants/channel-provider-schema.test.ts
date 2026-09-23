@@ -67,11 +67,18 @@ describe("0087 · o canal da sessão chega ao clone", () => {
     ).toBe("'waha'::text|NO");
   });
 
-  it("as três colunas do ramo meta_cloud existem", () => {
+  // A quarta coluna é da 0275: o App Secret PRÓPRIO do número, para quando ele
+  // entrega por outro app da Meta (NULL = vale o da instalação).
+  it("as colunas do ramo meta_cloud existem (as três da 0087 + o segredo da 0275)", () => {
     const cols = sql(`select column_name from information_schema.columns
                        where table_schema = 'public' and table_name = 'channel_sessions'
                          and column_name like 'meta\\_%' order by 1`).split("\n");
-    expect(cols).toEqual(["meta_phone_number_id", "meta_token_encrypted", "meta_waba_id"]);
+    expect(cols).toEqual([
+      "meta_app_secret_encrypted",
+      "meta_phone_number_id",
+      "meta_token_encrypted",
+      "meta_waba_id",
+    ]);
   });
 
   it("waha_session_name deixou de ser obrigatório — senão meta_cloud é inexprimível", () => {

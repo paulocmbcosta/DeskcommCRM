@@ -680,6 +680,7 @@ jobs:
         chamar-o-cliente-primeiro.spec.ts
         chat-do-site.spec.ts
         equipe-cadastro-com-senha.spec.ts
+        canal-oficial-varios-numeros.spec.ts
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts

@@ -54,11 +54,15 @@ vi.mock("@/lib/supabase/admin", () => {
     webhook_path_token: "tok-do-canal",
     status: "WORKING",
   };
-  const cadeiaDoCanal = {
+  // A rota lê a LISTA de canais oficiais (a organização pode ter vários), então
+  // a cadeia é aguardável direto; `maybeSingle` fica para quem pede um só.
+  const cadeiaDoCanal: Record<string, unknown> = {
     select: () => cadeiaDoCanal,
     eq: () => cadeiaDoCanal,
     is: () => cadeiaDoCanal,
+    order: () => cadeiaDoCanal,
     maybeSingle: async () => ({ data: canal, error: null }),
+    then: (ok: (v: unknown) => unknown) => Promise.resolve({ data: [canal], error: null }).then(ok),
   };
   return {
     createAdminClient: () => ({
