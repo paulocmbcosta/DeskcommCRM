@@ -491,6 +491,31 @@ evidências 05–11 foram refeitas. `get_boleto` e `get_pix` foram medidos na in
 Execução: build de produção + `next start`, Supabase local com o `baseline.sql` de
 2026-09-21 (`ON_ERROR_STOP=1`, 0 erros), Chromium real — 1 passed.
 
+**Fase 4 — a IA identifica o cliente e envia a cobrança (2026-09-23).** O segundo teste do
+mesmo arquivo prova, pela tela, o que o agente de IA faz quando o conector está ligado. O turno
+roda com o MOTOR REAL (fila, cadeia de envio, ledger, Storage, canal) e só o modelo é roteirizado
+(`scripts/e2e-turno-da-ia-cobranca.ts`) — sem isso não haveria como exercitar a IA no CI.
+
+| Caso | Prioridade | Estado |
+|---|---|---|
+| J26.12 SEM conector ligado, o editor do agente NÃO oferece as duas capacidades novas | `[P1]` | **PASS** |
+| J26.13 O admin ajusta "Faturas com mais de N dias de atraso vão para a Cobrança" (60 → 70) e o valor persiste | `[P1]` | **PASS** — `evidence/conector-ixc/ia/01-limite-de-dias.png` |
+| J26.14 Com o conector ligado, as duas capacidades aparecem no editor; **Enviar a cobrança é crítica** (o pacote "Atender e responder" não a liga sozinha) e é marcada uma a uma | `[P1]` | **PASS** — `evidence/conector-ixc/ia/02-capacidades-ligadas.png` |
+| J26.15 Turno real: a IA identifica a cliente pelo telefone, envia o **QR code do Pix** (imagem medida com `naturalWidth > 0`, não a olho) + o copia-e-cola, e escreve uma frase curta; o receiver do WhatsApp prova o que saiu | `[P1]` | **PASS** — `evidence/conector-ixc/ia/03-ia-enviou-o-pix.png` |
+| J26.16 Fatura 74 dias em atraso (acima do limite de 70): **nada sai**; a IA diz que a fatura foi encaminhada ao setor de cobrança, e a auditoria grava `conector.cobranca_encaminhada` | `[P1]` | **PASS** — `evidence/conector-ixc/ia/04-acima-do-limite-nao-envia.png` |
+| J26.17 Chat do site com telefone DIGITADO que bate no IXC: o painel mostra "escolher" (motivo `telefone_digitado`) e **nenhum vínculo é gravado** — o telefone só prova quem é onde ele é o transporte | `[P0]` | **PASS** — `evidence/conector-ixc/site-nao-vincula-pelo-telefone-digitado.png` |
+
+Sabotagem que prova a régua: com `diasDeAtraso > limiteDeDias` trocado por `false`, o caso
+J26.16 fica VERMELHO (a frase de encaminhamento nunca aparece). Execução: build de produção +
+`next start`, Supabase local pg15 com o `baseline.sql` (inclusive a migration 0274), Chromium
+real — 2 passed.
+
+Armadilhas pagas nesta jornada, para quem for estender o rig: `execFileSync` **trava** o
+processo do Playwright, que é quem hospeda os servidores falsos — o script filho espera uma
+resposta que nunca vem (use `spawn`); porta fixa colide entre os dois testes do arquivo (porta
+efêmera + `closeAllConnections()` antes do `close()`); e, sem worker de pé, ninguém semeia a
+camada `platform` do playbook nem a credencial de IA — o rig precisa fazer isso à mão.
+
 **Achado do DONO em produção, 2026-09-22 (v1.35.0), consertado:** com um cadastro real, a
 opção Pix ficava desligada em todas as faturas — o IXC ainda não tinha gerado o Pix delas
 (`pix_txid` vazio em 4 de 4 abertas), e a regra só oferecia Pix já gerado. A regra veio de

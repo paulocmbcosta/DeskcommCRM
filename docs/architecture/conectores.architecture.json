@@ -197,7 +197,7 @@
       "lane": "conector",
       "col": 9,
       "type": "backend",
-      "label": "ixc/enviar-cobranca.ts — a ÚNICA função que envia cobrança (botão hoje, IA amanhã): relê, confere dono/estado/forma, %PDF, CRC16 e Pix ATIVA"
+      "label": "ixc/enviar-cobranca.ts — a ÚNICA função que envia cobrança (botão do atendente e e a IA, pela ferramenta do motor): relê, confere dono/estado/forma, %PDF, CRC16 e Pix ATIVA"
     },
     {
       "id": "pix",
@@ -212,6 +212,20 @@
       "col": 9,
       "type": "database",
       "label": "Storage whatsapp-media — <org>/<conversa>/boleto-DD-MM-AAAA.pdf | pix-….png (storage-first)"
+    },
+    {
+      "id": "ia-ferramentas",
+      "lane": "api",
+      "col": 7,
+      "type": "backend",
+      "label": "Turno do agente — agent/ferramentas-do-conector.ts: monta consultar/enviar cobrança com conversa e contato fechados no closure; conta as 3 tentativas pela auditoria; a cobrança sai pela cadeia before-send (conteudoDoSistema) e pelo ledger (job, seq)"
+    },
+    {
+      "id": "ixc-agente",
+      "lane": "conector",
+      "col": 11,
+      "type": "backend",
+      "label": "ixc/agente.ts — o IXC para a IA: identidade (telefone que é identidade · CPF entre os do telefone · CPF + nascimento), fatura da vez (a mais atrasada, senão a próxima), limite de dias, Pix com queda para boleto"
     }
   ],
   "edges": [
@@ -399,6 +413,51 @@
       "from": "storage",
       "to": "envio",
       "label": "signed URL curta para o canal baixar"
+    },
+    {
+      "from": "ia-ferramentas",
+      "to": "registro",
+      "label": "conectorDoAgente — o motor nunca importa a pasta do conector"
+    },
+    {
+      "from": "registro",
+      "to": "ixc-agente",
+      "label": "definicao.agente"
+    },
+    {
+      "from": "ixc-agente",
+      "to": "identificar",
+      "label": "telefone · CPF + nascimento"
+    },
+    {
+      "from": "ixc-agente",
+      "to": "enviar-cobranca",
+      "label": "reusa a função única de envio"
+    },
+    {
+      "from": "ixc-agente",
+      "to": "resumo",
+      "label": "situação, plano, conexão, OS (sem sinal nem atendimentos)"
+    },
+    {
+      "from": "ia-ferramentas",
+      "to": "conexao",
+      "label": "credencial e limite de dias da cobrança"
+    },
+    {
+      "from": "ia-ferramentas",
+      "to": "audit",
+      "label": "fatura_enviada · vinculo_criado · identificacao_recusada · cobranca_encaminhada"
+    },
+    {
+      "from": "ia-ferramentas",
+      "to": "conversa",
+      "label": "arquivo + código, pela saída do motor"
+    },
+    {
+      "from": "config",
+      "to": "tb-conexoes",
+      "label": "limite de dias (migration 0274)"
     }
   ]
 }
