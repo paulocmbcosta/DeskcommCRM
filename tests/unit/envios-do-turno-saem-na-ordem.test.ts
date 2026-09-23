@@ -276,7 +276,11 @@ describe("a fila em si", () => {
   it("só as ferramentas de envio entram na fila — leitura segue em paralelo", () => {
     const tools = ferramentasDoTurno([], () => 0);
     const envolvidas = serializarEnvios(tools);
-    expect([...FERRAMENTAS_DE_ENVIO].sort()).toEqual(["send_message", "send_template"]);
+    expect([...FERRAMENTAS_DE_ENVIO].sort()).toEqual([
+      "crm_enviar_cobranca_erp",
+      "send_message",
+      "send_template",
+    ]);
     expect(envolvidas.search_knowledge).toBe(tools.search_knowledge);
     expect(envolvidas.send_message).not.toBe(tools.send_message);
     // A descrição e o schema — o que vai ao prefixo cacheado — não mudam.

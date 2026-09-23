@@ -48,6 +48,14 @@ export interface ContratoIxc {
   acesso: Leitura;
   vigente: boolean;
   bloqueado: boolean;
+  /**
+   * O `status_internet` CRU. O painel não precisa dele (já tem `acesso` e
+   * `bloqueado`); quem precisa é a projeção da IA (`clienteDe`, em
+   * `lib/conectores/ixc/agente.ts`), pra distinguir "vocabulário conhece como
+   * liberado" de "código que esta imagem nunca viu" — ver `acessoLiberado` em
+   * `vocabulario.ts`.
+   */
+  statusInternet: string;
   ativadoEm: string;
   endereco: string;
   parcelasEmAtraso: number;
@@ -143,6 +151,7 @@ function lerContrato(r: Record<string, string>): ContratoIxc {
     acesso: lerStatusDoAcesso(statusInternet),
     vigente: status === "A",
     bloqueado: acessoBloqueado(statusInternet),
+    statusInternet,
     ativadoEm: data(r.data_ativacao),
     endereco: [[r.endereco, r.numero].filter(Boolean).join(", "), r.bairro].filter(Boolean).join(" — "),
     parcelasEmAtraso: Number.parseInt(r.num_parcelas_atraso ?? "", 10) || 0,
@@ -162,11 +171,26 @@ export function situacaoDoCliente(contratos: ContratoIxc[]): Leitura {
   return { rotulo: "Liberado", tom: "bom" };
 }
 
+/**
+ * Que ONDAS de leitura `montarResumo` paga. Default TUDO ligado — é o que o
+ * painel (`painel.ts`) precisa e é o que este módulo garantia até aqui, então
+ * um chamador que não passa nada não muda de comportamento.
+ */
+export interface SecoesDoResumo {
+  /** Onda 2 — o sinal da ONU, uma leitura POR LOGIN (até `TETO_DE_LOGINS`). */
+  sinal?: boolean;
+  /** A tabela `su_ticket`. */
+  atendimentos?: boolean;
+}
+
 export async function montarResumo(
   credencial: CredencialDeConector,
   idDoCliente: string,
   agora: Date = new Date(),
+  secoes: SecoesDoResumo = {},
 ): Promise<ResumoIxc | null> {
+  const comSinal = secoes.sinal ?? true;
+  const comAtendimentos = secoes.atendimentos ?? true;
   const porCliente = (tabela: string) => ({ campo: `${tabela}.id_cliente`, operador: "=" as const, valor: idDoCliente });
 
   const [cliente, contratos, faturas, logins, os, tickets] = await Promise.allSettled([
@@ -199,16 +223,20 @@ export async function montarResumo(
       campos: CAMPOS_DA_OS,
       limite: TETO_DE_ITENS,
     }),
-    listarNoIxc(credencial, {
-      tabela: "su_ticket",
-      filtro: porCliente("su_ticket"),
-      tambem: [
-        { campo: "su_ticket.su_status", operador: "!=", valor: "S" },
-        { campo: "su_ticket.su_status", operador: "!=", valor: "C" },
-      ],
-      campos: CAMPOS_DO_TICKET,
-      limite: TETO_DE_ITENS,
-    }),
+    // Ninguém no motor lê `atendimentos` hoje (`clienteDe`, em `agente.ts`, só usa
+    // `ordensDeServico`) — desligado ali poupa uma chamada ao ERP por consulta.
+    comAtendimentos
+      ? listarNoIxc(credencial, {
+          tabela: "su_ticket",
+          filtro: porCliente("su_ticket"),
+          tambem: [
+            { campo: "su_ticket.su_status", operador: "!=", valor: "S" },
+            { campo: "su_ticket.su_status", operador: "!=", valor: "C" },
+          ],
+          campos: CAMPOS_DO_TICKET,
+          limite: TETO_DE_ITENS,
+        })
+      : Promise.resolve<Listagem>({ total: 0, registros: [] }),
   ]);
 
   // Sem o cadastro não há painel: a falha dele SOBE, com o motivo que ela tem.
@@ -231,17 +259,21 @@ export async function montarResumo(
       : [];
 
   // ONDA 2 — o sinal, por login. Falha aqui não derruba a conexão: login sem
-  // leitura de ONU é o caso NORMAL de quem não é fibra.
-  const sinais = await Promise.allSettled(
-    loginsLidos.map((l) =>
-      listarNoIxc(credencial, {
-        tabela: "radpop_radio_cliente_fibra",
-        filtro: { campo: "radpop_radio_cliente_fibra.id_login", operador: "=", valor: l.id ?? "" },
-        campos: CAMPOS_DA_FIBRA,
-        limite: 1,
-      }),
-    ),
-  );
+  // leitura de ONU é o caso NORMAL de quem não é fibra. Desligada (`!comSinal`),
+  // `sinais` fica vazio e o acesso por índice abaixo (`sinais[i]`) já é opcional
+  // — cada conexão sai sem `sinal`, como se nenhum login tivesse leitura.
+  const sinais = comSinal
+    ? await Promise.allSettled(
+        loginsLidos.map((l) =>
+          listarNoIxc(credencial, {
+            tabela: "radpop_radio_cliente_fibra",
+            filtro: { campo: "radpop_radio_cliente_fibra.id_login", operador: "=", valor: l.id ?? "" },
+            campos: CAMPOS_DA_FIBRA,
+            limite: 1,
+          }),
+        ),
+      )
+    : [];
 
   const secaoDeConexoes: Secao<ConexaoIxc[]> =
     logins.status === "rejected"

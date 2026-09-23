@@ -13,11 +13,22 @@
 import { bufToBytea, byteaToBuffer, decryptKey, encryptKey } from "@/lib/crypto/aes_gcm";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
+import { FAIXA_DO_LIMITE, LIMITE_PADRAO_DA_COBRANCA } from "./limite-de-cobranca";
 import { ehConectorId, type ConectorId, type CredencialDeConector, type EstadoDaConexao } from "./tipos";
+
+/**
+ * Reexportado só por COMPATIBILIDADE (LIMITE_PADRAO_DA_COBRANCA é usado
+ * internamente aqui embaixo). Quem precisa de `FAIXA_DO_LIMITE` do lado de
+ * fora — rota, tela, invariante — importa direto de `./limite-de-cobranca`,
+ * que é o módulo folha: dois caminhos de import para a mesma constante é
+ * exatamente o tipo de duplicação que a constante existe para evitar.
+ */
+export { FAIXA_DO_LIMITE, LIMITE_PADRAO_DA_COBRANCA };
 
 type Admin = ReturnType<typeof createAdminClient>;
 
-const COLUNAS_PUBLICAS = "conector, base_url, token_last4, status, status_detalhe, verificada_em, updated_at";
+const COLUNAS_PUBLICAS =
+  "conector, base_url, token_last4, status, status_detalhe, verificada_em, updated_at, cobranca_encaminha_apos_dias";
 const COLUNAS_DA_CREDENCIAL = "base_url, token_encrypted, token_iv, token_tag, status";
 
 export interface ConexaoPublica {
@@ -28,6 +39,7 @@ export interface ConexaoPublica {
   status_detalhe: string | null;
   verificada_em: string | null;
   updated_at: string;
+  cobranca_encaminha_apos_dias: number;
 }
 
 export async function lerConexaoPublica(admin: Admin, orgId: string, conector: ConectorId): Promise<ConexaoPublica | null> {
@@ -142,4 +154,59 @@ export async function carimbarEstado(
   } catch {
     // de propósito: ver o cabeçalho da função
   }
+}
+
+/**
+ * O limite de dias desta conexão. O BASELINE É O CONTRATO: toda instalação que
+ * aplicou o apêndice da migration 0274 tem a coluna, com default e CHECK. Sem
+ * linha de conexão (conector nunca ligado) ou com o valor nulo, vale o padrão
+ * do dono; erro de banco SOBE, como em `lerConexaoPublica` — cair num padrão
+ * silencioso aqui faria a IA enviar cobrança com o limite errado. Quem chama
+ * (a ferramenta do agente) trata a falha como falha de conector: diz que não
+ * conseguiu consultar agora e transfere, o que é muito melhor do que mandar a
+ * fatura fora da regra do dono.
+ *
+ * ⚠️ Isto já foi diferente: a versão anterior devolvia o padrão em QUALQUER
+ * erro, com o comentário dizendo que protegia "a janela do update.sh antes do
+ * baseline pegar" — janela que não existe, porque durante o `update.sh` quem
+ * está de pé é a imagem ANTIGA, que nem chama esta função nova. Na prática a
+ * defesa escondia um `42703` de coluna ausente (baseline não aplicado, clone
+ * quebrado) atrás de um 60 silencioso; o sintoma certo — a tela INTEIRA de
+ * Conectores caindo com 500, exatamente como `lerConexaoPublica` já se
+ * comporta — é o que avisa que a instalação está quebrada.
+ */
+export async function lerLimiteDeCobranca(admin: Admin, orgId: string, conector: ConectorId): Promise<number> {
+  const { data, error } = await admin
+    .from("conector_conexoes")
+    .select("cobranca_encaminha_apos_dias")
+    .eq("organization_id", orgId)
+    .eq("conector", conector)
+    .maybeSingle();
+  if (error) throw new Error(`conector_conexoes: ${error.message}`);
+  const valor = (data as { cobranca_encaminha_apos_dias?: number | null } | null)?.cobranca_encaminha_apos_dias;
+  return valor ?? LIMITE_PADRAO_DA_COBRANCA;
+}
+
+/**
+ * Grava o limite e devolve a conexão atualizada (`null` = não havia conexão
+ * para gravar). O CHECK do banco guarda a faixa (`FAIXA_DO_LIMITE`); o
+ * `updated_at` fica por conta do trigger `before update` — mandá-lo daqui era
+ * cosmético, o valor calculado no Node nunca chegava a ser o que ficava no
+ * disco.
+ */
+export async function salvarLimiteDeCobranca(
+  admin: Admin,
+  orgId: string,
+  conector: ConectorId,
+  dias: number,
+): Promise<ConexaoPublica | null> {
+  const { data, error } = await admin
+    .from("conector_conexoes")
+    .update({ cobranca_encaminha_apos_dias: dias })
+    .eq("organization_id", orgId)
+    .eq("conector", conector)
+    .select(COLUNAS_PUBLICAS)
+    .maybeSingle();
+  if (error) throw new Error(`conector_conexoes: ${error.message}`);
+  return (data as ConexaoPublica | null) ?? null;
 }

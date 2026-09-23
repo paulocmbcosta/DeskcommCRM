@@ -27757,6 +27757,38 @@ grant  execute on function public.fn_ia_automatica_no_canal(uuid, uuid) to servi
 
 notify pgrst, 'reload schema';
 
+-- ---- o limite de dias para a IA encaminhar a fatura à Cobrança (migration 0274) ----
+-- Fatura com MAIS de N dias de atraso a IA não envia: encaminha à Cobrança e
+-- transfere (regra do dono, 22/09). N é da tela, padrão 60. Racional completo no
+-- cabeçalho da migration 0274. O `update` normalizador roda ANTES do `add
+-- constraint`: sem ele, uma linha fora da faixa faz o `add constraint` falhar
+-- e o `update.sh` (sem `ON_ERROR_STOP`) segue em frente com a coluna sem CHECK.
+alter table public.conector_conexoes
+  add column if not exists cobranca_encaminha_apos_dias integer not null default 60;
+
+update public.conector_conexoes
+   set cobranca_encaminha_apos_dias = 60
+ where cobranca_encaminha_apos_dias is null
+    or cobranca_encaminha_apos_dias not between 1 and 3650;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'conector_conexoes_cobranca_encaminha_apos_dias_check'
+       and conrelid = 'public.conector_conexoes'::regclass
+  ) then
+    alter table public.conector_conexoes
+      add constraint conector_conexoes_cobranca_encaminha_apos_dias_check
+      check (cobranca_encaminha_apos_dias between 1 and 3650);
+  end if;
+end $$;
+
+comment on column public.conector_conexoes.cobranca_encaminha_apos_dias is
+  'Fatura com mais dias de atraso que isto a IA NÃO envia: encaminha à Cobrança (migration 0274).';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

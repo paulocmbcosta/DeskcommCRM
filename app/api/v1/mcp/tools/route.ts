@@ -19,9 +19,12 @@ import { z } from "zod";
 
 import { ok, fail } from "@/lib/api/wrappers";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { IDS_DAS_FERRAMENTAS_DO_CONECTOR } from "@/lib/conectores/ferramentas-do-agente";
+import { conectorDoAgente } from "@/lib/conectores/registro";
 import { allTools } from "@/lib/mcp/tools";
 import { TOOL_CATALOG } from "@/lib/mcp/tools/catalog";
 import { juntarCatalogoComHandlers } from "@/lib/mcp/tools/catalogo-servido";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -46,8 +49,21 @@ export async function GET(_req: NextRequest): Promise<Response> {
     );
   }
 
+  // As ferramentas do sistema de gestão só existem para quem tem um conectado:
+  // sem ele, oferecer "Enviar a cobrança" prometeria na tela uma capacidade que o
+  // turno nunca monta. Falha ao ler = não oferece (o turno também não montaria).
+  let temConector = false;
+  try {
+    temConector = (await conectorDoAgente(createAdminClient(), activeOrg.orgId)) !== null;
+  } catch {
+    temConector = false;
+  }
+  const oferecidas = servidas.filter(
+    (c) => temConector || !IDS_DAS_FERRAMENTAS_DO_CONECTOR.includes(c.id),
+  );
+
   const schemaPorNome = new Map(allTools.map((t) => [t.name, t.inputSchema]));
-  const tools = servidas.map((capacidade) => ({
+  const tools = oferecidas.map((capacidade) => ({
     ...capacidade,
     input_schema: z.toJSONSchema(z.object(schemaPorNome.get(capacidade.id) ?? {}), {
       target: "openapi-3.0",

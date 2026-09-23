@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hojeEmSaoPaulo, lerFatura, reaisParaCents, recortarFaturas } from "./faturas";
+import { faturaDaVez, hojeEmSaoPaulo, lerFatura, reaisParaCents, recortarFaturas } from "./faturas";
 
 const HOJE = "2026-09-19";
 
@@ -117,5 +117,30 @@ describe("hojeEmSaoPaulo", () => {
   it("às 22h de São Paulo ainda é o MESMO dia, embora em UTC já seja o seguinte", () => {
     // 2026-09-11T01:00Z = 2026-09-10 22:00 em São Paulo (UTC-3).
     expect(hojeEmSaoPaulo(new Date("2026-09-11T01:00:00Z"))).toBe("2026-09-10");
+  });
+});
+
+describe("faturaDaVez — UMA fatura por vez (regra do dono, 22/09)", () => {
+  const HOJE = "2026-09-22";
+  const f = (id: string, venc: string) =>
+    lerFatura({ id, id_cliente: "10", status: "A", data_vencimento: venc, valor: "100.00", valor_aberto: "100.00" }, HOJE)!;
+
+  it("a vencida MAIS ANTIGA vence qualquer outra", () => {
+    const escolhida = faturaDaVez([f("3", "2026-09-10"), f("1", "2026-07-14"), f("9", "2026-10-12"), f("2", "2026-08-13")]);
+    expect(escolhida?.id).toBe("1");
+    expect(escolhida?.situacao).toBe("vencida");
+  });
+
+  it("sem vencida, a que vence primeiro", () => {
+    expect(faturaDaVez([f("9", "2026-11-12"), f("8", "2026-10-12")])?.id).toBe("8");
+  });
+
+  it("empate no vencimento: decide o id, não a ordem de chegada", () => {
+    expect(faturaDaVez([f("20", "2026-07-14"), f("7", "2026-07-14")])?.id).toBe("7");
+    expect(faturaDaVez([f("7", "2026-07-14"), f("20", "2026-07-14")])?.id).toBe("7");
+  });
+
+  it("nenhuma fatura: null", () => {
+    expect(faturaDaVez([])).toBeNull();
   });
 });

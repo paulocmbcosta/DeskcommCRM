@@ -11,6 +11,9 @@
  * medidos por tests/invariants/vocabulario-banco-x-typescript.test.ts — conector
  * novo é uma linha aqui E uma migration que estende o CHECK.
  */
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import type { IdentidadeDoTelefone } from "@/lib/channels/capabilities";
 export const IDS_DE_CONECTOR = ["ixc"] as const;
 export type ConectorId = (typeof IDS_DE_CONECTOR)[number];
 
@@ -19,6 +22,10 @@ export type EstadoDaConexao = (typeof ESTADOS_DA_CONEXAO)[number];
 
 export const FORMAS_DE_VERIFICACAO = ["telefone", "documento", "manual"] as const;
 export type FormaDeVerificacao = (typeof FORMAS_DE_VERIFICACAO)[number];
+
+/** Como a cobrança sai: o PDF do boleto ou o Pix. Vocabulário do produto, não do ERP. */
+export const FORMAS_DE_COBRANCA = ["boleto", "pix"] as const;
+export type FormaDeCobranca = (typeof FORMAS_DE_COBRANCA)[number];
 
 export function ehConectorId(valor: string): valor is ConectorId {
   return (IDS_DE_CONECTOR as readonly string[]).includes(valor);
@@ -54,6 +61,195 @@ export class FalhaDoConector extends Error {
 
 export type ResultadoDoTeste = { ok: true } | { ok: false; motivo: MotivoDeFalha; detalhe: string };
 
+// ─── O que o AGENTE DE IA faz com um conector ────────────────────────────────
+//
+// O motor conhece ESTES tipos e o registro — nunca a pasta de um conector. Os
+// nomes falam de cliente, situação, fatura e forma, não de `fn_areceber`.
+// Spec: docs/superpowers/specs/2026-09-22-ia-envia-cobranca-ixc-design.md.
+
+/** Um arquivo que a cobrança leva: o PDF do boleto, o PNG do QR do Pix. */
+export interface ArquivoDaCobranca {
+  /** Sem extensão e sem caminho: `boleto-10-09-2026`. Quem guarda decide onde. */
+  nome: string;
+  extensao: "pdf" | "png";
+  mime: "application/pdf" | "image/png";
+  conteudo: Buffer;
+}
+
+export interface MensagemDaCobranca {
+  type: "text" | "document" | "image";
+  body: string;
+  media_storage_path?: string;
+  media_mime?: string;
+  media_size_bytes?: number;
+  /**
+   * `body` é CÓDIGO PARA COPIAR (linha digitável, copia-e-cola do Pix), relido
+   * do ERP — nunca prosa. O motor passa isto a `runBeforeSend` como
+   * `corpoImutavel` (lib/agent-engine/guardrails/before-send.ts): a única
+   * emenda de corpo que existe hoje (o aviso de IA do disclosure) NÃO pode
+   * prependar nada aqui, porque `isFirstOutbound` é por CONTATO — se a
+   * mensagem anterior desta MESMA cobrança saiu `queued`, o código ainda
+   * aparenta ser "1º outbound" e ganharia o aviso, corrompendo o BR Code.
+   */
+  corpoImutavel?: boolean;
+}
+
+export interface PortasDoEnvio {
+  /** Sobe o arquivo (storage-first) e devolve o caminho que `enviar` vai citar. */
+  guardarArquivo(arquivo: ArquivoDaCobranca): Promise<string>;
+  /** Envia UMA mensagem na conversa — a saída de sempre: fila, anti-banimento, opt-out. */
+  enviar(mensagem: MensagemDaCobranca): Promise<void>;
+}
+
+export interface FaturaParaAgente {
+  /** `AAAA-MM-DD`. */
+  vencimento: string;
+  valorCents: number;
+  /** 0 quando ainda não venceu. */
+  diasDeAtraso: number;
+}
+
+export interface FinanceiroParaAgente {
+  vencidas: FaturaParaAgente[];
+  proxima: FaturaParaAgente | null;
+  totalVencidoCents: number;
+  /** A ÚNICA fatura que se cobra agora (regra do dono, 22/09). */
+  daVez: FaturaParaAgente | null;
+}
+
+/** O que a IA pode saber do cliente (decisão de 21/09). `null` = a seção não pôde ser lida. */
+export interface ClienteParaAgente {
+  primeiroNome: string;
+  situacao: string | null;
+  motivoDaSituacao: string | null;
+  bloqueado: boolean | null;
+  plano: string | null;
+  /** `AAAA-MM-DD` do contrato em vigor mais antigo. */
+  clienteDesde: string | null;
+  conexao: "online" | "offline" | "sem_informacao" | null;
+  temOsAberta: boolean | null;
+}
+
+export interface PedidoDeConsulta {
+  admin: SupabaseClient;
+  credencial: CredencialDeConector;
+  orgId: string;
+  contactId: string;
+  telefone: string | null;
+  /**
+   * O telefone é identidade no canal desta conversa (`lib/channels/capabilities.ts`).
+   * "desconhecido" (canal ilegível, provider que esta imagem não conhece) NÃO é "nao":
+   * ele bloqueia vincular pelo telefone, mas não descarta vínculo que já existe.
+   */
+  identidadeDoTelefone: IdentidadeDoTelefone;
+  cpfCnpj?: string;
+  dataNascimento?: string;
+  agora?: Date;
+}
+
+/**
+ * O que uma consulta grava na AUDITORIA — o motor NUNCA repassa isto ao modelo.
+ * Agrupado à parte (em vez de campo solto ao lado de `cliente`/`financeiro`)
+ * de propósito: quem monta o contexto da IA a partir de `ResultadoDaConsulta`
+ * tem de tirar `auditoria` de propósito, nunca espalhar o objeto inteiro sem
+ * pensar — um `...resultado` desavisado não vaza `auditoria` pra dentro da
+ * mensagem do jeito que vazaria um campo solto.
+ */
+export interface AuditoriaDaConsulta {
+  /** Presente quando ESTA consulta criou OU promoveu o vínculo. */
+  vinculou?: { verificadoPor: FormaDeVerificacao; cadastros: string[] };
+}
+
+export type ResultadoDaConsulta =
+  | {
+      estado: "identificado";
+      cliente: ClienteParaAgente;
+      /** `null` quando o financeiro não pôde ser lido. */
+      financeiro: FinanceiroParaAgente | null;
+      auditoria: AuditoriaDaConsulta;
+    }
+  | {
+      estado: "precisa_cpf" | "precisa_cpf_e_nascimento" | "cpf_invalido" | "data_invalida" | "nao_conferiu";
+      /**
+       * Só em `nao_conferiu`: o CPF existe no sistema, mas a data de nascimento do
+       * cadastro está num formato que esta imagem não lê. O CLIENTE recebe a mesma
+       * recusa de sempre (não se diz qual dado falhou); quem precisa saber é o LOG do
+       * turno — sem isto, um ERP que grave a data de outro jeito faria 100% das
+       * conferências recusarem em silêncio, queimando as 3 tentativas de todo mundo.
+       */
+      dataIlegivel?: true;
+    };
+
+/**
+ * De-duplicar — não cobrar a MESMA fatura duas vezes no mesmo atendimento — é
+ * do CHAMADOR, não deste conector: ele não guarda estado entre chamadas de
+ * `enviarCobranca`, e quem sabe quantas vezes o turno já mandou cobrança é o
+ * motor, que tem o teto de envios do turno.
+ */
+export interface PedidoDeCobranca {
+  admin: SupabaseClient;
+  credencial: CredencialDeConector;
+  orgId: string;
+  contactId: string;
+  identidadeDoTelefone: IdentidadeDoTelefone;
+  forma: FormaDeCobranca;
+  /** Fatura com MAIS dias de atraso que isto não é enviada: vai para a Cobrança. */
+  limiteDeDias: number;
+  portas: PortasDoEnvio;
+  agora?: Date;
+}
+
+/**
+ * O que um envio grava na AUDITORIA — o motor NUNCA repassa isto ao modelo.
+ * Mesmo racional de `AuditoriaDaConsulta`: agrupado à parte pra um
+ * `...resultado` desavisado não espalhar `faturaId`/`motivoInterno` pro modelo.
+ */
+export interface AuditoriaDaCobranca {
+  faturaId: string;
+  /**
+   * Só quando a falha é NOSSA — a fatura nem foi achada na releitura
+   * (`fatura_nao_encontrada`). NUNCA é a frase do IXC: essa é `detalheDoErp`,
+   * ao lado, e essa sim pode valer a pena um humano ver no log da Cobrança.
+   */
+  motivoInterno?: string;
+}
+
+export type ResultadoDaCobranca =
+  | {
+      resultado: "enviada";
+      forma: FormaDeCobranca;
+      fatura: FaturaParaAgente;
+      enviadas: number;
+      previstas: number;
+      pixGeradoAgora: boolean;
+      /** O Pix falhou e saiu o BOLETO da mesma fatura no lugar. */
+      pixIndisponivel: boolean;
+      auditoria: AuditoriaDaCobranca;
+    }
+  | { resultado: "cliente_nao_identificado" | "sem_fatura_em_aberto" }
+  | {
+      /** `fatura_ja_paga`: a fatura fechou ENTRE listar e reler — quem pagou não vira "encaminhar pra Cobrança". */
+      resultado: "encaminhar_para_cobranca" | "boleto_indisponivel" | "fatura_ja_paga";
+      fatura: FaturaParaAgente;
+      auditoria: AuditoriaDaCobranca;
+    }
+  | { resultado: "sem_como_cobrar"; fatura: FaturaParaAgente; detalheDoErp?: string; auditoria: AuditoriaDaCobranca };
+
+/**
+ * O que o AGENTE DE IA faz com um conector: identificar o cliente da conversa e
+ * cobrar a fatura da vez.
+ *
+ * Ao contrário de `testar` (abaixo, em `DefinicaoDeConector` — "NUNCA lança"),
+ * as duas funções aqui PROPAGAM `FalhaDoConector` quando o sistema externo não
+ * responde, recusa a credencial etc. Tratar a falha (repetir, avisar a
+ * organização, cair pra atendimento humano) é decisão do MOTOR, que sabe de
+ * conversa e atendimento — não é decisão de quem implementa o conector.
+ */
+export interface CapacidadeDoAgente {
+  consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta>;
+  enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca>;
+}
+
 /** O que o núcleo sabe de um conector sem conhecer o sistema do outro lado. */
 export interface DefinicaoDeConector {
   id: ConectorId;
@@ -65,6 +261,11 @@ export interface DefinicaoDeConector {
   ajudaDoToken: string;
   /** Prova host + token com uma leitura mínima. NUNCA lança: devolve veredito. */
   testar(credencial: CredencialDeConector): Promise<ResultadoDoTeste>;
+  /**
+   * O que o agente de IA faz com este conector (identificar, cobrar). Ausente =
+   * o conector não tem cobrança, e as ferramentas dele não entram no turno.
+   */
+  agente?: CapacidadeDoAgente;
 }
 
 /** A frase que a tela mostra para cada motivo. Uma só fonte, três telas. */

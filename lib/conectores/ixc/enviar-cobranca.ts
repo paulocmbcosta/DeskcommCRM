@@ -21,35 +21,15 @@
  * Cada cobrança são DUAS mensagens: o arquivo com a legenda, e o código sozinho
  * (linha digitável ou copia-e-cola), para copiar com um toque.
  */
-import type { CredencialDeConector } from "../tipos";
+import type { ArquivoDaCobranca, CredencialDeConector, MensagemDaCobranca, PortasDoEnvio } from "../tipos";
 import { CAMPOS_DA_FATURA } from "./campos";
 import { hojeEmSaoPaulo, lerFatura, reaisParaCents, type Fatura, type FormaDeCobranca } from "./faturas";
 import { baixarBoletoDoIxc, buscarPixNoIxc, listarNoIxc } from "./http";
 import { legendaDoBoleto, legendaDoPix, nomeDoArquivo } from "./mensagem-fatura";
 import { copiaEColaIntegro, qrCodeDoPix } from "./pix";
 
-export interface ArquivoDaCobranca {
-  /** Sem extensão e sem caminho: `boleto-10-09-2026`. Quem guarda decide onde. */
-  nome: string;
-  extensao: "pdf" | "png";
-  mime: "application/pdf" | "image/png";
-  conteudo: Buffer;
-}
-
-export interface MensagemDaCobranca {
-  type: "text" | "document" | "image";
-  body: string;
-  media_storage_path?: string;
-  media_mime?: string;
-  media_size_bytes?: number;
-}
-
-export interface PortasDoEnvio {
-  /** Sobe o arquivo (storage-first) e devolve o caminho que `enviar` vai citar. */
-  guardarArquivo(arquivo: ArquivoDaCobranca): Promise<string>;
-  /** Envia UMA mensagem na conversa — a saída de sempre: fila, anti-banimento, opt-out. */
-  enviar(mensagem: MensagemDaCobranca): Promise<void>;
-}
+// Os tipos das portas moram no contrato: o motor preenche as mesmas portas sem conhecer o IXC.
+export type { ArquivoDaCobranca, MensagemDaCobranca, PortasDoEnvio };
 
 export type MotivoDaRecusa =
   | "fatura_nao_encontrada"
@@ -141,7 +121,10 @@ export async function enviarCobrancaIxc(p: PedidoDeEnvio): Promise<ResultadoDoEn
       media_mime: arquivo.mime,
       media_size_bytes: arquivo.conteudo.length,
     },
-    ...(codigo ? [{ type: "text" as const, body: codigo }] : []),
+    // `corpoImutavel`: isto é a linha digitável/copia-e-cola relido do IXC, não
+    // prosa — o disclosure de IA nunca pode prependar nada aqui (ver o campo em
+    // `../tipos.ts` e `corpoImutavel` em `before-send.ts`).
+    ...(codigo ? [{ type: "text" as const, body: codigo, corpoImutavel: true as const }] : []),
   ];
 
   let enviadas = 0;

@@ -1,0 +1,373 @@
+/**
+ * O IXC PARA O AGENTE DE IA — identificar o cliente da conversa e enviar a cobrança.
+ *
+ * É a implementação de `CapacidadeDoAgente` (lib/conectores/tipos.ts). O motor não
+ * sabe que isto é IXC: pede ao registro o conector da organização que declara
+ * `agente` e chama `consultar` / `enviarCobranca`. Spec:
+ * docs/superpowers/specs/2026-09-22-ia-envia-cobranca-ixc-design.md.
+ *
+ * Três regras do dono moram aqui porque dependem do que o IXC é:
+ *   1. identidade antes de dinheiro (§6): telefone que bate com UM cadastro — e
+ *      só num canal em que o telefone É a identidade, e só se nenhum CPF
+ *      informado contradisser o cadastro do telefone —; o CPF escolhe entre os
+ *      cadastros do telefone; fora disso, CPF + data de nascimento;
+ *   2. UMA fatura por vez (§7): a vencida mais antiga, senão a próxima;
+ *   3. fatura acima do limite de dias não sai (§7): vai para a Cobrança.
+ *
+ * O que NÃO mora aqui: contar tentativas, auditar, falar com o modelo. Isso é do
+ * motor, que é quem sabe de conversa, atendimento e agente.
+ */
+import type {
+  AuditoriaDaCobranca,
+  AuditoriaDaConsulta,
+  CapacidadeDoAgente,
+  ClienteParaAgente,
+  CredencialDeConector,
+  FaturaParaAgente,
+  FinanceiroParaAgente,
+  FormaDeVerificacao,
+  PedidoDeCobranca,
+  PedidoDeConsulta,
+  ResultadoDaCobranca,
+  ResultadoDaConsulta,
+} from "../tipos";
+import { listarVinculos, vincular } from "../vinculos";
+import { CAMPOS_DA_FATURA } from "./campos";
+import { enviarCobrancaIxc, type MotivoDaRecusa, type ResultadoDoEnvio } from "./enviar-cobranca";
+import { faturaDaVez, hojeEmSaoPaulo, recortarFaturas, type Fatura, type RecorteDeFaturas } from "./faturas";
+import { listarNoIxc } from "./http";
+import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientePorId, clientesPorTelefone, dataInformada, type ClienteIxc } from "./identificar";
+import { documentoNaMascara, soDigitos } from "./mascara";
+import { montarResumo, type ContratoIxc, type ResumoIxc } from "./resumo";
+import { acessoLiberado } from "./vocabulario";
+
+type Pedido = Pick<PedidoDeConsulta, "admin" | "orgId" | "contactId" | "identidadeDoTelefone">;
+
+interface CadastroValido {
+  externalId: string;
+  verificadoPor: FormaDeVerificacao;
+}
+
+/**
+ * Os cadastros vinculados que VALEM para a IA, com a forma que os provou. O
+ * vínculo `telefone` é descartado onde o telefone SABIDAMENTE não é identidade
+ * (antes do conserto de 22/09 o painel vinculava pelo número DIGITADO no chat
+ * do site). Canal "desconhecido" NÃO descarta: "não sei" não é "não é" —
+ * esconder vínculo legítimo faria a IA pedir CPF a quem já está identificado.
+ */
+async function cadastrosValidosComForma(p: Pedido): Promise<CadastroValido[]> {
+  const vinculos = await listarVinculos(p.admin, p.orgId, p.contactId, "ixc");
+  return vinculos
+    .filter((v) => v.verificado_por !== "telefone" || p.identidadeDoTelefone !== "nao")
+    .map((v) => ({ externalId: v.external_id, verificadoPor: v.verificado_por }));
+}
+
+async function cadastrosValidos(p: Pedido): Promise<string[]> {
+  return (await cadastrosValidosComForma(p)).map((c) => c.externalId);
+}
+
+/**
+ * O CPF informado bate com ALGUM dos cadastros? Só é chamada quando TODOS os
+ * vínculos existentes são por `telefone` — a única forma nunca desafiada por um
+ * dado que só o titular sabe (`documento`/`manual` já provaram isso e não são
+ * reconferidos aqui).
+ *
+ * É o crítico 1 um turno depois: telefone reciclado identifica errado na 1ª
+ * mensagem (vira vínculo `telefone`), a IA chama de novo SEM argumentos e
+ * recebe "identificado" — e se o cliente manda o CPF dele (o de verdade) numa
+ * mensagem seguinte, essa é a ÚNICA chance de pegar a contradição, porque
+ * `cadastrosValidos` responde antes de qualquer regra de identidade rodar.
+ */
+async function telefoneConfereComCpf(credencial: CredencialDeConector, cadastros: readonly string[], documento: string): Promise<boolean> {
+  const clientes = await Promise.all(cadastros.map((id) => clientePorId(credencial, id)));
+  return clientes.some((c) => c !== null && soDigitos(c.documento) === soDigitos(documento));
+}
+
+function paraAgente(f: Fatura): FaturaParaAgente {
+  return { vencimento: f.vencimento, valorCents: f.valorCents, diasDeAtraso: f.diasDeAtraso };
+}
+
+/** As faturas ABERTAS de todos os cadastros: "a mais atrasada de todas" olha para todos. */
+async function recorteDe(credencial: CredencialDeConector, cadastros: readonly string[], agora?: Date): Promise<RecorteDeFaturas> {
+  const listas = await Promise.all(
+    cadastros.map((id) =>
+      listarNoIxc(credencial, {
+        tabela: "fn_areceber",
+        filtro: { campo: "fn_areceber.id_cliente", operador: "=", valor: id },
+        tambem: [{ campo: "fn_areceber.status", operador: "=", valor: "A" }],
+        campos: CAMPOS_DA_FATURA,
+        limite: 50,
+        ordenarPor: "fn_areceber.data_vencimento",
+        ordem: "asc",
+      }),
+    ),
+  );
+  return recortarFaturas(listas.flatMap((l) => l.registros), hojeEmSaoPaulo(agora));
+}
+
+/**
+ * As faturas que fazem sentido cobrar: sem valor ilegível (`reaisParaCents`
+ * devolve 0 pra isso, e cobrar — ou até ANUNCIAR — uma fatura de R$ 0,00 é pior
+ * que fingir que ela não existe). A MESMA régua vale pra consulta
+ * (`financeiroDe`, o que a IA anuncia) e pro envio (`enviarCobranca`, o que ela
+ * manda): antes só o envio filtrava, e a consulta podia anunciar como "a da
+ * vez" uma fatura que o envio jamais escolheria.
+ */
+function faturasCobraveis(r: RecorteDeFaturas): { vencidas: Fatura[]; proximas: Fatura[] } {
+  return { vencidas: r.vencidas.filter((f) => f.valorCents > 0), proximas: r.proximas.filter((f) => f.valorCents > 0) };
+}
+
+function financeiroDe(r: RecorteDeFaturas): FinanceiroParaAgente {
+  const { vencidas, proximas } = faturasCobraveis(r);
+  const daVez = faturaDaVez([...vencidas, ...proximas]);
+  const proxima = proximas[0];
+  return {
+    vencidas: vencidas.map(paraAgente),
+    proxima: proxima ? paraAgente(proxima) : null,
+    totalVencidoCents: vencidas.reduce((soma, f) => soma + f.valorCents, 0),
+    daVez: daVez ? paraAgente(daVez) : null,
+  };
+}
+
+/**
+ * A leitura do acesso PARA A IA — mais rígida que `resumo.situacao` (painel).
+ * O painel, de propósito, assume "Liberado" quando nenhum contrato vigente
+ * está na lista de bloqueados; aqui só se afirma "Liberado" quando o
+ * vocabulário CONHECE o código como liberado (`acessoLiberado`). Um
+ * `status_internet` que este conector nunca viu (upgrade do IXC, campo
+ * customizado da instância…) não pode virar uma afirmação de "sem bloqueio"
+ * pra quem não tem como conferir — vira `bloqueado: null` e o rótulo CRU do
+ * código (`lerStatusDoAcesso` devolve o próprio código quando não reconhece).
+ */
+function situacaoParaAgente(vigentes: readonly ContratoIxc[]): { rotulo: string; detalhe: string | null; bloqueado: boolean | null } {
+  if (vigentes.length === 0) return { rotulo: "Sem contrato ativo", detalhe: null, bloqueado: false };
+  const bloqueado = vigentes.find((c) => c.bloqueado);
+  if (bloqueado) return { rotulo: bloqueado.acesso.rotulo, detalhe: bloqueado.acesso.detalhe ?? null, bloqueado: true };
+  const desconhecido = vigentes.find((c) => !acessoLiberado(c.statusInternet));
+  if (desconhecido) return { rotulo: desconhecido.acesso.rotulo, detalhe: desconhecido.acesso.detalhe ?? null, bloqueado: null };
+  return { rotulo: "Liberado", detalhe: null, bloqueado: false };
+}
+
+/**
+ * PJ pequena (MEI) costuma trazer o CPF do titular DENTRO da razão social —
+ * "JOSE DA SILVA 52998224725", medido no IXC real — e `nome` (em `ClienteIxc`)
+ * é exatamente essa razão quando ela existe. Nunca usar `nome` cru pra PJ:
+ * prefere o `fantasia`; na ausência dele, corta o sufixo numérico de 11/14
+ * dígitos (CPF/CNPJ) que a razão eventualmente carrega.
+ */
+function primeiroNomeDe(cliente: ClienteIxc): string {
+  if (!cliente.pessoaJuridica) return cliente.nome.split(/\s+/)[0] ?? "";
+  if (cliente.fantasia) return cliente.fantasia;
+  // SEM `|| cliente.nome`: quando a razão é SÓ o CPF ("52998224725", sem nome
+  // nenhum na frente), o `replace` zera a string, e o `||` reintroduzia o
+  // número inteiro pela porta de trás — o último caminho por onde o CPF do
+  // MEI ainda chegava na projeção. Vazio é o fallback certo, não o número.
+  return cliente.nome.replace(/\s*\d{11,14}$/, "").trim();
+}
+
+function clienteDe(resumo: ResumoIxc): ClienteParaAgente {
+  const contratos = resumo.contratos.ok ? resumo.contratos.dados : null;
+  const vigentes = contratos?.filter((c) => c.vigente) ?? [];
+  const situacao = contratos ? situacaoParaAgente(vigentes) : null;
+  const conexoes = resumo.conexoes.ok ? resumo.conexoes.dados : null;
+  const os = resumo.ordensDeServico.ok ? resumo.ordensDeServico.dados : null;
+  return {
+    primeiroNome: primeiroNomeDe(resumo.cliente),
+    situacao: situacao?.rotulo ?? null,
+    motivoDaSituacao: situacao?.detalhe ?? null,
+    bloqueado: situacao?.bloqueado ?? null,
+    // `null` tanto quando a seção de contratos FALHOU quanto quando ela leu
+    // certinho e simplesmente não há contrato vigente — os dois casos são
+    // "não dá pra afirmar plano/data" pra quem consome, que não precisa saber
+    // qual dos dois aconteceu.
+    plano: vigentes.map((c) => c.plano).filter(Boolean).join(" + ") || null,
+    clienteDesde:
+      vigentes
+        .map((c) => c.ativadoEm.slice(0, 10))
+        .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+        .sort()[0] ?? null,
+    conexao:
+      conexoes === null
+        ? null
+        : conexoes.some((c) => c.estado.tom === "bom")
+          ? "online"
+          : conexoes.some((c) => c.estado.tom === "ruim")
+            ? "offline"
+            : "sem_informacao",
+    temOsAberta: os === null ? null : os.total > 0 || os.abertas.length > 0,
+  };
+}
+
+/** `null` = o cadastro vinculado não existe mais no IXC. */
+async function identificado(
+  p: PedidoDeConsulta,
+  cadastros: string[],
+  vinculou: { verificadoPor: FormaDeVerificacao; cadastros: string[] } | null,
+): Promise<ResultadoDaConsulta | null> {
+  const [principal = ""] = cadastros;
+  const [resumo, recorteDeTodos] = await Promise.all([
+    // Sem sinal (onda 2, por login) e sem atendimentos (`su_ticket`): a IA não
+    // lê nenhum dos dois em `clienteDe` — poupa até duas chamadas ao ERP por
+    // consulta. O painel (`painel.ts`) continua chamando sem este 4º argumento,
+    // então continua com as duas ondas ligadas.
+    montarResumo(p.credencial, principal, p.agora, { sinal: false, atendimentos: false }),
+    cadastros.length > 1 ? recorteDe(p.credencial, cadastros, p.agora).catch(() => null) : Promise.resolve(undefined),
+  ]);
+  if (!resumo) return null;
+  const recorte = recorteDeTodos === undefined ? (resumo.financeiro.ok ? resumo.financeiro.dados : null) : recorteDeTodos;
+  const auditoria: AuditoriaDaConsulta = vinculou ? { vinculou } : {};
+  return { estado: "identificado", cliente: clienteDe(resumo), financeiro: recorte ? financeiroDe(recorte) : null, auditoria };
+}
+
+async function vincularE(p: PedidoDeConsulta, cadastros: string[], verificadoPor: FormaDeVerificacao): Promise<ResultadoDaConsulta> {
+  let criou = false;
+  for (const externalId of cadastros) {
+    // O vínculo é GRAVADO aqui — ANTES de sabermos se `identificado()` consegue
+    // ler o resumo. Um IXC que falhe logo em seguida ainda deixa o contato
+    // vinculado: a consulta seguinte já entra por `cadastrosValidos`, sem gastar
+    // outra tentativa de CPF.
+    //
+    // `vincular` devolve `{ vinculou, promovido }`: gravou agora OU promoveu a
+    // linha que existia (o vínculo por telefone vira `documento` quando o CPF
+    // confere). Os dois casos são "mudou o vínculo" e vão para a auditoria.
+    const { vinculou } = await vincular({ admin: p.admin, orgId: p.orgId, contactId: p.contactId, conector: "ixc", externalId, verificadoPor, userId: null });
+    criou = criou || vinculou;
+  }
+  return (await identificado(p, cadastros, criou ? { verificadoPor, cadastros } : null)) ?? { estado: "precisa_cpf_e_nascimento" };
+}
+
+async function consultar(p: PedidoDeConsulta): Promise<ResultadoDaConsulta> {
+  const validos = await cadastrosValidosComForma(p);
+  // Conta antes de consulta: dígito verificador e calendário não revelam se o CPF é de alguém.
+  const documento = p.cpfCnpj === undefined ? null : documentoNaMascara(p.cpfCnpj);
+
+  if (validos.length > 0) {
+    const externalIds = validos.map((v) => v.externalId);
+    // Vínculo por `documento`/`manual` já foi PROVADO por algo que só o titular
+    // sabe — não é reconferido aqui, e um CPF diferente informado depois não o
+    // desfaz. Só o vínculo por `telefone` (nunca desafiado) exige bater com um
+    // CPF BEM-FORMADO que apareça agora; CPF ausente ou malformado não é
+    // contradição — é "não dá pra comparar" (mesma regra do candidato único
+    // por telefone, abaixo: `documento !== null`).
+    const soTelefone = validos.every((v) => v.verificadoPor === "telefone");
+    const confia = !(documento && soTelefone) || (await telefoneConfereComCpf(p.credencial, externalIds, documento));
+    if (confia) {
+      const r = await identificado(p, externalIds, null);
+      if (r) return r;
+      // O vínculo aponta para um cadastro que o IXC não devolve mais: identifica de novo.
+    }
+    // Senão: o CPF contradiz TODOS os vínculos por telefone — ignora-os e cai
+    // no fluxo normal de identificação abaixo, igual a quem nunca teve vínculo.
+  }
+
+  if (p.cpfCnpj !== undefined && documento === null) return { estado: "cpf_invalido" };
+  const nascimento = p.dataNascimento === undefined ? null : dataInformada(p.dataNascimento);
+  if (p.dataNascimento !== undefined && nascimento === null) return { estado: "data_invalida" };
+
+  // Procurar pelo telefone só onde ele prova quem é — fail-closed em "desconhecido".
+  if (p.identidadeDoTelefone === "sim") {
+    const candidatos = (await clientesPorTelefone(p.credencial, p.telefone)).slice(0, TETO_DE_CANDIDATOS);
+    const [unico] = candidatos;
+    if (candidatos.length === 1 && unico) {
+      // O CPF, quando informado, tem de ser DESTE cadastro. Telefone reciclado
+      // por operadora é comum, e vincular só porque o número bateu — com um CPF
+      // que CONTRADIZ na mesma mensagem — identificaria a pessoa ERRADA (medido:
+      // telefone da Maria + CPF de terceiro identificava a Maria, e a cobrança
+      // dela sairia pro WhatsApp de outro). Contradição cai pro caminho de CPF +
+      // nascimento, igual a quem não tem telefone nenhum batendo.
+      const contradiz = documento !== null && soDigitos(unico.documento) !== soDigitos(documento);
+      if (!contradiz) return vincularE(p, [unico.id], "telefone");
+    }
+    if (candidatos.length > 1) {
+      if (!documento) return { estado: "precisa_cpf" };
+      const doTitular = candidatos.filter((c) => soDigitos(c.documento) === soDigitos(documento));
+      if (doTitular.length > 0) return vincularE(p, doTitular.map((c) => c.id), "documento");
+      // O CPF não é de nenhum cadastro deste telefone: vale a regra de quem escreve de outro número.
+    }
+  }
+
+  if (!documento || !nascimento) return { estado: "precisa_cpf_e_nascimento" };
+  const { cadastros: conferidos, dataIlegivel } = await cadastrosQueConferem(p.credencial, documento, nascimento);
+  if (conferidos.length === 0) return { estado: "nao_conferiu", ...(dataIlegivel ? { dataIlegivel: true } : {}) };
+  // TETO_DE_CANDIDATOS é do telefone (número de recepção, placeholder — muita
+  // gente atrás do MESMO número). Cadastros que conferem por CPF são do MESMO
+  // documento: fatiar essa lista faria "a mais atrasada entre TODOS os
+  // cadastros vinculados" parar de valer em silêncio pra quem tem mais
+  // contratos no próprio CPF do que esse teto.
+  return vincularE(p, conferidos.map((c) => c.id), "documento");
+}
+
+const MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE: ReadonlySet<MotivoDaRecusa> = new Set(["cobranca_indisponivel", "pix_inativo", "pix_corrompido"]);
+
+function enviada(r: Extract<ResultadoDoEnvio, { ok: true }>, pixIndisponivel: boolean): ResultadoDaCobranca {
+  return {
+    resultado: "enviada",
+    forma: r.forma,
+    fatura: paraAgente(r.fatura),
+    enviadas: r.enviadas,
+    previstas: r.previstas,
+    pixGeradoAgora: r.pixGeradoAgora,
+    pixIndisponivel,
+    auditoria: { faturaId: r.fatura.id },
+  };
+}
+
+async function enviarCobranca(p: PedidoDeCobranca): Promise<ResultadoDaCobranca> {
+  const cadastros = await cadastrosValidos(p);
+  if (cadastros.length === 0) return { resultado: "cliente_nao_identificado" };
+
+  const recorte = await recorteDe(p.credencial, cadastros, p.agora);
+  const { vencidas, proximas } = faturasCobraveis(recorte);
+  const daVez = faturaDaVez([...vencidas, ...proximas]);
+  if (!daVez) return { resultado: "sem_fatura_em_aberto" };
+  const fatura = paraAgente(daVez);
+  const auditoria = (motivoInterno?: string): AuditoriaDaCobranca => ({ faturaId: daVez.id, ...(motivoInterno ? { motivoInterno } : {}) });
+  // D5: acima do limite, a fatura é da Cobrança — nada sai.
+  if (daVez.diasDeAtraso > p.limiteDeDias) return { resultado: "encaminhar_para_cobranca", fatura, auditoria: auditoria() };
+
+  const pedir = (forma: "pix" | "boleto") =>
+    enviarCobrancaIxc({
+      credencial: p.credencial,
+      cadastrosVinculados: new Set(cadastros),
+      faturaId: daVez.id,
+      forma,
+      portas: p.portas,
+      ...(p.agora ? { agora: p.agora } : {}),
+    });
+
+  if (p.forma === "boleto") {
+    const boleto = await pedir("boleto");
+    if (boleto.ok) return enviada(boleto, false);
+    // A fatura fechou ENTRE a listagem e a releitura (`enviarCobrancaIxc` relê
+    // por id) — quem acabou de pagar não pode virar "encaminhar pra Cobrança"
+    // como se fosse inadimplente.
+    if (boleto.motivo === "fatura_fechada") return { resultado: "fatura_ja_paga", fatura, auditoria: auditoria() };
+    // O cliente ESCOLHEU boleto: trocar pelo Pix sem perguntar desfaria a escolha dele.
+    if (boleto.motivo === "forma_indisponivel") return { resultado: "boleto_indisponivel", fatura, auditoria: auditoria() };
+    return {
+      resultado: "sem_como_cobrar",
+      fatura,
+      ...(boleto.detalheDoErp ? { detalheDoErp: boleto.detalheDoErp } : {}),
+      auditoria: auditoria(boleto.motivo === "fatura_nao_encontrada" ? boleto.motivo : undefined),
+    };
+  }
+
+  const pix = await pedir("pix");
+  if (pix.ok) return enviada(pix, false);
+  if (pix.motivo === "fatura_fechada") return { resultado: "fatura_ja_paga", fatura, auditoria: auditoria() };
+  // D3 + D6: o Pix falhou; se o boleto já está registrado, ele sai no lugar — só
+  // as DUAS formas falhando é que mandam a conversa para a Cobrança.
+  if (daVez.temBoleto && MOTIVOS_DE_PIX_QUE_O_BOLETO_SUPRE.has(pix.motivo)) {
+    const boleto = await pedir("boleto");
+    if (boleto.ok) return enviada(boleto, true);
+    if (boleto.motivo === "fatura_fechada") return { resultado: "fatura_ja_paga", fatura, auditoria: auditoria() };
+  }
+  return {
+    resultado: "sem_como_cobrar",
+    fatura,
+    ...(pix.detalheDoErp ? { detalheDoErp: pix.detalheDoErp } : {}),
+    auditoria: auditoria(pix.motivo === "fatura_nao_encontrada" ? pix.motivo : undefined),
+  };
+}
+
+export const agenteIxc: CapacidadeDoAgente = { consultar, enviarCobranca };

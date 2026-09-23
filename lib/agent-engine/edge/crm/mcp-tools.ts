@@ -19,6 +19,7 @@ import { claimOfJob } from '@/lib/agent-engine/queue/claim';
  */
 import type { Tool } from 'ai';
 
+import { FERRAMENTAS_DO_CONECTOR } from '@/lib/conectores/ferramentas-do-agente';
 import { pickToolsFromMcp, type RuntimeHandoffSignal } from '@/lib/ai/runtime/tools';
 import { mintEphemeralToken, revokeEphemeralToken } from '@/lib/ai/runtime/mcp_token';
 import type { McpAuthResult } from '@/lib/mcp/auth';
@@ -37,6 +38,15 @@ import type { PublishedAgentConfig } from '../../agent/agent-config';
  */
 export const BLOCKED_TOOL_IDS = new Set(['crm_send_whatsapp_message', 'crm_request_human_handoff']);
 
+/**
+ * Ids do catálogo implementados NATIVAMENTE pelo motor — a ponte nunca os monta.
+ * O handler MCP deles só recusa (existe pela paridade catálogo×handler); montá-lo
+ * poria no turno uma ferramenta que sempre diz não: no Conversador sem conector,
+ * ou no Operador, que não fala com o cliente. Diferente de `BLOCKED_TOOL_IDS`, sai
+ * em silêncio: estar ligado na tela é o estado normal, não um alerta.
+ */
+export const NATIVAS_DO_MOTOR: ReadonlySet<string> = new Set(FERRAMENTAS_DO_CONECTOR);
+
 export interface McpTurnTools {
   tools: Record<string, Tool>;
   /** ids efetivamente montados (para o log do turno — auditável). */
@@ -52,7 +62,9 @@ export async function buildMcpTurnTools(
   log: Logger,
   options?: { readOnly: boolean },
 ): Promise<McpTurnTools | null> {
-  const allowed = agentConfig.toolIds.filter((id) => !BLOCKED_TOOL_IDS.has(id));
+  const allowed = agentConfig.toolIds.filter(
+    (id) => !BLOCKED_TOOL_IDS.has(id) && !NATIVAS_DO_MOTOR.has(id),
+  );
   const blocked = agentConfig.toolIds.filter((id) => BLOCKED_TOOL_IDS.has(id));
   if (blocked.length > 0) {
     // A tela permite marcar; o engine recusa em silêncio NUNCA — loga o porquê.
