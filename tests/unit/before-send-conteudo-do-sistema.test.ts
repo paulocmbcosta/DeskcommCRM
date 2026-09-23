@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
-import { evaluateBeforeSend, runBeforeSend, type GateContext } from "@/lib/agent-engine/guardrails/before-send";
+import { evaluateBeforeSend, runBeforeSend, type Gate, type GateContext } from "@/lib/agent-engine/guardrails/before-send";
 import type { Logger } from "@/lib/agent-engine/obs/logger";
 import { PACING_DEFAULTS } from "@/lib/agent-engine/pacing/defaults";
 import { SPINNING_DEFAULTS } from "@/lib/agent-engine/spinning/defaults";
@@ -72,5 +72,59 @@ describe("conteudoDoSistema", () => {
     expect(r.status).toBe("sent");
     const sqls = client.query.mock.calls.map(([s]) => String(s));
     expect(sqls.some((s) => s.includes("insert into outbound_copies"))).toBe(false);
+  });
+});
+
+/**
+ * A 2ª mensagem da cobrança é o CÓDIGO (linha digitável / copia-e-cola do Pix),
+ * puro. `isFirstOutbound` é por CONTATO, não por mensagem: se a 1ª (a legenda,
+ * que pode levar o aviso de IA) saiu `queued`, o ledger não a conta `accepted` e
+ * a 2ª ainda é vista como "1º outbound" pelo disclosureGate — que prependaria o
+ * aviso ao código e corromperia o BR Code. `corpoImutavel` existe para isto.
+ */
+describe("corpoImutavel", () => {
+  const comDisclosure = (overrides: Partial<GateContext> = {}) =>
+    ctx({
+      // Janela de spinning VAZIA: o que estes testes exercitam é o disclosure, e a
+      // LEGENDA já entra pré-carregada 3x no `window` do `ctx()` base (para o
+      // describe de `conteudoDoSistema` acima) — sem isto o spinning vetaria antes
+      // do disclosure sequer rodar.
+      spinning: { knobs: SPINNING_DEFAULTS, window: [] },
+      // Tabela de preço NULA pelo mesmo motivo: o describe de `conteudoDoSistema`
+      // acima arma um piso de R$ 200 pra testar QUELE gate — não este.
+      promise: { table: null },
+      disclosure: { template: "Olá! Sou a assistente virtual.", isFirstOutbound: true, mode: "inject" },
+      ...overrides,
+    });
+
+  it("controle: sem a flag, o disclosure EMENDA o corpo normalmente (a legenda pode levar o aviso)", () => {
+    const r = evaluateBeforeSend(comDisclosure());
+    expect(r.veto).toBeNull();
+    expect(r.body.startsWith("Olá! Sou a assistente virtual.")).toBe(true);
+  });
+
+  it("com a flag: o disclosure sai skipped e o código não é tocado", () => {
+    const r = evaluateBeforeSend(comDisclosure({ corpoImutavel: true }));
+    expect(r.veto).toBeNull();
+    expect(r.body).toBe(LEGENDA);
+    expect(r.trace).toContainEqual({ gate: "disclosure", verdict: "skipped", code: "corpo_imutavel" });
+  });
+
+  it("rede de segurança: o runner recusa amendBody de QUALQUER gate quando a flag está ligada", () => {
+    const gateQueSempreEmenda: Gate = {
+      name: "fake_amend",
+      evaluate: () => ({ pass: true, amendBody: "CORROMPIDO" }),
+    };
+    const r = evaluateBeforeSend(comDisclosure({ corpoImutavel: true }), [gateQueSempreEmenda]);
+    expect(r.body).toBe(LEGENDA);
+  });
+
+  it("controle: a mesma rede NÃO existe sem a flag (o gate fake emenda de verdade)", () => {
+    const gateQueSempreEmenda: Gate = {
+      name: "fake_amend",
+      evaluate: () => ({ pass: true, amendBody: "MUDOU" }),
+    };
+    const r = evaluateBeforeSend(comDisclosure(), [gateQueSempreEmenda]);
+    expect(r.body).toBe("MUDOU");
   });
 });

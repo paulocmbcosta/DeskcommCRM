@@ -246,6 +246,24 @@ export interface GateContext {
    */
   conteudoDoSistema?: boolean;
   /**
+   * O corpo é CÓDIGO PARA COPIAR — a linha digitável, o copia-e-cola do Pix —
+   * relido do ERP, não prosa. Desarma SÓ a emenda do `disclosureGate`: ele passa
+   * como `skipped` (`corpo_imutavel` no trace) em vez de prependar o aviso de IA.
+   *
+   * Existe porque `isFirstOutbound` (a base do disclosure) é por CONTATO, não por
+   * mensagem: se a 1ª mensagem da cobrança (a legenda, que PODE levar o aviso)
+   * saiu `queued` — aceita pelo canal, ainda não confirmada — o ledger não a conta
+   * como `accepted`, e a 2ª mensagem (o código puro) ainda é vista como "1º
+   * outbound" pelo gate. Sem esta trava, o aviso de IA seria prependado ao
+   * copia-e-cola e o cliente colaria um BR Code inválido no banco.
+   *
+   * O runner (`evaluateBeforeSend`) também recusa qualquer `amendBody` vindo de
+   * QUALQUER gate quando esta flag está ligada — rede de segurança para um gate
+   * futuro que esqueça de checar o campo, não só para o disclosure de hoje.
+   * Ausente = corpo comum (todo gate vale como sempre).
+   */
+  corpoImutavel?: boolean;
+  /**
    * Arma o `agendaStallGate`. Ausente = no-op — mesma direção segura de
    * `internalVocabularyEnforced` (caller que não conhece o campo não arma nada).
    *
@@ -279,7 +297,12 @@ export type GateVerdict =
   // `skipped: 'not_applicable'` (invariante 4 de `docs/doctrine/restricao-de-canal.md`): a
   // restrição não existe NESTE canal. Passa, mas o trace registra que não se aplicava — um
   // `pass` silencioso apagaria a diferença entre "não regrediu" e "provo que não regrediu".
-  | { pass: true; waitMs?: number; amendBody?: string; skipped?: 'not_applicable' | 'conteudo_do_sistema' }
+  | {
+      pass: true;
+      waitMs?: number;
+      amendBody?: string;
+      skipped?: 'not_applicable' | 'conteudo_do_sistema' | 'corpo_imutavel';
+    }
   | {
       pass: false;
       code: string;
@@ -561,6 +584,9 @@ export const disclosureGate: Gate = {
     const template = ctx.disclosure.template;
     if (template === null || !ctx.disclosure.isFirstOutbound) return { pass: true };
     if (bodyContainsDisclosure(ctx.body, template)) return { pass: true };
+    // Corpo imutável (código para copiar): nunca emenda, nunca veta por falta de
+    // aviso — a legenda que veio ANTES na mesma cobrança é que carrega o aviso.
+    if (ctx.corpoImutavel === true) return { pass: true, skipped: 'corpo_imutavel' };
     if (ctx.disclosure.mode === 'inject') {
       return { pass: true, amendBody: prependDisclosure(ctx.body, template) };
     }
@@ -850,6 +876,8 @@ export interface RunBeforeSendArgs {
   enforceSpinning?: boolean;
   /** Ver `GateContext.conteudoDoSistema`. Também não chama o classificador semântico nem grava a cópia. */
   conteudoDoSistema?: boolean;
+  /** Ver `GateContext.corpoImutavel`. */
+  corpoImutavel?: boolean;
   /**
    * Arma o `agendaStallGate` para ESTA tentativa — ver `GateContext.agenda`. Ausente = gate
    * no-op (retrocompatível com todo caller que não conhece agenda, ex.: `followup-turn.ts`).
@@ -891,7 +919,11 @@ export function evaluateBeforeSend(
         throttleWaitMs = verdict.waitMs;
       // Emenda de corpo (F4-05 inject): o corpo a enviar passa a ser o emendado; gates
       // seguintes na cadeia o veem (ex.: spinning avalia o texto que de fato vai ao lead).
-      if (verdict.amendBody !== undefined) ctx.body = verdict.amendBody;
+      //
+      // `corpoImutavel` recusa a emenda aqui, na CAMADA COMUM a todo gate — rede de
+      // segurança para um gate futuro que emende sem checar o campo (hoje só o
+      // `disclosureGate` o conhece, e ele já não devolve `amendBody` quando ligado).
+      if (verdict.amendBody !== undefined && ctx.corpoImutavel !== true) ctx.body = verdict.amendBody;
     } else {
       trace.push({
         gate: gate.name,
@@ -1027,6 +1059,7 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
       spinning: { knobs: spinningKnobs, window },
       ...(args.enforceSpinning === false ? { spinningEnforced: false as const } : {}),
       ...(args.conteudoDoSistema === true ? { conteudoDoSistema: true as const } : {}),
+      ...(args.corpoImutavel === true ? { corpoImutavel: true as const } : {}),
       promise: {
         table: promise?.table ?? null,
         ...(promise?.versionId !== undefined ? { versionId: promise.versionId } : {}),
