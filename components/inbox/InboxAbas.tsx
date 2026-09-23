@@ -8,6 +8,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Archive, Inbox, Robot, User, UsersThree } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
+import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 
 import { INBOX_TABS, visibleInboxTabs, type InboxTab } from "@/lib/inbox/abas";
 import type { InboxFiltersValue } from "./InboxFilters";
@@ -56,6 +57,8 @@ export function InboxAbas({ value, onChange }: Props) {
     tag: value.tag,
     channel_session_id: value.channel_session_id,
     team_id: value.team_id,
+    search: buscaValeConsulta(value.search) ? value.search : undefined,
+    by_team: value.tab === "all",
   });
 
   const tabs = activeOrg

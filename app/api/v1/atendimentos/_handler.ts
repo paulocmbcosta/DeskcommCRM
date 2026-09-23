@@ -160,6 +160,21 @@ async function conversasDoTermo(db: SupabaseClient, org: string, termo: string):
   return cabemNaUrl((conversas ?? []).map((c) => (c as { id: string }).id));
 }
 
+/** Predicado único da busca dos fechados, usado pela lista e pela contagem. */
+export async function predicadoDaBuscaDosFechados(
+  db: SupabaseClient,
+  org: string,
+  search: string,
+): Promise<string | null> {
+  const digitos = search.replace(/\D/g, "");
+  const conversas = await conversasDoTermo(db, org, search);
+  const partes = [
+    ...(digitos.length >= 4 ? [`protocol.ilike.*${digitos}*`] : []),
+    ...(conversas.length > 0 ? [`conversation_id.in.(${conversas.join(",")})`] : []),
+  ];
+  return partes.length > 0 ? partes.join(",") : null;
+}
+
 export type ResultadoDosFechados =
   | { ok: true; data: AtendimentoFechado[]; cursor: string | null; has_more: boolean }
   | { ok: false; motivo: "cursor_invalido" | "erro_de_leitura" };
@@ -191,16 +206,11 @@ export async function listarAtendimentosFechados(
   }
 
   if (q.search) {
-    const digitos = q.search.replace(/\D/g, "");
-    const conversas = await conversasDoTermo(db, ctx.organizationId, q.search);
-    const partes = [
-      ...(digitos.length >= 4 ? [`protocol.ilike.*${digitos}*`] : []),
-      ...(conversas.length > 0 ? [`conversation_id.in.(${conversas.join(",")})`] : []),
-    ];
+    const busca = await predicadoDaBuscaDosFechados(db, ctx.organizationId, q.search);
     // Nada casou: a resposta honesta é lista vazia, não a lista inteira — e um
     // `or=()` vazio é sintaxe inválida no PostgREST.
-    if (partes.length === 0) return { ok: true, data: [], cursor: null, has_more: false };
-    consulta = consulta.or(partes.join(","));
+    if (busca === null) return { ok: true, data: [], cursor: null, has_more: false };
+    consulta = consulta.or(busca);
   }
 
   if (q.cursor) {

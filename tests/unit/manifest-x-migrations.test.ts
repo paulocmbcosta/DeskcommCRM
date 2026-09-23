@@ -83,7 +83,7 @@ const TIMESTAMPS_REPETIDOS_CONHECIDOS: readonly string[] = [];
 /** Só os arquivos que carregam timestamp no nome — as legadas não têm. */
 function arquivosComTimestamp(): { timestamp: string; arquivo: string }[] {
   return readdirSync(DIR)
-    .filter((f) => f.endsWith(".sql"))
+    .filter((f) => f.endsWith(".sql") && !f.startsWith("._"))
     .map((arquivo) => ({ timestamp: /^(\d{14})_/.exec(arquivo)?.[1] ?? "", arquivo }))
     .filter((m) => m.timestamp !== "");
 }
@@ -99,7 +99,7 @@ function nomesDoManifest(): string[] {
 /** `20260805120000_0104_slug.sql` → `0104_slug`. */
 function nomesDeMigration(): string[] {
   return readdirSync(DIR)
-    .filter((f) => f.endsWith(".sql"))
+    .filter((f) => f.endsWith(".sql") && !f.startsWith("._"))
     .map((f) => f.slice(0, -4))
     .map((f) => (/^\d{14}_/.test(f) ? f.slice(15) : f));
 }

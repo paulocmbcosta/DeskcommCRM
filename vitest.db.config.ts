@@ -8,6 +8,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/invariants/**/*.test.ts"],
+    exclude: ["**/._*"], // sidecars AppleDouble não são arquivos de teste
     globals: false,
     // Seed + queries via docker exec são lentos o suficiente pro default de 5s.
     testTimeout: 30_000,

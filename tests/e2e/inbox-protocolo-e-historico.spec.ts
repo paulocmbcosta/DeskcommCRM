@@ -205,7 +205,7 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await expect(page.getByTestId("inbox-filtros-auxiliares")).toHaveCount(0);
     await page.getByTestId("inbox-abrir-filtros").click();
     await expect(page.getByTestId("inbox-filtros-auxiliares")).toBeVisible();
-    await expect(page.getByLabel("Filtrar por time")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Filtrar por time" })).toBeVisible();
     await page.screenshot({ path: `${evidence}/01-filtros-abertos.png` });
     await page.getByTestId("inbox-abrir-filtros").click();
     await expect(page.getByTestId("inbox-filtros-auxiliares")).toHaveCount(0);
@@ -221,6 +221,33 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     expect(cortado, "time ou canal com reticências no card").toBe(false);
     await expect(card.getByTestId("espera-da-conversa")).toContainText("Aguardando há");
     await page.screenshot({ path: `${evidence}/02-lista-com-time-e-canal.png` });
+
+    // A visão Todas separa times e fila geral com contagem vinda do banco,
+    // não da quantidade de cards já renderizados na primeira página.
+    const timeSuporte = randomUUID();
+    await sql(`insert into public.attendance_teams (id, organization_id, name, slug) values ($1, $2, 'Suporte', 'suporte')`, [timeSuporte, org]);
+    const contatoSuporte = await insert("contacts", {
+      organization_id: org, display_name: "Cliente Suporte", phone_number: "+5561993040002",
+    });
+    const conversaSuporte = await insert("conversations", {
+      organization_id: org, contact_id: contatoSuporte, channel_session_id: session,
+      team_id: timeSuporte, status: "open",
+    });
+    const contatoGeral = await insert("contacts", {
+      organization_id: org, display_name: "Cliente Geral", phone_number: "+5561993040003",
+    });
+    const conversaGeral = await insert("conversations", {
+      organization_id: org, contact_id: contatoGeral, channel_session_id: session,
+      status: "open",
+    });
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Filtrar por time: Cobrança" })).toHaveText(/Cobrança\s*1/);
+    await expect(page.getByRole("button", { name: "Filtrar por time: Suporte" })).toHaveText(/Suporte\s*1/);
+    await expect(page.getByRole("button", { name: "Filtrar por time: Sem time" })).toHaveText(/Sem time\s*1/);
+    await expect(page.getByRole("tab", { name: "Todas" })).toContainText("3");
+    await expect(page.locator(`[data-conversation-id="${conversaSuporte}"]`)).toBeVisible();
+    await expect(page.locator(`[data-conversation-id="${conversaGeral}"]`)).toBeVisible();
+    await page.screenshot({ path: `${evidence}/02b-todas-por-time.png` });
 
     // ─── 2. O painel: protocolo e ficha da conversa ─────────────────────────
     await card.click();
@@ -258,6 +285,14 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await expect(linha).toContainText("Conversa encerrada");
     await expect(linha).toContainText("Por Juliana Teste.");
     await page.screenshot({ path: `${evidence}/04-linha-do-tempo.png` });
+
+    // Encerrada, sai de Todas e de seu grupo; a aba Fechadas continua separada.
+    await page.goto("/app/inbox?filter=all");
+    await expect(page.locator(`[data-conversation-id="${conversation}"]`)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Todas" })).toContainText("2");
+    await expect(page.getByRole("button", { name: "Filtrar por time: Cobrança" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Filtrar por time: Suporte" })).toHaveText(/Suporte\s*1/);
+    await expect(page.getByRole("button", { name: "Filtrar por time: Sem time" })).toHaveText(/Sem time\s*1/);
 
     // Fechada, ela SOME da fila de quem atende.
     await page.goto("/app/inbox?filter=mine");
@@ -384,8 +419,14 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await expect(page.getByTestId("resultado-por-protocolo").filter({ hasText: primeiro })).toHaveCount(0);
     await page.getByLabel("Buscar conversas").fill("Fernando");
     await expect(encerrado).toBeVisible();
+    const porNome = await page.request.get("/api/v1/conversations/counts?search=Fernando");
+    expect(porNome.status()).toBe(200);
+    expect(((await porNome.json()) as { data: { closed: number } }).data.closed).toBe(1);
     await page.getByLabel("Buscar conversas").fill("Zuleica Inexistente");
     await expect(fechados.getByTestId("atendimento-fechado")).toHaveCount(0);
+    const semResultado = await page.request.get("/api/v1/conversations/counts?search=Zuleica%20Inexistente");
+    expect(semResultado.status()).toBe(200);
+    expect(((await semResultado.json()) as { data: { closed: number } }).data.closed).toBe(0);
     await page.getByLabel("Buscar conversas").fill("");
 
     // Os filtros, contra o PostgREST de verdade (dublê não prova filtro embutido).

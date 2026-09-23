@@ -29,7 +29,7 @@
     { "id": "api-linha", "lane": "api", "col": 3, "type": "backend", "label": "GET /conversations/[id]/timeline (eventos + atividades do negócio)" },
     { "id": "api-mensagens", "lane": "api", "col": 4, "type": "backend", "label": "GET /conversations/[id]/messages?atendimento_id=" },
     { "id": "atividades-do-lead", "lane": "banco", "col": 7, "type": "database", "label": "crm_lead_activities (o que o negócio fez)" },
-    { "id": "lista", "lane": "tela", "col": 1, "type": "frontend", "label": "Lista — card com espera, time e canal; busca por protocolo" },
+    { "id": "lista", "lane": "tela", "col": 1, "type": "frontend", "label": "Lista — Todas: abertas por time/Sem time com contagem exata; card com espera, time e canal; busca por protocolo" },
     { "id": "painel", "lane": "tela", "col": 2, "type": "frontend", "label": "PainelDaConversa — Detalhes · Atendimentos anteriores · Linha do tempo" },
     { "id": "thread", "lane": "tela", "col": 3, "type": "frontend", "label": "ChatThread — mostra UM atendimento por vez" },
     { "id": "reset-do-retorno", "lane": "banco", "col": 8, "type": "backend", "label": "fn_service_inbound, ramo 'reopened' (0269) — o atendimento novo começa do zero: sem time, sem silêncio, sem passagem" },

@@ -100,6 +100,12 @@ describe("a rede de segurança do inbox", () => {
     expect(fonte, "o sinal de perda não sai do hook").toMatch(/return \{[^}]*\bseguranca\b[^}]*\}/);
   });
 
+  it("uma mudança de conversa atualiza também os números exatos por time", () => {
+    const fonte = readFileSync("hooks/inbox/useConversationsRealtime.ts", "utf8");
+    const aoMudar = fonte.slice(fonte.indexOf("const onChange = useCallback"), fonte.indexOf("// G4-01", fonte.indexOf("const onChange = useCallback")));
+    expect(aoMudar).toContain('queryKey: ["conversation-counts"]');
+  });
+
   it("a conversa aberta também", () => {
     const fonte = readFileSync("hooks/inbox/useMessagesRealtime.ts", "utf8");
     expect(fonte, "a conversa aberta ficou sem rede de segurança").toMatch(/useRefetchDeSeguranca</);

@@ -41,11 +41,10 @@ describe("quais filtros a contagem aplica", () => {
     expect(filtrosAuxiliaresDaContagem(sp("tag="))).toEqual([]);
   });
 
-  it("a busca NÃO entra, e isso é decisão declarada", () => {
-    // `search` casa contato por uma consulta auxiliar em `contacts`. Repetir
-    // aquela lógica aqui criaria uma SEGUNDA régua de busca, e a segunda régua
-    // sempre diverge. O badge sob busca fica maior que a lista — declarado.
+  it("a busca não é predicado de igualdade: usa a régua compartilhada da lista", () => {
     expect(filtrosAuxiliaresDaContagem(sp("search=paulo"))).toEqual([]);
+    const fonte = readFileSync("app/api/v1/conversations/counts/route.ts", "utf8");
+    expect(fonte).toContain("filtroDaBuscaDeConversas(supabase, org, termo.data.search)");
   });
 });
 

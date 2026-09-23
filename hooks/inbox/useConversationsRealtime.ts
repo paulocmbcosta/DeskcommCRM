@@ -163,6 +163,7 @@ export function useConversationsRealtime(
 
   const onChange = useCallback(() => {
     qc.invalidateQueries({ queryKey: ["conversations"] });
+    qc.invalidateQueries({ queryKey: ["conversation-counts"] });
   }, [qc]);
 
   // G4-01 (visibility_mode): a subscription postgres_changes HERDA a RLS de

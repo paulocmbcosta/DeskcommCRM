@@ -29,6 +29,8 @@ e2e-artifacts/
 
 # IDE / OS
 .DS_Store
+# AppleDouble sidecars em volumes externos no macOS
+._*
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.recommended.json

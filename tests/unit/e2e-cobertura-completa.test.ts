@@ -72,7 +72,9 @@ const parte2 = listaDoWorkflow(yml, "SPECS_PARTE_2");
 const parte3 = listaDoWorkflow(yml, "SPECS_PARTE_3");
 const foraDoCi = listaDoWorkflow(yml, "FORA_DO_CI");
 const noDisco = readdirSync(DIR_SPECS)
-  .filter((f) => f.endsWith(".spec.ts"))
+  // Volumes externos no macOS criam sidecars AppleDouble `._arquivo.spec.ts`:
+  // são metadados binários, não specs executáveis.
+  .filter((f) => f.endsWith(".spec.ts") && !f.startsWith("._"))
   .sort();
 
 describe("cobertura do e2e no CI", () => {
