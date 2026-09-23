@@ -19,6 +19,7 @@ import { loadRecentCopies, loadSpinningKnobs } from '../spinning/store';
 import { loadPromiseTable } from '../guardrails/promise/table';
 import { loadDisclosureTemplate, countPriorAcceptedSends } from '../guardrails/disclosure/template';
 import { DEFAULT_CHANNEL_PROVIDER } from '@/lib/channels/capabilities';
+import { IDS_DAS_FERRAMENTAS_DO_CONECTOR } from '@/lib/conectores/ferramentas-do-agente';
 import { getToolByName } from '@/lib/mcp/tools';
 import type { Logger } from '../obs/logger';
 import type { Citation } from '@/lib/ai/citations/types';
@@ -153,9 +154,13 @@ export function applyPreviewPolicy(
         'read_skill_reference',
       ].includes(name);
       const catalog = getToolByName(name);
+      // As ferramentas do conector tocam o ERP e gravam (vínculo, auditoria, envio): na
+      // prévia são SEMPRE proposta — mesmo a consulta, que o catálogo marca como leitura.
+      const doConector = IDS_DAS_FERRAMENTAS_DO_CONECTOR.includes(name);
       if (
-        nativeRead ||
-        (catalog?.category === 'read' && (p.contactId !== null || SCENARIO_READS.has(name)))
+        !doConector &&
+        (nativeRead ||
+          (catalog?.category === 'read' && (p.contactId !== null || SCENARIO_READS.has(name))))
       )
         return [name, definition];
       return [
@@ -192,7 +197,7 @@ export function applyPreviewPolicy(
                 message: 'Resposta proposta. Nenhuma mensagem enviada. Encerre o turno.',
               };
             }
-            if (catalog?.category === 'read')
+            if (catalog?.category === 'read' && !doConector)
               return {
                 ok: false,
                 error: {
@@ -210,6 +215,12 @@ export function applyPreviewPolicy(
                 'schedule_followup',
                 'open_human_case',
                 'provide_case_update',
+                // Rede, não decisão: as duas do conector JÁ têm entrada em
+                // `lib/mcp/tools/sistema-de-gestao.ts`, então `catalog` acima
+                // já as cobre — este spread só segura a prévia se aquela
+                // entrada saísse do catálogo um dia (a tool nativa continuaria
+                // existindo e cairia aqui sem ninguém ter decidido isso).
+                ...IDS_DAS_FERRAMENTAS_DO_CONECTOR,
               ].includes(name)
             ) {
               p.result.proposals.push({ tool: name, arguments: args });

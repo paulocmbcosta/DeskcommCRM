@@ -68,6 +68,17 @@ export interface ChannelCapabilities {
    * mas FALA; este não tem como.
    */
   outboundFirst: boolean;
+  /**
+   * O telefone do contato É a identidade do transporte neste canal?
+   *
+   * `true` = quem escreve controla aquele número (no WhatsApp a mensagem chega DO
+   * número). `false` = o telefone, se existe, foi DIGITADO num formulário aberto —
+   * o chat do site grava em `contacts.phone_number` o que o visitante digitou — e
+   * não prova nada. Quem identifica um cliente num sistema externo pelo telefone
+   * (o painel do IXC, a IA que envia a cobrança) pergunta ISTO: sem a pergunta,
+   * quem digitasse o celular de outra pessoa receberia a fatura dela.
+   */
+  telefoneEhIdentidade: boolean;
 }
 
 /**

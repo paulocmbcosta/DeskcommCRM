@@ -75,7 +75,7 @@ describe("enviarCobrancaIxc — boleto", () => {
     expect(enviadas[0]?.body).toContain("R$ 129,90");
     // O link do boleto no site do banco NÃO sai mais — nem link nenhum.
     expect(JSON.stringify(enviadas)).not.toMatch(/https?:\/\//);
-    expect(enviadas[1]).toEqual({ type: "text", body: FATURA.linha_digitavel });
+    expect(enviadas[1]).toEqual({ type: "text", body: FATURA.linha_digitavel, corpoImutavel: true });
     expect(buscarPix).not.toHaveBeenCalled();
   });
 });
@@ -89,7 +89,7 @@ describe("enviarCobrancaIxc — Pix", () => {
     expect(guardados[0]?.conteudo.subarray(1, 4).toString("latin1")).toBe("PNG");
     expect(enviadas[0]).toMatchObject({ type: "image", media_mime: "image/png" });
     expect(enviadas[0]?.body).toContain("R$ 114,00");
-    expect(enviadas[1]).toEqual({ type: "text", body: BR_CODE });
+    expect(enviadas[1]).toEqual({ type: "text", body: BR_CODE, corpoImutavel: true });
     expect(baixarBoleto).not.toHaveBeenCalled();
   });
 
@@ -130,7 +130,7 @@ describe("enviarCobrancaIxc — o que vale para as duas formas, venha o pedido d
 
     expect(buscarPix).toHaveBeenCalledTimes(1);
     expect(r).toMatchObject({ ok: true, forma: "pix", enviadas: 2, pixGeradoAgora: true });
-    expect(enviadas[1]).toEqual({ type: "text", body: BR_CODE });
+    expect(enviadas[1]).toEqual({ type: "text", body: BR_CODE, corpoImutavel: true });
   });
 
   it("Pix que já existia não é 'gerado agora'; boleto nunca é", async () => {

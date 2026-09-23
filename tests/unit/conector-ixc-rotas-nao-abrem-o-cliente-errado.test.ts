@@ -130,7 +130,7 @@ beforeEach(() => {
   subidos.length = 0;
   baixarBoletoDoIxc.mockResolvedValue(PDF);
   buscarPixNoIxc.mockResolvedValue({ ok: true, pix: { copiaECola: BR_CODE, status: "ATIVA", valorOriginal: "129.90" } });
-  vincular.mockResolvedValue(true);
+  vincular.mockResolvedValue({ vinculou: true, promovido: false });
   sendMessageHandler.mockResolvedValue({ id: "msg" });
   listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "telefone", created_at: "" }]);
   conversaDoContato = CONTATO;
@@ -307,7 +307,7 @@ describe("POST …/ixc/vinculo", () => {
 
   it("vínculo que já existia não audita de novo (a rota é idempotente)", async () => {
     clientesPorTelefone.mockResolvedValue([{ id: "10", nome: "Maria", documento: "", ativo: true, pessoaJuridica: false }]);
-    vincular.mockResolvedValue(false);
+    vincular.mockResolvedValue({ vinculou: false, promovido: false });
     expect((await vincularRota(pedido({ cadastro_id: "10" }), rota)).status).toBe(201);
     expect(audit).not.toHaveBeenCalled();
   });

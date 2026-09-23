@@ -71,10 +71,15 @@ function definicoesDeTool(): Definicao[] {
     const txt = readFileSync(path.join(DIR, arquivo), "utf8");
     // Cada `export const x: McpToolDefinition` abre um bloco que vai até o próximo.
     for (const bloco of txt.split(/(?=export const \w+: McpToolDefinition)/)) {
-      const nome = /name:\s*"([^"]+)"/.exec(bloco);
+      // `name` costuma ser string literal, mas uma tool cujo id é FONTE ÚNICA
+      // em outro módulo (ex.: `lib/conectores/ferramentas-do-agente.ts`, para
+      // não divergir do id que o motor nativo usa) referencia uma constante —
+      // aceita as duas formas, senão o bloco INTEIRO some da varredura, que é
+      // exatamente o "regex parou de casar" que o CONTROLE abaixo existe pra pegar.
+      const nome = /name:\s*(?:"([^"]+)"|(\w+))/.exec(bloco);
       const cat = /category:\s*"(\w+)"/.exec(bloco);
       if (!nome || !cat) continue;
-      achadas.push({ name: nome[1]!, category: cat[1]!, corpo: bloco, arquivo });
+      achadas.push({ name: (nome[1] ?? nome[2])!, category: cat[1]!, corpo: bloco, arquivo });
     }
   }
   return achadas;

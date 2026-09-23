@@ -235,6 +235,35 @@ export interface GateContext {
    */
   spinningEnforced?: boolean;
   /**
+   * O corpo é CONTEÚDO DO SISTEMA — composto pelo código a partir de dado
+   * conferido (hoje: a cobrança do conector, com o valor e o código relidos no
+   * ERP) — e não texto do modelo. Desarma SÓ os gates que julgam a cópia do
+   * modelo: `spinning` (a mesma legenda para o 3º cliente do número seria vetada,
+   * a janela cruza clientes — a mesma conta do aviso de escalação) e `promise`
+   * (o valor da fatura cairia no piso de preço). Os dois saem `skipped` com
+   * `conteudo_do_sistema` no trace. Opt-out, LGPD, ritmo, janela e aviso de IA
+   * continuam valendo integralmente. Ausente = conteúdo do modelo (tudo armado).
+   */
+  conteudoDoSistema?: boolean;
+  /**
+   * O corpo é CÓDIGO PARA COPIAR — a linha digitável, o copia-e-cola do Pix —
+   * relido do ERP, não prosa. Desarma SÓ a emenda do `disclosureGate`: ele passa
+   * como `skipped` (`corpo_imutavel` no trace) em vez de prependar o aviso de IA.
+   *
+   * Existe porque `isFirstOutbound` (a base do disclosure) é por CONTATO, não por
+   * mensagem: se a 1ª mensagem da cobrança (a legenda, que PODE levar o aviso)
+   * saiu `queued` — aceita pelo canal, ainda não confirmada — o ledger não a conta
+   * como `accepted`, e a 2ª mensagem (o código puro) ainda é vista como "1º
+   * outbound" pelo gate. Sem esta trava, o aviso de IA seria prependado ao
+   * copia-e-cola e o cliente colaria um BR Code inválido no banco.
+   *
+   * O runner (`evaluateBeforeSend`) também recusa qualquer `amendBody` vindo de
+   * QUALQUER gate quando esta flag está ligada — rede de segurança para um gate
+   * futuro que esqueça de checar o campo, não só para o disclosure de hoje.
+   * Ausente = corpo comum (todo gate vale como sempre).
+   */
+  corpoImutavel?: boolean;
+  /**
    * Arma o `agendaStallGate`. Ausente = no-op — mesma direção segura de
    * `internalVocabularyEnforced` (caller que não conhece o campo não arma nada).
    *
@@ -268,7 +297,12 @@ export type GateVerdict =
   // `skipped: 'not_applicable'` (invariante 4 de `docs/doctrine/restricao-de-canal.md`): a
   // restrição não existe NESTE canal. Passa, mas o trace registra que não se aplicava — um
   // `pass` silencioso apagaria a diferença entre "não regrediu" e "provo que não regrediu".
-  | { pass: true; waitMs?: number; amendBody?: string; skipped?: 'not_applicable' }
+  | {
+      pass: true;
+      waitMs?: number;
+      amendBody?: string;
+      skipped?: 'not_applicable' | 'conteudo_do_sistema' | 'corpo_imutavel';
+    }
   | {
       pass: false;
       code: string;
@@ -344,6 +378,7 @@ export const lgpdGate: Gate = {
 export const promiseGate: Gate = {
   name: 'promise',
   evaluate: (ctx) => {
+    if (ctx.conteudoDoSistema === true) return { pass: true, skipped: 'conteudo_do_sistema' };
     if (ctx.promise.table === null) return { pass: true };
     const decision = decidePromise({ candidate: ctx.body, table: ctx.promise.table });
     return decision.allow
@@ -549,6 +584,9 @@ export const disclosureGate: Gate = {
     const template = ctx.disclosure.template;
     if (template === null || !ctx.disclosure.isFirstOutbound) return { pass: true };
     if (bodyContainsDisclosure(ctx.body, template)) return { pass: true };
+    // Corpo imutável (código para copiar): nunca emenda, nunca veta por falta de
+    // aviso — a legenda que veio ANTES na mesma cobrança é que carrega o aviso.
+    if (ctx.corpoImutavel === true) return { pass: true, skipped: 'corpo_imutavel' };
     if (ctx.disclosure.mode === 'inject') {
       return { pass: true, amendBody: prependDisclosure(ctx.body, template) };
     }
@@ -642,6 +680,7 @@ export const messagingWindowGate: Gate = {
 const spinningGate: Gate = {
   name: 'spinning',
   evaluate: (ctx) => {
+    if (ctx.conteudoDoSistema === true) return { pass: true, skipped: 'conteudo_do_sistema' };
     // Desarmado explicitamente: `skipped`, nunca `pass` silencioso — a diferença
     // entre "não vetou" e "nem chegou a olhar" é esta linha no trace (a mesma
     // disciplina do `messagingWindowGate` com canal sem janela).
@@ -835,6 +874,10 @@ export interface RunBeforeSendArgs {
    * diário (`recordSend`) continua valendo — o aviso é uma mensagem de verdade.
    */
   enforceSpinning?: boolean;
+  /** Ver `GateContext.conteudoDoSistema`. Também não chama o classificador semântico nem grava a cópia. */
+  conteudoDoSistema?: boolean;
+  /** Ver `GateContext.corpoImutavel`. */
+  corpoImutavel?: boolean;
   /**
    * Arma o `agendaStallGate` para ESTA tentativa — ver `GateContext.agenda`. Ausente = gate
    * no-op (retrocompatível com todo caller que não conhece agenda, ex.: `followup-turn.ts`).
@@ -876,7 +919,11 @@ export function evaluateBeforeSend(
         throttleWaitMs = verdict.waitMs;
       // Emenda de corpo (F4-05 inject): o corpo a enviar passa a ser o emendado; gates
       // seguintes na cadeia o veem (ex.: spinning avalia o texto que de fato vai ao lead).
-      if (verdict.amendBody !== undefined) ctx.body = verdict.amendBody;
+      //
+      // `corpoImutavel` recusa a emenda aqui, na CAMADA COMUM a todo gate — rede de
+      // segurança para um gate futuro que emende sem checar o campo (hoje só o
+      // `disclosureGate` o conhece, e ele já não devolve `amendBody` quando ligado).
+      if (verdict.amendBody !== undefined && ctx.corpoImutavel !== true) ctx.body = verdict.amendBody;
     } else {
       trace.push({
         gate: gate.name,
@@ -976,9 +1023,10 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
     const promise = await loadPromiseTable(client, args.tenantId);
     // Camada semântica (F4-02): a chamada de modelo (async) roda AQUI, sob o lock, e o
     // veredito entra no ctx para o `semanticPromiseGate` (sync) ler. Ausente = camada off.
-    const semanticPromise = args.classifyPromiseSemantic
-      ? await args.classifyPromiseSemantic(args.body)
-      : null;
+    const semanticPromise =
+      args.classifyPromiseSemantic && args.conteudoDoSistema !== true
+        ? await args.classifyPromiseSemantic(args.body)
+        : null;
     // Disclosure (F4-05): template por ponteiro da org + detecção de 1º outbound via
     // send_ledger (só conta se há template — sem template o gate é no-op de qualquer forma).
     const disclosure = await loadDisclosureTemplate(client, args.tenantId);
@@ -1010,6 +1058,8 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
       },
       spinning: { knobs: spinningKnobs, window },
       ...(args.enforceSpinning === false ? { spinningEnforced: false as const } : {}),
+      ...(args.conteudoDoSistema === true ? { conteudoDoSistema: true as const } : {}),
+      ...(args.corpoImutavel === true ? { corpoImutavel: true as const } : {}),
       promise: {
         table: promise?.table ?? null,
         ...(promise?.versionId !== undefined ? { versionId: promise.versionId } : {}),
@@ -1102,7 +1152,7 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
       await recordSend(client, args.tenantId, args.channelSessionId, args.now);
       // Simetria com o gate desarmado: quem não é julgado pela janela não entra
       // nela. Ver `GateContext.spinningEnforced`.
-      if (args.enforceSpinning !== false) {
+      if (args.enforceSpinning !== false && args.conteudoDoSistema !== true) {
         await recordCopy(client, args.tenantId, args.channelSessionId, ctx.body, args.now);
       }
     }
@@ -1145,6 +1195,35 @@ export async function loadChannelProvider(
   );
   const provider = rows[0]?.provider;
   return provider === undefined ? DEFAULT_CHANNEL_PROVIDER : (provider as ChannelProvider);
+}
+
+/**
+ * O provider CRU da sessão — `null` quando a linha não existe (sessão apagada,
+ * id de outra organização). Ao contrário de `loadChannelProvider` (usado pela
+ * cadeia de guardrails, que precisa de um provider SEMPRE — o default dela é
+ * `DEFAULT_CHANNEL_PROVIDER`, o canal com banRisk armado, a escolha
+ * conservadora para "assumir o pior" contra banimento), este existe para quem
+ * precisa DISTINGUIR "não sei que canal é" de "é este canal". Hoje quem
+ * precisa é `identidadeDoTelefone` (`lib/channels/capabilities.ts`), que trata
+ * `null`/desconhecido como `"desconhecido"` — nunca `"sim"` nem `"nao"`.
+ *
+ * ⚠️ Alimentar o default de `loadChannelProvider` ali é o defeito que este
+ * helper existe para não repetir: `DEFAULT_CHANNEL_PROVIDER` tem
+ * `telefoneEhIdentidade: true` na matriz de capabilities, então sessão ausente
+ * virava `"sim"` — o conector vinculava um contato pelo telefone no EXATO caso
+ * em que não se sabe de que canal se está falando (fail-open na identidade,
+ * achado de revisão de qualidade).
+ */
+export async function loadChannelProviderRaw(
+  db: Queryable,
+  organizationId: string,
+  channelSessionId: string,
+): Promise<string | null> {
+  const { rows } = await db.query<{ provider: string }>(
+    'select provider from channel_sessions where organization_id = $1 and id = $2',
+    [organizationId, channelSessionId],
+  );
+  return rows[0]?.provider ?? null;
 }
 
 async function readStopFlags(

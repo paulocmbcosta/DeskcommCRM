@@ -30,6 +30,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     groups: "full",
     costPerMessage: false,
     outboundFirst: true,
+    telefoneEhIdentidade: true,
   },
   // Hetero-restrição: não me banem, mas a Meta me proíbe e me cobra.
   meta_cloud: {
@@ -46,6 +47,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     // Fala primeiro, mas só com definição aprovada — é `requiresTemplates` que
     // diz COMO; esta diz que DÁ.
     outboundFirst: true,
+    telefoneEhIdentidade: true,
   },
   // Mesma hetero-restrição do canal oficial, por baixo: é um BSP: a WABA é da
   // Meta, os templates são aprovados pela Meta e a janela de 24h é da Meta. O
@@ -82,6 +84,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     // Fala primeiro, mas só com definição aprovada — é `requiresTemplates` que
     // diz COMO; esta diz que DÁ.
     outboundFirst: true,
+    telefoneEhIdentidade: true,
   },
   // O primeiro canal que NÃO é WhatsApp: o widget de chat que o dono cola no
   // próprio site. O transporte somos nós — a mensagem do atendente é gravada e o
@@ -108,6 +111,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     groups: "none",
     costPerMessage: false,
     outboundFirst: false,
+    telefoneEhIdentidade: false,
   },
 };
 
@@ -260,4 +264,28 @@ export function capabilitiesOf(provider: ChannelProvider): ChannelCapabilities {
   // barra em compilação; isto barra o que vem do banco em runtime.
   if (!caps) throw new Error(`unknown_channel_provider: ${provider}`);
   return caps;
+}
+
+/**
+ * `false` sozinho quer dizer três coisas diferentes — "o telefone foi
+ * digitado" (chat do site), "não sei que canal é este" (aba antiga aberta
+ * depois de uma atualização, provider fora da matriz) e "deu erro perguntando"
+ * — e só a PRIMEIRA autoriza descartar um vínculo já gravado por telefone.
+ * Colapsar as três em um booleano fazia uma atualização de canal "provar" que
+ * um WhatsApp vinculado nunca tinha sido identidade nenhuma.
+ */
+export type IdentidadeDoTelefone = "sim" | "nao" | "desconhecido";
+
+/**
+ * O telefone é identidade no canal deste provider? `"sim"`/`"nao"` só para
+ * provider CONHECIDO da matriz (pela capacidade `telefoneEhIdentidade`);
+ * `"desconhecido"` para ausente, vazio, de voz (`wacalls`) ou fora da matriz —
+ * fail-closed continua sendo NÃO VINCULAR sozinho, mas "desconhecido" agora se
+ * distingue de "nao": só "nao" autoriza descartar um vínculo por telefone já
+ * gravado.
+ */
+export function identidadeDoTelefone(provider: string | null | undefined): IdentidadeDoTelefone {
+  const linha = (CHANNEL_CAPABILITIES as Partial<Record<string, ChannelCapabilities>>)[provider ?? ""];
+  if (!linha) return "desconhecido";
+  return linha.telefoneEhIdentidade ? "sim" : "nao";
 }

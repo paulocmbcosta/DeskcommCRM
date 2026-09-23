@@ -22,6 +22,7 @@ import { TOOLS_FUNIL } from "./funil";
 import { TOOLS_GOVERNANCA } from "./governanca";
 import { TOOLS_OPERACAO } from "./operacao";
 import { TOOLS_RETENCAO } from "./retencao";
+import { TOOLS_SISTEMA_DE_GESTAO } from "./sistema-de-gestao";
 import type { McpToolCatalogEntry } from "./tipos";
 import { TOOLS_TIMES } from "./times";
 
@@ -39,6 +40,7 @@ export const TOOL_CATALOG: ReadonlyArray<McpToolCatalogEntry> = [
   ...TOOLS_OPERACAO,
   ...TOOLS_RETENCAO,
   ...TOOLS_TIMES,
+  ...TOOLS_SISTEMA_DE_GESTAO,
 ];
 
 /**

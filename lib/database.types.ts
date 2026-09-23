@@ -3339,6 +3339,7 @@ export type Database = {
       conector_conexoes: {
         Row: {
           base_url: string
+          cobranca_encaminha_apos_dias: number
           conector: string
           created_at: string
           created_by: string | null
@@ -3355,6 +3356,7 @@ export type Database = {
         }
         Insert: {
           base_url: string
+          cobranca_encaminha_apos_dias?: number
           conector: string
           created_at?: string
           created_by?: string | null
@@ -3371,6 +3373,7 @@ export type Database = {
         }
         Update: {
           base_url?: string
+          cobranca_encaminha_apos_dias?: number
           conector?: string
           created_at?: string
           created_by?: string | null

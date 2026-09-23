@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { identidadeDoTelefone, type IdentidadeDoTelefone } from "@/lib/channels/capabilities";
 import { carimbarEstado, lerCredencial, type CredencialGuardada } from "@/lib/conectores/conexao";
 import { FRASE_DA_FALHA, FalhaDoConector } from "@/lib/conectores/tipos";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -105,4 +106,52 @@ export async function respostaDaFalha(
 /** A leitura funcionou e a conexão estava marcada `erro`: o ERP voltou — a marca sai. */
 export async function limparErroSeHavia(ctx: Extract<ContextoIxc, { ok: true }>): Promise<void> {
   if (ctx.credencial.status === "erro") await carimbarEstado(ctx.admin, ctx.orgId, "ixc", "ativa", null);
+}
+
+/**
+ * O telefone do contato é identidade no canal DESTA conversa — tri-estado, não
+ * booleano. `"desconhecido"` é toda situação em que não dá para saber: sem
+ * `conversationId` (aba antiga aberta depois de uma atualização da VPS, antes
+ * de o navegador mandar `?conversa=`), id que não existe/não é deste contato
+ * ou desta organização, sessão sem `provider` reconhecido pela matriz. SÓ
+ * `"nao"` autoriza descartar um vínculo por telefone já gravado — colapsar
+ * "não sei" em `false` fazia uma aba desatualizada (ou um provider novo que
+ * esta imagem ainda não conhece) parecer prova de que o telefone NUNCA foi
+ * identidade, escondendo vínculo de WhatsApp de verdade.
+ *
+ * É ADMIN CLIENT, e não o de sessão — e o motivo, conferido no `baseline.sql`,
+ * não é "channel_sessions é ilegível pro papel `agent`" (é legível: a policy
+ * `channel_sessions_tenant_select` não tem `fn_role_at_least`, só organização).
+ * O motivo é `conversations_select`: ela passa por `fn_can_view_conversation`,
+ * que decide VISIBILIDADE (papel + atribuição + `visibility_mode` da
+ * organização) — uma pergunta diferente da que esta função faz, que é
+ * ESTRUTURAL ("esta linha pertence a este contato e a esta organização?"). Se
+ * usasse o client de sessão, um agente sob `visibility_mode: 'own'` olhando uma
+ * conversa que passou a ser de outro atendente depois que ele a abriu perderia
+ * a prova de identidade por um motivo que não tem nada a ver com o IXC. O filtro
+ * manual por `contact_id` (lido antes, já escopado pela sessão) e
+ * `organization_id` (da sessão, nunca do pedido) é exatamente o padrão que a
+ * doutrina pede para admin client em request handler — RLS não teria nada a
+ * acrescentar aqui além dessa mesma checagem.
+ */
+export async function identidadeDoTelefoneNaConversa(
+  ctx: Extract<ContextoIxc, { ok: true }>,
+  conversationId: string | null,
+): Promise<IdentidadeDoTelefone> {
+  if (!conversationId || !z.string().uuid().safeParse(conversationId).success) return "desconhecido";
+  const { data: conversa } = await ctx.admin
+    .from("conversations")
+    .select("channel_session_id")
+    .eq("id", conversationId)
+    .eq("contact_id", ctx.contato.id)
+    .eq("organization_id", ctx.orgId)
+    .maybeSingle();
+  if (!conversa?.channel_session_id) return "desconhecido";
+  const { data: sessao } = await ctx.admin
+    .from("channel_sessions")
+    .select("provider")
+    .eq("id", conversa.channel_session_id)
+    .eq("organization_id", ctx.orgId)
+    .maybeSingle();
+  return identidadeDoTelefone(sessao?.provider as string | undefined);
 }

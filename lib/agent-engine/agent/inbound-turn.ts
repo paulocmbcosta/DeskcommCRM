@@ -36,7 +36,7 @@ import { currentExecutionBoundary, guardServiceEffect } from '@/lib/atendimento/
 import type pg from 'pg';
 import { z } from 'zod';
 import { auxModelArgs, type AuxModelArgs } from './aux-model-args';
-import type { ChannelAdapter, ChannelSendResult } from '../channel-adapter';
+import type { ChannelAdapter, ChannelSendInput, ChannelSendResult } from '../channel-adapter';
 
 import { withFields, type Logger } from '../obs/logger';
 import {
@@ -131,6 +131,7 @@ import { janelaDeEnvioAberta, proximaAberturaDaJanela } from '../pacing/engine';
 import { loadChannelKnobs } from '../pacing/store';
 import { avisarJanelaFechada, resolverAvisoDeJanela } from '../pacing/aviso-de-janela';
 import { resolveConversationTurn, type TurnAgentResolution } from './resolve-turn-agent';
+import { montarFerramentasDoConector, type PortaDeEnvioDoTurno } from './ferramentas-do-conector';
 import {
   hasOpenCaseForContact,
   getCaseAwaitingLead,
@@ -151,9 +152,9 @@ import {
 } from './skills';
 import { readSkillReference, skillHasReferences } from './skill-references';
 import { READ_ONLY_TOOLS, wrapToolsWithBreaker, type ToolBreakerThresholds } from './tool-breaker';
-import { loadChannelProvider, runBeforeSend } from '../guardrails/before-send';
+import { loadChannelProviderRaw, runBeforeSend } from '../guardrails/before-send';
 import { isStatusSendable } from '../../channels/meta/template-binding';
-import { capabilitiesOf } from '@/lib/channels/capabilities';
+import { capabilitiesOf, identidadeDoTelefone, type ChannelProvider } from '@/lib/channels/capabilities';
 import { renderTemplateBody } from '@/lib/channels/meta/render-template';
 import { esperarComoHumano } from './atraso-humano';
 import { sendInBubbles } from './split-message';
@@ -1555,6 +1556,24 @@ export async function avisarCapacidadesAusentes(
   conversationId: string,
   detalhe: string,
   log: Logger,
+  // Dedup por (organização, kind, TÍTULO) — não só (organização, kind). Duas
+  // causas diferentes de "capacidade ausente" (tools MCP da tela e as
+  // ferramentas do conector) compartilham o mesmo `kind` (vocabulário
+  // existente, sem migration); sem o título na chave, um item já aberto por
+  // uma causa escondia silenciosamente a outra (achado da revisão de
+  // qualidade do Lote E). Default = o título histórico, para não mudar o
+  // comportamento de quem já chama esta função sem o parâmetro.
+  titulo = 'O agente atendeu sem as capacidades que você ligou',
+  // Corpo próprio por CAUSA, mesmo racional do título: "não pude carregar" (o
+  // default, um bug/falha transiente) e "não está configurado" (a causa é
+  // config, não falha de carga) são histórias diferentes para quem lê a
+  // Central — dizer "não puderam ser carregadas" quando a causa real é "você
+  // não conectou o sistema de gestão" manda o dono procurar um bug que não
+  // existe (achado de revisão de qualidade; mesmo padrão de `avisarFalhaInterna`
+  // em ferramentas-do-conector.ts).
+  corpo = 'As ferramentas configuradas na tela do agente não puderam ser carregadas neste ' +
+    'atendimento, e ele respondeu ao cliente sem elas. A conversa não foi interrompida. ' +
+    `Motivo técnico: ${detalhe}`,
 ): Promise<void> {
   try {
     await db.query(
@@ -1562,22 +1581,167 @@ export async function avisarCapacidadesAusentes(
        select $1, 'capabilities_missing', 'critical', $2, $3, 'conversation', $4
         where not exists (
           select 1 from agent_inbox_items
-           where organization_id = $1 and kind = 'capabilities_missing' and status = 'open'
+           where organization_id = $1 and kind = 'capabilities_missing' and status = 'open' and title = $2
         )`,
-      [
-        tenantId,
-        'O agente atendeu sem as capacidades que você ligou',
-        'As ferramentas configuradas na tela do agente não puderam ser carregadas neste ' +
-          'atendimento, e ele respondeu ao cliente sem elas. A conversa não foi interrompida. ' +
-          `Motivo técnico: ${detalhe}`,
-        conversationId,
-      ],
+      [tenantId, titulo, corpo, conversationId],
     );
   } catch (err) {
     log.warn('aviso de capacidades ausentes não foi gravado', {
       error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
     });
   }
+}
+
+/**
+ * O desfecho de UM envio pela cadeia real de canal, na granularidade que quem
+ * chama precisa: sucesso (inclusive "aceito, será entregue depois") vs falha
+ * que a IA não pode anunciar como entregue ao cliente. Espelha o switch de
+ * `send_message` (a tool logo abaixo, no mesmo arquivo).
+ *
+ * ⚠️ Nasceu como a 3ª cópia deste encanamento (send_message, send_template, a
+ * porta da cobrança do conector) e foi a cópia que perdeu `failed`/`unavailable`
+ * — achado CRÍTICO da revisão de qualidade do Lote E: com o canal `unavailable`
+ * (WAHA fora, ledger em `requested`), as duas mensagens da cobrança "sucediam",
+ * `enviarCobrancaIxc` devolvia `enviada`, o motor auditava
+ * `conector.fatura_enviada` e respondia "a cobrança foi enviada" — e o job
+ * completava sem retry, porque `unavailable` não é `failed` e ninguém chamava
+ * `noteRunError`. Nada saiu, o cliente foi informado do contrário, e a
+ * auditoria mentiu. Extraída para função nomeada (testável sem levantar o
+ * turno inteiro) exatamente para não perder o tratamento de novo.
+ */
+export function resultadoDoEnvioNoTurno(outcome: ChannelSendResult): { ok: true } | { ok: false; code: string; message: string } {
+  switch (outcome.kind) {
+    case 'sent':
+    case 'already_sent':
+    case 'queued':
+      return { ok: true };
+    case 'blocked':
+      return {
+        ok: false,
+        code: 'contato_bloqueado',
+        message:
+          'o contato optou por não receber mensagens (bloqueio irrevogável) — não envie mais nada e encerre o turno.',
+      };
+    case 'failed':
+      return {
+        ok: false,
+        code: 'envio_falhou',
+        message: 'o canal falhou ao enviar — não tente de novo neste turno; o sistema fará retry.',
+      };
+    case 'unavailable':
+      return {
+        ok: false,
+        code: 'envio_indisponivel',
+        message: 'não consegui enviar agora (canal indisponível) — encerre o turno; o sistema re-tentará.',
+      };
+  }
+}
+
+/** O que `montarPortaDeEnvioDoConector` precisa — parâmetros explícitos, não closure, para ser testável sem levantar o turno inteiro. */
+export interface DepsDaPortaDeEnvioDoConector {
+  pool: pg.Pool;
+  log: Logger;
+  tenantId: string;
+  leadId: string;
+  conversationId: string;
+  channelSessionId: string;
+  jobId: () => string;
+  jobClaim: () => ReturnType<typeof claimOfJob>;
+  agentOperation: Parameters<typeof runBeforeSend>[0]['agentOperation'];
+  optedOutThisTurn: boolean;
+  lgpd: Parameters<typeof runBeforeSend>[0]['lgpd'];
+  disclosureMode: Parameters<typeof runBeforeSend>[0]['disclosureMode'];
+  sleep: Parameters<typeof runBeforeSend>[0]['sleep'];
+  now: () => Date;
+  maxSendsPerTurn: number;
+  seqAtual: () => number;
+  avancarSeq: () => number;
+  enviarNoCanal: (input: ChannelSendInput) => Promise<ChannelSendResult>;
+  registrarOutcome: (outcome: ChannelSendResult) => void;
+  registrarPacingCapVeto: (v: { code: string; nextAllowedAt: Date }) => void;
+  noteRunError: (err: Error) => void;
+}
+
+/**
+ * A `PortaDeEnvioDoTurno` que a ferramenta da cobrança usa
+ * (`lib/agent-engine/agent/ferramentas-do-conector.ts`) — cada mensagem passa
+ * pela MESMA cadeia `before_send` de `send_message`: opt-out, LGPD, ritmo,
+ * janela, disclosure e o ledger (job/seq). Extraída como função NOMEADA e
+ * parametrizada (não um objeto anônimo montado inline dentro de
+ * `runAgentTurn`) para poder ser testada com mocks — ver
+ * `tests/unit/ferramentas-do-conector-ligacao.test.ts`.
+ */
+export function montarPortaDeEnvioDoConector(deps: DepsDaPortaDeEnvioDoConector): PortaDeEnvioDoTurno {
+  return {
+    vagas: () => deps.maxSendsPerTurn - deps.seqAtual(),
+    enviar: async (mensagem) => {
+      // O corpo é a legenda (ou o código): é ele que a cadeia avalia e que o
+      // ledger identifica. `conteudoDoSistema`: valor e código vêm do ERP.
+      // `corpoImutavel` (só na mensagem do código): o disclosure NUNCA pode
+      // prependar aviso de IA nela — ver `MensagemDaCobranca.corpoImutavel`.
+      const chain = await runBeforeSend({
+        pool: deps.pool,
+        log: deps.log,
+        agentOperation: deps.agentOperation,
+        tenantId: deps.tenantId,
+        leadId: deps.leadId,
+        jobId: deps.jobId(),
+        channelSessionId: deps.channelSessionId,
+        body: mensagem.body,
+        conteudoDoSistema: true,
+        ...(mensagem.corpoImutavel === true ? { corpoImutavel: true as const } : {}),
+        optedOutThisTurn: deps.optedOutThisTurn,
+        crmDailyLimit: null,
+        now: deps.now(),
+        sleep: deps.sleep,
+        lgpd: deps.lgpd,
+        disclosureMode: deps.disclosureMode,
+        send: (finalBody: string) => {
+          const seq = deps.avancarSeq();
+          return deps.enviarNoCanal({
+            tenantId: deps.tenantId,
+            leadId: deps.leadId,
+            jobId: deps.jobId(),
+            jobClaim: deps.jobClaim(),
+            agentOperation: deps.agentOperation,
+            seq,
+            conversationId: deps.conversationId,
+            body: finalBody,
+            ...(mensagem.media_storage_path
+              ? {
+                  media: {
+                    kind: mensagem.type === 'image' ? ('image' as const) : ('document' as const),
+                    storagePath: mensagem.media_storage_path,
+                    mime: mensagem.media_mime ?? 'application/octet-stream',
+                    sizeBytes: mensagem.media_size_bytes ?? 0,
+                  },
+                }
+              : {}),
+          });
+        },
+      });
+      if (chain.status === 'vetoed') {
+        // Mesmo tratamento de cap de ritmo do `send_message` (ver mais abaixo):
+        // sem isto o job da cobrança nunca era readiado para a hora em que o
+        // cap libera — o cliente ficaria esperando uma resposta que não vem.
+        if ((chain.code === 'warmup_cap' || chain.code === 'daily_cap') && chain.nextAllowedAt !== undefined) {
+          deps.registrarPacingCapVeto({ code: chain.code, nextAllowedAt: chain.nextAllowedAt });
+        }
+        return { ok: false, code: chain.code, message: chain.message };
+      }
+      deps.registrarOutcome(chain.outcome);
+      const resultado = resultadoDoEnvioNoTurno(chain.outcome);
+      if (!resultado.ok) {
+        if (chain.outcome.kind === 'unavailable') {
+          deps.noteRunError(
+            new Error(`canal indisponível no envio da cobrança (${chain.outcome.reason}) — job re-tentado pela fila`),
+          );
+        }
+        return { ok: false, code: resultado.code, message: resultado.message };
+      }
+      return { ok: true, outcome: chain.outcome };
+    },
+  };
 }
 
 /**
@@ -3426,13 +3590,127 @@ async function executarTurnoDoAgente(
   // A ferramenta de template só entra em canal que EXIGE template fora da janela.
   // Num canal que fala livre a qualquer hora ela nunca teria uso — e tool inútil no
   // prompt não é neutra: gasta contexto e degrada a escolha do modelo.
-  {
-    const provider =
-      preview && !preview.channelId
-        ? DEFAULT_CHANNEL_PROVIDER
-        : await loadChannelProvider(pool, tenantId, input.channelSessionId);
-    if (!capabilitiesOf(provider).requiresTemplates) {
-      delete rawTools.send_template;
+  //
+  // `providerCru` NÃO é bloco-escopado: as ferramentas do conector, logo abaixo,
+  // reusam esta MESMA leitura para saber se o telefone é identidade neste canal
+  // — sem isso, cada chamada de `crm_consultar_cliente_erp` faria uma consulta
+  // extra a `contacts`/`channel_sessions` só para redescobrir o que o turno já
+  // sabe (achado "menor" da revisão de qualidade do Lote E).
+  //
+  // ⚠️ CRU (`string | null`), não `loadChannelProvider` (que devolve o default
+  // `waha` quando a sessão não existe): o default de `send_template` e o de
+  // `identidadeDoTelefone` são DIFERENTES E NÃO PODEM COMPARTILHAR FONTE.
+  // `send_template` quer o conservador `waha` (banRisk armado) quando não sabe
+  // o canal; o conector quer `"desconhecido"` — que só `identidadeDoTelefone`
+  // devolve a partir de `null`. Alimentar `waha` nela fazia sessão ausente virar
+  // `"sim"` (waha tem `telefoneEhIdentidade: true`) e o conector vincular um
+  // contato pelo telefone no EXATO caso em que não se sabe de que canal se está
+  // falando (fail-open na identidade, achado de revisão de qualidade — nasceu
+  // exatamente desta otimização, na rodada anterior de consertos).
+  const providerCru: string | null =
+    preview && !preview.channelId ? null : await loadChannelProviderRaw(pool, tenantId, input.channelSessionId);
+  // `capabilitiesOf` só aceita provider CONHECIDO; o cast é seguro porque a
+  // função falha fechado em runtime (lança `unknown_channel_provider`) para
+  // qualquer string que a matriz não reconheça — o mesmo runtime-check que já
+  // valia quando `loadChannelProvider` devolvia o tipo estreito.
+  const providerParaTemplate = (providerCru ?? DEFAULT_CHANNEL_PROVIDER) as ChannelProvider;
+  if (!capabilitiesOf(providerParaTemplate).requiresTemplates) {
+    delete rawTools.send_template;
+  }
+
+  // Ferramentas do CONECTOR (consultar o cliente no sistema de gestão, enviar a
+  // cobrança): nativas do motor, porque a cobrança tem de sair por ESTA cadeia de
+  // envio — opt-out, LGPD, ritmo, janela e o ledger (job, seq). Entram antes das do
+  // catálogo; o nome nativo tem precedência e a ponte nunca monta o handler MCP
+  // delas (`NATIVAS_DO_MOTOR`). Ver ferramentas-do-conector.ts.
+  if (agentConfig !== null) {
+    try {
+      const doConector = await montarFerramentasDoConector({
+        pool,
+        supabase: deps.crmCfg.supabase,
+        log: runLog,
+        tenantId,
+        leadId,
+        conversationId: input.conversationId,
+        channelSessionId: input.channelSessionId,
+        telefone: openingContext.context.contact.phone,
+        identidadeDoTelefone: identidadeDoTelefone(providerCru),
+        toolIds: agentConfig.toolIds,
+        agentId: agentConfig.agentId,
+        agora: clock,
+        saida: montarPortaDeEnvioDoConector({
+          pool,
+          log: runLog,
+          tenantId,
+          leadId,
+          conversationId: input.conversationId,
+          channelSessionId: input.channelSessionId,
+          jobId: () => liveJob().id,
+          jobClaim: () => claimOfJob(liveJob()),
+          agentOperation,
+          optedOutThisTurn,
+          lgpd,
+          disclosureMode: deps.knobs.disclosureMode,
+          sleep: deps.sleep,
+          now: clock,
+          maxSendsPerTurn,
+          seqAtual: () => seq,
+          avancarSeq: () => {
+            seq += 1;
+            return seq;
+          },
+          enviarNoCanal: (envio) => liveChannel().send(envio),
+          registrarOutcome: (outcome) => outcomes.push(outcome),
+          registrarPacingCapVeto: (v) => {
+            pacingCapVeto = v;
+          },
+          noteRunError,
+        }),
+      });
+      Object.assign(rawTools, doConector.tools);
+      if (doConector.ausentes.length > 0) {
+        const detalhe = `capacidades ligadas sem sistema de gestão conectado: ${doConector.ausentes.join(', ')}`;
+        runLog.warn('ferramentas do conector ligadas sem conector na organização', { ausentes: doConector.ausentes });
+        if (preview) {
+          preview.result.impediments.push({ code: 'capabilities_unavailable', message: 'O sistema de gestão não está conectado.' });
+        } else {
+          await avisarCapacidadesAusentes(
+            pool,
+            tenantId,
+            input.conversationId,
+            detalhe,
+            runLog,
+            'O agente atendeu sem o sistema de gestão conectado',
+            // Corpo PRÓPRIO: aqui a causa é CONFIGURAÇÃO (a capacidade foi
+            // ligada, mas nenhum sistema de gestão foi conectado em
+            // Configurações), não uma falha ao carregar algo que já existia —
+            // o default (usado no `catch` logo abaixo, uma falha de verdade)
+            // diria "não puderam ser carregadas" e mandaria o dono procurar
+            // bug onde não há.
+            'O agente tem uma capacidade de sistema de gestão ligada, mas nenhum sistema de gestão ' +
+              'está conectado nesta organização — ele respondeu ao cliente sem consultar nem cobrar. ' +
+              'Conecte um sistema de gestão em Configurações › Conectores, ou desligue a capacidade no ' +
+              `agente. Detalhe: ${detalhe}`,
+          );
+        }
+      }
+    } catch (err) {
+      // Mesma regra das tools do catálogo: capacidade extra não derruba o turno,
+      // mas a ausência dela aparece na Central — não num log que ninguém lê.
+      const detalhe = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+      runLog.error('ferramentas do conector não montadas — turno segue sem elas', { error: detalhe });
+      if (preview) {
+        preview.result.impediments.push({ code: 'capabilities_unavailable', message: 'Não foi possível carregar as capacidades configuradas.' });
+      } else {
+        await avisarCapacidadesAusentes(
+          pool,
+          tenantId,
+          input.conversationId,
+          detalhe,
+          runLog,
+          'O agente atendeu sem o sistema de gestão conectado',
+        );
+      }
     }
   }
 

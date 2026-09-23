@@ -14,7 +14,7 @@ import type { JobClaim } from './queue/claim';
  * concretas (o sink do CRM valida o envio; o watchdog valida o status) — não aqui.
  */
 
-/** Uma mensagem de texto a enviar ao lead. Identidade da intenção = (jobId, seq). */
+/** Uma mensagem a enviar ao lead — texto, template ou arquivo com legenda. Identidade da intenção = (jobId, seq). */
 export interface ChannelSendInput {
   agentOperation?: AgentOperationContext;
   jobClaim?: JobClaim;
@@ -40,6 +40,13 @@ export interface ChannelSendInput {
     /** Valor por slot, chaveado por `slotKey` — a mesma chave da tela. */
     values: Record<string, string>;
   };
+  /**
+   * Presente = a mensagem leva um ARQUIVO, já guardado no Storage (storage-first);
+   * `body` é a legenda. Opcional pelo mesmo motivo do `template`: adapter que não
+   * conhece o campo envia só a legenda — degrada, não estoura. Hoje quem usa é a
+   * cobrança do conector (lib/agent-engine/agent/ferramentas-do-conector.ts).
+   */
+  media?: { kind: 'document' | 'image'; storagePath: string; mime: string; sizeBytes: number };
 }
 
 /**

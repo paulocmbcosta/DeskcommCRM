@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHANNEL_CAPABILITIES,
   capabilitiesOf,
+  identidadeDoTelefone,
   transportaMensagem,
   type ChannelProvider,
   type ProviderDeMensagem,
@@ -40,6 +41,7 @@ const CAPABILITIES = [
   "groups",
   "costPerMessage",
   "outboundFirst",
+  "telefoneEhIdentidade",
 ] as const;
 
 describe("matriz capability × provider é exaustiva", () => {
@@ -93,5 +95,26 @@ describe("matriz capability × provider é exaustiva", () => {
       const c = CHANNEL_CAPABILITIES[p];
       expect(c.banRisk && c.requiresTemplates, `${p} declara as duas famílias`).toBe(false);
     }
+  });
+
+  it("o telefone só é identidade onde o transporte É o número (chat do site: digitado)", () => {
+    expect(capabilitiesOf("waha").telefoneEhIdentidade).toBe(true);
+    expect(capabilitiesOf("meta_cloud").telefoneEhIdentidade).toBe(true);
+    expect(capabilitiesOf("zernio").telefoneEhIdentidade).toBe(true);
+    expect(capabilitiesOf("site_widget").telefoneEhIdentidade).toBe(false);
+  });
+
+  it("o helper é tri-estado: 'sim'/'nao' só para provider CONHECIDO; ausente/voz/desconhecido é 'desconhecido', não 'nao'", () => {
+    expect(identidadeDoTelefone("waha")).toBe("sim");
+    expect(identidadeDoTelefone("meta_cloud")).toBe("sim");
+    expect(identidadeDoTelefone("zernio")).toBe("sim");
+    expect(identidadeDoTelefone("site_widget")).toBe("nao");
+    // As três formas de "não sei" — nunca "nao": "nao" autorizaria descartar
+    // um vínculo por telefone que pode muito bem ser um WhatsApp de verdade.
+    expect(identidadeDoTelefone("wacalls")).toBe("desconhecido");
+    expect(identidadeDoTelefone("provider-que-nao-existe")).toBe("desconhecido");
+    expect(identidadeDoTelefone(null)).toBe("desconhecido");
+    expect(identidadeDoTelefone(undefined)).toBe("desconhecido");
+    expect(identidadeDoTelefone("")).toBe("desconhecido");
   });
 });

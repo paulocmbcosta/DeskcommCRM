@@ -14,14 +14,20 @@ const PRAZO_DO_ERP_MS = 35_000;
 
 const chave = (contactId: string | null, cadastro: string | null) => ["conector", "ixc", contactId, cadastro] as const;
 
-export function usePainelIxc(contactId: string | null, cadastro: string | null) {
+export function usePainelIxc(contactId: string | null, cadastro: string | null, conversationId: string | null) {
   return useQuery({
-    queryKey: chave(contactId, cadastro),
+    queryKey: [...chave(contactId, cadastro), conversationId] as const,
     enabled: !!contactId,
     queryFn: async () => {
-      const qs = cadastro ? `?cadastro=${encodeURIComponent(cadastro)}` : "";
+      const qs = new URLSearchParams();
+      if (cadastro) qs.set("cadastro", cadastro);
+      if (conversationId) qs.set("conversa", conversationId);
+      // `URLSearchParams.prototype.size` não existe no Safari 16.x — `toString()`
+      // vale em qualquer motor.
+      const s = qs.toString();
+      const sufixo = s ? `?${s}` : "";
       return (
-        await apiClient.get<{ data: EstadoDoPainelIxc }>(`/api/v1/contacts/${contactId}/conectores/ixc${qs}`, {
+        await apiClient.get<{ data: EstadoDoPainelIxc }>(`/api/v1/contacts/${contactId}/conectores/ixc${sufixo}`, {
           timeoutMs: PRAZO_DO_ERP_MS,
         })
       ).data;

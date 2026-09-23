@@ -48,8 +48,8 @@ export interface Fatura {
   pixJaGerado: boolean;
 }
 
-export const FORMAS_DE_COBRANCA = ["boleto", "pix"] as const;
-export type FormaDeCobranca = (typeof FORMAS_DE_COBRANCA)[number];
+// O vocabulário mora no contrato (`../tipos`): o motor fala dele sem conhecer o IXC.
+export { FORMAS_DE_COBRANCA, type FormaDeCobranca } from "../tipos";
 
 export interface RecorteDeFaturas {
   vencidas: Fatura[];
@@ -125,4 +125,19 @@ export function recortarFaturas(registros: Record<string, string>[], hoje: strin
     outrasAVencer: Math.max(0, aVencer.length - PROXIMAS_A_MOSTRAR),
     totalVencidoCents: vencidas.reduce((soma, f) => soma + f.valorCents, 0),
   };
+}
+
+/**
+ * A FATURA DA VEZ — a única que se cobra agora (regra do dono, 22/09): a vencida
+ * mais antiga; sem vencida, a que vence primeiro. Nunca duas.
+ *
+ * Em ordem crescente de vencimento a primeira JÁ é a resposta — toda vencida
+ * vence antes de toda a vencer. O desempate pelo id existe para a escolha não
+ * depender da ordem em que o IXC devolveu duas parcelas do mesmo dia.
+ */
+export function faturaDaVez(faturas: readonly Fatura[]): Fatura | null {
+  const ordenadas = [...faturas].sort(
+    (a, b) => a.vencimento.localeCompare(b.vencimento) || a.id.localeCompare(b.id, undefined, { numeric: true }),
+  );
+  return ordenadas[0] ?? null;
 }

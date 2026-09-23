@@ -80,7 +80,7 @@ export async function POST(req: NextRequest, rota: { params: Promise<{ id: strin
     await limparErroSeHavia(ctx);
 
     for (const externalId of ids) {
-      const criou = await vincular({
+      const resultado = await vincular({
         admin: ctx.admin,
         orgId: ctx.orgId,
         contactId: ctx.contato.id,
@@ -89,14 +89,17 @@ export async function POST(req: NextRequest, rota: { params: Promise<{ id: strin
         verificadoPor,
         userId: ctx.userId,
       });
-      if (criou) {
+      // Promoção audita como criação: para quem lê o log, "passou a valer
+      // manual/documento" é o mesmo fato relevante que "vinculei agora" — só
+      // que `promovido` diz que já havia uma linha mais fraca por baixo.
+      if (resultado.vinculou) {
         void audit({
           action: "conector.vinculo_criado",
           actorUserId: ctx.userId,
           organizationId: ctx.orgId,
           resourceType: "contact",
           resourceId: ctx.contato.id,
-          metadata: { conector: "ixc", cadastro: externalId, verificado_por: verificadoPor },
+          metadata: { conector: "ixc", cadastro: externalId, verificado_por: verificadoPor, promovido: resultado.promovido },
           requestId,
         });
       }
