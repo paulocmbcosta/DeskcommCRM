@@ -215,6 +215,11 @@ export function applyPreviewPolicy(
                 'schedule_followup',
                 'open_human_case',
                 'provide_case_update',
+                // Rede, não decisão: as duas do conector JÁ têm entrada em
+                // `lib/mcp/tools/sistema-de-gestao.ts`, então `catalog` acima
+                // já as cobre — este spread só segura a prévia se aquela
+                // entrada saísse do catálogo um dia (a tool nativa continuaria
+                // existindo e cairia aqui sem ninguém ter decidido isso).
                 ...IDS_DAS_FERRAMENTAS_DO_CONECTOR,
               ].includes(name)
             ) {
