@@ -9,16 +9,19 @@
 import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
+import { z } from "zod";
 
 import { fail, ok } from "@/lib/api/wrappers";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
 import { traduzir } from "@/lib/i18n/dicionario";
-import { CONVERSATION_TERMINAL_STATUSES, filtroDeTimeSchema } from "@/lib/schemas";
+import { CONVERSATION_TERMINAL_STATUSES, filtroDeTimeSchema, listConversationsQuerySchema } from "@/lib/schemas";
 import { orgTemAutomatico } from "@/lib/ai/agents/org-tem-automatico";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
 import { createClient } from "@/lib/supabase/server";
 
 import { aplicarPredicadoDeTime, predicadoDeTime, type ConsultaFiltravel } from "../_filtro-de-time";
+import { filtroDaBuscaDeConversas } from "../_handler";
+import { predicadoDaBuscaDosFechados } from "@/app/api/v1/atendimentos/_handler";
 
 export const dynamic = "force-dynamic";
 
@@ -41,10 +44,8 @@ export type FiltroDeContagem = readonly [coluna: string, valor: string | boolean
  * `tests/unit/badge-espelha-o-filtro.test.ts` vigia que nenhuma contagem seja
  * montada por fora.
  *
- * A busca (`search`) NÃO entra: ela casa contato por uma consulta auxiliar em
- * `contacts`, e repetir aquela lógica aqui criaria uma SEGUNDA régua de busca —
- * e a segunda régua sempre diverge. Enquanto isso, o badge sob busca fica maior
- * que a lista, e isso está declarado, não esquecido.
+ * A busca não é um par coluna/valor: a mesma fábrica de predicado da lista
+ * resolve contato, protocolo e prévia antes de montar estas contagens.
  *
  * O TIME também não entra aqui, e pela razão OPOSTA: ele não é igualdade (`none`
  * é `is null` e `mine` é uma lista que sai do banco), então não cabe num par
@@ -98,6 +99,13 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   const org = activeOrg.orgId;
   const sp = req.nextUrl.searchParams;
+  const porTime = z.enum(["true"]).optional().safeParse(sp.get("by_team") ?? undefined);
+  if (!porTime.success) {
+    return fail("validation_failed", traduzir("Query inválida.", authUser?.idioma ?? "pt-BR"), 422, {
+      requestId,
+    });
+  }
+  const incluirPorTime = porTime.data === "true";
   const auxiliares = filtrosAuxiliaresDaContagem(sp);
   const soNaoLidas = contagemSoNaoLidas(sp);
   // A MESMA régua da lista, e não um `get` cru: sem ela, o badge aceitaria um
@@ -109,6 +117,20 @@ export async function GET(req: NextRequest): Promise<Response> {
       requestId,
     });
   }
+  const termo = listConversationsQuerySchema.pick({ search: true }).safeParse({
+    search: sp.get("search") ?? undefined,
+  });
+  if (!termo.success) {
+    return fail("validation_failed", traduzir("Query inválida.", authUser?.idioma ?? "pt-BR"), 422, {
+      requestId,
+    });
+  }
+  const busca = termo.data.search
+    ? await filtroDaBuscaDeConversas(supabase, org, termo.data.search)
+    : null;
+  const buscaDosFechados = termo.data.search
+    ? await predicadoDaBuscaDosFechados(supabase, org, termo.data.search)
+    : undefined;
   // Resolvido ANTES da fábrica porque `mine` custa uma leitura: dentro dela,
   // seriam cinco idas ao banco para responder sempre a mesma coisa.
   const time = await predicadoDeTime(supabase, org, user.id, filtroDeTime.data);
@@ -129,6 +151,11 @@ export async function GET(req: NextRequest): Promise<Response> {
       q = coluna === "tag" ? q.contains("tags", [String(valor)]) : q.eq(coluna, valor);
     }
     if (soNaoLidas) q = q.gt("unread_count_for_assignee", 0);
+    if (busca) {
+      q = busca.tipo === "or"
+        ? q.or(busca.valor)
+        : q.ilike("last_message_preview", busca.valor);
+    }
     return aplicarPredicadoDeTime(q, time);
   };
 
@@ -137,7 +164,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   // conversas fechadas deixava de fora todo atendimento encerrado de quem voltou.
   // Fábrica própria porque a tabela é outra; a RÉGUA é a mesma, herdada inteira:
   // organização, número, etiqueta, não lidas (os três moram na conversa, por isso
-  // o `!inner`) e o time — que aqui é o do FECHAMENTO, igual à lista da aba.
+  // o `!inner`), busca e o time — que aqui é o do FECHAMENTO, igual à lista da aba.
   const countAtendimentosFechados = () => {
     let q = supabase
       .from("atendimentos")
@@ -151,6 +178,7 @@ export async function GET(req: NextRequest): Promise<Response> {
           : q.eq(`conversations.${coluna}`, valor);
     }
     if (soNaoLidas) q = q.gt("conversations.unread_count_for_assignee", 0);
+    if (buscaDosFechados) q = q.or(buscaDosFechados);
     // O cast poupa o compilador de uma conta que ele não termina: o builder
     // tipado por um `select` COM EMBED, entregue a um genérico, estoura a
     // profundidade de instanciação (TS2589) — e só o `next build` acusa, porque
@@ -160,9 +188,9 @@ export async function GET(req: NextRequest): Promise<Response> {
   };
 
   // Espelha tabToFilter (InboxLayout): unassigned = fila aberta sem dono;
-  // mine = atribuídas a mim e ainda ABERTAS; all = tudo que o usuário VÊ.
+  // mine = atribuídas a mim e ainda ABERTAS; all = todas ABERTAS no escopo RLS.
   //
-  // O `not in (terminais)` do `mine` espelha o `exclude_finished` da aba, e o
+  // O `not in (terminais)` de mine/all espelha o `exclude_finished` das abas, e o
   // espelhamento é o ponto: um badge que conta o que a aba não mostra é pior
   // que badge nenhum — manda o atendente procurar um trabalho que não existe.
   // O fato ORG-WIDE resolvido ANTES das contagens, porque ele escolhe QUAL
@@ -170,7 +198,18 @@ export async function GET(req: NextRequest): Promise<Response> {
   // convenção da regra: assume que há automático.
   const automaticoDaOrg = await orgTemAutomatico(supabase, org);
 
-  const [fila, automatico, mine, all, closed] = await Promise.all([
+  let times: Array<{ id: string; name: string }> = [];
+  if (incluirPorTime) {
+    const { data, error } = await supabase
+      .from("attendance_teams")
+      .select("id, name")
+      .eq("organization_id", org)
+      .order("name");
+    if (error) return fail("internal_error", error.message, 500, { requestId });
+    times = data ?? [];
+  }
+
+  const [fila, automatico, mine, all, closed, ...grupos] = await Promise.all([
     // A FILA DEIXOU DE SER "sem dono + status de espera".
     //
     // Aquele par contava como trabalho humano pendente tudo que o robô estava
@@ -188,15 +227,28 @@ export async function GET(req: NextRequest): Promise<Response> {
     countExact()
       .eq("assigned_to_user_id", user.id)
       .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`),
-    countExact(),
+    countExact().not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`),
     // A aba "Fechadas" existia SEM número nenhum. Num inbox antigo, é o número
     // que diz o tamanho do arquivo — e a sua ausência fazia a aba parecer um
     // lugar vazio. Mesma fábrica: herda organização e filtros.
-    countAtendimentosFechados(),
+    // Busca sem protocolo/contato casado tem resposta vazia na lista; não há
+    // predicado `or=()` válido, então a contagem é zero sem consultar a tabela.
+    buscaDosFechados === null
+      ? Promise.resolve({ count: 0, error: null })
+      : countAtendimentosFechados(),
+    ...times.map((time) =>
+      countExact()
+        .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)
+        .eq("team_id", time.id),
+    ),
+    ...(incluirPorTime ? [countExact()
+      .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)
+      .is("team_id", null)] : []),
   ]);
 
   const firstErr =
-    fila.error ?? automatico.error ?? mine.error ?? all.error ?? closed.error;
+    fila.error ?? automatico.error ?? mine.error ?? all.error ?? closed.error ??
+    grupos.find((grupo) => grupo.error)?.error;
   if (firstErr) {
     return fail("internal_error", firstErr.message, 500, { requestId });
   }
@@ -213,6 +265,14 @@ export async function GET(req: NextRequest): Promise<Response> {
       mine: mine.count ?? 0,
       all: all.count ?? 0,
       closed: closed.count ?? 0,
+      ...(incluirPorTime ? { by_team: [
+        ...times.map((time, index) => ({
+          team_id: time.id,
+          name: time.name,
+          count: grupos[index]?.count ?? 0,
+        })),
+        { team_id: null, name: null, count: grupos[times.length]?.count ?? 0 },
+      ] } : {}),
     },
     { requestId },
   );

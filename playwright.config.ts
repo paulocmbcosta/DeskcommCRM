@@ -91,6 +91,7 @@ const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testIgnore: "**/._*", // sidecars AppleDouble em volumes externos do macOS
   timeout: 30_000,
   fullyParallel: false,
   /**

@@ -23,6 +23,7 @@ export default defineConfig({
     // a tests/e2e/**: sem excluir, o include default do vitest o pegaria e o
     // import de @playwright/test derrubaria a suíte unitária.
     exclude: [
+      "**/._*", // sidecars AppleDouble em volumes externos do macOS
       "**/node_modules/**",
       ".next",
       "dist",

@@ -17,6 +17,8 @@ export interface ConversationCounts {
   all: number;
   /** Opcional pelo mesmo motivo dos de cima: cache gravado antes deste deploy não tem. */
   closed?: number;
+  /** Contagem exata por time da aba Todas; opcional para caches antigos. */
+  by_team?: Array<{ team_id: string | null; name: string | null; count: number }>;
 }
 
 /** Os filtros auxiliares ligados na barra, que a contagem tem de aplicar junto. */
@@ -26,6 +28,8 @@ export interface FiltrosDaContagem {
   channel_session_id?: string;
   /** A fila por setor: `mine`, `none` ou o id de um time (migration 0263). */
   team_id?: string;
+  search?: string;
+  by_team?: boolean;
 }
 
 /**
@@ -41,6 +45,8 @@ export function useConversationCounts(
   if (filtros.tag) qs.set("tag", filtros.tag);
   if (filtros.channel_session_id) qs.set("channel_session_id", filtros.channel_session_id);
   if (filtros.team_id) qs.set("team_id", filtros.team_id);
+  if (filtros.search) qs.set("search", filtros.search);
+  if (filtros.by_team) qs.set("by_team", "true");
   const sufixo = qs.toString();
 
   return useQuery({

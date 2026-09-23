@@ -39,7 +39,7 @@ const arquivos = fs
   // único que o archify renderiza. Foi por essa fresta que ele passou a afirmar
   // "cadeia de 7 gates" (eram 10) e "1 chamada de modelo" (eram 2) sem nada
   // reprovar: prosa não tem catraca, e o gate estrutural nem olhava o arquivo.
-  .filter((f) => f.endsWith(".json"))
+  .filter((f) => f.endsWith(".json") && !f.startsWith("._"))
   .sort();
 
 /**

@@ -365,9 +365,15 @@ nunca por `update` de status.
 | 11 | A busca pelo protocolo ANTIGO acha o atendimento estando em outra aba | `resultado-por-protocolo` na aba Minhas | ✅ |
 | 12 | O atendimento novo começa do ZERO: sem o time nem o dono do anterior, IA religada (migration 0269) | `conversations` com `team_id`/dono/silêncio/passagem nulos; card "Sem time"; linha do tempo só com "Novo atendimento aberto" | ✅ |
 | 13 | A aba Fechadas lista ATENDIMENTOS: o encerrado continua lá com a conversa ABERTA de novo, marcado "o cliente voltou", com quem encerrou (sem reticências), o time do FECHAMENTO e o canal; o badge conta a mesma unidade | `lista-de-atendimentos-fechados`, `cliente-voltou`, `quem-encerrou` medido por `scrollWidth`, badge `1` | ✅ |
-| 14 | Na aba Fechadas a busca acha pelo protocolo e pelo nome, e os filtros valem contra o PostgREST de verdade (time do fechamento, número, etiqueta); a contagem com etiqueta responde 200 | `GET /atendimentos?status=closed&…` e `GET /conversations/counts?tag=` pela sessão logada | ✅ |
+| 14 | Na aba Fechadas a busca acha pelo protocolo e pelo nome, e os filtros valem contra o PostgREST de verdade (time do fechamento, número, etiqueta); o badge acompanha a busca com e sem resultado | `GET /atendimentos?status=closed&…` e `GET /conversations/counts?tag=`/`?search=` pela sessão logada | ✅ |
 | 15 | Clicar num atendimento encerrado abre AQUELE atendimento (recortado, composer travado) e a ficha mostra o time que o encerrou, não "Sem time" | `aviso-atendimento-antigo`, `ficha-da-conversa` com "Cobrança" | ✅ |
 | 16 | A NOTA INTERNA pertence ao atendimento em que foi escrita: a do primeiro não aparece no atendimento novo, a do novo não aparece ao abrir o antigo (pelo histórico e pela aba Fechadas), e "voltar ao atual" desfaz | duas notas escritas PELO COMPOSER; `chat-thread` com/sem o texto de cada uma | ✅ |
+| 17 | A aba Todas mostra só conversas abertas, agrupadas por Cobrança, Suporte e Sem time; cada cabeçalho e o badge mostram a contagem exata e mudam ao encerrar uma conversa | `inbox-protocolo-e-historico.spec.ts`: três grupos com 1 conversa cada; após Fechar, Cobrança some de Todas e o total cai de 3 para 2; `tests/unit/inbox-todas-contagem-por-time.test.ts` cobre 60 conversas além da primeira página; `.superpowers/evidence/inbox-protocolo/02b-todas-por-time.png` | ✅ |
+
+**Limite preexistente da busca:** termos que casam muitos contatos continuam sujeitos
+ao teto de 120 IDs na busca por nome/telefone. Os contadores são exatos para o
+mesmo predicado que a lista aplica; ampliar a busca além desse teto é uma frente
+separada.
 
 **Achados desta rodada, consertados na causa:**
 

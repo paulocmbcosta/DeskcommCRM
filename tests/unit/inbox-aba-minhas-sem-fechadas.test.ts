@@ -29,6 +29,10 @@ describe("tabToFilter — o que cada aba significa", () => {
     expect(tabToFilter("mine")).toEqual({ assigned_to: "me", exclude_finished: true });
   });
 
+  it("Todas mostra somente conversas ainda em andamento", () => {
+    expect(tabToFilter("all")).toEqual({ exclude_finished: true });
+  });
+
   it("Fechadas continua mostrando as fechadas — senão não sobra onde vê-las", () => {
     expect(tabToFilter("closed")).toEqual({ status: "closed" });
   });
@@ -65,9 +69,8 @@ describe("tabToFilter — o que cada aba significa", () => {
     expect(tabToFilter("ai")).toEqual({ comando: ["automatico"] });
   });
 
-  it("as outras abas não ganham o filtro de tabela", () => {
+  it("Fila e Automático não ganham o filtro de tabela", () => {
     expect(tabToFilter("unassigned").exclude_finished).toBeUndefined();
-    expect(tabToFilter("all").exclude_finished).toBeUndefined();
     expect(tabToFilter("ai").exclude_finished).toBeUndefined();
   });
 });

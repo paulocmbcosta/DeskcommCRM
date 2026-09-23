@@ -42,6 +42,7 @@ import { cn } from "@/lib/utils";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
 import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
+import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
 
 /**
  * QUAL COLUNA APARECE NO CELULAR — as duas saem da MESMA pergunta.
@@ -103,6 +104,7 @@ export function tabToFilter(
       // atendia 47. Agora ela pergunta a régua do MOTOR.
       return { comando: ["automatico"] };
     case "all":
+      return { exclude_finished: true };
     default:
       return {};
   }
@@ -244,6 +246,14 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // We need the selected conversation object for header / composer / side panel.
   // Source it from the same query the list uses to avoid an extra request.
   const listQ = useConversationsRealtime(filters, orgId);
+  const contagensQ = useConversationCounts(orgId, {
+    unread: filters.unread,
+    tag: filters.tag,
+    channel_session_id: filters.channel_session_id,
+    team_id: filters.team_id,
+    search: filters.search,
+    by_team: tab === "all",
+  });
   const inList = useMemo(() => {
     const all = listQ.data?.pages.flatMap((p) => p.data) ?? [];
     return all.find((c) => c.id === selectedId) ?? null;
@@ -548,6 +558,11 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 onSelect={handleSelect}
                 onVisibleChange={handleVisibleChange}
                 onLimparFiltros={limparFiltrosAuxiliares}
+                agruparPorTime={tab === "all"}
+                contagensPorTime={contagensQ.data?.by_team}
+                erroNasContagens={contagensQ.isError}
+                onRecarregarContagens={() => void contagensQ.refetch()}
+                onFiltrarTime={(teamId) => setFilterValue({ ...filterValue, team_id: teamId })}
               />
             )}
           </div>

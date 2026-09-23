@@ -4696,6 +4696,10 @@ export const DICIONARIO: Traducoes = {
   // ("Times de atendimento" → "Equipos de atención"). Manter duas palavras para
   // a mesma coisa faria o seletor do inbox e o menu nomearem coisas diferentes.
   "Sem time": { es: "Sin equipo" },
+  "Time indisponível": { es: "Equipo no disponible" },
+  "Não foi possível carregar o volume por time.": {
+    es: "No se pudo cargar el volumen por equipo.",
+  },
   "Encaminhar esta conversa para outro time.": {
     es: "Derivar esta conversación a otro equipo.",
   },
