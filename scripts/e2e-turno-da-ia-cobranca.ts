@@ -12,17 +12,24 @@
  * Uso: npx tsx scripts/e2e-turno-da-ia-cobranca.ts <org> <conversa>
  */
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 
 import pg from "pg";
 
-// `lib/env.ts` valida o ambiente AO SER IMPORTADO: o `.env.local` do rig entra no
-// process.env antes de qualquer módulo do app (o ambiente já definido vence).
-for (const linha of (fs.existsSync(".env.local") ? fs.readFileSync(path.join(process.cwd(), ".env.local"), "utf8") : "").split("\n")) {
-  const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(linha);
-  if (m && process.env[m[1]!] === undefined) process.env[m[1]!] = (m[2] ?? "").replace(/^"(.*)"$/, "$1").trim();
-}
+import { carregarEnvLocal } from "./lib/env-de-teste";
+
+// `lib/env.ts` valida o ambiente AO SER IMPORTADO — por isso os imports de
+// módulo do app, abaixo, são todos DINÂMICOS (dentro de `main()`), depois desta
+// linha rodar.
+//
+// `carregarEnvLocal()` (não um `readFileSync(".env.local")` à mão) é quem
+// publica o arquivo em `process.env`: ela faz `process.env` VENCER e tolera o
+// arquivo ausente. Ler o disco direto era o padrão que
+// `tests/unit/seed-nao-le-env-local-do-disco.test.ts` existe pra proibir —
+// congela o defeito medido em 2026-08-06: seeds que liam `.env.local` sozinhos
+// ignoravam o `.env.e2e` que o `webServer` do Playwright injeta em
+// `process.env`, e escreveram organização de teste em PRODUÇÃO por meses com a
+// suíte verde.
+carregarEnvLocal();
 
 const USO = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 
