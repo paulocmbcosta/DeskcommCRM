@@ -41,8 +41,9 @@
  * sem `withServiceJob`, onde a guarda é no-op — uma fila mal posta ficaria verde
  * no teste e embaralhada em produção.
  *
- * `send_message` e `send_template` dividem a MESMA fila: as duas falam com o
- * mesmo cliente, e uma não pode ultrapassar a outra.
+ * `send_message`, `send_template` e a cobrança do conector (`crm_enviar_cobranca_erp`)
+ * dividem a MESMA fila: todas falam com o mesmo cliente, e uma não pode
+ * ultrapassar a outra.
  *
  * Ferramentas de leitura NÃO entram: elas não têm ordem visível ao cliente, e
  * serializá-las só somaria latência ao turno.
@@ -70,8 +71,10 @@
  */
 import type { ToolSet } from 'ai';
 
+import { FERRAMENTA_ENVIAR_COBRANCA } from '@/lib/conectores/ferramentas-do-agente';
+
 /** As ferramentas que produzem mensagem física ao cliente — e só elas. */
-export const FERRAMENTAS_DE_ENVIO = ['send_message', 'send_template'] as const;
+export const FERRAMENTAS_DE_ENVIO = ['send_message', 'send_template', FERRAMENTA_ENVIAR_COBRANCA] as const;
 
 /** Põe um trabalho na fila e devolve o resultado DELE (ou o erro dele). */
 export type FilaDeEnvio = <T>(trabalho: () => Promise<T>) => Promise<T>;

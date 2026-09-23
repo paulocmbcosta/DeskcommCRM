@@ -131,6 +131,7 @@ import { janelaDeEnvioAberta, proximaAberturaDaJanela } from '../pacing/engine';
 import { loadChannelKnobs } from '../pacing/store';
 import { avisarJanelaFechada, resolverAvisoDeJanela } from '../pacing/aviso-de-janela';
 import { resolveConversationTurn, type TurnAgentResolution } from './resolve-turn-agent';
+import { montarFerramentasDoConector } from './ferramentas-do-conector';
 import {
   hasOpenCaseForContact,
   getCaseAwaitingLead,
@@ -3430,6 +3431,101 @@ async function executarTurnoDoAgente(
         : await loadChannelProvider(pool, tenantId, input.channelSessionId);
     if (!capabilitiesOf(provider).requiresTemplates) {
       delete rawTools.send_template;
+    }
+  }
+
+  // Ferramentas do CONECTOR (consultar o cliente no sistema de gestão, enviar a
+  // cobrança): nativas do motor, porque a cobrança tem de sair por ESTA cadeia de
+  // envio — opt-out, LGPD, ritmo, janela e o ledger (job, seq). Entram antes das do
+  // catálogo; o nome nativo tem precedência e a ponte nunca monta o handler MCP
+  // delas (`NATIVAS_DO_MOTOR`). Ver ferramentas-do-conector.ts.
+  if (agentConfig !== null) {
+    try {
+      const doConector = await montarFerramentasDoConector({
+        pool,
+        supabase: deps.crmCfg.supabase,
+        log: runLog,
+        tenantId,
+        leadId,
+        conversationId: input.conversationId,
+        channelSessionId: input.channelSessionId,
+        toolIds: agentConfig.toolIds,
+        agentId: agentConfig.agentId,
+        agora: clock,
+        saida: {
+          vagas: () => maxSendsPerTurn - seq,
+          enviar: async (mensagem) => {
+            // O corpo é a legenda (ou o código): é ele que a cadeia avalia e que o
+            // ledger identifica. `conteudoDoSistema`: valor e código vêm do ERP.
+            const chain = await runBeforeSend({
+              pool,
+              log: runLog,
+              agentOperation,
+              tenantId,
+              leadId,
+              jobId: liveJob().id,
+              channelSessionId: input.channelSessionId,
+              body: mensagem.body,
+              conteudoDoSistema: true,
+              optedOutThisTurn,
+              crmDailyLimit: null,
+              now: clock(),
+              sleep: deps.sleep,
+              lgpd,
+              agentId: agentConfig.agentId,
+              send: (finalBody: string) => {
+                seq += 1;
+                return liveChannel().send({
+                  tenantId,
+                  leadId,
+                  jobId: liveJob().id,
+                  jobClaim: claimOfJob(liveJob()),
+                  agentOperation,
+                  seq,
+                  conversationId: input.conversationId,
+                  body: finalBody,
+                  ...(mensagem.media_storage_path
+                    ? {
+                        media: {
+                          kind: mensagem.type === 'image' ? ('image' as const) : ('document' as const),
+                          storagePath: mensagem.media_storage_path,
+                          mime: mensagem.media_mime ?? 'application/octet-stream',
+                          sizeBytes: mensagem.media_size_bytes ?? 0,
+                        },
+                      }
+                    : {}),
+                });
+              },
+            });
+            if (chain.status === 'vetoed') return { ok: false, code: chain.code, message: chain.message };
+            outcomes.push(chain.outcome);
+            if (chain.outcome.kind === 'blocked') {
+              return { ok: false, code: 'contato_bloqueado', message: 'o contato optou por sair — nada mais deve ser enviado.' };
+            }
+            return { ok: true, outcome: chain.outcome };
+          },
+        },
+      });
+      Object.assign(rawTools, doConector.tools);
+      if (doConector.ausentes.length > 0) {
+        const detalhe = `capacidades ligadas sem sistema de gestão conectado: ${doConector.ausentes.join(', ')}`;
+        runLog.warn('ferramentas do conector ligadas sem conector na organização', { ausentes: doConector.ausentes });
+        if (preview) {
+          preview.result.impediments.push({ code: 'capabilities_unavailable', message: 'O sistema de gestão não está conectado.' });
+        } else {
+          await avisarCapacidadesAusentes(pool, tenantId, input.conversationId, detalhe, runLog);
+        }
+      }
+    } catch (err) {
+      // Mesma regra das tools do catálogo: capacidade extra não derruba o turno,
+      // mas a ausência dela aparece na Central — não num log que ninguém lê.
+      const detalhe = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+      runLog.error('ferramentas do conector não montadas — turno segue sem elas', { error: detalhe });
+      if (preview) {
+        preview.result.impediments.push({ code: 'capabilities_unavailable', message: 'Não foi possível carregar as capacidades configuradas.' });
+      } else {
+        await avisarCapacidadesAusentes(pool, tenantId, input.conversationId, detalhe, runLog);
+      }
     }
   }
 
