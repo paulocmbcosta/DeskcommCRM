@@ -15,16 +15,22 @@ import { declararTools } from "./tipos";
 export const TOOLS_SISTEMA_DE_GESTAO = declararTools([
   {
     name: "crm_consultar_cliente_erp",
-    category: "read",
+    // `write`, não `read`: quando o telefone bate com um cadastro do ERP, ela
+    // cria ou promove o vínculo e insere auditoria — a MESMA gravação que
+    // `GET /api/v1/contacts/[id]/conectores/ixc` faz pela tela (é GET e GRAVA).
+    // `read` escondia isso dos dois gates que varrem por `category === "write"`
+    // (escopo de funil e a vacuidade de `ALVO_DE_FUNIL`) — achado da revisão de
+    // qualidade do Lote D+E.
+    category: "write",
     rotulo: "Consultar o cliente no sistema de gestão",
     explicacao:
-      "Procura o cliente da conversa no sistema de gestão conectado e mostra ao agente a situação do acesso, o plano, a conexão e as faturas em aberto — sem CPF, endereço nem senha. Quem não é reconhecido pelo telefone precisa confirmar CPF e data de nascimento.",
+      "Procura o cliente da conversa no sistema de gestão conectado e mostra ao agente a situação do acesso, o plano, a conexão e as faturas em aberto — sem CPF, endereço nem senha. Quem não é reconhecido pelo telefone precisa confirmar CPF e data de nascimento. Pode vincular o contato a um cadastro do sistema quando o telefone bate com um só.",
     oQueToca: "Sistema de gestão conectado",
-    // `seguro`, não `atencao`: a regra do catálogo é pela CATEGORIA técnica
-    // (`tests/unit/catalogo-tools-leigo-friendly.test.ts` — "read" só pode
-    // anunciar "seguro"), não pela sensibilidade do dado. Esta tool só lê, e
-    // já sai sem CPF, endereço nem senha (ver `explicacao`).
-    risco: "seguro",
+    // `atencao`, não `seguro`: a regra do catálogo é pela CATEGORIA técnica
+    // (`tests/unit/catalogo-tools-leigo-friendly.test.ts` — "write" nunca pode
+    // anunciar "seguro"), e esta tool ESCREVE (vínculo + auditoria), mesmo sem
+    // expor CPF, endereço nem senha ao modelo (ver `explicacao`).
+    risco: "atencao",
     pacotes: ["atender"],
   },
   {

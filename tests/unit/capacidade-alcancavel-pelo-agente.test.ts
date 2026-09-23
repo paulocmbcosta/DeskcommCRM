@@ -114,6 +114,13 @@ const ESCRITA_QUE_E_TRABALHO_DE_ATENDENTE: ReadonlyArray<string> = [
   // botão do atendente. Pela ponte MCP a tool só recusa; quem envia é a ferramenta
   // nativa do motor, pela cadeia de envio do turno.
   "crm_enviar_cobranca_erp",
+  // `app/api/v1/contacts/[id]/conectores/ixc/` — GET exige `agent`
+  // (`contextoIxc` → `requireRole("agent")`) e GRAVA: um único candidato pelo
+  // telefone vincula sozinho. Reclassificada de `read` para `write` na revisão
+  // de qualidade do Lote D+E, pela mesma paridade — consultar o painel do IXC é
+  // trabalho de quem atende, e é exatamente o que a tool nativa faz. Pela ponte
+  // MCP a tool só recusa; quem consulta é a ferramenta nativa do motor.
+  "crm_consultar_cliente_erp",
 ];
 
 function alcancavelPeloAgente(requiresRole: Role): boolean {

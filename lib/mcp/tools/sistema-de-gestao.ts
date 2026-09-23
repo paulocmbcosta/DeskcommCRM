@@ -31,9 +31,16 @@ export const crmConsultarClienteErp: McpToolDefinition<typeof consultarShape> = 
   name: FERRAMENTA_CONSULTAR_CLIENTE,
   description: DESCRICAO_CONSULTAR_CLIENTE,
   inputSchema: consultarShape,
-  category: "read",
+  // `write`, não `read`: a ferramenta NATIVA (que é quem de fato roda — este
+  // handler só recusa) cria ou promove vínculo de cadastro e insere auditoria
+  // quando o telefone bate com um cadastro do ERP. Paridade com
+  // `GET /api/v1/contacts/[id]/conectores/ixc`, que também é GET e GRAVA (um
+  // único candidato por telefone vincula sozinho) — achado da revisão de
+  // qualidade do Lote D+E: `read` aqui escapava dos dois gates que varrem por
+  // `category === "write"` (escopo de funil e vacuidade da tabela).
+  category: "write",
   requiresRole: "agent",
-  requiresScope: "mcp:read",
+  requiresScope: "mcp:write",
   handler: async () => RECUSA,
 };
 

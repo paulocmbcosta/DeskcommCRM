@@ -140,6 +140,12 @@ export const ALVO_DE_FUNIL: Record<string, AlvoDeFunil> = {
   // mesma barreira OUTRA de `crm_send_whatsapp_message` acima. Entra aqui só para
   // a vacuidade não acusar; não recebe `lead_id` nem `pipeline_id`.
   crm_enviar_cobranca_erp: "sem_funil",
+  // Mesma barreira OUTRA e o mesmo motivo de `crm_enviar_cobranca_erp` acima:
+  // ferramenta NATIVA do motor, a ponte MCP nunca a monta. Reclassificada de
+  // `read` para `write` na revisão de qualidade do Lote D+E (ela cria/promove
+  // vínculo de cadastro) — entra aqui pela mesma vacuidade; opera por
+  // `contact_id`/telefone da conversa, nunca por `lead_id` nem `pipeline_id`.
+  crm_consultar_cliente_erp: "sem_funil",
 };
 
 /**
