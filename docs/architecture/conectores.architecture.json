@@ -197,7 +197,7 @@
       "lane": "conector",
       "col": 9,
       "type": "backend",
-      "label": "ixc/enviar-cobranca.ts — a ÚNICA função que envia cobrança (botão do atendente e e a IA, pela ferramenta do motor): relê, confere dono/estado/forma, %PDF, CRC16 e Pix ATIVA"
+      "label": "ixc/enviar-cobranca.ts — a ÚNICA função que envia cobrança (botão do atendente e a IA, pela ferramenta do motor): relê, confere dono/estado/forma, %PDF, CRC16 e Pix ATIVA"
     },
     {
       "id": "pix",
