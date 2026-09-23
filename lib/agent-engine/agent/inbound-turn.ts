@@ -36,7 +36,7 @@ import { currentExecutionBoundary, guardServiceEffect } from '@/lib/atendimento/
 import type pg from 'pg';
 import { z } from 'zod';
 import { auxModelArgs, type AuxModelArgs } from './aux-model-args';
-import type { ChannelAdapter, ChannelSendResult } from '../channel-adapter';
+import type { ChannelAdapter, ChannelSendInput, ChannelSendResult } from '../channel-adapter';
 
 import { withFields, type Logger } from '../obs/logger';
 import {
@@ -131,7 +131,7 @@ import { janelaDeEnvioAberta, proximaAberturaDaJanela } from '../pacing/engine';
 import { loadChannelKnobs } from '../pacing/store';
 import { avisarJanelaFechada, resolverAvisoDeJanela } from '../pacing/aviso-de-janela';
 import { resolveConversationTurn, type TurnAgentResolution } from './resolve-turn-agent';
-import { montarFerramentasDoConector } from './ferramentas-do-conector';
+import { montarFerramentasDoConector, type PortaDeEnvioDoTurno } from './ferramentas-do-conector';
 import {
   hasOpenCaseForContact,
   getCaseAwaitingLead,
@@ -154,7 +154,7 @@ import { readSkillReference, skillHasReferences } from './skill-references';
 import { READ_ONLY_TOOLS, wrapToolsWithBreaker, type ToolBreakerThresholds } from './tool-breaker';
 import { loadChannelProvider, runBeforeSend } from '../guardrails/before-send';
 import { isStatusSendable } from '../../channels/meta/template-binding';
-import { capabilitiesOf } from '@/lib/channels/capabilities';
+import { capabilitiesOf, identidadeDoTelefone } from '@/lib/channels/capabilities';
 import { renderTemplateBody } from '@/lib/channels/meta/render-template';
 import { esperarComoHumano } from './atraso-humano';
 import { sendInBubbles } from './split-message';
@@ -1556,6 +1556,14 @@ export async function avisarCapacidadesAusentes(
   conversationId: string,
   detalhe: string,
   log: Logger,
+  // Dedup por (organização, kind, TÍTULO) — não só (organização, kind). Duas
+  // causas diferentes de "capacidade ausente" (tools MCP da tela e as
+  // ferramentas do conector) compartilham o mesmo `kind` (vocabulário
+  // existente, sem migration); sem o título na chave, um item já aberto por
+  // uma causa escondia silenciosamente a outra (achado da revisão de
+  // qualidade do Lote E). Default = o título histórico, para não mudar o
+  // comportamento de quem já chama esta função sem o parâmetro.
+  titulo = 'O agente atendeu sem as capacidades que você ligou',
 ): Promise<void> {
   try {
     await db.query(
@@ -1563,11 +1571,11 @@ export async function avisarCapacidadesAusentes(
        select $1, 'capabilities_missing', 'critical', $2, $3, 'conversation', $4
         where not exists (
           select 1 from agent_inbox_items
-           where organization_id = $1 and kind = 'capabilities_missing' and status = 'open'
+           where organization_id = $1 and kind = 'capabilities_missing' and status = 'open' and title = $2
         )`,
       [
         tenantId,
-        'O agente atendeu sem as capacidades que você ligou',
+        titulo,
         'As ferramentas configuradas na tela do agente não puderam ser carregadas neste ' +
           'atendimento, e ele respondeu ao cliente sem elas. A conversa não foi interrompida. ' +
           `Motivo técnico: ${detalhe}`,
@@ -1579,6 +1587,158 @@ export async function avisarCapacidadesAusentes(
       error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
     });
   }
+}
+
+/**
+ * O desfecho de UM envio pela cadeia real de canal, na granularidade que quem
+ * chama precisa: sucesso (inclusive "aceito, será entregue depois") vs falha
+ * que a IA não pode anunciar como entregue ao cliente. Espelha o switch de
+ * `send_message` (a tool logo abaixo, no mesmo arquivo).
+ *
+ * ⚠️ Nasceu como a 3ª cópia deste encanamento (send_message, send_template, a
+ * porta da cobrança do conector) e foi a cópia que perdeu `failed`/`unavailable`
+ * — achado CRÍTICO da revisão de qualidade do Lote E: com o canal `unavailable`
+ * (WAHA fora, ledger em `requested`), as duas mensagens da cobrança "sucediam",
+ * `enviarCobrancaIxc` devolvia `enviada`, o motor auditava
+ * `conector.fatura_enviada` e respondia "a cobrança foi enviada" — e o job
+ * completava sem retry, porque `unavailable` não é `failed` e ninguém chamava
+ * `noteRunError`. Nada saiu, o cliente foi informado do contrário, e a
+ * auditoria mentiu. Extraída para função nomeada (testável sem levantar o
+ * turno inteiro) exatamente para não perder o tratamento de novo.
+ */
+export function resultadoDoEnvioNoTurno(outcome: ChannelSendResult): { ok: true } | { ok: false; code: string; message: string } {
+  switch (outcome.kind) {
+    case 'sent':
+    case 'already_sent':
+    case 'queued':
+      return { ok: true };
+    case 'blocked':
+      return {
+        ok: false,
+        code: 'contato_bloqueado',
+        message:
+          'o contato optou por não receber mensagens (bloqueio irrevogável) — não envie mais nada e encerre o turno.',
+      };
+    case 'failed':
+      return {
+        ok: false,
+        code: 'envio_falhou',
+        message: 'o canal falhou ao enviar — não tente de novo neste turno; o sistema fará retry.',
+      };
+    case 'unavailable':
+      return {
+        ok: false,
+        code: 'envio_indisponivel',
+        message: 'não consegui enviar agora (canal indisponível) — encerre o turno; o sistema re-tentará.',
+      };
+  }
+}
+
+/** O que `montarPortaDeEnvioDoConector` precisa — parâmetros explícitos, não closure, para ser testável sem levantar o turno inteiro. */
+export interface DepsDaPortaDeEnvioDoConector {
+  pool: pg.Pool;
+  log: Logger;
+  tenantId: string;
+  leadId: string;
+  conversationId: string;
+  channelSessionId: string;
+  jobId: () => string;
+  jobClaim: () => ReturnType<typeof claimOfJob>;
+  agentOperation: Parameters<typeof runBeforeSend>[0]['agentOperation'];
+  optedOutThisTurn: boolean;
+  lgpd: Parameters<typeof runBeforeSend>[0]['lgpd'];
+  disclosureMode: Parameters<typeof runBeforeSend>[0]['disclosureMode'];
+  sleep: Parameters<typeof runBeforeSend>[0]['sleep'];
+  now: () => Date;
+  maxSendsPerTurn: number;
+  seqAtual: () => number;
+  avancarSeq: () => number;
+  enviarNoCanal: (input: ChannelSendInput) => Promise<ChannelSendResult>;
+  registrarOutcome: (outcome: ChannelSendResult) => void;
+  registrarPacingCapVeto: (v: { code: string; nextAllowedAt: Date }) => void;
+  noteRunError: (err: Error) => void;
+}
+
+/**
+ * A `PortaDeEnvioDoTurno` que a ferramenta da cobrança usa
+ * (`lib/agent-engine/agent/ferramentas-do-conector.ts`) — cada mensagem passa
+ * pela MESMA cadeia `before_send` de `send_message`: opt-out, LGPD, ritmo,
+ * janela, disclosure e o ledger (job/seq). Extraída como função NOMEADA e
+ * parametrizada (não um objeto anônimo montado inline dentro de
+ * `runAgentTurn`) para poder ser testada com mocks — ver
+ * `tests/unit/ferramentas-do-conector-ligacao.test.ts`.
+ */
+export function montarPortaDeEnvioDoConector(deps: DepsDaPortaDeEnvioDoConector): PortaDeEnvioDoTurno {
+  return {
+    vagas: () => deps.maxSendsPerTurn - deps.seqAtual(),
+    enviar: async (mensagem) => {
+      // O corpo é a legenda (ou o código): é ele que a cadeia avalia e que o
+      // ledger identifica. `conteudoDoSistema`: valor e código vêm do ERP.
+      // `corpoImutavel` (só na mensagem do código): o disclosure NUNCA pode
+      // prependar aviso de IA nela — ver `MensagemDaCobranca.corpoImutavel`.
+      const chain = await runBeforeSend({
+        pool: deps.pool,
+        log: deps.log,
+        agentOperation: deps.agentOperation,
+        tenantId: deps.tenantId,
+        leadId: deps.leadId,
+        jobId: deps.jobId(),
+        channelSessionId: deps.channelSessionId,
+        body: mensagem.body,
+        conteudoDoSistema: true,
+        ...(mensagem.corpoImutavel === true ? { corpoImutavel: true as const } : {}),
+        optedOutThisTurn: deps.optedOutThisTurn,
+        crmDailyLimit: null,
+        now: deps.now(),
+        sleep: deps.sleep,
+        lgpd: deps.lgpd,
+        disclosureMode: deps.disclosureMode,
+        send: (finalBody: string) => {
+          const seq = deps.avancarSeq();
+          return deps.enviarNoCanal({
+            tenantId: deps.tenantId,
+            leadId: deps.leadId,
+            jobId: deps.jobId(),
+            jobClaim: deps.jobClaim(),
+            agentOperation: deps.agentOperation,
+            seq,
+            conversationId: deps.conversationId,
+            body: finalBody,
+            ...(mensagem.media_storage_path
+              ? {
+                  media: {
+                    kind: mensagem.type === 'image' ? ('image' as const) : ('document' as const),
+                    storagePath: mensagem.media_storage_path,
+                    mime: mensagem.media_mime ?? 'application/octet-stream',
+                    sizeBytes: mensagem.media_size_bytes ?? 0,
+                  },
+                }
+              : {}),
+          });
+        },
+      });
+      if (chain.status === 'vetoed') {
+        // Mesmo tratamento de cap de ritmo do `send_message` (ver mais abaixo):
+        // sem isto o job da cobrança nunca era readiado para a hora em que o
+        // cap libera — o cliente ficaria esperando uma resposta que não vem.
+        if ((chain.code === 'warmup_cap' || chain.code === 'daily_cap') && chain.nextAllowedAt !== undefined) {
+          deps.registrarPacingCapVeto({ code: chain.code, nextAllowedAt: chain.nextAllowedAt });
+        }
+        return { ok: false, code: chain.code, message: chain.message };
+      }
+      deps.registrarOutcome(chain.outcome);
+      const resultado = resultadoDoEnvioNoTurno(chain.outcome);
+      if (!resultado.ok) {
+        if (chain.outcome.kind === 'unavailable') {
+          deps.noteRunError(
+            new Error(`canal indisponível no envio da cobrança (${chain.outcome.reason}) — job re-tentado pela fila`),
+          );
+        }
+        return { ok: false, code: resultado.code, message: resultado.message };
+      }
+      return { ok: true, outcome: chain.outcome };
+    },
+  };
 }
 
 /**
@@ -3424,14 +3584,18 @@ async function executarTurnoDoAgente(
   // A ferramenta de template só entra em canal que EXIGE template fora da janela.
   // Num canal que fala livre a qualquer hora ela nunca teria uso — e tool inútil no
   // prompt não é neutra: gasta contexto e degrada a escolha do modelo.
-  {
-    const provider =
-      preview && !preview.channelId
-        ? DEFAULT_CHANNEL_PROVIDER
-        : await loadChannelProvider(pool, tenantId, input.channelSessionId);
-    if (!capabilitiesOf(provider).requiresTemplates) {
-      delete rawTools.send_template;
-    }
+  //
+  // `provider` NÃO é bloco-escopado: as ferramentas do conector, logo abaixo,
+  // reusam esta MESMA leitura para saber se o telefone é identidade neste canal
+  // — sem isso, cada chamada de `crm_consultar_cliente_erp` faria uma consulta
+  // extra a `contacts`/`channel_sessions` só para redescobrir o que o turno já
+  // sabe (achado "menor" da revisão de qualidade do Lote E).
+  const provider =
+    preview && !preview.channelId
+      ? DEFAULT_CHANNEL_PROVIDER
+      : await loadChannelProvider(pool, tenantId, input.channelSessionId);
+  if (!capabilitiesOf(provider).requiresTemplates) {
+    delete rawTools.send_template;
   }
 
   // Ferramentas do CONECTOR (consultar o cliente no sistema de gestão, enviar a
@@ -3449,62 +3613,39 @@ async function executarTurnoDoAgente(
         leadId,
         conversationId: input.conversationId,
         channelSessionId: input.channelSessionId,
+        telefone: openingContext.context.contact.phone,
+        identidadeDoTelefone: identidadeDoTelefone(provider),
         toolIds: agentConfig.toolIds,
         agentId: agentConfig.agentId,
         agora: clock,
-        saida: {
-          vagas: () => maxSendsPerTurn - seq,
-          enviar: async (mensagem) => {
-            // O corpo é a legenda (ou o código): é ele que a cadeia avalia e que o
-            // ledger identifica. `conteudoDoSistema`: valor e código vêm do ERP.
-            const chain = await runBeforeSend({
-              pool,
-              log: runLog,
-              agentOperation,
-              tenantId,
-              leadId,
-              jobId: liveJob().id,
-              channelSessionId: input.channelSessionId,
-              body: mensagem.body,
-              conteudoDoSistema: true,
-              optedOutThisTurn,
-              crmDailyLimit: null,
-              now: clock(),
-              sleep: deps.sleep,
-              lgpd,
-              agentId: agentConfig.agentId,
-              send: (finalBody: string) => {
-                seq += 1;
-                return liveChannel().send({
-                  tenantId,
-                  leadId,
-                  jobId: liveJob().id,
-                  jobClaim: claimOfJob(liveJob()),
-                  agentOperation,
-                  seq,
-                  conversationId: input.conversationId,
-                  body: finalBody,
-                  ...(mensagem.media_storage_path
-                    ? {
-                        media: {
-                          kind: mensagem.type === 'image' ? ('image' as const) : ('document' as const),
-                          storagePath: mensagem.media_storage_path,
-                          mime: mensagem.media_mime ?? 'application/octet-stream',
-                          sizeBytes: mensagem.media_size_bytes ?? 0,
-                        },
-                      }
-                    : {}),
-                });
-              },
-            });
-            if (chain.status === 'vetoed') return { ok: false, code: chain.code, message: chain.message };
-            outcomes.push(chain.outcome);
-            if (chain.outcome.kind === 'blocked') {
-              return { ok: false, code: 'contato_bloqueado', message: 'o contato optou por sair — nada mais deve ser enviado.' };
-            }
-            return { ok: true, outcome: chain.outcome };
+        saida: montarPortaDeEnvioDoConector({
+          pool,
+          log: runLog,
+          tenantId,
+          leadId,
+          conversationId: input.conversationId,
+          channelSessionId: input.channelSessionId,
+          jobId: () => liveJob().id,
+          jobClaim: () => claimOfJob(liveJob()),
+          agentOperation,
+          optedOutThisTurn,
+          lgpd,
+          disclosureMode: deps.knobs.disclosureMode,
+          sleep: deps.sleep,
+          now: clock,
+          maxSendsPerTurn,
+          seqAtual: () => seq,
+          avancarSeq: () => {
+            seq += 1;
+            return seq;
           },
-        },
+          enviarNoCanal: (envio) => liveChannel().send(envio),
+          registrarOutcome: (outcome) => outcomes.push(outcome),
+          registrarPacingCapVeto: (v) => {
+            pacingCapVeto = v;
+          },
+          noteRunError,
+        }),
       });
       Object.assign(rawTools, doConector.tools);
       if (doConector.ausentes.length > 0) {
@@ -3513,7 +3654,14 @@ async function executarTurnoDoAgente(
         if (preview) {
           preview.result.impediments.push({ code: 'capabilities_unavailable', message: 'O sistema de gestão não está conectado.' });
         } else {
-          await avisarCapacidadesAusentes(pool, tenantId, input.conversationId, detalhe, runLog);
+          await avisarCapacidadesAusentes(
+            pool,
+            tenantId,
+            input.conversationId,
+            detalhe,
+            runLog,
+            'O agente atendeu sem o sistema de gestão conectado',
+          );
         }
       }
     } catch (err) {
@@ -3524,7 +3672,14 @@ async function executarTurnoDoAgente(
       if (preview) {
         preview.result.impediments.push({ code: 'capabilities_unavailable', message: 'Não foi possível carregar as capacidades configuradas.' });
       } else {
-        await avisarCapacidadesAusentes(pool, tenantId, input.conversationId, detalhe, runLog);
+        await avisarCapacidadesAusentes(
+          pool,
+          tenantId,
+          input.conversationId,
+          detalhe,
+          runLog,
+          'O agente atendeu sem o sistema de gestão conectado',
+        );
       }
     }
   }
