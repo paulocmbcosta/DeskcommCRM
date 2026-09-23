@@ -120,8 +120,13 @@ pacote **"Atender e responder"**:
 
 | id (contrato de wire) | category | rótulo na tela | risco |
 |---|---|---|---|
-| `crm_consultar_cliente_erp` | read | Consultar o cliente no sistema de gestão | atencao |
+| `crm_consultar_cliente_erp` | read | Consultar o cliente no sistema de gestão | seguro |
 | `crm_enviar_cobranca_erp` | write | Enviar a cobrança do cliente (Pix ou boleto) | **critico** |
+
+O risco da consulta é `seguro` porque `tests/unit/catalogo-tools-leigo-friendly.test.ts` exige
+que toda capacidade `category: "read"` anuncie `seguro` — quem dirige o risco é a categoria
+técnica, e essa ferramenta de fato só lê (a projeção já exclui CPF, endereço e senha). Esta linha
+dizia `atencao` até a execução medir o gate.
 
 `critico` na cobrança não é enfeite: ligar o pacote "Atender e responder" NÃO pode dar ao
 agente o direito de mandar mensagem ao cliente (`lib/mcp/tools/selecao-por-pacote.ts` — a
