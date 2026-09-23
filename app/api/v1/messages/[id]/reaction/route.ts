@@ -155,6 +155,16 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     reacaoExternalId = r.externalId;
   } catch (err) {
     const motivo = err instanceof Error ? err.message : String(err);
+    // Credencial ausente é o NÚMERO não configurado, não a Meta recusando —
+    // dizer "o WhatsApp recusou" mandaria o operador procurar no lugar errado.
+    if (motivo.startsWith(adapter.codes.notConfigured)) {
+      return fail(
+        "channel_not_configured",
+        t("Este número não tem credencial da Meta configurada — a reação não saiu."),
+        422,
+        { requestId },
+      );
+    }
     logger.warn("[reaction] o canal recusou a reação", {
       request_id: requestId,
       message_id: id,

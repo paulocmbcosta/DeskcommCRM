@@ -101,18 +101,21 @@ export const EMOJIS_DA_GRADE = [
 ] as const;
 
 /**
- * Um emoji só — o que a Meta aceita no campo `reaction.emoji`.
+ * UM emoji — o que a Meta aceita no campo `reaction.emoji`.
  *
- * Aceita sequência (bandeira, tom de pele, família com ZWJ), recusa texto: a
- * Meta devolve erro para "ok" e o atendente só descobriria depois do envio.
+ * Conta GRAFEMAS (`Intl.Segmenter`), não caracteres: 🙏🏽, 👨‍👩‍👧 e 🇧🇷 são um
+ * só para quem lê e várias unidades para o JavaScript. Um grafema, e ele tem
+ * de ser pictográfico, bandeira ou keycap (1️⃣). Texto ("ok") e dois emojis
+ * colados ("👍👍") a Meta recusa — melhor dizer antes do envio.
  * Vazio NÃO passa aqui — remover é outro caminho explícito (`emoji: ""` na rota).
  */
 export function ehEmojiValido(valor: string): boolean {
   if (valor.length === 0 || valor.length > 32) return false;
-  if (/[\p{L}\p{N}\s<>]/u.test(valor.replace(/[\u{1F1E6}-\u{1F1FF}]/gu, ""))) {
-    // Letra, dígito ou espaço solto = texto. (Regional indicators são "letras"
-    // para algumas versões do ICU; bandeira é emoji legítimo.)
-    return /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(valor);
-  }
-  return /\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]/u.test(valor);
+  const grafemas = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(valor)];
+  if (grafemas.length !== 1) return false;
+  return (
+    /\p{Extended_Pictographic}/u.test(valor) ||
+    /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(valor) ||
+    /^[0-9#*]\uFE0F?\u20E3$/u.test(valor)
+  );
 }

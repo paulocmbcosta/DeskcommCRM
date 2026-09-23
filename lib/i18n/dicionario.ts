@@ -4677,6 +4677,7 @@ export const DICIONARIO: Traducoes = {
   "Esta mensagem ainda não chegou ao WhatsApp — não dá para reagir a ela.": { es: "Este mensaje aún no llegó a WhatsApp — no se puede reaccionar a él." },
   "A janela de 24h está fechada — a reação seria recusada pela plataforma.": { es: "La ventana de 24 h está cerrada — la plataforma rechazaría la reacción." },
   "O WhatsApp recusou a reação.": { es: "WhatsApp rechazó la reacción." },
+  "Este número não tem credencial da Meta configurada — a reação não saiu.": { es: "Este número no tiene credencial de Meta configurada — la reacción no salió." },
   "A reação foi enviada, mas não foi registrada aqui.": { es: "La reacción se envió, pero no se registró aquí." },
   "Esta mensagem foi apagada": { es: "Este mensaje fue eliminado" },
   editada: { es: "editado" },

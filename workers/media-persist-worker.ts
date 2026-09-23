@@ -66,12 +66,23 @@ export async function persistMessageMedia(row: EventRow): Promise<HandlerResult>
   if (msg.media_storage_path) return { consumer_key, status: "skipped", detail: "already stored" };
 
   const markStatus = async (media_status: "stored" | "failed", patch: Record<string, unknown> = {}) => {
-    const { error: updErr } = await admin
-      .from("messages")
-      .update({ metadata: { ...(msg.metadata ?? {}), media_status }, ...patch })
-      .eq("id", msg.id)
-      .eq("organization_id", msg.organization_id);
-    if (updErr) throw new Error(`message update failed: ${updErr.message}`);
+    if (Object.keys(patch).length > 0) {
+      const { error: updErr } = await admin
+        .from("messages")
+        .update(patch)
+        .eq("id", msg.id)
+        .eq("organization_id", msg.organization_id);
+      if (updErr) throw new Error(`message update failed: ${updErr.message}`);
+    }
+    // MERGE NO BANCO, não `{...msg.metadata, media_status}`: entre ler a linha
+    // e gravar passa o download da mídia, e regravar a cópia lida apagava o que
+    // outro escritor pôs no meio — a reação do atendente (DYD-16, 0276).
+    const { error: mergeErr } = await admin.rpc("fn_mesclar_metadata_da_mensagem" as never, {
+      p_org: msg.organization_id,
+      p_id: msg.id,
+      p_patch: { media_status },
+    } as never);
+    if (mergeErr) throw new Error(`message update failed: ${mergeErr.message}`);
   };
 
   const isLastAttempt = row.attempts >= DRAIN_MAX_ATTEMPTS - 1;

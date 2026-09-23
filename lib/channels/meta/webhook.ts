@@ -158,7 +158,8 @@ export interface InboundReactionEvent {
   targetExternalId: string;
   /** `""` = o cliente tirou a reação. */
   emoji: string;
-  at: Date;
+  /** `null` sem timestamp no fio: o banco usa `now()` — 1970 perderia sempre. */
+  at: Date | null;
 }
 
 export type MetaWebhookEvent =
@@ -245,7 +246,10 @@ export function parseMetaWebhook(envelope: MetaWebhookEnvelope): MetaWebhookEven
               from,
               targetExternalId: alvo,
               emoji: typeof reacao.emoji === "string" ? reacao.emoji : "",
-              at: new Date(Number(str(raw.timestamp) ?? "0") * 1000),
+              at: (() => {
+                const ts = Number(str(raw.timestamp) ?? "");
+                return Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000) : null;
+              })(),
             });
             continue;
           }

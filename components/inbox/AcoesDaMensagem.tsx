@@ -105,9 +105,12 @@ export function AcoesDaMensagem({ lado, onResponder, onReagir, minhaReacao }: Pr
             role="group"
             aria-label={t("Escolha uma reação")}
           >
-            {EMOJIS_RAPIDOS.map((e) => (
+            {EMOJIS_RAPIDOS.map((e, i) => (
               <button
                 key={e}
+                // O botão "Reagir" que tinha o foco acabou de sumir: sem isto o
+                // foco cai no <body> e quem navega por teclado se perde.
+                autoFocus={i === 0}
                 type="button"
                 aria-label={`${t("Reagir com")} ${e}`}
                 aria-pressed={e === minhaReacao}
@@ -138,9 +141,10 @@ export function AcoesDaMensagem({ lado, onResponder, onReagir, minhaReacao }: Pr
               role="group"
               aria-label={t("Todos os emojis")}
             >
-              {EMOJIS_DA_GRADE.map((e) => (
+              {EMOJIS_DA_GRADE.map((e, i) => (
                 <button
                   key={e}
+                  autoFocus={i === 0}
                   type="button"
                   aria-label={`${t("Reagir com")} ${e}`}
                   onClick={() => reagir(e)}
@@ -205,6 +209,7 @@ export function ReacoesDoBalao({
   return (
     <div
       title={titulo}
+      role="img"
       aria-label={`${t("Reações")}: ${titulo}`}
       data-testid="reacoes-do-balao"
       className={cn(

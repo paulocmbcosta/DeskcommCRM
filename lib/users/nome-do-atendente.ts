@@ -93,13 +93,15 @@ export async function nomesDosAtendentes(
 /**
  * O nome de EXIBIÇÃO de quem enviou uma mensagem pelo CRM (DYD-13): o nome
  * cadastrado e, na falta dele, o que vem antes do `@` do e-mail — a MESMA
- * régua de `fn_nome_do_usuario` (migration 0270), que é quem responde. Sem o
- * degrau do e-mail, quem instalou antes de o `bootstrap-owner.ts` gravar
- * `full_name` voltaria a aparecer como "Atendente", que é o defeito.
+ * régua de `fn_nome_do_usuario` (migration 0270). Sem o degrau do e-mail, quem
+ * instalou antes de o `bootstrap-owner.ts` gravar `full_name` voltaria a
+ * aparecer como "Atendente", que é o defeito.
  *
- * Uma chamada por id ÚNICO da página (numa conversa, 1 a 3 pessoas), ao banco
- * e não ao GoTrue. Sem service role o mapa volta vazio e a tela cai no rótulo
- * genérico — declarado, como em `nomesDosAtendentes`.
+ * UMA chamada por página (`fn_nomes_dos_usuarios`, 0276): o histórico é relido
+ * a cada evento do Realtime, e um nome por pessoa multiplicava isso. Sem
+ * service role o mapa volta vazio e a tela cai no rótulo genérico — declarado,
+ * como em `nomesDosAtendentes`. Falha de leitura também: o nome é cortesia, a
+ * mensagem não pode deixar de carregar por causa dele.
  */
 export async function nomesDeExibicao(
   userIds: Array<string | null | undefined>,
@@ -107,16 +109,24 @@ export async function nomesDeExibicao(
   const unicos = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
   if (unicos.length === 0 || !isServiceRoleConfigured()) return new Map();
 
-  const admin = createAdminClient();
-  const pares = await Promise.all(
-    unicos.map(async (id): Promise<readonly [string, string | null]> => {
-      const { data, error } = await admin.rpc("fn_nome_do_usuario" as never, { p_user: id } as never);
-      if (error) {
-        logger.warn("[nome-do-atendente] nome de exibição falhou", { user_id: id, erro: error.message });
-        return [id, null] as const;
-      }
-      return [id, (data as string | null) ?? null] as const;
-    }),
-  );
-  return new Map(pares);
+  try {
+    const { data, error } = await createAdminClient().rpc(
+      "fn_nomes_dos_usuarios" as never,
+      { p_users: unicos } as never,
+    );
+    if (error) {
+      logger.warn("[nome-do-atendente] nomes de exibição falharam", {
+        atendentes: unicos.length,
+        erro: error.message,
+      });
+      return new Map();
+    }
+    const linhas = (data as Array<{ user_id: string; nome: string | null }> | null) ?? [];
+    return new Map(linhas.map((l) => [l.user_id, l.nome] as const));
+  } catch (err) {
+    logger.warn("[nome-do-atendente] nomes de exibição lançaram", {
+      erro: err instanceof Error ? err.message : String(err),
+    });
+    return new Map();
+  }
 }

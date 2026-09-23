@@ -30,7 +30,16 @@ export interface PlanoDoStatus {
    * dele), o `delivered_at` vazio é preenchido com o mesmo horário.
    */
   preencherEntregueSeVazio?: string;
+  /** Vale esperar o envio gravar o `external_id` e tentar de novo? */
+  reTentaSemLinha?: boolean;
 }
+
+/**
+ * Quanto esperar o envio gravar o `external_id` antes da segunda tentativa. O
+ * intervalo real é o de uma resposta da Graph API mais um UPDATE — dezenas a
+ * centenas de ms; 1,5 s cobre com folga e continua longe do limite da Meta.
+ */
+export const ESPERA_PELO_ENVIO_MS = 1500;
 
 const ANTES_DE_SAIR = ["queued", "sending"] as const;
 
@@ -44,12 +53,14 @@ export function planoDoStatus(e: MessageStatusEvent, agora: Date): PlanoDoStatus
       return {
         deOnde: [...ANTES_DE_SAIR, "sent"],
         campos: { status: "delivered", delivered_at: em },
+        reTentaSemLinha: true,
       };
     case "read":
       return {
         deOnde: [...ANTES_DE_SAIR, "sent", "delivered"],
         campos: { status: "read", read_at: em },
         preencherEntregueSeVazio: em,
+        reTentaSemLinha: true,
       };
     case "failed": {
       const detalhe = [e.errorTitle, e.errorDetail].filter(Boolean).join(" — ");
@@ -62,6 +73,7 @@ export function planoDoStatus(e: MessageStatusEvent, agora: Date): PlanoDoStatus
           error_code: e.errorCode != null ? `meta_${e.errorCode}` : "meta_error",
           error_message: detalhe || null,
         },
+        reTentaSemLinha: true,
       };
     }
     default:
@@ -78,17 +90,44 @@ export async function aplicarStatusDeEntrega(
   organizationId: string,
   e: MessageStatusEvent,
   agora = new Date(),
+  esperaMs = ESPERA_PELO_ENVIO_MS,
 ): Promise<{ aplicado: boolean; erro?: string }> {
   const plano = planoDoStatus(e, agora);
   if (!plano) return { aplicado: false };
 
-  const { error } = await admin
-    .from("messages")
-    .update({ ...plano.campos, updated_at: agora.toISOString() })
-    .eq("organization_id", organizationId)
-    .eq("external_id", e.externalId)
-    .in("status", plano.deOnde);
+  const aplicar = () =>
+    admin
+      .from("messages")
+      .update({ ...plano.campos, updated_at: agora.toISOString() })
+      .eq("organization_id", organizationId)
+      .eq("external_id", e.externalId)
+      .in("status", plano.deOnde)
+      .select("id");
+
+  let { data, error } = await aplicar();
   if (error) return { aplicado: false, erro: error.message };
+
+  // ─── O status que chega ANTES do `external_id` ────────────────────────────
+  // O envio só grava o wamid DEPOIS de a Meta responder; um `delivered` ou um
+  // `failed` rápido chega nesse intervalo e não acha linha. Sem esta segunda
+  // tentativa a bolha ficaria em um check para sempre (quem desligou a
+  // confirmação de leitura nunca manda o `read` que corrigiria), e a falha
+  // 131047 sumiria. Só re-tenta quando a mensagem NÃO existe ainda — se ela
+  // existe e o UPDATE não pegou, é o "só sobe" recusando um status atrasado.
+  if ((data ?? []).length === 0 && plano.reTentaSemLinha && esperaMs > 0) {
+    const { data: existe } = await admin
+      .from("messages")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("external_id", e.externalId)
+      .limit(1);
+    if ((existe ?? []).length === 0) {
+      await new Promise((r) => setTimeout(r, esperaMs));
+      ({ data, error } = await aplicar());
+      if (error) return { aplicado: false, erro: error.message };
+    }
+  }
+  if ((data ?? []).length === 0) return { aplicado: false };
 
   if (plano.preencherEntregueSeVazio) {
     await admin

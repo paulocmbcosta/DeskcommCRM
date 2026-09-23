@@ -275,18 +275,18 @@ export async function processSentiment(event: EventRow): Promise<SentimentResult
     const latencyMs = Date.now() - start;
 
     // ── Merge sentiment into messages.metadata ────────────────────────────
-    const existingMetadata = (message.metadata as Record<string, unknown> | null) ?? {};
-    const updatedMetadata = {
-      ...existingMetadata,
-      sentiment_score: result.sentiment_score,
-      sentiment_latency_ms: latencyMs,
-    };
-
-    const { error: updateErr } = await admin
-      .from("messages")
-      .update({ metadata: updatedMetadata })
-      .eq("id", messageId)
-      .eq("organization_id", event.organization_id);
+    // MERGE NO BANCO, não `{...metadata_lido, sentiment}`: entre ler a linha e
+    // gravar passam os segundos do LLM, e regravar a cópia lida apagava o que
+    // outro escritor pôs no meio — a reação que o atendente acabou de dar
+    // (DYD-16, migration 0276).
+    const { error: updateErr } = await admin.rpc("fn_mesclar_metadata_da_mensagem" as never, {
+      p_org: event.organization_id,
+      p_id: messageId,
+      p_patch: {
+        sentiment_score: result.sentiment_score,
+        sentiment_latency_ms: latencyMs,
+      },
+    } as never);
 
     if (updateErr) {
       console.warn("[ai-sentiment-worker] metadata update failed", {

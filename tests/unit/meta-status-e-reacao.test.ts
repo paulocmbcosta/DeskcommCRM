@@ -9,9 +9,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { planoDoStatus } from "@/lib/channels/meta/status-de-entrega";
+import { aplicarStatusDeEntrega, planoDoStatus } from "@/lib/channels/meta/status-de-entrega";
 import { parseMetaWebhook, type MessageStatusEvent } from "@/lib/channels/meta/webhook";
-import { canalReage, CHANNEL_CAPABILITIES, PROVIDERS_DE_MENSAGEM } from "@/lib/channels/capabilities";
+import {
+  canalReage,
+  CHANNEL_CAPABILITIES,
+  PROVIDERS_DE_MENSAGEM,
+} from "@/lib/channels/capabilities";
 import { getAdapter } from "@/lib/channels";
 import { ehEmojiValido, reacoesDe } from "@/lib/messaging/reacoes";
 
@@ -71,6 +75,53 @@ describe("status de entrega do canal oficial (DYD-15)", () => {
     expect(p.deOnde).not.toContain("delivered");
   });
 
+  /**
+   * Um client falso que responde, em ordem, às consultas que a função faz:
+   * cada `await` de uma cadeia consome a próxima resposta da fila.
+   */
+  function clienteFalso(respostas: Array<{ data: unknown[] }>) {
+    const feitas: string[] = [];
+    const cadeia = (op: string): Record<string, unknown> => {
+      const c: Record<string, unknown> = {};
+      for (const m of ["eq", "in", "is", "select", "limit", "update"]) c[m] = () => c;
+      c.then = (ok: (v: unknown) => void) => {
+        feitas.push(op);
+        ok({ ...(respostas.shift() ?? { data: [] }), error: null });
+      };
+      return c;
+    };
+    return {
+      feitas,
+      admin: { from: () => ({ update: () => cadeia("update"), select: () => cadeia("select") }) },
+    };
+  }
+
+  it("delivered que chega ANTES do external_id é aplicado na segunda tentativa", async () => {
+    const f = clienteFalso([{ data: [] }, { data: [] }, { data: [{ id: "m1" }] }]);
+    const r = await aplicarStatusDeEntrega(
+      f.admin as never,
+      "org",
+      status({ status: "delivered" }),
+      AGORA,
+      1,
+    );
+    expect(r.aplicado).toBe(true);
+    expect(f.feitas).toEqual(["update", "select", "update"]);
+  });
+
+  it("mensagem que JÁ existe em status acima não re-tenta — é o 'só sobe' recusando", async () => {
+    const f = clienteFalso([{ data: [] }, { data: [{ id: "m1" }] }]);
+    const r = await aplicarStatusDeEntrega(
+      f.admin as never,
+      "org",
+      status({ status: "delivered" }),
+      AGORA,
+      1,
+    );
+    expect(r.aplicado).toBe(false);
+    expect(f.feitas).toEqual(["update", "select"]);
+  });
+
   it("status desconhecido não mexe na bolha", () => {
     expect(planoDoStatus(status({ status: "deleted" }), AGORA)).toBeNull();
   });
@@ -90,7 +141,13 @@ describe("status de entrega do canal oficial (DYD-15)", () => {
                     id: "wamid.A",
                     status: "failed",
                     timestamp: "1790000000",
-                    errors: [{ code: 131047, title: "Re-engagement message", error_data: { details: "janela" } }],
+                    errors: [
+                      {
+                        code: 131047,
+                        title: "Re-engagement message",
+                        error_data: { details: "janela" },
+                      },
+                    ],
                   },
                 ],
               },
@@ -117,7 +174,13 @@ describe("reação do cliente no canal oficial (DYD-16)", () => {
               value: {
                 metadata: { phone_number_id: "pn1" },
                 messages: [
-                  { id: "wamid.R", from: "5531999999999", timestamp: "1790000000", type: "reaction", reaction },
+                  {
+                    id: "wamid.R",
+                    from: "5531999999999",
+                    timestamp: "1790000000",
+                    type: "reaction",
+                    reaction,
+                  },
                 ],
               },
             },
@@ -150,7 +213,9 @@ describe("reação do cliente no canal oficial (DYD-16)", () => {
 
 describe("reação: formato e canal", () => {
   it("reacoesDe lê os dois lados e ignora chave torta", () => {
-    expect(reacoesDe({ reacoes: { contato: { emoji: "❤️" }, empresa: { emoji: "👍", user_id: "u" } } })).toEqual({
+    expect(
+      reacoesDe({ reacoes: { contato: { emoji: "❤️" }, empresa: { emoji: "👍", user_id: "u" } } }),
+    ).toEqual({
       contato: { emoji: "❤️" },
       empresa: { emoji: "👍", user_id: "u" },
     });
@@ -158,11 +223,11 @@ describe("reação: formato e canal", () => {
     expect(reacoesDe(null)).toEqual({});
   });
 
-  it.each(["👍", "❤️", "🙏🏽", "👨‍👩‍👧", "🇧🇷", "✅"])("aceita o emoji %s", (e) => {
+  it.each(["👍", "❤️", "🙏🏽", "👨‍👩‍👧", "🇧🇷", "✅", "1️⃣"])("aceita o emoji %s", (e) => {
     expect(ehEmojiValido(e)).toBe(true);
   });
 
-  it.each(["ok", "", "👍 ok", "a", "<b>", "1"])("recusa %j (texto não é reação)", (e) => {
+  it.each(["ok", "", "👍 ok", "a", "<b>", "1", "👍👍"])("recusa %j (texto não é reação)", (e) => {
     expect(ehEmojiValido(e)).toBe(false);
   });
 

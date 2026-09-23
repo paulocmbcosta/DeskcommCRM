@@ -24,6 +24,8 @@ const CONTATO_A = "c0de0276-0000-4000-8000-0000000000a2";
 const CONTATO_B = "c0de0276-0000-4000-8000-0000000000b2";
 const MSG_A = "c0de0276-0000-4000-8000-0000000000a3";
 const MSG_B = "c0de0276-0000-4000-8000-0000000000b3";
+const USER_COM_NOME = "c0de0276-0000-4000-8000-0000000000c1";
+const USER_SEM_NOME = "c0de0276-0000-4000-8000-0000000000c2";
 const FN = "public.fn_registrar_reacao(uuid, uuid, text, text, text, uuid, text, timestamptz)";
 
 const ultima = (saida: string) => saida.trim().split("\n").pop()?.trim() ?? "";
@@ -32,12 +34,19 @@ const metadataDe = (id: string) =>
     string,
     unknown
   >;
-const reagir = (org: string, alvo: string | null, ext: string | null, lado: string, emoji: string) =>
+const reagir = (
+  org: string,
+  alvo: string | null,
+  ext: string | null,
+  lado: string,
+  emoji: string,
+  em = "clock_timestamp()",
+) =>
   ultima(
     sql(
       `select coalesce(public.fn_registrar_reacao('${org}', ${alvo ? `'${alvo}'` : "null"}, ${
         ext ? `'${ext}'` : "null"
-      }, '${lado}', '${emoji}', null, null, now())::text, 'NULO');`,
+      }, '${lado}', '${emoji}', null, null, ${em})::text, 'NULO');`,
     ),
   );
 
@@ -71,20 +80,67 @@ beforeAll(() => {
 describe("fn_registrar_reacao (migration 0276)", () => {
   it("grava pelo external_id, substitui e remove — sem tocar nas outras chaves", () => {
     expect(reagir(ORG_A, null, "wamid.inv0276.A", "contato", "👍")).toBe(MSG_A);
-    expect((metadataDe(MSG_A).reacoes as Record<string, { emoji: string }>).contato.emoji).toBe("👍");
+    expect((metadataDe(MSG_A).reacoes as Record<string, { emoji: string }>).contato?.emoji).toBe(
+      "👍",
+    );
 
     expect(reagir(ORG_A, MSG_A, null, "contato", "❤️")).toBe(MSG_A);
     expect(reagir(ORG_A, MSG_A, null, "empresa", "🙏")).toBe(MSG_A);
     const m = metadataDe(MSG_A);
     const r = m.reacoes as Record<string, { emoji: string }>;
-    expect(r.contato.emoji).toBe("❤️");
-    expect(r.empresa.emoji).toBe("🙏");
+    expect(r.contato?.emoji).toBe("❤️");
+    expect(r.empresa?.emoji).toBe("🙏");
     expect(m.outra).toBe("chave");
 
+    // Remover grava a MARCA (emoji vazio + horário), não apaga a chave: é o
+    // horário que impede uma reação atrasada de ressuscitar a removida.
     expect(reagir(ORG_A, MSG_A, null, "contato", "")).toBe(MSG_A);
-    const depois = metadataDe(MSG_A).reacoes as Record<string, unknown>;
-    expect(depois.contato).toBeUndefined();
-    expect((depois.empresa as { emoji: string }).emoji).toBe("🙏");
+    const depois = metadataDe(MSG_A).reacoes as Record<string, { emoji: string }>;
+    expect(depois.contato?.emoji).toBe("");
+    expect(depois.empresa?.emoji).toBe("🙏");
+  });
+
+  it("reação mais VELHA que a gravada não vale (reentrega, ordem invertida)", () => {
+    expect(reagir(ORG_A, MSG_A, null, "empresa", "🔥", "now() + interval '1 hour'")).toBe(MSG_A);
+    expect(reagir(ORG_A, MSG_A, null, "empresa", "😢", "now() - interval '1 day'")).toBe("NULO");
+    const r = metadataDe(MSG_A).reacoes as Record<string, { emoji: string }>;
+    expect(r.empresa?.emoji).toBe("🔥");
+  });
+
+  it("fn_mesclar_metadata_da_mensagem acrescenta sem apagar a reação; não cruza org", () => {
+    expect(
+      ultima(
+        sql(
+          `select public.fn_mesclar_metadata_da_mensagem('${ORG_A}', '${MSG_A}', '{"media_status":"stored"}')::text;`,
+        ),
+      ),
+    ).toBe("true");
+    const m = metadataDe(MSG_A);
+    expect(m.media_status).toBe("stored");
+    expect((m.reacoes as Record<string, { emoji: string }>).empresa?.emoji).toBe("🔥");
+    expect(
+      ultima(
+        sql(
+          `select public.fn_mesclar_metadata_da_mensagem('${ORG_A}', '${MSG_B}', '{"x":1}')::text;`,
+        ),
+      ),
+    ).toBe("false");
+    expect(metadataDe(MSG_B).x).toBeUndefined();
+  });
+
+  it("fn_nomes_dos_usuarios: nome cadastrado, senão o início do e-mail", () => {
+    sql(`
+      insert into auth.users (id, email, raw_user_meta_data) values
+        ('${USER_COM_NOME}', 'daniel-0276@invariant.test', '{"full_name":"Daniel Souza"}'),
+        ('${USER_SEM_NOME}', 'luana.0276@invariant.test', '{}')
+        on conflict (id) do nothing;`);
+    const saida = sql(
+      `select user_id || '=' || coalesce(nome, 'NULO') from public.fn_nomes_dos_usuarios(array['${USER_COM_NOME}', '${USER_SEM_NOME}']::uuid[]) order by nome;`,
+    );
+    expect(saida.split("\n").map((l) => l.trim())).toEqual([
+      `${USER_COM_NOME}=Daniel Souza`,
+      `${USER_SEM_NOME}=luana.0276`,
+    ]);
   });
 
   it("não cruza organização: alvo de outra org devolve NULO e fica intocado", () => {
@@ -103,9 +159,13 @@ describe("fn_registrar_reacao (migration 0276)", () => {
     expect(erro).toMatch(/lado_invalido/);
   });
 
-  it("fechada a anon e authenticated; aberta ao service_role", () => {
+  it.each([
+    FN,
+    "public.fn_mesclar_metadata_da_mensagem(uuid, uuid, jsonb)",
+    "public.fn_nomes_dos_usuarios(uuid[])",
+  ])("%s: fechada a anon e authenticated; aberta ao service_role", (fn) => {
     const priv = (papel: string) =>
-      ultima(sql(`select has_function_privilege('${papel}', '${FN}', 'execute')::text;`));
+      ultima(sql(`select has_function_privilege('${papel}', '${fn}', 'execute')::text;`));
     expect(priv("anon")).toBe("false");
     expect(priv("authenticated")).toBe("false");
     expect(priv("service_role")).toBe("true");
