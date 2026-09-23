@@ -20,7 +20,7 @@
  * esperado é o português — o espanhol é coberto por i18n-espanhol-cobre-a-tela.
  */
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { MessageBubble } from "./MessageBubble";
 import type { Message } from "@/lib/types/messaging";
@@ -125,5 +125,111 @@ describe("MessageBubble — rótulo de origem", () => {
     for (const rotulo of ["Celular", "Automação", "Você", "Atendente", "IA"]) {
       expect(screen.queryByText(rotulo)).not.toBeInTheDocument();
     }
+  });
+});
+
+describe("MessageBubble — nome de quem atendeu (DYD-13)", () => {
+  it("mensagem do COLEGA mostra o NOME dele, não 'Atendente'", () => {
+    render(
+      <MessageBubble
+        message={msg({ sent_via: "user", sent_by_user_id: "u-colega", sent_by_name: "Daniel" })}
+        viewerUserId="u-eu"
+      />,
+    );
+    expect(screen.getByText("Daniel")).toBeInTheDocument();
+    expect(screen.queryByText("Atendente")).not.toBeInTheDocument();
+  });
+
+  it("a própria mensagem segue 'Você' mesmo com o nome resolvido", () => {
+    render(
+      <MessageBubble
+        message={msg({ sent_via: "user", sent_by_user_id: "u-eu", sent_by_name: "Paulo" })}
+        viewerUserId="u-eu"
+      />,
+    );
+    expect(screen.getByText("Você")).toBeInTheDocument();
+  });
+
+  it("nome vazio cai em 'Atendente' — nunca um rótulo em branco", () => {
+    render(
+      <MessageBubble
+        message={msg({ sent_via: "user", sent_by_user_id: "u-colega", sent_by_name: "  " })}
+        viewerUserId="u-eu"
+      />,
+    );
+    expect(screen.getByText("Atendente")).toBeInTheDocument();
+  });
+});
+
+describe("MessageBubble — checks de entrega (DYD-15)", () => {
+  it.each([
+    ["sent", "Enviada"],
+    ["delivered", "Entregue"],
+    ["read", "Lida"],
+  ] as const)("status %s mostra o indicador %s", (status, rotulo) => {
+    render(<MessageBubble message={msg({ status })} />);
+    expect(screen.getByLabelText(rotulo)).toBeInTheDocument();
+  });
+});
+
+describe("MessageBubble — reações (DYD-16)", () => {
+  it("a reação do cliente aparece colada ao balão", () => {
+    render(
+      <MessageBubble
+        message={msg({ metadata: { reacoes: { contato: { emoji: "❤️" } } } })}
+      />,
+    );
+    expect(screen.getByTestId("reacoes-do-balao")).toHaveTextContent("❤️");
+  });
+
+  it("metadata torta não derruba o balão nem inventa reação", () => {
+    render(<MessageBubble message={msg({ metadata: { reacoes: { contato: 3 } } })} />);
+    expect(screen.queryByTestId("reacoes-do-balao")).not.toBeInTheDocument();
+  });
+
+  it("com reação disponível, o botão de ações leva a Responder e Reagir", () => {
+    const reagidas: string[] = [];
+    render(
+      <MessageBubble
+        message={msg({ direction: "inbound", external_id: "wamid.X" })}
+        onResponder={() => {}}
+        onReagir={(_m, e) => reagidas.push(e)}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Ações da mensagem" }));
+    expect(screen.getByRole("button", { name: "Responder a esta mensagem" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reagir" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reagir com 👍" }));
+    expect(reagidas).toEqual(["👍"]);
+  });
+
+  it("clicar na MESMA reação de novo a tira (emoji vazio)", () => {
+    const reagidas: string[] = [];
+    render(
+      <MessageBubble
+        message={msg({
+          direction: "inbound",
+          external_id: "wamid.X",
+          metadata: { reacoes: { empresa: { emoji: "👍" } } },
+        })}
+        onReagir={(_m, e) => reagidas.push(e)}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Ações da mensagem" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reagir" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reagir com 👍" }));
+    expect(reagidas).toEqual([""]);
+  });
+
+  it("sem external_id (não saiu) não oferece Reagir — só o atalho de responder", () => {
+    render(
+      <MessageBubble
+        message={msg({ external_id: null })}
+        onResponder={() => {}}
+        onReagir={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Ações da mensagem" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Responder a esta mensagem" })).toBeInTheDocument();
   });
 });

@@ -89,3 +89,44 @@ export async function nomesDosAtendentes(
   );
   return new Map(pares);
 }
+
+/**
+ * O nome de EXIBIÇÃO de quem enviou uma mensagem pelo CRM (DYD-13): o nome
+ * cadastrado e, na falta dele, o que vem antes do `@` do e-mail — a MESMA
+ * régua de `fn_nome_do_usuario` (migration 0270). Sem o degrau do e-mail, quem
+ * instalou antes de o `bootstrap-owner.ts` gravar `full_name` voltaria a
+ * aparecer como "Atendente", que é o defeito.
+ *
+ * UMA chamada por página (`fn_nomes_dos_usuarios`, 0276): o histórico é relido
+ * a cada evento do Realtime, e um nome por pessoa multiplicava isso. Sem
+ * service role o mapa volta vazio e a tela cai no rótulo genérico — declarado,
+ * como em `nomesDosAtendentes`. Falha de leitura também: o nome é cortesia, a
+ * mensagem não pode deixar de carregar por causa dele.
+ */
+export async function nomesDeExibicao(
+  userIds: Array<string | null | undefined>,
+): Promise<Map<string, string | null>> {
+  const unicos = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
+  if (unicos.length === 0 || !isServiceRoleConfigured()) return new Map();
+
+  try {
+    const { data, error } = await createAdminClient().rpc(
+      "fn_nomes_dos_usuarios" as never,
+      { p_users: unicos } as never,
+    );
+    if (error) {
+      logger.warn("[nome-do-atendente] nomes de exibição falharam", {
+        atendentes: unicos.length,
+        erro: error.message,
+      });
+      return new Map();
+    }
+    const linhas = (data as Array<{ user_id: string; nome: string | null }> | null) ?? [];
+    return new Map(linhas.map((l) => [l.user_id, l.nome] as const));
+  } catch (err) {
+    logger.warn("[nome-do-atendente] nomes de exibição lançaram", {
+      erro: err instanceof Error ? err.message : String(err),
+    });
+    return new Map();
+  }
+}

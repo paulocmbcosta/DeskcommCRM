@@ -2869,3 +2869,24 @@ apontar para outro número), e a tela, com duas linhas, dizia "não conectado".
 **Não medido aqui:** conectar pela tela com credencial VÁLIDA (o ambiente local não tem
 token da Meta) e uma mensagem real chegando pelo segundo número. Isso é a virada, feita
 em produção.
+
+## J31 — O balão do canal oficial diz o que aconteceu: checks, reação e quem respondeu `[P1]` (2026-09-23)
+
+Três pedidos do Linear (DYD-15, DYD-16, DYD-13). **Medido em produção antes:** 300 de 300
+mensagens enviadas pelo número oficial em 3 dias ficaram em UM check — o webhook gravava
+`delivered`/`read` como `sent`; a reação do cliente virava mensagem vazia `[reaction]` que
+acordava a IA; e toda resposta de colega aparecia como "Atendente".
+
+| Caso | O que prova | Onde | Estado |
+|---|---|---|---|
+| J31.1 | Um check (enviada), dois (entregue), dois azuis (lida — `#53bdeb` medido por `getComputedStyle`) | `tests/e2e/inbox-checks-reacoes-e-nome.spec.ts` | FAIL → PASS |
+| J31.2 | Status só sobe; falha guarda `meta_<código>` e o motivo; status antes do wamid re-tenta | `tests/unit/meta-status-e-reacao.test.ts` | FAIL → PASS |
+| J31.3 | A mensagem do colega traz o NOME dele; a minha segue "Você" | e2e acima + `MessageBubble.test.tsx` | FAIL → PASS |
+| J31.4 | A reação do cliente aparece colada ao balão (medido: ≤ 24 px da borda de baixo) | e2e acima | FAIL → PASS |
+| J31.5 | O botão de ações abre Responder e Reagir; Reagir mostra os seis emojis e o "+" (grade + colar) | e2e acima | FAIL → PASS |
+| J31.6 | Reação que não sai não fica no balão, e a tela diz o porquê | e2e acima | PASS |
+| J31.7 | Gravar/substituir/remover, reação mais velha não vale, não cruza organização, grants | `tests/invariants/reacao-na-mensagem.test.ts` | FAIL → PASS |
+
+**Não medido aqui:** a reação saindo de verdade para um celular (sem token da Meta local) e
+se a reação do cliente abre a janela de 24h (por conservadorismo, não mexe em
+`last_inbound_at`). WAHA e o canal intermediado declaram `reacoes: false`.

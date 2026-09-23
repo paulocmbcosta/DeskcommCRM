@@ -96,8 +96,14 @@ describe("persistMessageMedia", () => {
       expect.objectContaining({
         media_storage_path: "org1/conv1/msg1.jpg",
         media_size_bytes: 3,
-        metadata: expect.objectContaining({ media_status: "stored" }),
       }),
+    );
+    // `media_status` entra por MERGE no banco (0276), não regravando a cópia
+    // lida de `metadata` — que apagaria uma reação dada durante o download.
+    expect(updateEqMock).not.toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.anything() }));
+    expect(rpcMock).toHaveBeenCalledWith(
+      "fn_mesclar_metadata_da_mensagem",
+      expect.objectContaining({ p_id: "msg1", p_patch: { media_status: "stored" } }),
     );
     expect(rpcMock).toHaveBeenCalledWith(
       "emit_event",
@@ -123,8 +129,9 @@ describe("persistMessageMedia", () => {
     vi.mocked(fetchWahaMedia).mockRejectedValue(new Error("waha_media_503"));
     const result = await persistMessageMedia(eventRow(4));
     expect(result.status).toBe("error");
-    expect(updateEqMock).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: expect.objectContaining({ media_status: "failed" }) }),
+    expect(rpcMock).toHaveBeenCalledWith(
+      "fn_mesclar_metadata_da_mensagem",
+      expect.objectContaining({ p_id: "msg1", p_patch: { media_status: "failed" } }),
     );
   });
 
@@ -132,8 +139,9 @@ describe("persistMessageMedia", () => {
     uploadMock.mockResolvedValue({ error: { message: "bucket unreachable" } });
     const result = await persistMessageMedia(eventRow(4));
     expect(result.status).toBe("error");
-    expect(updateEqMock).toHaveBeenCalledWith(
-      expect.objectContaining({ metadata: expect.objectContaining({ media_status: "failed" }) }),
+    expect(rpcMock).toHaveBeenCalledWith(
+      "fn_mesclar_metadata_da_mensagem",
+      expect.objectContaining({ p_id: "msg1", p_patch: { media_status: "failed" } }),
     );
   });
 });

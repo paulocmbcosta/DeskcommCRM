@@ -31,6 +31,9 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     costPerMessage: false,
     outboundFirst: true,
     telefoneEhIdentidade: true,
+    // O WAHA sabe reagir, mas o id que o envio devolve (bare) não é o que a
+    // reação exige (serializado): ligar exige medir primeiro. Declarado, não esquecido.
+    reacoes: false,
   },
   // Hetero-restrição: não me banem, mas a Meta me proíbe e me cobra.
   meta_cloud: {
@@ -48,6 +51,8 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     // diz COMO; esta diz que DÁ.
     outboundFirst: true,
     telefoneEhIdentidade: true,
+    // `type: "reaction"` na Cloud API, endereçado pelo wamid da mensagem alvo.
+    reacoes: true,
   },
   // Mesma hetero-restrição do canal oficial, por baixo: é um BSP: a WABA é da
   // Meta, os templates são aprovados pela Meta e a janela de 24h é da Meta. O
@@ -85,6 +90,8 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     // diz COMO; esta diz que DÁ.
     outboundFirst: true,
     telefoneEhIdentidade: true,
+    // O intermediário não documenta envio de reação. Não medido ⇒ não prometido.
+    reacoes: false,
   },
   // O primeiro canal que NÃO é WhatsApp: o widget de chat que o dono cola no
   // próprio site. O transporte somos nós — a mensagem do atendente é gravada e o
@@ -112,6 +119,8 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     costPerMessage: false,
     outboundFirst: false,
     telefoneEhIdentidade: false,
+    // O widget não desenha reação no navegador do visitante.
+    reacoes: false,
   },
 };
 
@@ -180,6 +189,18 @@ export const PROVIDERS_QUE_FALAM_PRIMEIRO: readonly ProviderDeMensagem[] =
  */
 export function canalFalaPrimeiro(provider: string | null | undefined): boolean {
   return (PROVIDERS_QUE_FALAM_PRIMEIRO as readonly string[]).includes(provider ?? "");
+}
+
+/**
+ * `true` quando o atendente pode reagir com emoji por este canal. É a pergunta
+ * da tela ("mostro Reagir?") e da rota ("aceito a reação?"). Desconhecido ⇒
+ * `false`: gravar no balão uma reação que o cliente nunca vê é o erro caro.
+ */
+export function canalReage(provider: string | null | undefined): boolean {
+  return (
+    transportaMensagem(provider) &&
+    CHANNEL_CAPABILITIES[provider as ProviderDeMensagem].reacoes
+  );
 }
 
 /**

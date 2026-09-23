@@ -41,6 +41,9 @@ describe("capabilities do canal intermediado", () => {
       // Zernio é WhatsApp por intermediário: o número da conversa é o próprio
       // transporte, igual ao canal oficial e ao WAHA.
       telefoneEhIdentidade: true,
+      // Diferença declarada: o oficial reage (sendReaction), o intermediário
+      // não documenta reação — não medido, não prometido (DYD-16).
+      reacoes: false,
     });
   });
 

@@ -37,6 +37,7 @@ export {
   PROVIDERS_QUE_FALAM_PRIMEIRO,
   PROVIDERS_SEM_MENSAGEM,
   canalFalaPrimeiro,
+  canalReage,
   meioDoCanal,
   MEIOS_DE_CANAL,
   canalConhecidoSemMensagem,

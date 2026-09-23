@@ -46,6 +46,7 @@ import {
 import type { ListMessagesQuery, SendMessageInput } from "@/lib/schemas";
 import { sendTemplateForSession } from "@/lib/channels/meta/send-template-for-session";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { nomesDeExibicao } from "@/lib/users/nome-do-atendente";
 import type { Message } from "@/lib/types/messaging";
 
 type SB = SupabaseClient;
@@ -268,7 +269,19 @@ export async function listMessagesHandler(
   // A RESPOSTA continua cronológica (antigo → novo), igual a antes: o consumidor
   // renderiza de cima para baixo sem mudar nada. O que mudou foi QUAIS mensagens
   // entram na página, não a ordem em que saem.
-  return { messages: page.slice().reverse(), cursor, has_more: hasMore };
+  //
+  // O NOME de quem enviou pelo CRM (DYD-13). A bolha dizia "Atendente" para
+  // toda mensagem do colega: `sent_by_user_id` é só um UUID, e a tela não tem
+  // como nomeá-lo. Resolvido aqui, uma vez por pessoa da página.
+  const nomes = await nomesDeExibicao(page.map((m) => m.sent_by_user_id));
+  const comNome = nomes.size
+    ? page.map((m) =>
+        m.sent_by_user_id && nomes.has(m.sent_by_user_id)
+          ? { ...m, sent_by_name: nomes.get(m.sent_by_user_id) ?? null }
+          : m,
+      )
+    : page;
+  return { messages: comNome.slice().reverse(), cursor, has_more: hasMore };
 }
 
 // ---------------------------------------------------------------------------

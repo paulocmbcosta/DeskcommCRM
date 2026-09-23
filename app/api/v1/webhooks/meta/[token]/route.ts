@@ -34,6 +34,8 @@ import { appDaMeta, appSecretDaEntrega } from "@/lib/channels/meta/app";
 import { lerEnvelopeMeta } from "@/lib/channels/meta/envelope";
 import { parseMetaWebhook, verificationChallenge, verifyMetaSignature } from "@/lib/channels/meta/webhook";
 import { ingestMetaInbound } from "@/lib/channels/meta/ingest";
+import { aplicarStatusDeEntrega } from "@/lib/channels/meta/status-de-entrega";
+import { registrarReacao } from "@/lib/messaging/registrar-reacao";
 import { metaSessionByWebhookToken } from "@/lib/channels/meta/session";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -158,12 +160,38 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
         .eq("waba_id", e.wabaId)
         .eq("name", e.templateName)
         .eq("language", e.templateLanguage);
+    } else if (e.kind === "inbound_reaction") {
+      // A reação do cliente é gravada NA MENSAGEM ALVO (migration 0276), não
+      // como mensagem nova: sem balão vazio, sem prévia "[reaction]" e sem
+      // acordar o agente de IA. Alvo fora desta organização = nada gravado.
+      const r = await registrarReacao(admin, {
+        organizationId: session.organizationId,
+        lado: "contato",
+        emoji: e.emoji,
+        alvoExternalId: e.targetExternalId,
+        externalId: e.externalId,
+        em: e.at,
+      });
+      desfechos.push(r.erro ? "reaction_failed" : r.alvoId ? "reaction" : "reaction_no_target");
+      if (r.erro) {
+        logger.error("[meta.webhook] reação não gravada", {
+          request_id: requestId,
+          external_id: e.externalId,
+          erro: r.erro,
+        });
+      }
     } else {
-      await admin
-        .from("messages")
-        .update({ status: e.status === "failed" ? "failed" : "sent", updated_at: now })
-        .eq("organization_id", session.organizationId)
-        .eq("external_id", e.externalId);
+      // Entregue e lido SOBEM a bolha (dois checks, dois checks azuis); nunca
+      // rebaixam. Antes tudo virava `sent` — ver status-de-entrega.ts (DYD-15).
+      const r = await aplicarStatusDeEntrega(admin, session.organizationId, e);
+      if (r.erro) {
+        logger.error("[meta.webhook] status de entrega não gravado", {
+          request_id: requestId,
+          external_id: e.externalId,
+          status: e.status,
+          erro: r.erro,
+        });
+      }
     }
   }
 

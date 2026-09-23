@@ -10,10 +10,9 @@ import type { Message } from "@/lib/types/messaging";
 import { CitationButton } from "@/components/ai/CitationButton";
 import { MediaRenderer } from "@/components/inbox/media/MediaRenderer";
 import { ContactCard } from "@/components/inbox/media/ContactCard";
-import {
-  extractCitations,
-  isAiGeneratedMessage,
-} from "@/lib/ai/citations/types";
+import { AcoesDaMensagem, ReacoesDoBalao } from "@/components/inbox/AcoesDaMensagem";
+import { reacoesDe } from "@/lib/messaging/reacoes";
+import { extractCitations, isAiGeneratedMessage } from "@/lib/ai/citations/types";
 
 interface Props {
   message: Message;
@@ -33,14 +32,23 @@ interface Props {
    * "Atendente", que é verdadeiro para todo mundo.
    */
   viewerUserId?: string | null;
+  /**
+   * Reagir com emoji a esta mensagem (DYD-16). Ausente = o canal não reage, ou
+   * a janela de 24h fechou: o item "Reagir" some do menu. `""` tira a reação.
+   */
+  onReagir?: (m: Message, emoji: string) => void;
 }
 
 function AckIndicator({ status, t }: { status: string; t: (texto: string) => string }) {
   if (status === "read") {
-    return <Checks size={12} weight="bold" className="text-blue-400" aria-label={t("Lida")} />;
+    // O azul do WhatsApp (#53bdeb): o balão enviado é a cor de destaque da
+    // marca (verde no padrão), e o `blue-400` de antes quase sumia sobre ela.
+    return <Checks size={14} weight="bold" className="text-[#53bdeb]" aria-label={t("Lida")} />;
   }
   if (status === "delivered") {
-    return <Checks size={12} weight="bold" className="text-current/70" aria-label={t("Entregue")} />;
+    return (
+      <Checks size={14} weight="bold" className="text-current/70" aria-label={t("Entregue")} />
+    );
   }
   if (status === "sent") {
     return <Check size={12} weight="bold" className="text-current/70" aria-label={t("Enviada")} />;
@@ -54,6 +62,7 @@ export function MessageBubble({
   onResponder,
   citada,
   viewerUserId,
+  onReagir,
 }: Props) {
   const localeDaData = useLocaleDeData();
   const t = useT();
@@ -72,8 +81,7 @@ export function MessageBubble({
   const editada = Boolean(message.edited_at) && !apagada;
   const aiGenerated = isAiGeneratedMessage(message.metadata);
   const citations = extractCitations(message.metadata);
-  const showCitationButton =
-    isOutbound && aiGenerated && (debugCitations ?? false);
+  const showCitationButton = isOutbound && aiGenerated && (debugCitations ?? false);
   // De quem saiu esta linha. `external_device` é a resposta pelo CELULAR — o
   // operador atendeu pelo WhatsApp do telefone, fora do CRM, e o ingest carimba
   // aqui. Antes isto voltava null para tudo que não fosse IA, e a bolha ficava
@@ -99,12 +107,58 @@ export function MessageBubble({
       // qualquer uma, o rótulo cai para "Atendente" — que continua dizendo o
       // que `sent_via` de fato garante (um humano, pelo CRM) sem afirmar uma
       // identidade que o dado não sustenta.
-      return viewerUserId != null && message.sent_by_user_id === viewerUserId
-        ? "Você"
-        : "Atendente";
+      if (viewerUserId != null && message.sent_by_user_id === viewerUserId) return "Você";
+      // O NOME de quem enviou (DYD-13), quando a leitura do histórico o
+      // resolveu. É dado, não interface: não passa por t().
+      return message.sent_by_name?.trim() ? { nome: message.sent_by_name.trim() } : "Atendente";
     }
     return null;
   })();
+  const reacoes = reacoesDe(message.metadata);
+  // Só reage a quem existe no WhatsApp: sem `external_id` a mensagem não saiu,
+  // e apagada não tem mais o que reagir.
+  const reagirAqui =
+    onReagir && message.external_id && !apagada && message.status !== "failed"
+      ? (emoji: string) => onReagir(message, emoji)
+      : undefined;
+  const responderAqui = onResponder ? () => onResponder(message) : undefined;
+  const lado = isOutbound ? ("direita" as const) : ("esquerda" as const);
+
+  // O botão ao lado do balão. Com reação disponível, é o menu de ações
+  // (Responder / Reagir — DYD-16); sem ela, segue o atalho direto de responder
+  // que já existia, sem clique a mais para quem não tem o que escolher.
+  const acoes = reagirAqui ? (
+    <AcoesDaMensagem
+      lado={lado}
+      onResponder={responderAqui}
+      onReagir={reagirAqui}
+      minhaReacao={reacoes.empresa?.emoji ?? null}
+    />
+  ) : responderAqui ? (
+    <button
+      type="button"
+      onClick={responderAqui}
+      aria-label={t("Responder a esta mensagem")}
+      className={cn(
+        "rounded-md p-1 text-muted-foreground transition-opacity hover:bg-muted",
+        // VISÍVEL POR PADRÃO, e escondido só onde EXISTE hover.
+        //
+        // A primeira versão era `opacity-0` + `group-hover`, copiando o
+        // WhatsApp Web. No celular isso deixa o botão invisível para
+        // sempre: não há como passar o mouse, e `focus-visible` só chega
+        // por teclado. Ou seja, a função sumia exatamente onde o dono
+        // deste CRM mais atende.
+        //
+        // `@media (hover: hover)` pergunta pelo DISPOSITIVO, não pela
+        // largura: um tablet largo com toque continua mostrando, e um
+        // desktop estreito continua escondendo. Largura não é a pergunta.
+        "opacity-100 [@media(hover:hover)]:opacity-0",
+        "focus-visible:opacity-100 [@media(hover:hover)]:group-hover:opacity-100",
+      )}
+    >
+      <ArrowBendUpLeft size={14} />
+    </button>
+  ) : null;
 
   return (
     <div
@@ -123,64 +177,46 @@ export function MessageBubble({
         quando o mouse entra. Em telas de toque não há hover — por isso
         `focus-visible` também revela, e o teclado alcança.
       */}
-      {onResponder && isOutbound && (
-        <button
-          type="button"
-          onClick={() => onResponder(message)}
-          aria-label={t("Responder a esta mensagem")}
-          className={cn(
-            "rounded-md p-1 text-muted-foreground transition-opacity hover:bg-muted",
-            // VISÍVEL POR PADRÃO, e escondido só onde EXISTE hover.
-            //
-            // A primeira versão era `opacity-0` + `group-hover`, copiando o
-            // WhatsApp Web. No celular isso deixa o botão invisível para
-            // sempre: não há como passar o mouse, e `focus-visible` só chega
-            // por teclado. Ou seja, a função sumia exatamente onde o dono
-            // deste CRM mais atende.
-            //
-            // `@media (hover: hover)` pergunta pelo DISPOSITIVO, não pela
-            // largura: um tablet largo com toque continua mostrando, e um
-            // desktop estreito continua escondendo. Largura não é a pergunta.
-            "opacity-100 [@media(hover:hover)]:opacity-0",
-            "[@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100",
-          )}
-        >
-          <ArrowBendUpLeft size={14} />
-        </button>
-      )}
+      {isOutbound && acoes}
       <div
         className={cn(
-          "max-w-[75%] text-sm",
-          isBareSticker
-            ? "px-0 py-0"
-            : cn(
-                "rounded-2xl px-3 py-2 shadow-sm",
-                isOutbound
-                  ? "rounded-br-sm bg-primary text-primary-foreground"
-                  : "rounded-bl-sm bg-muted text-foreground",
-              ),
-          isFailed && "border border-destructive",
+          "flex max-w-[75%] min-w-0 flex-col",
+          isOutbound ? "items-end" : "items-start",
         )}
       >
-        {/*
+        <div
+          className={cn(
+            "max-w-full text-sm",
+            isBareSticker
+              ? "px-0 py-0"
+              : cn(
+                  "rounded-2xl px-3 py-2 shadow-sm",
+                  isOutbound
+                    ? "rounded-br-sm bg-primary text-primary-foreground"
+                    : "rounded-bl-sm bg-muted text-foreground",
+                ),
+            isFailed && "border border-destructive",
+          )}
+        >
+          {/*
           A CITAÇÃO, dentro da bolha e acima do texto — o fio.
 
           Mostra de quem era e um trecho. `line-clamp-2` porque serve para
           reconhecer, não para reler: a original está logo acima no histórico.
         */}
-        {citada && (
-          <div
-            className={cn(
-              "mb-1 rounded-md border-l-2 px-2 py-1 text-xs",
-              isOutbound
-                ? "border-primary-foreground/50 bg-primary-foreground/10"
-                : "border-primary bg-background/60",
-            )}
-          >
-            <div className="font-medium opacity-80">
-              {citada.direction === "outbound" ? t("Você") : t("Cliente")}
-            </div>
-            {/*
+          {citada && (
+            <div
+              className={cn(
+                "mb-1 rounded-md border-l-2 px-2 py-1 text-xs",
+                isOutbound
+                  ? "border-primary-foreground/50 bg-primary-foreground/10"
+                  : "border-primary bg-background/60",
+              )}
+            >
+              <div className="font-medium opacity-80">
+                {citada.direction === "outbound" ? t("Você") : t("Cliente")}
+              </div>
+              {/*
               A CITADA PODE TER SIDO APAGADA — e aí o texto dela não volta aqui.
 
               A bolha principal já trata isto (`apagada`, acima): "mostrá-lo
@@ -190,111 +226,87 @@ export function MessageBubble({
               continuava legível dentro de cada resposta que a citou. O fio
               permanece (a citação some, não a resposta); o conteúdo, não.
             */}
-            <div className={cn("line-clamp-2 opacity-70", citada.revoked_at && "italic")}>
-              {citada.revoked_at
-                ? t("Esta mensagem foi apagada")
-                : citada.body?.trim() || t("(sem texto)")}
+              <div className={cn("line-clamp-2 opacity-70", citada.revoked_at && "italic")}>
+                {citada.revoked_at
+                  ? t("Esta mensagem foi apagada")
+                  : citada.body?.trim() || t("(sem texto)")}
+              </div>
             </div>
+          )}
+          {senderLabel && (
+            <div className="mb-0.5 flex items-center gap-1 text-[11px] font-semibold opacity-80">
+              {senderLabel === "IA" ? <Robot size={10} weight="duotone" aria-hidden /> : null}
+              {typeof senderLabel === "string" ? t(senderLabel) : senderLabel.nome}
+            </div>
+          )}
+
+          {apagada ? (
+            // Nem corpo nem mídia: o anexo apagado também sai. Em itálico e
+            // esmaecido porque não é texto de ninguém — é o CRM narrando o que
+            // aconteceu com aquele lugar da conversa.
+            <p className="leading-snug break-words whitespace-pre-wrap italic opacity-60">
+              {t("Esta mensagem foi apagada")}
+            </p>
+          ) : (
+            <>
+              {hasMedia && (
+                <div className={cn(message.body && "mb-1")}>
+                  <MediaRenderer message={message} />
+                </div>
+              )}
+
+              {isContact && !hasMedia && (
+                <div className={cn(message.body && isContact && "mb-1")}>
+                  <ContactCard message={message} />
+                </div>
+              )}
+
+              {message.body && !isContact && (
+                <p className="leading-snug break-words whitespace-pre-wrap">{message.body}</p>
+              )}
+            </>
+          )}
+
+          <div
+            className={cn(
+              "mt-1 flex items-center justify-end gap-1 text-[10px]",
+              isOutbound ? "text-primary-foreground" : "text-muted-foreground",
+            )}
+          >
+            {editada && (
+              // Ao lado da hora, não no corpo: o texto mostrado JÁ é o novo, e o
+              // que falta é avisar que ele mudou. Sem isso, um combinado de preço
+              // ou endereço é lido como se sempre tivesse dito aquilo — e a
+              // divergência só aparece quando alguém cobra o que não foi.
+              <span title={t("O autor editou esta mensagem")}>{t("editada")}</span>
+            )}
+            <span>{time}</span>
+            {showCitationButton && <CitationButton citations={citations} messageId={message.id} />}
+            {isOutbound && !isFailed && <AckIndicator status={message.status} t={t} />}
+            {isFailed && (
+              // Provider local: o painel do inbox não tem TooltipProvider ancestral e
+              // este Tooltip só monta em mensagem failed — sem o provider, abrir uma
+              // conversa com falha de envio derrubava o painel inteiro (error boundary).
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex items-center gap-0.5 font-semibold text-destructive">
+                      <WarningOctagon size={10} weight="fill" aria-hidden /> {t("Falhou")}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {message.error_message
+                      ? t(message.error_message)
+                      : (message.error_code ?? t("Erro desconhecido"))}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
           </div>
-        )}
-        {senderLabel && (
-          <div className="mb-0.5 flex items-center gap-1 text-[11px] font-semibold opacity-80">
-            {senderLabel === "IA" ? (
-              <Robot size={10} weight="duotone" aria-hidden />
-            ) : null}
-            {senderLabel && t(senderLabel)}
-          </div>
-        )}
-
-        {apagada ? (
-          // Nem corpo nem mídia: o anexo apagado também sai. Em itálico e
-          // esmaecido porque não é texto de ninguém — é o CRM narrando o que
-          // aconteceu com aquele lugar da conversa.
-          <p className="whitespace-pre-wrap break-words italic leading-snug opacity-60">
-            {t("Esta mensagem foi apagada")}
-          </p>
-        ) : (
-          <>
-            {hasMedia && (
-              <div className={cn(message.body && "mb-1")}>
-                <MediaRenderer message={message} />
-              </div>
-            )}
-
-            {isContact && !hasMedia && (
-              <div className={cn(message.body && isContact && "mb-1")}>
-                <ContactCard message={message} />
-              </div>
-            )}
-
-            {message.body && !isContact && (
-              <p className="whitespace-pre-wrap break-words leading-snug">{message.body}</p>
-            )}
-          </>
-        )}
-
-        <div
-          className={cn(
-            "mt-1 flex items-center justify-end gap-1 text-[10px]",
-            isOutbound ? "text-primary-foreground" : "text-muted-foreground",
-          )}
-        >
-          {editada && (
-            // Ao lado da hora, não no corpo: o texto mostrado JÁ é o novo, e o
-            // que falta é avisar que ele mudou. Sem isso, um combinado de preço
-            // ou endereço é lido como se sempre tivesse dito aquilo — e a
-            // divergência só aparece quando alguém cobra o que não foi.
-            <span title={t("O autor editou esta mensagem")}>{t("editada")}</span>
-          )}
-          <span>{time}</span>
-          {showCitationButton && (
-            <CitationButton citations={citations} messageId={message.id} />
-          )}
-          {isOutbound && !isFailed && <AckIndicator status={message.status} t={t} />}
-          {isFailed && (
-            // Provider local: o painel do inbox não tem TooltipProvider ancestral e
-            // este Tooltip só monta em mensagem failed — sem o provider, abrir uma
-            // conversa com falha de envio derrubava o painel inteiro (error boundary).
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex items-center gap-0.5 font-semibold text-destructive">
-                    <WarningOctagon size={10} weight="fill" aria-hidden /> {t("Falhou")}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {message.error_message ? t(message.error_message) : (message.error_code ?? t("Erro desconhecido"))}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
         </div>
+        <ReacoesDoBalao reacoes={reacoes} lado={lado} />
       </div>
-      {onResponder && !isOutbound && (
-        <button
-          type="button"
-          onClick={() => onResponder(message)}
-          aria-label={t("Responder a esta mensagem")}
-          className={cn(
-            "rounded-md p-1 text-muted-foreground transition-opacity hover:bg-muted",
-            // VISÍVEL POR PADRÃO, e escondido só onde EXISTE hover.
-            //
-            // A primeira versão era `opacity-0` + `group-hover`, copiando o
-            // WhatsApp Web. No celular isso deixa o botão invisível para
-            // sempre: não há como passar o mouse, e `focus-visible` só chega
-            // por teclado. Ou seja, a função sumia exatamente onde o dono
-            // deste CRM mais atende.
-            //
-            // `@media (hover: hover)` pergunta pelo DISPOSITIVO, não pela
-            // largura: um tablet largo com toque continua mostrando, e um
-            // desktop estreito continua escondendo. Largura não é a pergunta.
-            "opacity-100 [@media(hover:hover)]:opacity-0",
-            "[@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100",
-          )}
-        >
-          <ArrowBendUpLeft size={14} />
-        </button>
-      )}
+      {!isOutbound && acoes}
     </div>
   );
 }

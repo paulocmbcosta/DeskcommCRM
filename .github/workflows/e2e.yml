@@ -681,6 +681,7 @@ jobs:
         chat-do-site.spec.ts
         equipe-cadastro-com-senha.spec.ts
         canal-oficial-varios-numeros.spec.ts
+        inbox-checks-reacoes-e-nome.spec.ts
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts
