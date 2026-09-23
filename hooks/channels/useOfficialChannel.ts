@@ -4,7 +4,24 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { apiClient } from "@/lib/api/client";
 
+/** Um número oficial conectado. A organização pode ter vários. */
+export interface OfficialChannel {
+  channel_session_id: string;
+  hasToken: boolean;
+  /** O número entrega por um app da Meta PRÓPRIO (migration 0275)? O segredo nunca volta. */
+  hasOwnAppSecret: boolean;
+  phoneNumberId: string | null;
+  wabaId: string | null;
+  displayName: string | null;
+  phoneNumber: string | null;
+  status: string | null;
+  webhook: NonNullable<OfficialChannelState["webhook"]>;
+}
+
 export interface OfficialChannelState {
+  /** Todos os números oficiais ativos, do mais antigo ao mais novo. */
+  channels?: OfficialChannel[];
+  /** Os campos abaixo repetem o PRIMEIRO canal — contrato de quando havia um só. */
   channel_session_id?: string | null;
   connected: boolean;
   /** Existe token gravado? O token em si NUNCA volta — ver a rota. */
@@ -33,6 +50,8 @@ export interface ConnectInput {
   phone_number_id: string;
   waba_id: string;
   token: string;
+  /** Só para número que entrega por outro app da Meta; vazio = o da instalação. */
+  app_secret?: string;
 }
 
 export function useOfficialChannel() {

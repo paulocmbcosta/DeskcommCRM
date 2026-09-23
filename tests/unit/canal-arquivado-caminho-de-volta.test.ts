@@ -94,7 +94,7 @@ function canalOficial(over: Linha = {}): Linha {
     organization_id: ORG,
     provider: CHANNEL_PROVIDER_META,
     waha_session_name: null,
-    meta_phone_number_id: "999",
+    meta_phone_number_id: "1234567890",
     meta_token_encrypted: null,
     display_name: "Canal oficial",
     phone_number: null,
@@ -401,6 +401,128 @@ describe("POST /api/v1/channels/official — reconectar é ressuscitar", () => {
     });
     const { POST } = await import("@/app/api/v1/channels/official/route");
     expect((await POST(reqOficial())).status).toBe(500);
+  });
+});
+
+/**
+ * N números oficiais por organização — a chave é o `phone_number_id`.
+ *
+ * Medido em 2026-09-23 (primeira organização com dois números oficiais, de
+ * contas diferentes): a rota procurava "o canal oficial da org" e ATUALIZAVA a
+ * linha achada com o número novo. Conectar o segundo número sobrescrevia o
+ * primeiro — as conversas dele passavam a apontar para outro número.
+ *
+ * Para ver morder: tire o `.eq("meta_phone_number_id", phone_number_id)` de
+ * `buscarExistente` na rota — o primeiro caso reprova (update em vez de insert).
+ */
+describe("POST /api/v1/channels/official — o segundo número é um canal NOVO", () => {
+  const reqCom = (corpo: Record<string, unknown>) =>
+    new NextRequest("http://localhost/api/v1/channels/official", {
+      method: "POST",
+      body: JSON.stringify(corpo),
+      headers: { "content-type": "application/json" },
+    });
+
+  it("⭐ número diferente NÃO sobrescreve o primeiro: insere um canal ao lado", async () => {
+    authOk();
+    const db = makeDb({ sessions: [canalOficial({ status: "WORKING", meta_token_encrypted: "cifra-velha" })] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, phone_number_id: "5555555555", waba_id: "7777777777" }));
+
+    expect(res.status).toBe(200);
+    expect(db.escritas.map((e) => e.tipo)).toEqual(["insert"]);
+    expect(db.linhas).toHaveLength(2);
+    // O primeiro número ficou intocado: mesmo número, mesma credencial.
+    expect(db.linhas[0]?.meta_phone_number_id).toBe("1234567890");
+    expect(db.linhas[0]?.meta_token_encrypted).toBe("cifra-velha");
+    expect(db.linhas[1]?.meta_phone_number_id).toBe("5555555555");
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "channel.connected" }));
+  });
+
+  it("o MESMO número é troca de credencial: atualiza a linha dele, não cria outra", async () => {
+    authOk();
+    const outro = canalOficial({ id: "canal-2", meta_phone_number_id: "5555555555", status: "WORKING" });
+    const db = makeDb({ sessions: [canalOficial({ status: "WORKING" }), outro] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, phone_number_id: "5555555555" }));
+
+    expect(res.status).toBe(200);
+    expect(db.escritas.map((e) => e.tipo)).toEqual(["update"]);
+    expect(db.linhas).toHaveLength(2);
+    expect(outro.meta_token_encrypted).toBe("cifra-nova");
+    expect(db.linhas[0]?.meta_token_encrypted).toBeNull();
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: "channel.reconnected" }));
+  });
+
+  it("App Secret próprio: é conferido com a Meta e gravado cifrado no canal", async () => {
+    authOk();
+    vi.mocked(encryptWebhookSecret).mockImplementation(async (_db, valor) =>
+      (valor === "segredo-do-app-com-32-caracteres" ? "cifra-do-segredo" : "cifra-nova") as never,
+    );
+    const db = makeDb({ sessions: [] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, app_secret: "segredo-do-app-com-32-caracteres" }));
+
+    expect(res.status).toBe(200);
+    expect(validateMetaCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ appSecret: "segredo-do-app-com-32-caracteres" }),
+    );
+    expect(patchDe(db)).toHaveProperty("meta_app_secret_encrypted", "cifra-do-segredo");
+  });
+
+  it("trocar só o token NÃO apaga o App Secret próprio que já estava gravado", async () => {
+    authOk();
+    const db = makeDb({
+      sessions: [canalOficial({ status: "WORKING", meta_app_secret_encrypted: "cifra-do-segredo" })],
+    });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    await POST(reqCom({ ...corpoOficial, app_secret: "" }));
+
+    expect(patchDe(db)).not.toHaveProperty("meta_app_secret_encrypted");
+    expect(db.linhas[0]?.meta_app_secret_encrypted).toBe("cifra-do-segredo");
+  });
+
+  it("App Secret recusado pela Meta: nada é gravado", async () => {
+    authOk();
+    vi.mocked(validateMetaCredentials).mockResolvedValue({
+      ok: false,
+      motivo: "Invalid appsecret_proof provided in the API argument",
+    } as never);
+    const db = makeDb({ sessions: [] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, app_secret: "segredo-errado-com-32-caracteres" }));
+
+    expect(res.status).toBe(422);
+    expect(db.escritas).toEqual([]);
+  });
+
+  it("número já ativo noutra organização (índice da 0165): 409 legível, não 500", async () => {
+    authOk();
+    makeDb({ sessions: [], writeError: () => ({ code: "23505", message: "duplicate key" }) });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, phone_number_id: "5555555555" }));
+
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("GET /api/v1/channels/official — dois números, dois canais na tela", () => {
+  it("⭐ devolve os DOIS, cada um com a sua URL de webhook", async () => {
+    authOk();
+    makeDb({
+      sessions: [
+        canalOficial({ webhook_path_token: "tok-1" }),
+        canalOficial({ id: "canal-2", meta_phone_number_id: "5555555555", webhook_path_token: "tok-2" }),
+      ],
+    });
+    const { GET } = await import("@/app/api/v1/channels/official/route");
+    const body = await (await GET(new NextRequest("http://localhost/api/v1/channels/official"))).json();
+
+    // Antes: `maybeSingle()` sobre duas linhas → `null` → "não conectado".
+    expect(body.data.connected).toBe(true);
+    expect(body.data.channels).toHaveLength(2);
+    expect(body.data.channels.map((c: { webhook: { callbackUrl: string } }) => c.webhook.callbackUrl.split("/").pop()))
+      .toEqual(["tok-1", "tok-2"]);
   });
 });
 

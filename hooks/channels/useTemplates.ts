@@ -18,6 +18,8 @@ export interface TemplatePreview {
 }
 
 export interface TemplateView {
+  /** A conta (WABA) dona do modelo. Opcional: resposta de versão anterior não traz. */
+  wabaId?: string;
   name: string;
   language: string;
   status: string;
@@ -35,6 +37,12 @@ export interface TemplateView {
 export interface TemplatesPayload {
   /** `null` = canal oficial não conectado. Distinto de "conectado e sem template". */
   waba: string | null;
+  /** Cada conta oficial com os seus números — mais de uma quando há números de contas diferentes. */
+  contas?: Array<{
+    wabaId: string;
+    rotulo: string;
+    numeros: Array<{ phoneNumber: string | null; displayName: string | null }>;
+  }>;
   templates: TemplateView[];
 }
 

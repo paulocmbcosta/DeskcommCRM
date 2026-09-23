@@ -16,10 +16,10 @@ import type { NextRequest, NextResponse } from "next/server";
 import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { resolveMetaCreds } from "@/lib/channels/meta/credentials";
-import { metaSessionForOrg } from "@/lib/channels/meta/session";
+import { metaSessionsForOrg } from "@/lib/channels/meta/session";
 import { normalizeRejectedReason } from "@/lib/channels/meta/webhook";
 import { deriveTemplateContract, describeAddress } from "@/lib/channels/meta/template-contract";
-import { syncTemplates } from "@/lib/channels/meta/template-sync";
+import { syncTemplates, type SyncCounts } from "@/lib/channels/meta/template-sync";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +27,8 @@ export const runtime = "nodejs";
 
 /** Um template pronto para a tela: o que a Meta diz + o contrato derivado. */
 export interface TemplateView {
+  /** A conta (WABA) dona do modelo — com dois números de contas diferentes, a tela agrupa por ela. */
+  wabaId: string;
   name: string;
   language: string;
   status: string;
@@ -88,12 +90,12 @@ export async function GET(): Promise<NextResponse> {
   const r = await orgOrFail(requestId);
   if (!r.autorizado) return r.resposta;
 
-  const sessao = await metaSessionForOrg(r.orgId);
+  const sessoes = await metaSessionsForOrg(r.orgId);
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("meta_templates")
     .select(
-      "name, language, status, category, rejected_reason, quality_score, parameter_format, contract_hash, components, synced_at",
+      "waba_id, name, language, status, category, rejected_reason, quality_score, parameter_format, contract_hash, components, synced_at",
     )
     .eq("organization_id", r.orgId)
     .order("status")
@@ -109,6 +111,7 @@ export async function GET(): Promise<NextResponse> {
       components: row.components as never,
     });
     return {
+      wabaId: row.waba_id,
       name: row.name,
       language: row.language,
       status: row.status,
@@ -142,7 +145,12 @@ export async function GET(): Promise<NextResponse> {
     // `null` aqui não é "erro": é o estado de quem não tem canal oficial ATIVO —
     // nunca conectou, ou conectou e excluiu —, e a tela precisa distingui-lo de
     // "conectado, porém sem template".
-    waba: sessao?.wabaId ?? null,
+    waba: sessoes[0]?.wabaId ?? null,
+    /**
+     * Cada conta (WABA) com os números oficiais dela. Um número por conta é o
+     * caso comum; dois números da MESMA conta dividem os modelos.
+     */
+    contas: contasDasSessoes(sessoes),
     templates,
   });
 }
@@ -155,41 +163,95 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
   const r = await orgOrFail(requestId);
   if (!r.autorizado) return r.resposta;
 
-  const sessao = await metaSessionForOrg(r.orgId);
-  if (!sessao?.wabaId) {
+  // TODAS as contas oficiais da organização, uma sincronização por conta (WABA).
+  // Espelhava só a primeira: com um segundo número de outra conta, os modelos
+  // dele nunca chegavam ao espelho, e o número não conseguia falar primeiro.
+  const contas = contasDasSessoes(await metaSessionsForOrg(r.orgId));
+  if (contas.length === 0) {
     return fail("invalid_request", "no_meta_channel", 400, { requestId });
   }
 
-  // A credencial vem da SESSÃO que o operador conectou na tela, com o ambiente só
-  // como RESERVA — a mesma porta que `send`, `checkHealth` e `fetchInboundMedia` já
-  // usam. Antes disto este 400 olhava só `META_SYSTEM_USER_TOKEN`: numa instalação que
-  // conectou o número pela TELA, "Sincronizar modelos" respondia
-  // `400 missing_meta_token` a quem tinha credencial salva e visível na própria tela,
-  // e o 2º número oficial da instalação nunca sincronizava um modelo.
-  //
-  // A ORDEM dos desfechos NÃO muda: sem canal oficial a resposta continua
-  // `no_meta_channel`; com canal e sem credencial nenhuma (nem na sessão, nem no
-  // ambiente) continua `missing_meta_token` 400 — o que muda é só de ONDE a
-  // credencial sai quando existe.
-  const creds = await resolveMetaCreds(createAdminClient(), {
-    organizationId: r.orgId,
-    phoneNumberId: sessao.phoneNumberId ?? "",
-  });
-  if (!creds) return fail("invalid_request", "missing_meta_token", 400, { requestId });
+  const total: SyncCounts = { inserted: 0, updated: 0, unchanged: 0, disabled: 0 };
+  const falhas: string[] = [];
+  let semCredencial = 0;
 
-  try {
-    const counts = await syncTemplates({
+  for (const conta of contas) {
+    // A credencial vem da SESSÃO que o operador conectou na tela, com o ambiente só
+    // como RESERVA — a mesma porta que `send`, `checkHealth` e `fetchInboundMedia` já
+    // usam. Antes disto este 400 olhava só `META_SYSTEM_USER_TOKEN`: numa instalação que
+    // conectou o número pela TELA, "Sincronizar modelos" respondia
+    // `400 missing_meta_token` a quem tinha credencial salva e visível na própria tela.
+    //
+    // A ORDEM dos desfechos NÃO muda: sem canal oficial a resposta continua
+    // `no_meta_channel`; com canal e sem credencial nenhuma (nem na sessão, nem no
+    // ambiente) continua `missing_meta_token` 400 — o que muda é só de ONDE a
+    // credencial sai quando existe.
+    const creds = await resolveMetaCreds(createAdminClient(), {
       organizationId: r.orgId,
-      wabaId: sessao.wabaId,
-      token: creds.token,
-      graphVersion: creds.graphVersion,
+      phoneNumberId: conta.phoneNumberId ?? "",
     });
-    return ok(counts);
-  } catch (err) {
+    if (!creds) {
+      semCredencial += 1;
+      continue;
+    }
+
+    try {
+      const counts = await syncTemplates({
+        organizationId: r.orgId,
+        wabaId: conta.wabaId,
+        token: creds.token,
+        graphVersion: creds.graphVersion,
+      });
+      total.inserted += counts.inserted;
+      total.updated += counts.updated;
+      total.unchanged += counts.unchanged;
+      total.disabled += counts.disabled;
+    } catch (err) {
+      // Uma conta que falha não impede a outra de sincronizar — e a mensagem diz
+      // QUAL conta falhou, senão o operador troca o token do número errado.
+      const motivo = err instanceof Error ? err.message : "sync_failed";
+      falhas.push(contas.length > 1 ? `${conta.rotulo}: ${motivo}` : motivo);
+    }
+  }
+
+  if (semCredencial === contas.length) {
+    return fail("invalid_request", "missing_meta_token", 400, { requestId });
+  }
+  if (falhas.length > 0) {
     // A falha da Graph API vira mensagem legível na tela, não 500 mudo — o
     // operador precisa saber se é token vencido, WABA errada ou rede.
-    return fail("internal_error", err instanceof Error ? err.message : "sync_failed", 502, {
-      requestId,
+    return fail("internal_error", falhas.join(" · "), 502, { requestId });
+  }
+  return ok(total);
+}
+
+/** Uma conta (WABA) oficial, com o número que a representa e todos os dela. */
+interface ContaOficial {
+  wabaId: string;
+  /** O número cuja credencial sincroniza a conta — o mais antigo dela. */
+  phoneNumberId: string | null;
+  /** Como a tela e a mensagem de erro nomeiam a conta. */
+  rotulo: string;
+  numeros: Array<{ phoneNumber: string | null; displayName: string | null }>;
+}
+
+/** Agrupa as sessões por conta. Sessão sem WABA não tem modelo a espelhar. */
+function contasDasSessoes(sessoes: Awaited<ReturnType<typeof metaSessionsForOrg>>): ContaOficial[] {
+  const porConta = new Map<string, ContaOficial>();
+  for (const s of sessoes) {
+    if (!s.wabaId) continue;
+    const numero = { phoneNumber: s.phoneNumber ?? null, displayName: s.displayName ?? null };
+    const conta = porConta.get(s.wabaId);
+    if (conta) {
+      conta.numeros.push(numero);
+      continue;
+    }
+    porConta.set(s.wabaId, {
+      wabaId: s.wabaId,
+      phoneNumberId: s.phoneNumberId,
+      rotulo: s.phoneNumber ?? s.displayName ?? s.wabaId,
+      numeros: [numero],
     });
   }
+  return [...porConta.values()];
 }

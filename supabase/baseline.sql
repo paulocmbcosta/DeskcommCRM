@@ -27789,6 +27789,18 @@ comment on column public.conector_conexoes.cobranca_encaminha_apos_dias is
 
 notify pgrst, 'reload schema';
 
+-- ---- App Secret por número oficial (migration 0275) ----
+-- O segundo número oficial pode entregar por OUTRO app da Meta, assinado com o
+-- segredo desse app. NULL = vale o da instalação (platform_meta_app, 0257).
+-- Racional completo no cabeçalho da migration 0275. Idempotente.
+alter table public.channel_sessions
+  add column if not exists meta_app_secret_encrypted bytea;
+
+comment on column public.channel_sessions.meta_app_secret_encrypted is
+  'App Secret do app da Meta pelo qual ESTE número entrega o webhook, cifrado por fn_encrypt_oauth. NULL = vale o da instalação (platform_meta_app). Existe para dois números de apps diferentes na mesma instalação (migration 0275).';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

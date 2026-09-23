@@ -35,6 +35,9 @@ export interface MetaWebhookSession {
 export interface MetaSessaoDaOrg extends MetaWebhookSession {
   /** `channel_sessions.meta_phone_number_id` — `null` em base anterior à 0144. */
   phoneNumberId: string | null;
+  /** O número como a pessoa o lê (`+55…`) — para a tela nomear a conta. */
+  phoneNumber?: string | null;
+  displayName?: string | null;
 }
 
 /**
@@ -79,18 +82,18 @@ export async function metaSessionByWebhookToken(
 }
 
 /**
- * A sessão oficial ATIVA da organização (se houver). Usada pela tela de templates
- * para saber QUAL WABA espelhar — e para dizer ao operador o que fazer quando não
- * há nenhuma, em vez de mostrar uma tabela vazia sem explicação.
+ * As sessões oficiais ATIVAS da organização, da mais antiga para a mais nova.
+ *
+ * Lista, e não uma: a organização pode ter mais de um número oficial — e de
+ * CONTAS (WABAs) diferentes, cada uma com os seus modelos. Quem espelha modelos
+ * percorre todas; quem só quer "a primeira" usa `metaSessionForOrg`.
  *
  * Arquivada não conta: sem o filtro, a tela seguia nomeando a WABA de um canal
  * que o operador excluiu e o botão de sincronizar continuava puxando templates
  * dela — o token do env não foi revogado junto com o da linha, então a chamada
  * ia mesmo. "Excluído" que continua operando é a promessa quebrada.
  */
-export async function metaSessionForOrg(
-  organizationId: string,
-): Promise<MetaSessaoDaOrg | null> {
+export async function metaSessionsForOrg(organizationId: string): Promise<MetaSessaoDaOrg[]> {
   const admin = createAdminClient();
   const base = () =>
     admin
@@ -99,21 +102,38 @@ export async function metaSessionForOrg(
       // credencial (`organization_id` + ele): sem o número, quem chama não tem como
       // pedir a credencial DESTA sessão e volta a olhar o ambiente — que é o defeito
       // que a fatia F4 da #850 fecha.
-      .select("id, organization_id, meta_waba_id, meta_phone_number_id")
+      .select("id, organization_id, meta_waba_id, meta_phone_number_id, phone_number, display_name")
       .eq("organization_id", organizationId)
       .eq("provider", CHANNEL_PROVIDER_META)
-      .order("created_at", { ascending: true })
-      .limit(1);
+      .order("created_at", { ascending: true });
   const { data } = await queryTolerantToMissingArchived(
-    () => base().is(ARCHIVED_AT, null).maybeSingle(),
-    () => base().maybeSingle(),
+    () => base().is(ARCHIVED_AT, null),
+    () => base(),
   );
 
-  if (!data) return null;
-  return {
-    id: data.id,
-    organizationId: data.organization_id,
-    wabaId: data.meta_waba_id ?? null,
-    phoneNumberId: data.meta_phone_number_id ?? null,
-  };
+  return ((data ?? []) as Array<{
+    id: string;
+    organization_id: string;
+    meta_waba_id: string | null;
+    meta_phone_number_id: string | null;
+    phone_number?: string | null;
+    display_name?: string | null;
+  }>).map((linha) => ({
+    id: linha.id,
+    organizationId: linha.organization_id,
+    wabaId: linha.meta_waba_id ?? null,
+    phoneNumberId: linha.meta_phone_number_id ?? null,
+    phoneNumber: linha.phone_number ?? null,
+    displayName: linha.display_name ?? null,
+  }));
+}
+
+/**
+ * A PRIMEIRA sessão oficial ativa da organização (se houver) — a mais antiga.
+ * Para "tem canal oficial?"; quem precisa de todas usa `metaSessionsForOrg`.
+ */
+export async function metaSessionForOrg(
+  organizationId: string,
+): Promise<MetaSessaoDaOrg | null> {
+  return (await metaSessionsForOrg(organizationId))[0] ?? null;
 }

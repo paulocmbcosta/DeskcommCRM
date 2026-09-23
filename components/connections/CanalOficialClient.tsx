@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  type OfficialChannel,
   useConnectOfficialChannel,
   useOfficialChannel,
 } from "@/hooks/channels/useOfficialChannel";
@@ -60,111 +61,159 @@ function ParaColar({
   );
 }
 
+/** O que o operador cola na Meta para UM número — cada número tem a sua URL. */
+function ColarNaMeta({ webhook }: { webhook: OfficialChannel["webhook"] }) {
+  const t = useT();
+  return (
+    <div className="flex flex-col gap-3 border-t pt-3">
+      <div>
+        <h3 className="text-sm font-medium">{t("Cole isto no painel da Meta")}</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t("Em")} <strong>WhatsApp → {t("Configuração")}</strong>
+          {t(", na seção de Webhook. Sem esse passo o canal envia, mas")}{" "}
+          <strong>{t("não recebe")}</strong>
+          {t(" — as respostas do cliente não chegam e a janela de 24 horas nunca abre.")}
+        </p>
+      </div>
+      <ParaColar rotulo={t("URL de callback")} valor={webhook.callbackUrl} />
+      <ParaColar
+        rotulo={t("Token de verificação")}
+        valor={webhook.verifyToken}
+        semValor={
+          // Desde a 0257 o token vive na tela de administração da instalação
+          // e é mostrado UMA vez, quando é gerado. Mandar "definir no
+          // servidor" quem já cadastrou tudo por lá seria mandá-lo editar um
+          // arquivo que ele não precisa abrir — e o valor do arquivo nem é
+          // mais o que a Meta precisa receber.
+          <span className="flex flex-col items-start gap-1">
+            {webhook.verifyTokenOrigem === "instalacao" ? (
+              <span className="text-sm text-muted-foreground" data-testid="token-na-instalacao">
+                {t("Já cadastrado na administração da instalação. Ele aparece uma vez só, quando é gerado — se não foi guardado, quem administra a instalação gera outro em Admin › API Oficial (Meta).")}
+              </span>
+            ) : (
+              <span className="text-sm text-destructive" data-testid="token-nao-configurado">
+                {t("Ainda não configurado. Quem administra a instalação cadastra em Admin › API Oficial (Meta), e o token aparece lá pronto para copiar.")}
+              </span>
+            )}
+            {webhook.configurarEm ? (
+              <Link
+                href={webhook.configurarEm}
+                data-testid="abrir-app-da-meta"
+                className="text-sm font-medium underline underline-offset-2"
+              >
+                {t("Abrir API Oficial (Meta) na administração")}
+              </Link>
+            ) : null}
+          </span>
+        }
+      />
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {t("Campos a assinar")}
+        </span>
+        <div className="flex flex-wrap gap-1">
+          {webhook.fields.map((f) => (
+            <Badge key={f} variant="outline" className="font-mono text-xs">
+              {f}
+            </Badge>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const FORM_VAZIO = { phone_number_id: "", waba_id: "", token: "", app_secret: "" };
+
 export function CanalOficialClient() {
   const t = useT();
   const { data, isPending } = useOfficialChannel();
   const conectar = useConnectOfficialChannel();
-  const [form, setForm] = useState({ phone_number_id: "", waba_id: "", token: "" });
+  const [form, setForm] = useState(FORM_VAZIO);
+  /**
+   * O número cuja credencial está sendo trocada — `null` é "conectar um número
+   * novo". O `phone_number_id` é a chave do canal: com ele, o servidor atualiza
+   * aquele número; com outro, cria um canal novo ao lado.
+   */
+  const [trocando, setTrocando] = useState<OfficialChannel | null>(null);
 
-  const estado = data?.data;
+  const canais = data?.data.channels ?? [];
+
+  function trocarCredencial(canal: OfficialChannel) {
+    setTrocando(canal);
+    setForm({
+      ...FORM_VAZIO,
+      phone_number_id: canal.phoneNumberId ?? "",
+      waba_id: canal.wabaId ?? "",
+    });
+    document.getElementById("form-canal-oficial")?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function voltarAoNovo() {
+    setTrocando(null);
+    setForm(FORM_VAZIO);
+  }
 
   async function enviar(e: React.FormEvent) {
     e.preventDefault();
     const r = await conectar.mutateAsync(form);
     toast.success(`${t("Conectado:")} ${r.data.displayName} ${r.data.phoneNumber ?? ""}`.trim());
-    // O token some do formulário assim que grava — deixá-lo na tela seria mantê-lo
-    // em memória do navegador sem motivo, e ele não volta em nenhum GET.
-    setForm((f) => ({ ...f, token: "" }));
+    // Os segredos somem do formulário assim que gravam — deixá-los na tela seria
+    // mantê-los em memória do navegador sem motivo, e eles não voltam em nenhum GET.
+    voltarAoNovo();
   }
 
   if (isPending) return <p className="text-sm text-muted-foreground">{t("Carregando…")}</p>;
 
+  const tituloDoForm = trocando
+    ? `${t("Trocar credencial")} · ${trocando.phoneNumber ?? trocando.displayName ?? ""}`.trim()
+    : canais.length > 0
+      ? t("Adicionar outro número")
+      : t("Conectar canal oficial");
+
   return (
     <div className="flex flex-col gap-4" data-testid="canal-oficial-root">
-      {estado?.connected ? (
-        <Card className="p-4" data-testid="canal-conectado">
+      {canais.map((canal) => (
+        <Card key={canal.channel_session_id} className="flex flex-col gap-3 p-4" data-testid="canal-conectado">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{estado.displayName}</span>
-            {estado.phoneNumber ? (
+            <span className="font-medium">{canal.displayName}</span>
+            {canal.phoneNumber ? (
               <Badge variant="outline" className="font-mono text-xs">
-                {estado.phoneNumber}
+                {canal.phoneNumber}
               </Badge>
             ) : null}
-            <Badge>{estado.status ?? "—"}</Badge>
+            <Badge>{canal.status ?? "—"}</Badge>
             {/* Mostra que o token EXISTE, nunca qual é. */}
-            <Badge variant={estado.hasToken ? "outline" : "destructive"}>
-              {estado.hasToken ? t("credencial guardada") : t("sem credencial")}
+            <Badge variant={canal.hasToken ? "outline" : "destructive"}>
+              {canal.hasToken ? t("credencial guardada") : t("sem credencial")}
             </Badge>
+            {canal.hasOwnAppSecret ? (
+              <Badge variant="outline" data-testid="app-proprio">
+                {t("app da Meta próprio")}
+              </Badge>
+            ) : null}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => trocarCredencial(canal)}
+              data-testid="btn-trocar-credencial"
+            >
+              {t("Trocar credencial")}
+            </Button>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            WABA <span className="font-mono">{estado.wabaId}</span> · {t("número")}{" "}
-            <span className="font-mono">{estado.phoneNumberId}</span>
+          <p className="text-xs text-muted-foreground">
+            WABA <span className="font-mono">{canal.wabaId}</span> · {t("número")}{" "}
+            <span className="font-mono">{canal.phoneNumberId}</span>
           </p>
+          <ChannelAiAccess channelId={canal.channel_session_id} />
+          <ColarNaMeta webhook={canal.webhook} />
         </Card>
-      ) : null}
-      {estado?.channel_session_id && <ChannelAiAccess channelId={estado.channel_session_id} />}
+      ))}
 
-      {estado?.webhook ? (
-        <Card className="flex flex-col gap-3 p-4">
-          <div>
-            <h2 className="font-medium">{t("Cole isto no painel da Meta")}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {t("Em")} <strong>WhatsApp → {t("Configuração")}</strong>
-              {t(", na seção de Webhook. Sem esse passo o canal envia, mas")}{" "}
-              <strong>{t("não recebe")}</strong>
-              {t(" — as respostas do cliente não chegam e a janela de 24 horas nunca abre.")}
-            </p>
-          </div>
-          <ParaColar rotulo={t("URL de callback")} valor={estado.webhook.callbackUrl} />
-          <ParaColar
-            rotulo={t("Token de verificação")}
-            valor={estado.webhook.verifyToken}
-            semValor={
-              // Desde a 0257 o token vive na tela de administração da instalação
-              // e é mostrado UMA vez, quando é gerado. Mandar "definir no
-              // servidor" quem já cadastrou tudo por lá seria mandá-lo editar um
-              // arquivo que ele não precisa abrir — e o valor do arquivo nem é
-              // mais o que a Meta precisa receber.
-              <span className="flex flex-col items-start gap-1">
-                {estado.webhook.verifyTokenOrigem === "instalacao" ? (
-                  <span className="text-sm text-muted-foreground" data-testid="token-na-instalacao">
-                    {t("Já cadastrado na administração da instalação. Ele aparece uma vez só, quando é gerado — se não foi guardado, quem administra a instalação gera outro em Admin › API Oficial (Meta).")}
-                  </span>
-                ) : (
-                  <span className="text-sm text-destructive" data-testid="token-nao-configurado">
-                    {t("Ainda não configurado. Quem administra a instalação cadastra em Admin › API Oficial (Meta), e o token aparece lá pronto para copiar.")}
-                  </span>
-                )}
-                {estado.webhook.configurarEm ? (
-                  <Link
-                    href={estado.webhook.configurarEm}
-                    data-testid="abrir-app-da-meta"
-                    className="text-sm font-medium underline underline-offset-2"
-                  >
-                    {t("Abrir API Oficial (Meta) na administração")}
-                  </Link>
-                ) : null}
-              </span>
-            }
-          />
-          <div className="flex flex-col gap-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              {t("Campos a assinar")}
-            </span>
-            <div className="flex flex-wrap gap-1">
-              {estado.webhook.fields.map((f) => (
-                <Badge key={f} variant="outline" className="font-mono text-xs">
-                  {f}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        </Card>
-      ) : null}
-
-      <Card className="p-4">
-        <h2 className="font-medium">
-          {estado?.connected ? t("Trocar credencial") : t("Conectar canal oficial")}
+      <Card className="p-4" id="form-canal-oficial">
+        <h2 className="font-medium" data-testid="titulo-form-oficial">
+          {tituloDoForm}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {t("Os três valores vêm do seu app na Meta (")}
@@ -172,6 +221,11 @@ export function CanalOficialClient() {
           {t("). A credencial é")} <strong>{t("validada com a Meta antes de ser gravada")}</strong>
           {t(" — se o número não responder, nada é salvo.")}
         </p>
+        {!trocando && canais.length > 0 ? (
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t("Um número novo vira uma caixa de entrada nova, ao lado das que já existem — nenhuma é substituída.")}
+          </p>
+        ) : null}
 
         <form onSubmit={enviar} className="mt-4 flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
@@ -181,6 +235,9 @@ export function CanalOficialClient() {
               value={form.phone_number_id}
               onChange={(e) => setForm((f) => ({ ...f, phone_number_id: e.target.value }))}
               placeholder="1103328999528818"
+              // Trocando a credencial, o número é a chave do canal: mudá-lo aqui
+              // criaria um canal novo em vez de trocar a credencial deste.
+              readOnly={trocando !== null}
               required
             />
           </div>
@@ -202,7 +259,7 @@ export function CanalOficialClient() {
               value={form.token}
               onChange={(e) => setForm((f) => ({ ...f, token: e.target.value }))}
               placeholder={
-                estado?.hasToken ? t("•••• (já guardado — preencha para trocar)") : "EAAG…"
+                trocando?.hasToken ? t("•••• (já guardado — preencha para trocar)") : "EAAG…"
               }
               required
             />
@@ -210,9 +267,34 @@ export function CanalOficialClient() {
               {t("Guardado cifrado. Não é exibido de volta em nenhum momento.")}
             </span>
           </div>
-          <Button type="submit" disabled={conectar.isPending} data-testid="btn-conectar">
-            {conectar.isPending ? t("Validando com a Meta…") : t("Validar e conectar")}
-          </Button>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="appsecret">
+              {t("Chave secreta do app (opcional)")}
+            </Label>
+            <Input
+              id="appsecret"
+              type="password"
+              value={form.app_secret}
+              onChange={(e) => setForm((f) => ({ ...f, app_secret: e.target.value }))}
+              placeholder={
+                trocando?.hasOwnAppSecret ? t("•••• (já guardada — preencha para trocar)") : ""
+              }
+              data-testid="campo-app-secret"
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("Só se este número pertence a um app da Meta diferente do cadastrado na instalação. Sem ela, as mensagens desse número chegam e são recusadas. Fica em Configurações do app › Básico › Chave secreta do app.")}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={conectar.isPending} data-testid="btn-conectar">
+              {conectar.isPending ? t("Validando com a Meta…") : t("Validar e conectar")}
+            </Button>
+            {trocando ? (
+              <Button type="button" variant="ghost" onClick={voltarAoNovo}>
+                {t("Cancelar")}
+              </Button>
+            ) : null}
+          </div>
         </form>
       </Card>
     </div>

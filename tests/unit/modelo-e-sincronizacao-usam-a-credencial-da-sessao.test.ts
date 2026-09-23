@@ -100,6 +100,24 @@ function cadeia(tabela: string, filtros: Record<string, unknown>): Record<string
   alvo.is = () => alvo;
   alvo.order = () => alvo;
   alvo.limit = () => alvo;
+  // Busca da LISTA de conexões oficiais (`metaSessionsForOrg`): a rota de
+  // sincronizar percorre todas as contas da organização.
+  alvo.then = (ok: (v: unknown) => unknown) => {
+    const org = String(filtros.organization_id ?? "");
+    const conexao = sessoes[org];
+    const data =
+      tabela === "channel_sessions" && conexao
+        ? [
+            {
+              id: `sessao-${org}`,
+              organization_id: org,
+              meta_waba_id: `waba-${org}`,
+              meta_phone_number_id: conexao.phoneNumberId,
+            },
+          ]
+        : [];
+    return Promise.resolve({ data, error: null }).then(ok);
+  };
   return alvo;
 }
 
