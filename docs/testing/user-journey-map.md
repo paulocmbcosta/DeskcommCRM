@@ -2850,7 +2850,7 @@ healthcheck, levando junto o `psql` do baseline — o log do CLI é que diz
 Postgres a `57014 statement timeout` e o GoTrue a `504`. **O Realtime não foi
 exercitado nesta rodada.**
 
-## J24 — Um segundo número da API Oficial na mesma organização `[P1]` (2026-09-23)
+## J30 — Um segundo número da API Oficial na mesma organização `[P1]` (2026-09-23)
 
 A primeira organização com dois números oficiais, em **contas (WABAs) e apps da Meta
 diferentes**. Antes, a porta de entrada conhecia um canal oficial por organização:
@@ -2859,12 +2859,12 @@ apontar para outro número), e a tela, com duas linhas, dizia "não conectado".
 
 | Caso | O que prova | Onde | Estado |
 |---|---|---|---|
-| J24.1 | Dois números aparecem os dois, cada um com a SUA URL de webhook | `tests/e2e/canal-oficial-varios-numeros.spec.ts` | FAIL → PASS |
-| J24.2 | Número novo é canal novo; o mesmo número é troca de credencial | unidade da rota (`canal-arquivado-caminho-de-volta.test.ts`) | FAIL → PASS |
-| J24.3 | "Trocar credencial" trava o ID do número (mudá-lo criaria outro canal) | e2e acima | PASS |
-| J24.4 | Credencial ruim para um terceiro número é recusada pela Meta real e não toca os outros | e2e acima | PASS |
-| J24.5 | O número de outro app da Meta é aceito com a chave secreta DELE (0275) | `webhook-meta-le-do-banco.test.ts` | FAIL → PASS |
-| J24.6 | Cada número só oferece e só envia os modelos da sua conta | `modelos-por-conta-oficial.test.ts` | FAIL → PASS |
+| J30.1 | Dois números aparecem os dois, cada um com a SUA URL de webhook | `tests/e2e/canal-oficial-varios-numeros.spec.ts` | FAIL → PASS |
+| J30.2 | Número novo é canal novo; o mesmo número é troca de credencial | unidade da rota (`canal-arquivado-caminho-de-volta.test.ts`) | FAIL → PASS |
+| J30.3 | "Trocar credencial" trava o ID do número (mudá-lo criaria outro canal) | e2e acima | PASS |
+| J30.4 | Credencial ruim para um terceiro número é recusada pela Meta real e não toca os outros | e2e acima | PASS |
+| J30.5 | O número de outro app da Meta é aceito com a chave secreta DELE (0275) | `webhook-meta-le-do-banco.test.ts` | FAIL → PASS |
+| J30.6 | Cada número só oferece e só envia os modelos da sua conta | `modelos-por-conta-oficial.test.ts` | FAIL → PASS |
 
 **Não medido aqui:** conectar pela tela com credencial VÁLIDA (o ambiente local não tem
 token da Meta) e uma mensagem real chegando pelo segundo número. Isso é a virada, feita
