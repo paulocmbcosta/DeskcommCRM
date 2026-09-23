@@ -8,6 +8,14 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.39.0] — 2026-09-23
+
+### Adicionado
+
+- **Inbox separa as conversas abertas por time** A aba Todas agora mostra somente conversas em aberto, organizadas por time e por
+  "Sem time", com a contagem exata de cada grupo. Conversas encerradas continuam
+  na aba Fechadas.
+
 ## [1.38.0] — 2026-09-23
 
 ### Adicionado
@@ -5366,7 +5374,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.38.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.39.0...HEAD
+[1.39.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.38.0...v1.39.0
 [1.38.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.37.0...v1.38.0
 [1.37.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.36.0...v1.37.0
 [1.36.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.35.1...v1.36.0
