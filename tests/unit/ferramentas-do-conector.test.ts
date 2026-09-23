@@ -19,7 +19,7 @@ import { montarFerramentasDoConector } from "@/lib/agent-engine/agent/ferramenta
 
 const consultar = vi.fn();
 const enviarCobranca = vi.fn();
-const upload = vi.fn(async () => ({ error: null }));
+const upload = vi.fn(async (..._args: unknown[]) => ({ error: null }));
 let recusas = 0;
 let provider = "meta_cloud";
 const pool = {
