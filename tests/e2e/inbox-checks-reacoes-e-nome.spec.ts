@@ -119,6 +119,9 @@ test.beforeAll(async () => {
     channel_session_id: sessaoId,
     contact_id: contatoId,
     type: "text",
+    // Inserção em LOTE: o PostgREST manda NULL na coluna que falta numa linha
+    // e sobra noutra — e `metadata` é NOT NULL.
+    metadata: {},
   };
   const t0 = Date.now() - 10 * 60_000;
   const em = (min: number) => new Date(t0 + min * 60_000).toISOString();
