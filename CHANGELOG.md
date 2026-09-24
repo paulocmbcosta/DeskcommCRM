@@ -8,6 +8,15 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.41.1] — 2026-09-24
+
+### Corrigido
+
+- **Número oficial com token de um app e webhook de outro** Conectar um número da API Oficial informando a chave secreta do app falhava com
+  "Invalid appsecret_proof" quando o token tinha sido gerado em um app e o webhook
+  do número vinha de outro. A tela agora tem o campo "ID do app do webhook": com
+  ele, a chave é conferida direto com esse app.
+
 ## [1.41.0] — 2026-09-23
 
 ### Adicionado
@@ -5412,7 +5421,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.1...HEAD
+[1.41.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.0...v1.41.1
 [1.41.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.40.0...v1.41.0
 [1.40.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.39.0...v1.40.0
 [1.39.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.38.0...v1.39.0
