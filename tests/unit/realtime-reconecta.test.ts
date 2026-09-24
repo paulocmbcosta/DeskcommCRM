@@ -103,7 +103,13 @@ describe("a rede de segurança do inbox", () => {
   it("uma mudança de conversa atualiza também os números exatos por time", () => {
     const fonte = readFileSync("hooks/inbox/useConversationsRealtime.ts", "utf8");
     const aoMudar = fonte.slice(fonte.indexOf("const onChange = useCallback"), fonte.indexOf("// G4-01", fonte.indexOf("const onChange = useCallback")));
-    expect(aoMudar).toContain('queryKey: ["conversation-counts"]');
+    // Desde 2026-09-24 a recarga vai pelo juntador (um refetch por aviso
+    // derrubou a produção): o `onChange` pede a recarga, e é ELA que tem de
+    // incluir as contagens.
+    expect(aoMudar).toContain("pedirRecargaDoInbox(qc)");
+    const recarga = readFileSync("hooks/inbox/recargaDoInbox.ts", "utf8");
+    expect(recarga).toContain('queryKey: ["conversation-counts"]');
+    expect(recarga).toContain('queryKey: ["conversations"]');
   });
 
   it("a conversa aberta também", () => {

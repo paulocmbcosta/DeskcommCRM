@@ -2,6 +2,7 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
+import { pedirRecargaDoInbox } from "./recargaDoInbox";
 import { useRefetchDeSeguranca } from "@/hooks/realtime/useRefetchDeSeguranca";
 import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
@@ -69,9 +70,13 @@ export function useMessagesRealtime(conversationId: string | null, atendimentoId
     refetchOnWindowFocus: true,
   });
 
+  // As mensagens da conversa ABERTA recarregam na hora — é o que a pessoa está
+  // lendo. A LISTA do Inbox vai pelo juntador compartilhado: por aviso, ela
+  // multiplicava a carga pelo número de atendentes (incidente de 2026-09-24,
+  // `lib/realtime/juntar-avisos.ts`).
   const onChange = useCallback(() => {
     if (conversationId) qc.invalidateQueries({ queryKey: ["messages", conversationId] });
-    qc.invalidateQueries({ queryKey: ["conversations"] });
+    pedirRecargaDoInbox(qc);
   }, [qc, conversationId]);
 
   const { status: realtimeStatus, ultimaEntrega } = useRealtimeChannel({

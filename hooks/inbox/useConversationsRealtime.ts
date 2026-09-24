@@ -2,6 +2,7 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
+import { pedirRecargaDoInbox } from "./recargaDoInbox";
 import { useRefetchDeSeguranca } from "@/hooks/realtime/useRefetchDeSeguranca";
 import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
@@ -161,9 +162,11 @@ export function useConversationsRealtime(
     refetchOnWindowFocus: true,
   });
 
+  // JUNTADO, não um refetch por aviso: com N atendentes logados, cada aviso
+  // virava N × (lista + contagens) no banco — e isso derrubou a produção em
+  // 2026-09-24. Ver `lib/realtime/juntar-avisos.ts`.
   const onChange = useCallback(() => {
-    qc.invalidateQueries({ queryKey: ["conversations"] });
-    qc.invalidateQueries({ queryKey: ["conversation-counts"] });
+    pedirRecargaDoInbox(qc);
   }, [qc]);
 
   // G4-01 (visibility_mode): a subscription postgres_changes HERDA a RLS de
