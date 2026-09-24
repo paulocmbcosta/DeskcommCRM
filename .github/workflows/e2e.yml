@@ -660,6 +660,7 @@ jobs:
         historico-de-captacao.spec.ts
         inbox-quem-manda.spec.ts
         inbox-protocolo-e-historico.spec.ts
+        inbox-fila-e-termometro.spec.ts
         pausa-do-atendente.spec.ts
         inbox-rotulo-de-origem.spec.ts
         troca-de-organizacao-tem-volta.spec.ts

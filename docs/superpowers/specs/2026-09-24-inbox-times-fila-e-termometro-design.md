@@ -19,7 +19,12 @@ Data: 2026-09-24 · Pedido do dono (Totus) · Aprovado na conversa em 2026-09-24
 - O **trilho lateral de abas não muda** (Fila, Minhas, Todas, Fechadas, Automático). Os
   chips existem **só dentro de Todas**.
 - **Uma régua de espera só**, ajustável pela organização; padrão **2 / 5 / 10 min**.
-- "Na fila do time" = `team_id` definido **e** sem atendente **e** comando `aguardando`.
+- "Na fila do time" = `team_id` definido **e** sem atendente **e** não encerrada **e**
+  `bot_silenced_until` no futuro (a IA saiu do comando). Pergunta colunas, não o campo
+  calculado `comando_da_conversa`: entra numa contagem por time, e o campo calculado lê
+  `contacts` duas vezes por linha (incidente da 0278). Régua única em
+  `lib/inbox/espera.ts` (`estaNaFilaDoTime`) com espelho SQL em
+  `app/api/v1/conversations/_na-fila.ts`.
   Transferência manual para um time passa a **silenciar a IA** (times não têm agente de IA;
   transferir e deixar o robô respondendo era o estado "transferido mas não está na fila").
 - O **motivo** (ninguém disponível / todos no limite ou fora do horário) aparece por time, na
@@ -62,7 +67,7 @@ Data: 2026-09-24 · Pedido do dono (Totus) · Aprovado na conversa em 2026-09-24
 - `GET /api/v1/conversations/counts`: `na_fila=true` entra na fábrica de contagem (badge
   espelha a lista). `by_team` passa a ser contado **sem** o filtro de time (senão, ao
   escolher um chip, todos os outros viram 0) e ganha `na_fila` por time.
-- `GET /api/v1/teams/fila` (agent+): para cada time com fila, o motivo —
+- `GET /api/v1/conversations/teams/fila` (viewer+): para cada time com fila, o motivo —
   `ninguem_disponivel` (nenhum membro disponível) ou `todos_ocupados` (há disponíveis, mas
   ninguém elegível: teto/horário). Usa `loadEligibleAttendants` (a mesma régua do roteador).
 
@@ -70,9 +75,11 @@ Data: 2026-09-24 · Pedido do dono (Totus) · Aprovado na conversa em 2026-09-24
 
 - **Todas**: some o agrupamento. Abaixo dos filtros, chips `Todos N · Sem time N · <Time> N`
   (+ selo vermelho "N na fila" e dica do motivo). Clicar filtra por `team_id`. Ao lado, dois
-  chips de alternância: **Só na fila** e **Mais tempo esperando**.
-- **Card**: selo `Na fila · <Time>` quando a conversa está na fila do time; o termômetro
-  substitui a linha "Aguardando há X": amarelo ≥ amarelo_min, laranja ≥ laranja_min,
+  chips de alternância: **Só na fila** e **Mais tempo esperando**. Em **Minhas**, só o
+  segundo (é a aba de quem atende).
+- **Card**: selo `Na fila · <Time>` quando a conversa está na fila do time; a linha
+  "Aguardando há X" vira o termômetro (o texto fica — é vocabulário que as specs e o
+  espanhol já conhecem): amarelo ≥ amarelo_min, laranja ≥ laranja_min,
   vermelho pulsando ≥ vermelho_min (`motion-safe`). Só aparece com comando `humano` ou
   `aguardando` (no Automático a IA leva 1–3 min e pintaria tudo de amarelo). O relógio anda
   sozinho (tick de 30 s na lista).

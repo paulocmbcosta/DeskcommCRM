@@ -369,7 +369,7 @@ export function ConversationListItem({
                   <Clock size={12} weight="regular" aria-hidden />
                 )}
                 <span className="truncate">
-                  {espera ? `${t("Sem resposta há")} ${formatarEspera(espera.ms, t)}` : t("Aguardando")}
+                  {espera ? `${t("Aguardando há")} ${formatarEspera(espera.ms, t)}` : t("Aguardando")}
                 </span>
               </span>
             )}

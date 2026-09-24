@@ -66,7 +66,7 @@ describe("o termômetro sobe pela régua (padrão 2 / 5 / 10 min)", () => {
 
   it("mede desde a PRIMEIRA mensagem sem resposta, não a última", () => {
     pintar({ espera_desde: ha(12), last_inbound_at: ha(1) });
-    expect(screen.getByTestId("espera-da-conversa")).toHaveTextContent("Sem resposta há 12 min");
+    expect(screen.getByTestId("espera-da-conversa")).toHaveTextContent("Aguardando há 12 min");
   });
 
   it("só o vermelho pulsa (a sirene)", () => {
