@@ -48,7 +48,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import { CHANNEL_PROVIDER_META } from "@/lib/channels/capabilities";
 import { appDaMeta, appDaMetaDoAmbiente } from "@/lib/channels/meta/app";
-import { validateMetaCredentials } from "@/lib/channels/meta/validate-credentials";
+import { validarChaveDoApp, validateMetaCredentials } from "@/lib/channels/meta/validate-credentials";
 import { reactivateChannelSession } from "@/lib/channels/reactivate";
 import { env } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -68,6 +68,12 @@ const conectarSchema = z.object({
   waba_id: z.string().trim().min(5),
   token: z.string().trim().min(20),
   app_secret: opcional(z.string().trim().min(16)),
+  /**
+   * O app que ENTREGA o webhook deste número, quando não é o app do token.
+   * Com ele, a chave é conferida direto com esse app (`validarChaveDoApp`);
+   * sem ele, pela prova do token (`appsecret_proof`).
+   */
+  app_id: opcional(z.string().trim().regex(/^\d{5,20}$/)),
 });
 
 /** Uma linha oficial, na projeção que a tela usa. */
@@ -238,19 +244,44 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       requestId,
     });
   }
-  const { phone_number_id, waba_id, token, app_secret } = parsed.data;
+  const { phone_number_id, waba_id, token, app_secret, app_id } = parsed.data;
+  if (app_id && !app_secret) {
+    return fail("invalid_request", t("Informe a chave secreta do app junto com o ID do app."), 422, {
+      requestId,
+    });
+  }
 
   // VALIDA ANTES DE GRAVAR — a rota não sabe com quem fala; ela pergunta se a
-  // credencial presta e o canal responde. Com `app_secret`, a mesma chamada
-  // confere o segredo (`appsecret_proof`): colado errado, ele só se revelaria
-  // como 401 calado na primeira mensagem do cliente.
+  // credencial presta e o canal responde. A chave secreta, colada errado, só se
+  // revelaria como 401 calado na primeira mensagem do cliente — então também é
+  // conferida, por um de dois caminhos:
+  //   - com `app_id`: direto com o app que entrega o webhook. É o caso do token
+  //     de um app e webhook de outro (medido na virada do 4063, 2026-09-24);
+  //   - sem `app_id`: pela prova do token (`appsecret_proof`), que só passa
+  //     quando token e chave são do mesmo app.
   const validacao = await validateMetaCredentials({
     phoneNumberId: phone_number_id,
     token,
-    appSecret: app_secret ?? null,
+    appSecret: app_id ? null : (app_secret ?? null),
   });
   if (!validacao.ok) {
-    return fail("invalid_request", validacao.motivo, 422, { requestId });
+    // A Graph diz "Invalid appsecret_proof" e não diz o que fazer: o motivo mais
+    // provável é token e webhook de apps diferentes, e a saída é o ID do app.
+    const motivo = /appsecret_proof/i.test(validacao.motivo)
+      ? t("A chave secreta não é do app deste token. Se o webhook deste número vem de outro app da Meta, informe também o ID desse app.")
+      : validacao.motivo;
+    return fail("invalid_request", motivo, 422, { requestId });
+  }
+  if (app_id && app_secret) {
+    const chave = await validarChaveDoApp({ appId: app_id, appSecret: app_secret });
+    if (!chave.ok) {
+      return fail(
+        "invalid_request",
+        `${t("A Meta não confirmou a chave secreta deste app:")} ${chave.motivo}`,
+        422,
+        { requestId },
+      );
+    }
   }
 
   const admin = createAdminClient();
@@ -379,6 +410,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         provider: CHANNEL_PROVIDER_META,
         phone_number: linha.phone_number,
         app_secret_proprio: Boolean(segredoCifrado),
+        app_do_webhook: app_id ?? null,
       },
     });
   }
