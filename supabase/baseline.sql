@@ -27907,6 +27907,41 @@ grant  execute on function public.fn_nomes_dos_usuarios(uuid[]) to service_role;
 
 notify pgrst, 'reload schema';
 
+-- ---- fn_user_org_ids / fn_user_role_in_org só consultam o suporte de administrador (migration 0278) ----
+-- Incidente de 2026-09-24: `fn_support_context()` era 60% do custo da RLS, avaliada
+-- por linha, e para quem não é administrador da plataforma sempre dava vazio. O
+-- portão em `platform_admins` é equivalente. Racional no cabeçalho da migration 0278.
+-- DEPOIS do bloco da 0220, que redefine as duas funções a cada reaplicação.
+create or replace function public.fn_user_org_ids()
+returns setof uuid language sql stable security definer set search_path = public as $f$
+ select organization_id from public.user_organizations where user_id=auth.uid() and revoked_at is null
+ union
+ select (s->>'organization_id')::uuid
+   from (select public.fn_support_context() s
+          where exists (select 1 from public.platform_admins pa
+                         where pa.user_id = auth.uid() and pa.revoked_at is null)) c
+  where s->>'status'='active';
+$f$;
+
+create or replace function public.fn_user_role_in_org(p_org uuid)
+returns text language sql stable security definer set search_path = public as $f$
+ select coalesce(
+   (select case when s->>'access_mode'='full' then 'admin' else 'viewer' end
+      from (select public.fn_support_context() s
+             where exists (select 1 from public.platform_admins pa
+                            where pa.user_id = auth.uid() and pa.revoked_at is null)) c
+     where s->>'status'='active' and (s->>'organization_id')::uuid=p_org),
+   (select role from public.user_organizations
+     where user_id=auth.uid() and organization_id=p_org and revoked_at is null limit 1));
+$f$;
+
+revoke execute on function public.fn_user_org_ids() from public, anon;
+grant  execute on function public.fn_user_org_ids() to authenticated, service_role;
+revoke execute on function public.fn_user_role_in_org(uuid) from public, anon;
+grant  execute on function public.fn_user_role_in_org(uuid) to authenticated, service_role;
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES
