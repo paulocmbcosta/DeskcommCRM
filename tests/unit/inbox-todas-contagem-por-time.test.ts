@@ -127,7 +127,13 @@ describe("contagem exata da aba Todas por time", () => {
   });
 
   it("'Só na fila' entra na fábrica: a aba conta o que a lista mostra", async () => {
+    const semFiltro = (await (await GET(new NextRequest("http://localhost/api/v1/conversations/counts"))).json()).data;
     const response = await GET(new NextRequest("http://localhost/api/v1/conversations/counts?na_fila=true"));
-    expect((await response.json()).data.all).toBe(1);
+    const { data } = await response.json();
+    expect(data.all).toBe(1);
+    // …e SÓ a de Todas: as outras abas ignoram o chip, e o badge delas também.
+    expect(data.fila).toBe(semFiltro.fila);
+    expect(data.mine).toBe(semFiltro.mine);
+    expect(data.automatico).toBe(semFiltro.automatico);
   });
 });

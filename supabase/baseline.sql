@@ -27980,9 +27980,14 @@ comment on column public.conversations.espera_desde is
 create or replace function public.fn_conversations_espera_desde()
 returns trigger language plpgsql set search_path = public as $$
 declare
+  -- A entrada tem de ser DESTE atendimento: posterior ao último encerramento.
+  -- Sem isso, o "obrigado" que ficou sem resposta antes de encerrar reabria a
+  -- espera de uma semana atrás no instante em que a conversa reabre (o status
+  -- muda antes de a mensagem nova gravar `last_inbound_at`).
   v_espera boolean :=
     new.last_inbound_at is not null
     and (new.last_outbound_at is null or new.last_inbound_at > new.last_outbound_at)
+    and (new.service_closed_at is null or new.last_inbound_at > new.service_closed_at)
     and new.status not in ('closed', 'resolved', 'archived');
 begin
   if not v_espera then
@@ -28002,10 +28007,21 @@ end; $$;
 
 revoke execute on function public.fn_conversations_espera_desde() from public, anon, authenticated;
 
-drop trigger if exists trg_conversations_espera_desde on public.conversations;
-create trigger trg_conversations_espera_desde
-  before insert or update of last_inbound_at, last_outbound_at, status on public.conversations
-  for each row execute function public.fn_conversations_espera_desde();
+-- Só cria se faltar: `drop` + `create` pegaria trava exclusiva de
+-- `conversations` a cada `update.sh` (o mesmo cuidado do bloco da 0269). O
+-- corpo da função é `create or replace` acima — é ele que evolui.
+do $$
+begin
+  if not exists (
+    select 1 from pg_trigger
+     where tgname = 'trg_conversations_espera_desde'
+       and tgrelid = 'public.conversations'::regclass
+  ) then
+    create trigger trg_conversations_espera_desde
+      before insert or update of last_inbound_at, last_outbound_at, status on public.conversations
+      for each row execute function public.fn_conversations_espera_desde();
+  end if;
+end $$;
 
 -- Backfill: quem espera hoje recebe a última entrada (a primeira sem resposta não
 -- foi guardada antes desta migration — é a melhor aproximação que o dado permite).
@@ -28013,12 +28029,14 @@ update public.conversations
    set espera_desde = case
      when last_inbound_at is not null
       and (last_outbound_at is null or last_inbound_at > last_outbound_at)
+      and (service_closed_at is null or last_inbound_at > service_closed_at)
       and status not in ('closed', 'resolved', 'archived')
      then coalesce(espera_desde, last_inbound_at)
    end
  where espera_desde is distinct from case
      when last_inbound_at is not null
       and (last_outbound_at is null or last_inbound_at > last_outbound_at)
+      and (service_closed_at is null or last_inbound_at > service_closed_at)
       and status not in ('closed', 'resolved', 'archived')
      then coalesce(espera_desde, last_inbound_at)
    end;

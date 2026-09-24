@@ -319,8 +319,13 @@ export async function listConversationsHandler(
     }
     const op = asc ? "gt" : "lt";
     if (c.sort) {
+      // `nullsFirst: false` põe as linhas SEM valor depois de todas as com valor
+      // — então elas continuam "à frente" de qualquer cursor com valor, e o
+      // `.or` tem de incluí-las. Sem o `is.null`, em "Mais tempo esperando" a
+      // paginação terminava junto com quem espera, e toda conversa já respondida
+      // (`espera_desde` nulo — a maior parte da caixa) sumia da lista.
       query = query.or(
-        `${sortCol}.${op}.${c.sort},and(${sortCol}.eq.${c.sort},id.${op}.${c.id})`,
+        `${sortCol}.${op}.${c.sort},and(${sortCol}.eq.${c.sort},id.${op}.${c.id}),${sortCol}.is.null`,
       );
     } else {
       // Página já na região de sort NULL (nulls last): pagina só por id.

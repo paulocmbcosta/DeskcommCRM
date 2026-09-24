@@ -63,11 +63,22 @@ describe("0279 — espera_desde é a primeira mensagem sem resposta", () => {
     expect(esperaDesde()).toBe("2026-09-24 11:00:00+00");
   });
 
-  it("encerrar o atendimento zera, e reabrir volta a esperar", () => {
+  it("encerrar zera, e reabrir NÃO ressuscita a espera do atendimento anterior", () => {
+    // O "alguém aí?" das 11h ficou sem resposta e o atendente encerrou. Reabrir
+    // (a pessoa, ou a ingestão, que muda o status ANTES de gravar a mensagem
+    // nova) não pode pintar o card com a espera de antes do encerramento.
     sql(`update public.conversations set status = 'closed' where id = '${CONVERSA}';`);
     expect(esperaDesde()).toBe("(null)");
     sql(`update public.conversations set status = 'open' where id = '${CONVERSA}';`);
-    expect(esperaDesde()).toBe("2026-09-24 11:00:00+00");
+    expect(esperaDesde()).toBe("(null)");
+  });
+
+  it("a primeira entrada DEPOIS do encerramento abre a espera nova", () => {
+    const em = lastLine(
+      sql(`select (service_closed_at + interval '1 minute')::text from public.conversations where id = '${CONVERSA}';`),
+    );
+    mensagem("inbound", em);
+    expect(esperaDesde()).toBe(em);
   });
 });
 

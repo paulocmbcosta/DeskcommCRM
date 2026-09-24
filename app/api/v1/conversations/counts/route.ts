@@ -144,8 +144,14 @@ export async function GET(req: NextRequest): Promise<Response> {
   // "Suporte" apagaria os números de "Vendas", que é justamente o que o chip
   // existe para mostrar. Todo o resto (número, etiqueta, não lidas, busca, fila)
   // continua herdado.
-  const soNaFila = sp.get("na_fila") === "true";
   const agora = new Date();
+  // "Só na fila" é um chip de TODAS: vale para o número de Todas e para os
+  // chips de time, e para mais nenhum. Aplicado na fábrica, zerava o badge de
+  // Minhas (fila de time é conversa SEM dono) e encolhia os das outras abas,
+  // cujas listas ignoram o filtro — badge contando o que a aba não mostra.
+  const soNaFila = sp.get("na_fila") === "true";
+  const daTodas = <Q extends Parameters<typeof aplicarNaFilaDoTime>[0]>(q: Q): Q =>
+    soNaFila ? aplicarNaFilaDoTime(q, agora) : q;
   const countExact = (comTime = true) => {
     let q = supabase
       .from("conversations")
@@ -164,7 +170,6 @@ export async function GET(req: NextRequest): Promise<Response> {
         ? q.or(busca.valor)
         : q.ilike("last_message_preview", busca.valor);
     }
-    if (soNaFila) q = aplicarNaFilaDoTime(q, agora);
     return comTime ? aplicarPredicadoDeTime(q, time) : q;
   };
 
@@ -236,7 +241,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     countExact()
       .eq("assigned_to_user_id", user.id)
       .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`),
-    countExact().not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`),
+    daTodas(countExact().not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)),
     // A aba "Fechadas" existia SEM número nenhum. Num inbox antigo, é o número
     // que diz o tamanho do arquivo — e a sua ausência fazia a aba parecer um
     // lugar vazio. Mesma fábrica: herda organização e filtros.
@@ -246,13 +251,13 @@ export async function GET(req: NextRequest): Promise<Response> {
       ? Promise.resolve({ count: 0, error: null })
       : countAtendimentosFechados(),
     ...times.map((time) =>
-      countExact(false)
+      daTodas(countExact(false)
         .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)
-        .eq("team_id", time.id),
+        .eq("team_id", time.id)),
     ),
-    ...(incluirPorTime ? [countExact(false)
+    ...(incluirPorTime ? [daTodas(countExact(false)
       .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)
-      .is("team_id", null)] : []),
+      .is("team_id", null))] : []),
     // Quantos de cada time estão NA FILA (ninguém pegou) — o selo vermelho do
     // chip. Mesma régua da lista (`_na-fila.ts`).
     ...times.map((time) => aplicarNaFilaDoTime(countExact(false).eq("team_id", time.id), agora)),
