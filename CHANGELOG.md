@@ -8,6 +8,18 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.42.1] — 2026-09-24
+
+### Corrigido
+
+- **"Cancelar a assinatura" não bloqueia mais o cliente como se ele tivesse pedido para parar de receber mensagens** A detecção de "parar de receber mensagens" tratava **"cancelar a assinatura"** (e o
+  espanhol **"cancelar la suscripción"**) como pedido de descadastro. Num provedor, num
+  SaaS ou num streaming, a assinatura é o **plano** do cliente. Um cliente sem internet,
+  reclamando e ameaçando cancelar, era bloqueado, e a IA parava de atendê-lo. Agora essas
+  frases só bloqueiam quando falam da comunicação, como em "cancelar a assinatura das
+  mensagens" ou "…da newsletter". "Sair da lista", "descadastrar", "parar de receber" e
+  "cancelar a inscrição" continuam bloqueando como antes.
+
 ## [1.42.0] — 2026-09-24
 
 ### Adicionado
@@ -5463,7 +5475,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.1...HEAD
+[1.42.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.0...v1.42.1
 [1.42.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.3...v1.42.0
 [1.41.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.2...v1.41.3
 [1.41.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.1...v1.41.2
