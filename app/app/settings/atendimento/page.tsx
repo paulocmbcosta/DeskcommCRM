@@ -25,6 +25,8 @@ import { createClient } from "@/lib/supabase/server";
 import { loadChannelRoutingSettings } from "@/lib/routing/channel-policies";
 import { ChannelRoutingForm } from "./_channels-form";
 import { AtendimentoForm } from "./_form";
+import { ReguaDeEsperaForm } from "./_regua-de-espera";
+import { reguaDeEspera } from "@/lib/schemas/settings";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +74,9 @@ export default async function AtendimentoSettingsPage() {
         initial={{ ...routing, visibility_mode: settings.visibility_mode ?? DEFAULT_VISIBILITY_MODE }}
       />
       <ChannelRoutingForm initial={channels} />
+      {/* O termômetro do Inbox (migration 0279): quanto tempo o cliente pode
+          esperar uma pessoa antes de o card mudar de cor. */}
+      <ReguaDeEsperaForm inicial={reguaDeEspera(settings)} />
     </div>
   );
 }

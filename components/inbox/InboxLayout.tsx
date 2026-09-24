@@ -44,6 +44,8 @@ import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
 import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
+import { useFilaDosTimes } from "@/hooks/inbox/useFilaDosTimes";
+import { AlternanciasDaLista, ChipsDosTimes } from "./ChipsDosTimes";
 
 /**
  * QUAL COLUNA APARECE NO CELULAR — as duas saem da MESMA pergunta.
@@ -218,6 +220,13 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       tag: filterValue.tag,
       team_id: filterValue.team_id,
       unread: filterValue.onlyUnread || undefined,
+      // Os dois chips de Todas (migration 0279). Só valem ali: em outra aba, a
+      // tela não mostra o chip que os desligaria — um filtro que a pessoa não
+      // enxerga é uma lista menor sem explicação. A ordem vale também em
+      // Minhas, que ganha o mesmo chip.
+      na_fila: filterValue.tab === "all" ? filterValue.na_fila || undefined : undefined,
+      ordem:
+        filterValue.tab === "all" || filterValue.tab === "mine" ? filterValue.ordem : undefined,
     }),
     [
       filterValue.tab,
@@ -227,6 +236,8 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       filterValue.tag,
       filterValue.team_id,
       filterValue.onlyUnread,
+      filterValue.na_fila,
+      filterValue.ordem,
     ],
   );
 
@@ -254,7 +265,11 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
     team_id: filters.team_id,
     search: filters.search,
     by_team: tab === "all",
+    na_fila: filters.na_fila,
   });
+  // POR QUE a fila de cada time não anda — só pergunta quando há fila.
+  const haFilaDeTime = (contagensQ.data?.by_team ?? []).some((g) => (g.na_fila ?? 0) > 0);
+  const filaDosTimesQ = useFilaDosTimes(tab === "all" && haFilaDeTime);
   const inList = useMemo(() => {
     const all = listQ.data?.pages.flatMap((p) => p.data) ?? [];
     return all.find((c) => c.id === selectedId) ?? null;
@@ -528,10 +543,25 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
           {/* O NOME da aba, por extenso. No trilho só cabe o ícone, e dica de
               mouse não existe em tela de toque — sem esta linha, quem atende do
               celular não teria onde LER em que visão está. */}
-          <div className="flex items-center justify-between px-3 pt-2.5" data-testid="inbox-aba-atual">
-            <h2 className="text-sm font-semibold text-text">
+          <div className="flex items-center justify-between gap-2 px-3 pt-2.5">
+            {/* O testid no TÍTULO, não na linha: a linha passou a ter os botões
+                de alternância à direita, e o nome da aba é o que se mede. */}
+            <h2 className="text-sm font-semibold text-text" data-testid="inbox-aba-atual">
               {t(INBOX_TABS.find((m) => m.value === tab)?.label ?? "Fila")}
             </h2>
+            {/* "Só na fila" (Todas) e "Mais tempo esperando" (Todas e Minhas):
+                na linha do título, que tinha a direita vazia — zero altura a
+                mais na lista. */}
+            {(tab === "all" || tab === "mine") && (
+              <AlternanciasDaLista
+                mostrarFila={tab === "all"}
+                naFilaTotal={(contagensQ.data?.by_team ?? []).reduce((soma, g) => soma + (g.na_fila ?? 0), 0)}
+                soNaFila={Boolean(filterValue.na_fila)}
+                onSoNaFila={(ligado) => setFilterValue({ ...filterValue, na_fila: ligado || undefined })}
+                porEspera={filterValue.ordem === "espera"}
+                onPorEspera={(ligado) => setFilterValue({ ...filterValue, ordem: ligado ? "espera" : undefined })}
+              />
+            )}
           </div>
           <InboxFilters
             value={filterValue}
@@ -547,6 +577,19 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             onAbrir={abrirAtendimento}
             ocultarEncerrados={tab === "closed"}
           />
+          {/* TODAS: os times viram chips com o total (e "N na fila"), no lugar
+              dos grupos que empurravam o último time para o fim da lista. O
+              trilho de abas não muda. */}
+          {tab === "all" && (
+            <ChipsDosTimes
+              contagens={contagensQ.data?.by_team}
+              erro={contagensQ.isError}
+              onRecarregar={() => void contagensQ.refetch()}
+              timeEscolhido={filterValue.team_id}
+              onEscolherTime={(teamId) => setFilterValue({ ...filterValue, team_id: teamId })}
+              motivos={filaDosTimesQ.data}
+            />
+          )}
           <div className="min-h-0 flex-1 overflow-hidden">
             {tab === "closed" ? (
               // A unidade desta aba é o ATENDIMENTO, não a conversa: o que foi
@@ -567,11 +610,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 onSelect={handleSelect}
                 onVisibleChange={handleVisibleChange}
                 onLimparFiltros={limparFiltrosAuxiliares}
-                agruparPorTime={tab === "all"}
-                contagensPorTime={contagensQ.data?.by_team}
-                erroNasContagens={contagensQ.isError}
-                onRecarregarContagens={() => void contagensQ.refetch()}
-                onFiltrarTime={(teamId) => setFilterValue({ ...filterValue, team_id: teamId })}
+                regua={activeOrg?.regua_de_espera}
               />
             )}
           </div>

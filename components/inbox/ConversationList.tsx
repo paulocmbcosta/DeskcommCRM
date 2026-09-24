@@ -1,12 +1,12 @@
 "use client";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useT } from "@/hooks/i18n/useT";
 import type { InfiniteData, UseInfiniteQueryResult } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
-import type { ConversationCounts } from "@/hooks/inbox/useConversationCounts";
+import type { ReguaDeEspera } from "@/lib/schemas/settings";
 
 import { ConversationListItem } from "./ConversationListItem";
 import { EmptyInbox } from "@/components/empty";
@@ -32,11 +32,8 @@ interface Props {
   onLimparFiltros?: () => void;
   /** Notifies parent when the visible list changes (used by keyboard nav). */
   onVisibleChange?: (ids: string[]) => void;
-  agruparPorTime?: boolean;
-  contagensPorTime?: ConversationCounts["by_team"];
-  onFiltrarTime?: (teamId: string) => void;
-  erroNasContagens?: boolean;
-  onRecarregarContagens?: () => void;
+  /** A régua do termômetro da organização (`ActiveOrg.regua_de_espera`); ausente = padrão. */
+  regua?: ReguaDeEspera;
 }
 
 export function ConversationList({
@@ -46,13 +43,17 @@ export function ConversationList({
   onSelect,
   onVisibleChange,
   onLimparFiltros,
-  agruparPorTime = false,
-  contagensPorTime,
-  onFiltrarTime,
-  erroNasContagens = false,
-  onRecarregarContagens,
+  regua,
 }: Props) {
   const t = useT();
+  // O RELÓGIO da lista: o termômetro é função do tempo, e sem este tique o card
+  // só mudava de cor quando a lista recarregava. Um por lista (não por card), a
+  // cada 30 s — a régua conta em minutos.
+  const [agora, setAgora] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setAgora(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
   // O TIME de cada conversa. O catálogo é UMA consulta para a lista inteira (e o
   // react-query a dedupa com o cabeçalho e os filtros); a conversa carrega só o
   // id, e o nome sai daqui. Arquivado entra no mapa de propósito: conversa
@@ -86,47 +87,6 @@ export function ConversationList({
     () => (q.data?.pages.flatMap((p) => p.data) ?? []) as ConversationWithContact[],
     [q.data],
   );
-
-  const grupos = useMemo(() => {
-    if (!agruparPorTime) return [];
-    const carregadas = new Map<string | null, ConversationWithContact[]>();
-    for (const conversa of items) {
-      const id = conversa.team_id ?? null;
-      const grupo = carregadas.get(id) ?? [];
-      grupo.push(conversa);
-      carregadas.set(id, grupo);
-    }
-    const presentes = new Set<string | null>();
-    const resultado: Array<{
-      id: string | null;
-      nome: string | null;
-      total: number | null;
-      conversas: ConversationWithContact[];
-    }> = (contagensPorTime ?? [])
-      .filter((grupo) => grupo.count > 0 || carregadas.has(grupo.team_id))
-      .map((grupo) => {
-        presentes.add(grupo.team_id);
-        return {
-          id: grupo.team_id,
-          nome: grupo.team_id === null ? "Sem time" : grupo.name,
-          total: grupo.count,
-          conversas: carregadas.get(grupo.team_id) ?? [],
-        };
-      });
-    for (const [id, conversas] of carregadas) {
-      if (!presentes.has(id)) {
-        resultado.push({
-          id,
-          nome: id === null ? "Sem time" : nomeDoTimePorId.get(id) ?? null,
-          total: null,
-          conversas,
-        });
-      }
-    }
-    return resultado.sort((a, b) =>
-      a.id === null ? -1 : b.id === null ? 1 : (a.nome ?? "").localeCompare(b.nome ?? "", "pt-BR"),
-    );
-  }, [agruparPorTime, contagensPorTime, items, nomeDoTimePorId]);
 
   // Notify parent of currently-visible IDs (for j/k nav). Must use effect
   // (not render-time call) — invoking onVisibleChange during render triggers
@@ -166,11 +126,9 @@ export function ConversationList({
     !(filters.comando?.length === 1 && filters.comando[0] === "automatico");
 
   useEffect(() => {
-    if (onVisibleChange) onVisibleChange(
-      agruparPorTime ? grupos.flatMap((grupo) => grupo.conversas.map((i) => i.id)) : items.map((i) => i.id),
-    );
+    if (onVisibleChange) onVisibleChange(items.map((i) => i.id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, grupos, agruparPorTime]);
+  }, [items]);
 
   if (q.isLoading) {
     return (
@@ -202,7 +160,7 @@ export function ConversationList({
   // mensagens vao aparecer. Este e o unico caso que ainda sai por `return`
   // precoce, porque aqui nao ha pagina seguinte a alcancar.
   const filtrosAtivos = filtrosAuxiliaresAtivos(filters);
-  if (items.length === 0 && grupos.length === 0 && filtrosAtivos.length === 0 && !erroNasContagens) {
+  if (items.length === 0 && filtrosAtivos.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6">
         <EmptyInbox />
@@ -213,33 +171,12 @@ export function ConversationList({
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto">
-        {agruparPorTime && erroNasContagens && (
-          <div role="alert" className="border-b border-border p-3 text-sm text-text-muted">
-            {t("Não foi possível carregar o volume por time.")}
-            <Button size="sm" variant="outline" className="ml-2" onClick={onRecarregarContagens}>
-              {t("Tentar novamente")}
-            </Button>
-          </div>
-        )}
         {/* Vazio por FILTRO: fica DENTRO do return, nunca como `return` precoce —
             e por isso o bloco do `hasNextPage` abaixo continua sendo alcancado. */}
-        {items.length === 0 && grupos.length === 0 && filtrosAtivos.length > 0 && (
+        {items.length === 0 && filtrosAtivos.length > 0 && (
           <EmptyPorFiltro filtros={filtrosAtivos} onLimpar={onLimparFiltros} />
         )}
-        {agruparPorTime ? grupos.map((grupo) => (
-          <section key={grupo.id ?? "sem-time"} data-testid="inbox-grupo-time" data-team-id={grupo.id ?? "none"}>
-            <button
-              type="button"
-              aria-label={`${t("Filtrar por time")}: ${grupo.id === null ? t("Sem time") : grupo.nome ?? t("Time indisponível")}`}
-              onClick={() => onFiltrarTime?.(grupo.id ?? "none")}
-              className="flex w-full items-center justify-between border-y border-border bg-surface px-3 py-2 text-left text-xs font-semibold text-text hover:bg-surface-elevated"
-            >
-              <span className="truncate">{grupo.id === null ? t("Sem time") : grupo.nome ?? t("Time indisponível")}</span>
-              <span className="ml-2 tabular-nums text-text-muted">{erroNasContagens ? "—" : grupo.total ?? "…"}</span>
-            </button>
-            {grupo.conversas.map((c) => renderItem(c))}
-          </section>
-        )) : items.map((c, i) => renderItem(c, i))}
+        {items.map((c, i) => renderItem(c, i))}
         {q.hasNextPage && (
           <div className="flex justify-center p-3">
             <Button
@@ -256,14 +193,14 @@ export function ConversationList({
     </div>
   );
 
-  function renderItem(c: ConversationWithContact, i?: number) {
+  function renderItem(c: ConversationWithContact, i: number) {
     return (
           <ConversationListItem
             key={c.id}
             conversation={c}
             isSelected={c.id === selectedId}
             onSelect={onSelect}
-            queuePosition={isQueue && i !== undefined ? i + 1 : undefined}
+            queuePosition={isQueue ? i + 1 : undefined}
             // `undefined` enquanto o catálogo carrega: o card não afirma
             // "Sem time" sobre uma conversa cujo time ele ainda não sabe nomear.
             nomeDoTime={
@@ -277,6 +214,8 @@ export function ConversationList({
             mostrarAtendente={mostrarAtendente}
             mostrarAutomatico={mostrarAutomatico}
             automaticoDaOrg={automaticoDaOrg.data}
+            agora={agora}
+            regua={regua}
           />
     );
   }

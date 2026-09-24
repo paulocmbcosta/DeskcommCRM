@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { channelLabel, useChannelSessions } from "@/hooks/channels/useChannelSessions";
+import { canalComNumero } from "@/lib/inbox/rotulo-do-canal";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useConversationTagVocabulary } from "@/hooks/inbox/useConversationTags";
 import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
@@ -38,6 +39,10 @@ export interface InboxFiltersValue {
    * seletor.
    */
   team_id?: string;
+  /** Só a fila dos times — foi para um setor e ninguém pegou (chip de Todas). */
+  na_fila?: boolean;
+  /** `espera` = quem está há mais tempo sem resposta primeiro. */
+  ordem?: "espera";
 }
 
 /** "Os times de quem está olhando, mais a fila geral." */
@@ -337,7 +342,7 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange }: Props)
                   )}
                   {channels?.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {channelLabel(c)}
+                      {canalComNumero(c) ?? channelLabel(c)}
                     </SelectItem>
                   ))}
                 </SelectContent>

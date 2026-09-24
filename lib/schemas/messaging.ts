@@ -466,6 +466,26 @@ export const listConversationsQuerySchema = z.object({
    */
   unread: z.coerce.boolean().optional(),
   /**
+   * Só as que estão NA FILA DO TIME: foram para um setor, ninguém pegou e a IA
+   * saiu do comando. A régua é `estaNaFilaDoTime` (`lib/inbox/espera.ts`), com o
+   * espelho do banco em `app/api/v1/conversations/_na-fila.ts`.
+   *
+   * Aceita `true`/`false` literais — e não `z.coerce.boolean()`, que leria a
+   * string `"false"` como verdadeira.
+   */
+  na_fila: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .transform((v) => v === true || v === "true" || undefined)
+    // `.optional()` por ÚLTIMO: antes do transform a chave ficaria obrigatória na
+    // SAÍDA, e todo chamador do handler (as tools MCP) teria de escrevê-la à mão.
+    .optional(),
+  /**
+   * A ORDEM da lista. `espera` = quem espera resposta há mais tempo primeiro
+   * (`espera_desde` asc, migration 0279), e quem não espera vai para o fim.
+   * Ausente = a ordem da aba (atividade recente; na Fila, tempo de espera).
+   */
+  ordem: z.enum(["espera"]).optional(),
+  /**
    * O termo de busca. A régua inteira vive em `lib/inbox/termo-de-busca.ts`, e a
    * tela lê a MESMA — repetir aqui faria os dois divergirem, e a divergência
    * apareceria como erro na cara de quem digita (a rota recusa e o hook mostra).

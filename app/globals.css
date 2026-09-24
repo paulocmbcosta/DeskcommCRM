@@ -83,6 +83,11 @@
   --color-warning: #b07a2b;
   --color-warning-bg: rgba(176, 122, 43, 0.12);
   --color-warning-fg: #875a1a;
+  /* Laranja: o degrau do meio do termômetro de espera do Inbox (entre
+     `warning` e `error`). */
+  --color-alert: #c2622d;
+  --color-alert-bg: rgba(194, 98, 45, 0.12);
+  --color-alert-fg: #9a4a1f;
   --color-error: #a94a3c;
   --color-error-bg: rgba(169, 74, 60, 0.12);
   --color-error-fg: #8a3a2e;
@@ -280,6 +285,11 @@
   --color-warning: #b07a2b;
   --color-warning-bg: rgba(176, 122, 43, 0.12);
   --color-warning-fg: #875a1a;
+  /* Laranja: o degrau do meio do termômetro de espera do Inbox (entre
+     `warning` e `error`). */
+  --color-alert: #c2622d;
+  --color-alert-bg: rgba(194, 98, 45, 0.12);
+  --color-alert-fg: #9a4a1f;
   --color-error: #a94a3c;
   --color-error-bg: rgba(169, 74, 60, 0.12);
   --color-error-fg: #8a3a2e;
@@ -379,6 +389,9 @@
   --color-warning: #d09455;
   --color-warning-bg: rgba(208, 148, 85, 0.18);
   --color-warning-fg: #e0ad77;
+  --color-alert: #e08a52;
+  --color-alert-bg: rgba(224, 138, 82, 0.18);
+  --color-alert-fg: #eaa373;
   --color-error: #c87263;
   --color-error-bg: rgba(200, 114, 99, 0.18);
   --color-error-fg: #d99182;
@@ -500,6 +513,9 @@
   --color-warning: var(--color-warning);
   --color-warning-bg: var(--color-warning-bg);
   --color-warning-fg: var(--color-warning-fg);
+  --color-alert: var(--color-alert);
+  --color-alert-bg: var(--color-alert-bg);
+  --color-alert-fg: var(--color-alert-fg);
   --color-error: var(--color-error);
   --color-error-bg: var(--color-error-bg);
   --color-error-fg: var(--color-error-fg);
@@ -869,6 +885,37 @@
        Ele dura os PULSE_MS inteiros (useBoard.ts), NÃO os 320ms da animação:
        a diferença entre os dois números é deliberada e está explicada lá. */
     border-color: var(--color-accent);
+  }
+}
+
+/* ---- Inbox · a SIRENE do termômetro de espera ----------------------------
+   A exceção declarada à regra do `card-pulse` acima ("um pulso, uma vez"): o
+   dono do produto pediu, em 2026-09-24, que o cliente esperando além do degrau
+   vermelho CONTINUE chamando atenção — é um alarme, não um aviso de mudança.
+   Por isso ela é `infinite`, e por isso fica restrita ao SELO (nunca ao card
+   inteiro, nunca à lista): um anel que respira em volta de um texto pequeno,
+   que já diz o tempo por escrito.
+
+   `prefers-reduced-motion: reduce`: o mesmo anel, parado — o alarme continua
+   legível para quem desligou animação. */
+@keyframes deskcomm-sirene {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-error) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 0%, transparent);
+  }
+}
+
+.espera-sirene {
+  animation: deskcomm-sirene 1.4s var(--ease-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .espera-sirene {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-error) 35%, transparent);
   }
 }
 

@@ -77,7 +77,7 @@ describe("nenhuma contagem é montada por fora da fábrica", () => {
 
   it("a fábrica aplica os auxiliares E o não-lidas", () => {
     const fabrica = fonte.slice(
-      fonte.indexOf("const countExact = () =>"),
+      fonte.indexOf("const countExact = ("),
       fonte.indexOf("await Promise.all(["),
     );
     expect(fabrica).toContain("organization_id");
@@ -92,7 +92,7 @@ describe("nenhuma contagem é montada por fora da fábrica", () => {
     // notar. Com a lista filtrada por setor e o badge contando a organização
     // inteira, a aba volta a anunciar trabalho que a lista não mostra.
     const fabrica = fonte.slice(
-      fonte.indexOf("const countExact = () =>"),
+      fonte.indexOf("const countExact = ("),
       fonte.indexOf("await Promise.all(["),
     );
     expect(fabrica, "o filtro de time não entra na fábrica").toContain(
@@ -141,7 +141,7 @@ describe("nenhuma contagem é montada por fora da fábrica", () => {
     // uma etiqueta escolhida os números sumiam de TODAS as abas. A lista sempre
     // usou `contains` (`conversations/_handler.ts`) — o badge tem de usar a mesma.
     const fabricas = fonte.slice(
-      fonte.indexOf("const countExact = () =>"),
+      fonte.indexOf("const countExact = ("),
       fonte.indexOf("// Espelha tabToFilter"),
     );
     expect(fabricas).toContain('q.contains("tags", [String(valor)])');

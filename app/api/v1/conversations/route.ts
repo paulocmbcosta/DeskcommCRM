@@ -56,6 +56,10 @@ export async function GET(req: NextRequest): Promise<Response> {
     // Achado por @jmpo, no cabeçalho do teste que ele escreveu no PR #199.
     tag: url.searchParams.get("tag") ?? undefined,
     unread: url.searchParams.get("unread") ?? undefined,
+    // Fila do time e ordem por espera (migration 0279). Os dois precisam estar
+    // aqui — `rota-le-todo-filtro-do-schema.test.ts` reprova o esquecimento.
+    na_fila: url.searchParams.get("na_fila") ?? undefined,
+    ordem: url.searchParams.get("ordem") ?? undefined,
     channel_session_id: url.searchParams.get("channel_session_id") ?? undefined,
     // O TIME (migration 0263): `none` = fila geral, `mine` = meus times + a
     // fila geral, ou o uuid de um time. A cerca de

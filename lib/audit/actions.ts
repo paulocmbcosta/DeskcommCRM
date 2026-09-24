@@ -583,6 +583,9 @@ export const AUDIT_ACTIONS = [
   // "Quando o card nasce" alterada: toda conversa ↔ só conversas comerciais
   // (classificador Jev). metadata leva a regra antes e depois.
   "crm.nascimento_do_card_alterado",
+  // Régua do termômetro do Inbox (minutos até amarelo/laranja/vermelho).
+  // metadata leva a régua antes e depois.
+  "inbox.regua_de_espera_alterada",
   // Conectores de sistema externo (migration 0271 — o primeiro é o IXC). A
   // conexão guarda um token de ERP de terceiro: quem ligou, trocou ou desligou é
   // a primeira pergunta depois de um incidente. O vínculo diz QUAL cadastro do
