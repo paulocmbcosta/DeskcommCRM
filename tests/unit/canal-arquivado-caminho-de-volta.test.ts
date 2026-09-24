@@ -31,7 +31,7 @@ import { loadAuthUser, requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import type { AuthUser } from "@/lib/auth/types";
 import { CHANNEL_PROVIDER_META, CHANNEL_PROVIDER_WAHA } from "@/lib/channels/capabilities";
 import { reactivateChannelSession } from "@/lib/channels/reactivate";
-import { validateMetaCredentials } from "@/lib/channels/meta/validate-credentials";
+import { validarChaveDoApp, validateMetaCredentials } from "@/lib/channels/meta/validate-credentials";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { getWahaClient } from "@/lib/waha/client";
@@ -48,7 +48,10 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/webhooks/secrets", () => ({ encryptWebhookSecret: vi.fn() }));
-vi.mock("@/lib/channels/meta/validate-credentials", () => ({ validateMetaCredentials: vi.fn() }));
+vi.mock("@/lib/channels/meta/validate-credentials", () => ({
+  validateMetaCredentials: vi.fn(),
+  validarChaveDoApp: vi.fn(),
+}));
 vi.mock("@/lib/waha/client", () => ({
   getWahaClient: vi.fn(),
   wahaFriendlyError: (m: string) => m,
@@ -503,6 +506,76 @@ describe("POST /api/v1/channels/official — o segundo número é um canal NOVO"
     const res = await POST(reqCom({ ...corpoOficial, phone_number_id: "5555555555" }));
 
     expect(res.status).toBe(409);
+  });
+});
+
+/**
+ * Token de um app, webhook de OUTRO (medido na virada do 4063 da Totus,
+ * 2026-09-24): a prova `appsecret_proof` só passa quando token e chave são do
+ * mesmo app, e recusava uma configuração legítima com "Invalid appsecret_proof".
+ * Com o ID do app do webhook, a chave é conferida direto com esse app.
+ *
+ * Para ver morder: volte a passar `appSecret: app_secret` a
+ * `validateMetaCredentials` mesmo com `app_id` — o primeiro caso reprova.
+ */
+describe("POST /api/v1/channels/official — chave do app do WEBHOOK, não do token", () => {
+  const reqCom = (corpo: Record<string, unknown>) =>
+    new NextRequest("http://localhost/api/v1/channels/official", {
+      method: "POST",
+      body: JSON.stringify(corpo),
+      headers: { "content-type": "application/json" },
+    });
+  const CHAVE = "chave-do-app-do-webhook-32-carac";
+
+  it("⭐ com o ID do app: confere a chave com ESSE app, e não pela prova do token", async () => {
+    authOk();
+    vi.mocked(validarChaveDoApp).mockResolvedValue({ ok: true, nomeDoApp: "6140637232 - Totus" });
+    vi.mocked(encryptWebhookSecret).mockImplementation(async (_db, valor) =>
+      (valor === CHAVE ? "cifra-da-chave" : "cifra-nova") as never,
+    );
+    const db = makeDb({ sessions: [] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, app_secret: CHAVE, app_id: "690936200035931" }));
+
+    expect(res.status).toBe(200);
+    expect(validateMetaCredentials).toHaveBeenCalledWith(expect.objectContaining({ appSecret: null }));
+    expect(validarChaveDoApp).toHaveBeenCalledWith({ appId: "690936200035931", appSecret: CHAVE });
+    expect(patchDe(db)).toHaveProperty("meta_app_secret_encrypted", "cifra-da-chave");
+  });
+
+  it("a Meta não confirma a chave daquele app: 422 e nada é gravado", async () => {
+    authOk();
+    vi.mocked(validarChaveDoApp).mockResolvedValue({ ok: false, motivo: "Invalid OAuth access token" });
+    const db = makeDb({ sessions: [] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, app_secret: CHAVE, app_id: "690936200035931" }));
+
+    expect(res.status).toBe(422);
+    expect(db.escritas).toEqual([]);
+  });
+
+  it("sem o ID e a prova do token recusa: a mensagem diz o que fazer", async () => {
+    authOk();
+    vi.mocked(validateMetaCredentials).mockResolvedValue({
+      ok: false,
+      motivo: "Invalid appsecret_proof provided in the API argument",
+    } as never);
+    makeDb({ sessions: [] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, app_secret: CHAVE }));
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error.message).toMatch(/ID desse app/);
+  });
+
+  it("ID do app sem a chave: 422 — o ID sozinho não confere nada", async () => {
+    authOk();
+    const db = makeDb({ sessions: [] });
+    const { POST } = await import("@/app/api/v1/channels/official/route");
+    const res = await POST(reqCom({ ...corpoOficial, app_id: "690936200035931" }));
+
+    expect(res.status).toBe(422);
+    expect(db.escritas).toEqual([]);
   });
 });
 

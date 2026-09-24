@@ -52,6 +52,8 @@ export interface ConnectInput {
   token: string;
   /** Só para número que entrega por outro app da Meta; vazio = o da instalação. */
   app_secret?: string;
+  /** O app que entrega o webhook, quando não é o do token — a chave é conferida com ele. */
+  app_id?: string;
 }
 
 export function useOfficialChannel() {

@@ -123,7 +123,7 @@ function ColarNaMeta({ webhook }: { webhook: OfficialChannel["webhook"] }) {
   );
 }
 
-const FORM_VAZIO = { phone_number_id: "", waba_id: "", token: "", app_secret: "" };
+const FORM_VAZIO = { phone_number_id: "", waba_id: "", token: "", app_secret: "", app_id: "" };
 
 export function CanalOficialClient() {
   const t = useT();
@@ -283,6 +283,20 @@ export function CanalOficialClient() {
             />
             <span className="text-xs text-muted-foreground">
               {t("Só se este número pertence a um app da Meta diferente do cadastrado na instalação. Sem ela, as mensagens desse número chegam e são recusadas. Fica em Configurações do app › Básico › Chave secreta do app.")}
+            </span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="appid">{t("ID do app do webhook (opcional)")}</Label>
+            <Input
+              id="appid"
+              inputMode="numeric"
+              value={form.app_id}
+              onChange={(e) => setForm((f) => ({ ...f, app_id: e.target.value }))}
+              placeholder="690936200035931"
+              data-testid="campo-app-id"
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("Preencha quando o token acima foi gerado em um app e o webhook deste número vem de outro. A chave secreta é conferida com este app.")}
             </span>
           </div>
           <div className="flex flex-wrap gap-2">
