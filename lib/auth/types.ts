@@ -159,6 +159,12 @@ export interface ActiveOrg {
    */
   cliente_pela_agenda?: boolean;
   /**
+   * A régua do termômetro do Inbox (`settings.inbox.regua_de_espera`, padrão
+   * 2 / 5 / 10 min). Opcional pelo mesmo motivo de `visibility_mode`: só o
+   * layout de `/app` preenche; ausente, o card usa o padrão.
+   */
+  regua_de_espera?: { amarelo_min: number; laranja_min: number; vermelho_min: number };
+  /**
    * O que ESTA organização definiu para si — CAMPO A CAMPO, e só o que ela
    * mesma definiu.
    *

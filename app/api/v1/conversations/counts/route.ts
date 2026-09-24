@@ -21,6 +21,7 @@ import { createClient } from "@/lib/supabase/server";
 
 import { aplicarPredicadoDeTime, predicadoDeTime, type ConsultaFiltravel } from "../_filtro-de-time";
 import { filtroDaBuscaDeConversas } from "../_handler";
+import { aplicarNaFilaDoTime } from "../_na-fila";
 import { predicadoDaBuscaDosFechados } from "@/app/api/v1/atendimentos/_handler";
 
 export const dynamic = "force-dynamic";
@@ -138,7 +139,14 @@ export async function GET(req: NextRequest): Promise<Response> {
   // ⚠️ TODA contagem nasce daqui, e daqui já sai com `organization_id` E com os
   // filtros auxiliares. Herdar tira a opção de esquecer: não existe o caminho
   // "montei uma contagem e não pus o filtro".
-  const countExact = () => {
+  // `comTime=false` só para os CHIPS de Todas (`by_team`): cada chip é um time, e
+  // aplicar o time escolhido a todos eles zeraria os outros — clicar em
+  // "Suporte" apagaria os números de "Vendas", que é justamente o que o chip
+  // existe para mostrar. Todo o resto (número, etiqueta, não lidas, busca, fila)
+  // continua herdado.
+  const soNaFila = sp.get("na_fila") === "true";
+  const agora = new Date();
+  const countExact = (comTime = true) => {
     let q = supabase
       .from("conversations")
       .select("id", { count: "exact", head: true })
@@ -156,7 +164,8 @@ export async function GET(req: NextRequest): Promise<Response> {
         ? q.or(busca.valor)
         : q.ilike("last_message_preview", busca.valor);
     }
-    return aplicarPredicadoDeTime(q, time);
+    if (soNaFila) q = aplicarNaFilaDoTime(q, agora);
+    return comTime ? aplicarPredicadoDeTime(q, time) : q;
   };
 
   // A aba FECHADAS conta ATENDIMENTOS, não conversas (ver `atendimentos/_handler.ts`):
@@ -237,13 +246,16 @@ export async function GET(req: NextRequest): Promise<Response> {
       ? Promise.resolve({ count: 0, error: null })
       : countAtendimentosFechados(),
     ...times.map((time) =>
-      countExact()
+      countExact(false)
         .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)
         .eq("team_id", time.id),
     ),
-    ...(incluirPorTime ? [countExact()
+    ...(incluirPorTime ? [countExact(false)
       .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)
       .is("team_id", null)] : []),
+    // Quantos de cada time estão NA FILA (ninguém pegou) — o selo vermelho do
+    // chip. Mesma régua da lista (`_na-fila.ts`).
+    ...times.map((time) => aplicarNaFilaDoTime(countExact(false).eq("team_id", time.id), agora)),
   ]);
 
   const firstErr =
@@ -270,8 +282,10 @@ export async function GET(req: NextRequest): Promise<Response> {
           team_id: time.id,
           name: time.name,
           count: grupos[index]?.count ?? 0,
+          na_fila: grupos[times.length + 1 + index]?.count ?? 0,
         })),
-        { team_id: null, name: null, count: grupos[times.length]?.count ?? 0 },
+        // "Sem time" não tem fila de time, por definição.
+        { team_id: null, name: null, count: grupos[times.length]?.count ?? 0, na_fila: 0 },
       ] } : {}),
     },
     { requestId },

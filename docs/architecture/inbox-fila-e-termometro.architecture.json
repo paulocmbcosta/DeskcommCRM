@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Inbox: chips por time, fila do time e termômetro de espera",
+    "subtitle": "espera_desde nasce no banco por trigger; a tela pinta pela régua da organização; o time vira filtro de um clique",
+    "output": "inbox-fila-e-termometro.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "tela", "label": "Tela" },
+    { "id": "api", "label": "API" },
+    { "id": "banco", "label": "Banco" }
+  ],
+  "mainPath": ["mensagem", "trigger", "lista", "card"],
+  "nodes": [
+    { "id": "config", "lane": "tela", "col": 1, "type": "frontend", "label": "Configurações › Distribuição de atendimento › Termômetro de espera (manager+) — 2 / 5 / 10 min" },
+    { "id": "chips", "lane": "tela", "col": 2, "type": "frontend", "label": "Inbox › Todas — chips por time (total + 'N na fila'), Só na fila, Mais tempo esperando" },
+    { "id": "card", "lane": "tela", "col": 3, "type": "frontend", "label": "Card — termômetro (amarelo/laranja/vermelho com sirene) + selo 'Na fila · <time>'" },
+    { "id": "transferir", "lane": "tela", "col": 4, "type": "frontend", "label": "Transferir para time (cabeçalho da conversa)" },
+    { "id": "lista", "lane": "api", "col": 3, "type": "backend", "label": "GET /conversations — na_fila, ordem=espera; seleciona espera_desde" },
+    { "id": "contagens", "lane": "api", "col": 2, "type": "backend", "label": "GET /conversations/counts?by_team — por time SEM o filtro de time, + na_fila" },
+    { "id": "motivo", "lane": "api", "col": 1, "type": "backend", "label": "GET /conversations/teams/fila — por que ninguém pega (loadEligibleAttendants, régua do roteador)" },
+    { "id": "mensagem", "lane": "banco", "col": 1, "type": "database", "label": "fn_mark_conversation_message — last_inbound_at / last_outbound_at" },
+    { "id": "trigger", "lane": "banco", "col": 2, "type": "database", "label": "trg_conversations_espera_desde — a PRIMEIRA mensagem sem resposta (0279)" },
+    { "id": "settings", "lane": "banco", "col": 3, "type": "database", "label": "organizations.settings.inbox.regua_de_espera" },
+    { "id": "setteam", "lane": "banco", "col": 4, "type": "database", "label": "fn_conversation_set_team — grava o time e cala a IA (bot_silenced_until = infinity)" }
+  ],
+  "edges": [
+    { "from": "mensagem", "to": "trigger", "label": "toda entrada/saída passa pelo trigger BEFORE" },
+    { "from": "trigger", "to": "lista", "label": "espera_desde: ordena e alimenta o termômetro" },
+    { "from": "lista", "to": "card", "label": "o card pinta pela régua, com relógio de 30 s" },
+    { "from": "config", "to": "settings", "label": "grava a régua (admin client, audita inbox.regua_de_espera_alterada)" },
+    { "from": "settings", "to": "card", "label": "ActiveOrg.regua_de_espera (layout de /app)" },
+    { "from": "transferir", "to": "setteam", "label": "POST /conversations/[id]/team" },
+    { "from": "setteam", "to": "contagens", "label": "a conversa entra na fila do time" },
+    { "from": "contagens", "to": "chips", "label": "total por time + 'N na fila'" },
+    { "from": "motivo", "to": "chips", "label": "a dica do chip: fechado, sem membros, ninguém disponível, todos ocupados" },
+    { "from": "chips", "to": "lista", "label": "team_id, na_fila, ordem=espera" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "O que a forma não mostra",
+      "items": [
+        "espera_desde é derivada das colunas que a ingestão JÁ grava: nenhum canal (WAHA, Meta, Zernio, site) precisou mudar",
+        "A fila do time pergunta colunas (time, dono, bot_silenced_until), não o campo calculado comando_da_conversa — ela entra em uma contagem por time, e o campo calculado lê contacts duas vezes por linha (incidente 0278)",
+        "No Automático não há termômetro: a IA leva de 1 a 3 minutos para responder e a régua de minutos pintaria tudo de amarelo",
+        "A sirene é a exceção declarada ao 'um pulso, uma vez' do card-pulse: pedido do dono; só no selo, e parada para prefers-reduced-motion",
+        "Laço de retorno: régua errada aparece na tela (tudo vermelho, ou nada muda) e se corrige em Configurações; motivo 'todos_ocupados' aponta para o limite por time em Times"
+      ]
+    }
+  ]
+}

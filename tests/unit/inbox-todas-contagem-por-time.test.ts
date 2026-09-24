@@ -8,7 +8,7 @@ const org = "33333333-3333-4333-8333-333333333333";
 const linhas = [
   ...Array.from({ length: 60 }, (_, i) => ({ id: `a-${i}`, team_id: timeA, status: "open", organization_id: org, assigned_to_user_id: null, comando_da_conversa: "aguardando", contact_id: i === 0 ? "contato-maria" : null, last_message_preview: "olá" })),
   { id: "a-fechada", team_id: timeA, status: "closed", organization_id: org, assigned_to_user_id: null, comando_da_conversa: "encerrada" },
-  { id: "b-1", team_id: timeB, status: "pending", organization_id: org, assigned_to_user_id: null, comando_da_conversa: "aguardando" },
+  { id: "b-1", team_id: timeB, status: "pending", organization_id: org, assigned_to_user_id: null, comando_da_conversa: "aguardando", bot_silenced_until: "infinity" },
   ...Array.from({ length: 3 }, (_, i) => ({ id: `geral-${i}`, team_id: null, status: "open", organization_id: org, assigned_to_user_id: null, comando_da_conversa: "aguardando" })),
 ];
 
@@ -24,7 +24,15 @@ function bancoFalso() {
         limit() { return query; },
         eq(coluna: string, valor: unknown) { consultas.push({ tabela, coluna, valor }); filtros.push((l) => l[coluna] === valor); return query; },
         is(coluna: string, valor: unknown) { consultas.push({ tabela, coluna, valor }); filtros.push((l) => l[coluna] === valor); return query; },
-        gt(coluna: string, valor: number) { filtros.push((l) => Number(l[coluna]) > valor); return query; },
+        gt(coluna: string, valor: number | string) {
+          filtros.push((l) =>
+            typeof valor === "string"
+              ? // Carimbo: `infinity` é maior que qualquer data; ISO compara como texto.
+                l[coluna] === "infinity" || (typeof l[coluna] === "string" && String(l[coluna]) > valor)
+              : Number(l[coluna]) > valor,
+          );
+          return query;
+        },
         contains() { return query; },
         in(coluna: string, valores: unknown[]) { filtros.push((l) => valores.includes(l[coluna])); return query; },
         or(predicado: string) {
@@ -78,9 +86,9 @@ describe("contagem exata da aba Todas por time", () => {
     const { data } = await response.json();
     expect(data.all).toBe(64);
     expect(data.by_team).toEqual([
-      { team_id: timeA, name: "Cobrança", count: 60 },
-      { team_id: timeB, name: "Suporte", count: 1 },
-      { team_id: null, name: null, count: 3 },
+      { team_id: timeA, name: "Cobrança", count: 60, na_fila: 0 },
+      { team_id: timeB, name: "Suporte", count: 1, na_fila: 1 },
+      { team_id: null, name: null, count: 3, na_fila: 0 },
     ]);
     expect(banco.consultas).toContainEqual({ tabela: "attendance_teams", coluna: "organization_id", valor: org });
   });
@@ -91,9 +99,9 @@ describe("contagem exata da aba Todas por time", () => {
     const { data } = await response.json();
     expect(data.all).toBe(1);
     expect(data.by_team).toEqual([
-      { team_id: timeA, name: "Cobrança", count: 1 },
-      { team_id: timeB, name: "Suporte", count: 0 },
-      { team_id: null, name: null, count: 0 },
+      { team_id: timeA, name: "Cobrança", count: 1, na_fila: 0 },
+      { team_id: timeB, name: "Suporte", count: 0, na_fila: 0 },
+      { team_id: null, name: null, count: 0, na_fila: 0 },
     ]);
   });
 
@@ -103,5 +111,23 @@ describe("contagem exata da aba Todas por time", () => {
     expect(response.status).toBe(200);
     expect((await response.json()).data.by_team).toBeUndefined();
     expect(banco.consultas.slice(anterior).filter((c) => c.tabela === "attendance_teams")).toEqual([]);
+  });
+  it("escolher um time NÃO zera os outros chips (by_team é contado sem o filtro de time)", async () => {
+    const response = await GET(
+      new NextRequest(`http://localhost/api/v1/conversations/counts?by_team=true&team_id=${timeB}`),
+    );
+    const { data } = await response.json();
+    expect(data.by_team).toEqual([
+      { team_id: timeA, name: "Cobrança", count: 60, na_fila: 0 },
+      { team_id: timeB, name: "Suporte", count: 1, na_fila: 1 },
+      { team_id: null, name: null, count: 3, na_fila: 0 },
+    ]);
+    // …mas a aba segue a lista: com o time escolhido, "Todas" conta só o Suporte.
+    expect(data.all).toBe(1);
+  });
+
+  it("'Só na fila' entra na fábrica: a aba conta o que a lista mostra", async () => {
+    const response = await GET(new NextRequest("http://localhost/api/v1/conversations/counts?na_fila=true"));
+    expect((await response.json()).data.all).toBe(1);
   });
 });

@@ -104,6 +104,10 @@ export interface ConversationsFilters {
    * `conversations` e o `visibility_mode` da organização.
    */
   team_id?: string;
+  /** Só a fila dos times: foi para um setor e ninguém pegou (migration 0279). */
+  na_fila?: boolean;
+  /** `espera` = quem espera resposta há mais tempo primeiro. */
+  ordem?: "espera";
 }
 
 interface ListResponse {
@@ -145,6 +149,9 @@ export function useConversationsRealtime(
       // parecendo funcionar — é a metade do trabalho que o typecheck não pega,
       // e a mesma que já custou o `comando` uma vez.
       if (filters.team_id) qs.set("team_id", filters.team_id);
+      // Fila do time e ordem por espera (migration 0279) — mesma razão da linha acima.
+      if (filters.na_fila) qs.set("na_fila", "true");
+      if (filters.ordem) qs.set("ordem", filters.ordem);
       if (pageParam) qs.set("cursor", pageParam);
       qs.set("limit", "50");
       try {

@@ -39,3 +39,17 @@ export function canalPorExtenso(canal: CanalRotulavel | null | undefined): strin
   if (!canal) return null;
   return preenchido(canal.phone_number) ?? preenchido(canal.display_name);
 }
+
+/**
+ * Para ESCOLHER um canal numa lista (o filtro de número do Inbox): apelido E
+ * número inteiro. Dois números oficiais da Meta com o mesmo nome verificado
+ * ("Totus" e "Totus") eram indistinguíveis no seletor — e ali, diferente do
+ * card, há espaço para o número inteiro, e é ele que a pessoa reconhece.
+ */
+export function canalComNumero(canal: CanalRotulavel | null | undefined): string | null {
+  if (!canal) return null;
+  const apelido = preenchido(canal.display_name);
+  const numero = preenchido(canal.phone_number);
+  if (apelido && numero) return `${apelido} · ${numero}`;
+  return apelido ?? numero;
+}

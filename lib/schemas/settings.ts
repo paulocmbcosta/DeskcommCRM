@@ -358,3 +358,47 @@ export function nascimentoDoCard(settings: unknown): NascimentoDoCard {
     v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
   return nascimentoDoCardSchema.parse(objeto(objeto(settings)?.crm)?.nascimento_do_card ?? {});
 }
+
+/**
+ * `organizations.settings.inbox.regua_de_espera` — a RÉGUA DO TERMÔMETRO do card.
+ *
+ * Minutos desde a primeira mensagem do cliente sem resposta (`espera_desde`,
+ * migration 0279) em que o selo passa a amarelo, laranja e vermelho pulsando.
+ * Padrão 2 / 5 / 10: o cliente de WhatsApp que falou com uma PESSOA espera
+ * resposta em minutos, não em horas — o degrau antigo (30 min / 2 h) só avisava
+ * quando o cliente já tinha desistido.
+ *
+ * Lixo, valor fora de [1, 1440] ou degraus fora de ordem leem como o padrão:
+ * uma régua invertida pintaria de vermelho antes do amarelo, e a tela que
+ * serve para consertá-la não pode quebrar por causa dela.
+ */
+export const REGUA_DE_ESPERA_PADRAO = { amarelo_min: 2, laranja_min: 5, vermelho_min: 10 } as const;
+
+const minutosDaRegua = z.number().int().min(1).max(1440);
+
+const degrausDaRegua = z.object({
+  amarelo_min: minutosDaRegua,
+  laranja_min: minutosDaRegua,
+  vermelho_min: minutosDaRegua,
+});
+const degrausCrescem = (r: z.infer<typeof degrausDaRegua>) =>
+  r.amarelo_min < r.laranja_min && r.laranja_min < r.vermelho_min;
+const MENSAGEM_DOS_DEGRAUS = "Os degraus precisam crescer: amarelo < laranja < vermelho.";
+
+/** Escrita: estrita (chave desconhecida é 422, não silêncio). */
+export const reguaDeEsperaWriteSchema = degrausDaRegua.strict().refine(degrausCrescem, {
+  message: MENSAGEM_DOS_DEGRAUS,
+});
+/** Leitura: tolera chave a mais no jsonb (versão futura), nunca degrau fora de ordem. */
+const reguaDeEsperaLidaSchema = degrausDaRegua.refine(degrausCrescem, { message: MENSAGEM_DOS_DEGRAUS });
+export type ReguaDeEspera = z.infer<typeof reguaDeEsperaWriteSchema>;
+
+/** A régua em vigor. Nunca lança; devolve objeto novo a cada chamada. */
+export function reguaDeEspera(settings: unknown): ReguaDeEspera {
+  const objeto = (v: unknown): Record<string, unknown> | undefined =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  const lida = reguaDeEsperaLidaSchema.safeParse(objeto(objeto(settings)?.inbox)?.regua_de_espera);
+  return lida.success
+    ? { amarelo_min: lida.data.amarelo_min, laranja_min: lida.data.laranja_min, vermelho_min: lida.data.vermelho_min }
+    : { ...REGUA_DE_ESPERA_PADRAO };
+}

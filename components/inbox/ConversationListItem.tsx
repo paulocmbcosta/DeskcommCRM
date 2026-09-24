@@ -5,7 +5,7 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import type { Locale } from "date-fns";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
-import { Clock, Globe, Phone, Robot, UsersThree } from "@/lib/ui/icons";
+import { Clock, Globe, HourglassMedium, Phone, Robot, Siren, Thermometer, UsersThree } from "@/lib/ui/icons";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { OwnerBadge } from "@/components/kanban/OwnerBadge";
@@ -14,7 +14,8 @@ import { cn } from "@/lib/utils";
 import type { ConversationWithContact } from "@/hooks/inbox/useConversationsRealtime";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
-import { esperaDaConversa, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
+import { esperaDaConversa, estaNaFilaDoTime, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
+import type { ReguaDeEspera } from "@/lib/schemas/settings";
 import { canalPorExtenso as canalInteiro, rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 
 interface Props {
@@ -50,6 +51,8 @@ interface Props {
   orgTemTimes?: boolean;
   /** Relógio injetável: a espera é função do tempo, e teste não espera meia hora. */
   agora?: Date;
+  /** A régua da organização (minutos até amarelo/laranja/vermelho). Ausente = padrão 2/5/10. */
+  regua?: ReguaDeEspera;
   /**
    * Mostrar QUEM está no comando de cada conversa.
    *
@@ -121,11 +124,16 @@ function relativeTime(iso: string | null, locale: Locale): string {
   return format(d, "dd/MM");
 }
 
-/** A cor da espera. Texto E cor: quem enxerga mal cor lê o mesmo tempo escrito. */
+/**
+ * A cor da espera. Texto E cor: quem enxerga mal cor lê o mesmo tempo escrito.
+ * Os degraus são da organização (`settings.inbox.regua_de_espera`); o vermelho
+ * ganha a sirene (`.espera-sirene`, `app/globals.css`) — pedido do dono.
+ */
 const COR_DA_ESPERA: Record<NivelDeEspera, string> = {
   normal: "text-text-muted",
-  atencao: "text-warning-fg",
-  critico: "text-error-fg",
+  amarelo: "bg-warning-bg text-warning-fg",
+  laranja: "bg-alert-bg text-alert-fg",
+  vermelho: "bg-error-bg text-error-fg espera-sirene",
 };
 
 export function ConversationListItem({
@@ -140,6 +148,7 @@ export function ConversationListItem({
   nomeDoTime,
   orgTemTimes = false,
   agora,
+  regua,
 }: Props) {
   const localeDaData = useLocaleDeData();
   const t = useT();
@@ -192,13 +201,30 @@ export function ConversationListItem({
     Boolean(c?.is_blocked) ||
     Boolean(c?.is_anonymized);
 
+  const relogio = agora ?? new Date();
   const espera = esperaDaConversa(
     {
       status: conversation.status,
       last_inbound_at: conversation.last_inbound_at,
       last_outbound_at: conversation.last_outbound_at,
+      espera_desde: conversation.espera_desde,
+      // "ninguem" (org sem automático) também espera gente: a régua pergunta
+      // o nome do banco, e ali ele é `aguardando`.
+      comando_da_conversa: comando.quem === "ninguem" ? "aguardando" : comando.quem,
     },
-    agora ?? new Date(),
+    relogio,
+    regua,
+  );
+  // NA FILA DO TIME: foi para um setor e ninguém pegou (`lib/inbox/espera.ts`,
+  // mesma régua do filtro "Só na fila" e do número vermelho do chip).
+  const naFilaDoTime = estaNaFilaDoTime(
+    {
+      status: conversation.status,
+      team_id: conversation.team_id,
+      assigned_to_user_id: conversation.assigned_to_user_id,
+      bot_silenced_until: conversation.bot_silenced_until ?? null,
+    },
+    relogio,
   );
 
   // O rodapé: DE QUEM é (time) e POR ONDE entrou (canal). Três estados para o
@@ -311,16 +337,11 @@ export function ConversationListItem({
 
         {/* A ESPERA, em linha própria e em TODA aba — não só na Fila. É a
             resposta a "qual eu atendo primeiro?", e a conversa com dono parada
-            há três horas precisa gritar tanto quanto a que ninguém pegou. */}
-        {(espera || queuePosition !== undefined) && (
-          <div
-            className={cn(
-              "mt-1.5 flex items-center gap-1.5 text-[11px] font-medium",
-              COR_DA_ESPERA[espera?.nivel ?? "normal"],
-            )}
-            data-testid="espera-da-conversa"
-            data-nivel={espera?.nivel ?? "normal"}
-          >
+            há dez minutos precisa gritar tanto quanto a que ninguém pegou.
+            Ao lado, o selo "Na fila · <time>": foi para um setor e ninguém
+            pegou — o gargalo, visível sem abrir nada. */}
+        {(espera || queuePosition !== undefined || naFilaDoTime) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-medium">
             {queuePosition !== undefined && (
               <span
                 className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-soft px-1 text-[10px] font-medium tabular-nums text-accent"
@@ -329,10 +350,42 @@ export function ConversationListItem({
                 {queuePosition}º
               </span>
             )}
-            <Clock size={12} weight={espera && espera.nivel !== "normal" ? "fill" : "regular"} aria-hidden />
-            <span className="truncate">
-              {espera ? `${t("Aguardando há")} ${formatarEspera(espera.ms, t)}` : t("Aguardando")}
-            </span>
+            {(espera || queuePosition !== undefined) && (
+              <span
+                className={cn(
+                  "inline-flex min-w-0 items-center gap-1 rounded-full",
+                  espera && espera.nivel !== "normal" && "px-1.5 py-0.5",
+                  COR_DA_ESPERA[espera?.nivel ?? "normal"],
+                )}
+                data-testid="espera-da-conversa"
+                data-nivel={espera?.nivel ?? "normal"}
+                title={espera ? `${t("Cliente sem resposta desde")} ${format(espera.desde, "HH:mm")}` : undefined}
+              >
+                {espera?.nivel === "vermelho" ? (
+                  <Siren size={12} weight="fill" aria-hidden />
+                ) : espera && espera.nivel !== "normal" ? (
+                  <Thermometer size={12} weight="fill" aria-hidden />
+                ) : (
+                  <Clock size={12} weight="regular" aria-hidden />
+                )}
+                <span className="truncate">
+                  {espera ? `${t("Sem resposta há")} ${formatarEspera(espera.ms, t)}` : t("Aguardando")}
+                </span>
+              </span>
+            )}
+            {naFilaDoTime && (
+              <span
+                className="inline-flex min-w-0 items-center gap-1 rounded-full bg-warning-bg px-1.5 py-0.5 text-warning-fg"
+                data-testid="selo-na-fila-do-time"
+                title={t("Transferida para o time e ainda sem atendente")}
+              >
+                <HourglassMedium size={12} weight="fill" aria-hidden />
+                <span className="truncate">
+                  {t("Na fila")}
+                  {typeof nomeDoTime === "string" ? ` · ${nomeDoTime}` : ""}
+                </span>
+              </span>
+            )}
           </div>
         )}
 

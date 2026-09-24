@@ -18,7 +18,12 @@ export interface ConversationCounts {
   /** Opcional pelo mesmo motivo dos de cima: cache gravado antes deste deploy não tem. */
   closed?: number;
   /** Contagem exata por time da aba Todas; opcional para caches antigos. */
-  by_team?: Array<{ team_id: string | null; name: string | null; count: number }>;
+  /**
+   * Contagem exata por time da aba Todas; opcional para caches antigos. Contada
+   * SEM o filtro de time (cada chip é um time). `na_fila`: quantos daquele time
+   * ninguém pegou (migration 0279); opcional pelo mesmo motivo.
+   */
+  by_team?: Array<{ team_id: string | null; name: string | null; count: number; na_fila?: number }>;
 }
 
 /** Os filtros auxiliares ligados na barra, que a contagem tem de aplicar junto. */
@@ -30,6 +35,8 @@ export interface FiltrosDaContagem {
   team_id?: string;
   search?: string;
   by_team?: boolean;
+  /** Só a fila dos times (ninguém pegou) — o chip "Só na fila" de Todas. */
+  na_fila?: boolean;
 }
 
 /**
@@ -47,6 +54,7 @@ export function useConversationCounts(
   if (filtros.team_id) qs.set("team_id", filtros.team_id);
   if (filtros.search) qs.set("search", filtros.search);
   if (filtros.by_team) qs.set("by_team", "true");
+  if (filtros.na_fila) qs.set("na_fila", "true");
   const sufixo = qs.toString();
 
   return useQuery({

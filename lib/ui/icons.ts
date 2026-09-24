@@ -32,6 +32,12 @@ export {
   Gauge,
   WifiSlash,
   Clock,
+  // termômetro de espera do Inbox (migration 0279): a cor sobe, o ícone também —
+  // Siren no degrau vermelho, Hourglass no selo "Na fila" do time.
+  Thermometer,
+  Siren,
+  HourglassMedium,
+  SortAscending,
   // marca da instalação (o revendedor troca nome e cor do produto)
   Palette,
   // anúncios (Análise → Meta Ads). Megaphone e não outro ChartX: os dois

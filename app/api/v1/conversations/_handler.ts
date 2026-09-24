@@ -11,6 +11,8 @@ import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { CONVERSATION_TERMINAL_STATUSES } from "@/lib/schemas";
+
+import { aplicarNaFilaDoTime } from "./_na-fila";
 import type {
   ListConversationsQuery,
   PatchConversationInput,
@@ -129,7 +131,7 @@ const SELECT_COLS = `
   last_outbound_at, last_message_at, last_message_preview,
   unread_count_for_assignee, is_group, group_chat_id, tags, metadata,
   snooze_until, created_at, updated_at, team_id, protocol,
-  bot_silenced_until, last_handoff_at,
+  bot_silenced_until, last_handoff_at, espera_desde,
   comando_da_conversa,
   contacts:contact_id (id, display_name, name, phone_number, email, is_anonymized, tags, is_blocked, avatar_storage_path, force_human),
   channel_sessions:channel_session_id (phone_number, display_name, provider)
@@ -201,8 +203,11 @@ export async function listConversationsHandler(
   // lista continuaria populada, só que ordenada por atividade recente, e quem
   // espera desde ontem afundaria embaixo de quem escreveu agora.
   const isQueue = q.comando?.includes("aguardando") ?? q.assigned_to === "unassigned";
-  const sortCol = isQueue ? "last_inbound_at" : "last_message_at";
-  const asc = isQueue;
+  // "Mais tempo esperando" (migration 0279): a PRIMEIRA mensagem sem resposta,
+  // mais antiga primeiro; quem não espera ninguém (null) vai para o fim.
+  const porEspera = q.ordem === "espera";
+  const sortCol = porEspera ? "espera_desde" : isQueue ? "last_inbound_at" : "last_message_at";
+  const asc = porEspera || isQueue;
 
   let query = supabase
     .from("conversations")
@@ -273,6 +278,9 @@ export async function listConversationsHandler(
   // Este handler usa o admin client, que passa por cima da RLS: esse filtro é a Única
   // barreira. Consulta nova só para os não lidos nasceria sem barreira nenhuma.
   if (q.unread) query = query.gt("unread_count_for_assignee", 0);
+  // Na fila do time: mesma régua da contagem do chip (`_na-fila.ts`). Compõe
+  // sobre `query`, que já tem o `organization_id` — a única barreira aqui.
+  if (q.na_fila) query = aplicarNaFilaDoTime(query, new Date());
 
   if (q.assigned_to === "me") {
     if (ctx.actor.type !== "user") {
