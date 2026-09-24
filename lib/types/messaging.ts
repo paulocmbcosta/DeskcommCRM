@@ -65,6 +65,13 @@ export interface Conversation {
    * vira atendimento) e em resposta de versão anterior ainda em cache.
    */
   protocol?: string | null;
+  /**
+   * A PRIMEIRA mensagem do cliente ainda sem resposta (migration 0279) — o que o
+   * termômetro do card mede. `null` = ninguém deve resposta. Mantida por trigger
+   * a partir de `last_inbound_at`/`last_outbound_at`/`status`. Opcional pela
+   * razão de sempre: resposta de versão anterior ainda em cache não a tem.
+   */
+  espera_desde?: string | null;
   created_at: string;
   updated_at: string;
 }
