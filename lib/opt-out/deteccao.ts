@@ -151,6 +151,16 @@ const DETERMINANTES_DE_OBJETO =
   "mi|mis|tu|tus|esse|essa|esses|essas|ese|esa|esos|esas|nesse|nessa";
 
 /**
+ * O que, depois de "cancelar a assinatura/suscripción", faz da frase um pedido
+ * sobre a COMUNICAÇÃO — e não sobre o plano. Português e espanhol, sem acento
+ * (o texto chega normalizado).
+ */
+const OBJETOS_DE_ASSINATURA =
+  "mensagem|mensagens|lista|newsletter|notificacao|notificacoes|promocao|promocoes|" +
+  "aviso|avisos|comunicacao|comunicacoes|email|emails|e-mails|whatsapp|" +
+  "mensaje|mensajes|boletin|notificacion|notificaciones|promocion|promociones|correos";
+
+/**
  * Pedidos INEQUÍVOCOS de descadastro escritos por extenso. Todos exigem o objeto
  * de comunicação; nenhum casa a palavra solta.
  *
@@ -195,7 +205,17 @@ const FRASES_DE_OPT_OUT: readonly RegExp[] = [
   ),
   /\bme\s+(?:tira|tire|tirem|remove|remova|removam|retira|retire|exclui|exclua|apaga|apague)\s+(?:da|dessa|desta|de\s+sua|da\s+sua)\s+lista\b/u,
   /\bsair\s+d(?:a|essa|esta)\s+lista\b/u,
-  /\bcancelar?\s+(?:a\s+)?(?:inscricao|assinatura)\b/u,
+  /\bcancelar?\s+(?:a\s+)?inscricao\b/u,
+  // "assinatura" é, antes de tudo, o PLANO do cliente (provedor, SaaS,
+  // streaming): "pretendo cancelar a assinatura" é churn, não descadastro.
+  // Medido em produção (2026-09-24): um cliente sem internet a noite toda,
+  // reclamando, foi bloqueado por esta frase — sem objeto de comunicação, a
+  // regra caçava a palavra, que é o defeito que este arquivo existe para
+  // impedir. Só vale com o objeto escrito ("…da newsletter", "…das mensagens").
+  new RegExp(
+    `\\bcancelar?\\s+(?:a\\s+)?assinatura\\s+(?:d[aeo]s?|de|no|na|nos|nas)\\s+(?:${OBJETOS_DE_ASSINATURA})\\b`,
+    "u",
+  ),
   /\b(?:me\s+)?descadastr\w*\b/u,
   /\bdescadastro\b/u,
   // ── espanhol ──────────────────────────────────────────────────────────────
@@ -264,7 +284,12 @@ const FRASES_DE_OPT_OUT: readonly RegExp[] = [
   // quer continuar sendo atendido.
   /\b(?:sacame|sacar|quitame|quitar|borrame|borrar|elimina|eliminame)\s+de\s+(?:la\s+)?lista\b(?!\s+de\s+(?:espera|precios|invitados))/u,
   /\bsalir\s+de\s+(?:la\s+)?lista\b(?!\s+de\s+(?:espera|precios|invitados))/u,
-  /\bcancelar\s+(?:la\s+)?(?:suscripcion|inscripcion)\b/u,
+  /\bcancelar\s+(?:la\s+)?inscripcion\b/u,
+  // Espelho do português: "suscripción" é o plano do serviço. Só com objeto.
+  new RegExp(
+    `\\bcancelar\\s+(?:la\\s+|mi\\s+)?suscripcion\\s+(?:a|al|de|del|de\\s+los|de\\s+las|a\\s+los|a\\s+las)\\s+(?:${OBJETOS_DE_ASSINATURA})\\b`,
+    "u",
+  ),
 ];
 
 /**

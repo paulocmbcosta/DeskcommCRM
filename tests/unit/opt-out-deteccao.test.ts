@@ -47,6 +47,10 @@ const PEDE_PARA_SAIR = [
   "quero sair da lista",
   "quero cancelar a inscrição",
   "me descadastra aí",
+  // "assinatura" só vale com o objeto de comunicação escrito (ver o negativo
+  // do provedor abaixo) — com ele, segue bloqueando.
+  "quero cancelar a assinatura das mensagens",
+  "cancelar assinatura da newsletter",
 ];
 
 /** Frases do dia a dia que usam a palavra e NÃO são pedido de descadastro. */
@@ -54,6 +58,13 @@ const NAO_PEDE_PARA_SAIR = [
   // e-commerce — o padrão de cessação ancorava só no VERBO ("mandar"), e
   // "mandar" é verbo de comunicação mesmo quando o objeto é outra coisa.
   // Bloquearia um cliente pedindo para mudar a ENTREGA.
+  // PROVEDOR (medido em produção, 2026-09-24): cliente sem internet a noite
+  // toda, reclamando, foi BLOQUEADO — "assinatura" é o PLANO dele, não uma
+  // lista de mensagens. Justo o cliente que mais precisava de atendimento.
+  "Hoje fiquei sem Internet a noite toda. Eu trabalho a noite com a Internet e infelizmente perdi muitos trabalhos por falta da Internet aqui em casa. Estou extremamente chateado. Vou aguardar reativar e pretendo cancelar a assinatura.",
+  "pretendo cancelar a assinatura",
+  "quero cancelar minha assinatura da internet",
+  "como faço para cancelar a assinatura?",
   "pare de mandar o pedido nesse endereco",
   "para de mandar a fatura por aqui",
   // MESMA CLASSE, outra construção: "não me mande mais X" ancorava só no
@@ -151,7 +162,7 @@ const ESPANHOL_PEDE_PARA_SAIR = [
   "por favor no me escriban mas",
   "me desuscribo",
   "sacame de la lista",
-  "cancelar la suscripcion",
+  "cancelar la suscripcion a los mensajes",
 ];
 
 const ESPANHOL_NAO_PEDE = [
@@ -162,6 +173,10 @@ const ESPANHOL_NAO_PEDE = [
   "necesito rebajar el precio",
   "Y el abuelo subiendo y bajando bolsones",
   "puedo cancelar el turno del martes?",
+  // "suscripción" é o PLANO do serviço (internet, streaming, SaaS) — o espelho
+  // do caso do provedor em português. Só bloqueia com objeto de comunicação.
+  "cancelar la suscripcion",
+  "quiero cancelar mi suscripcion de internet",
   // Troca de canal, não descadastro — o mesmo raciocínio da regra de "ligação".
   "no quiero recibir la factura por aqui, manda por email",
   // Outra lista. Quem escreve isto QUER continuar sendo atendido.

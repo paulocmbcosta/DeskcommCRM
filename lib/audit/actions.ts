@@ -121,6 +121,9 @@ export const AUDIT_ACTIONS = [
   // como falha (rodada vazia não vira linha — varredura não é mutação).
   "message.recover_stuck_run",
   "contact.blocked",
+  // Reversão de um bloqueio (ex.: falso positivo do opt-out). metadata leva o
+  // motivo da reversão — hoje só por SQL auditado; ainda não há porta na tela.
+  "contact.unblocked",
   "ai.handoff_triggered",
   "ai.reactivated_by_agent",
   "conversation.usable_for_rag_toggled",
