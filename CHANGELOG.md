@@ -8,6 +8,17 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.41.3] — 2026-09-24
+
+### Corrigido
+
+- **Inbox e demais telas até 3× mais rápidos no banco para quem não é administrador da plataforma** As regras de segurança do banco consultavam, a cada linha lida, o contexto de
+  suporte temporário — que só vale para administradores da plataforma e, para todos
+  os outros usuários, sempre dava vazio. Agora essa consulta só acontece para quem é
+  administrador da plataforma. O que cada pessoa vê não muda; medido em produção, a
+  contagem de uma aba do Inbox caiu de ~175 ms para ~52 ms. A migration 0278 é
+  aplicada sozinha pelo `update.sh`.
+
 ## [1.41.2] — 2026-09-24
 
 ### Corrigido
@@ -5431,7 +5442,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.2...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.3...HEAD
+[1.41.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.2...v1.41.3
 [1.41.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.1...v1.41.2
 [1.41.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.0...v1.41.1
 [1.41.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.40.0...v1.41.0
