@@ -8,6 +8,16 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.41.2] — 2026-09-24
+
+### Corrigido
+
+- **O Inbox não derruba mais o banco quando chegam mensagens com muitos atendentes logados** Cada aviso de tempo real ("conversa mudou", "mensagem nova") fazia TODAS as telas
+  abertas do Inbox recarregarem a lista e as contagens das abas na hora. Com vários
+  atendentes logados, uma única mensagem virava centenas de consultas e saturava o
+  banco. Agora cada tela junta os avisos e recarrega no máximo uma vez a cada
+  poucos segundos. As mensagens da conversa aberta continuam aparecendo na hora.
+
 ## [1.41.1] — 2026-09-24
 
 ### Corrigido
@@ -5421,7 +5431,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.2...HEAD
+[1.41.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.1...v1.41.2
 [1.41.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.0...v1.41.1
 [1.41.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.40.0...v1.41.0
 [1.40.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.39.0...v1.40.0
