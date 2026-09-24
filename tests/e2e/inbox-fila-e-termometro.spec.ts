@@ -166,7 +166,9 @@ test("Todas por chips, fila do time e termômetro de espera", async ({ browser }
     await expect(page.getByTestId("inbox-abas")).toBeVisible();
     const chips = page.getByTestId("chips-dos-times");
     await expect(chips).toBeVisible();
-    await expect(page.getByRole("button", { name: "Filtrar por time: Suporte" })).toHaveText(/Suporte\s*1\s*1 na fila/);
+    const chipSuporte = page.getByRole("button", { name: "Filtrar por time: Suporte (1 na fila)" });
+    await expect(chipSuporte).toHaveText(/Suporte\s*1/);
+    await expect(chipSuporte.getByTestId("chip-na-fila")).toHaveText("1");
     await expect(page.getByRole("button", { name: "Filtrar por time: Vendas" })).toHaveText(/Vendas\s*1/);
     await expect(page.getByRole("button", { name: "Filtrar por time: Sem time" })).toHaveText(/Sem time\s*1/);
     await expect(page.getByTestId("inbox-grupo-time")).toHaveCount(0);
@@ -222,7 +224,7 @@ test("Todas por chips, fila do time e termômetro de espera", async ({ browser }
 
     // ─── 7. A régua da organização muda a cor ───────────────────────────────
     await page.goto("/app/settings/atendimento");
-    const regua = page.getByTestId("regua-de-espera");
+    const regua = page.getByRole("main").getByTestId("regua-de-espera");
     await expect(regua).toBeVisible();
     await regua.getByLabel("Amarelo a partir de").fill("1");
     await regua.getByLabel("Laranja a partir de").fill("2");

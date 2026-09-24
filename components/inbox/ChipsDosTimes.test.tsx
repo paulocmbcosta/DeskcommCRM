@@ -2,7 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ChipsDosTimes } from "./ChipsDosTimes";
+import { AlternanciasDaLista, ChipsDosTimes } from "./ChipsDosTimes";
 
 vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (texto: string) => texto }));
 
@@ -14,20 +14,8 @@ const contagens = [
 ];
 
 function pintar(props: Partial<Parameters<typeof ChipsDosTimes>[0]> = {}) {
-  const handlers = {
-    onEscolherTime: vi.fn(),
-    onSoNaFila: vi.fn(),
-    onPorEspera: vi.fn(),
-  };
-  render(
-    <ChipsDosTimes
-      contagens={contagens}
-      soNaFila={false}
-      porEspera={false}
-      {...handlers}
-      {...props}
-    />,
-  );
+  const handlers = { onEscolherTime: vi.fn() };
+  render(<ChipsDosTimes contagens={contagens} {...handlers} {...props} />);
   return handlers;
 }
 
@@ -37,7 +25,7 @@ describe("Todas: os times viram chips com o total", () => {
   it("cada time mostra a contagem exata, e 'Todos' a soma", () => {
     pintar();
     expect(screen.getByRole("button", { name: "Filtrar por time: Cobrança" })).toHaveTextContent("60");
-    expect(screen.getByRole("button", { name: "Filtrar por time: Suporte" })).toHaveTextContent("25");
+    expect(screen.getByRole("button", { name: /^Filtrar por time: Suporte/ })).toHaveTextContent("25");
     expect(screen.getByRole("button", { name: "Filtrar por time: Sem time" })).toHaveTextContent("5");
     expect(screen.getByRole("button", { name: /^Todos/ })).toHaveTextContent("90");
   });
@@ -55,12 +43,16 @@ describe("Todas: os times viram chips com o total", () => {
     const nomes = screen
       .getAllByRole("button", { name: /^Filtrar por time/ })
       .map((b) => b.getAttribute("aria-label"));
-    expect(nomes).toEqual(["Filtrar por time: Sem time", "Filtrar por time: Cobrança", "Filtrar por time: Suporte"]);
+    expect(nomes).toEqual([
+      "Filtrar por time: Sem time",
+      "Filtrar por time: Cobrança",
+      "Filtrar por time: Suporte (3 na fila)",
+    ]);
   });
 
   it("clicar escolhe o time; clicar de novo desliga; 'Sem time' é a fila geral", async () => {
     const { onEscolherTime } = pintar({ timeEscolhido: "time-b" });
-    await userEvent.click(screen.getByRole("button", { name: "Filtrar por time: Suporte" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Filtrar por time: Suporte/ }));
     expect(onEscolherTime).toHaveBeenLastCalledWith(undefined);
     await userEvent.click(screen.getByRole("button", { name: "Filtrar por time: Sem time" }));
     expect(onEscolherTime).toHaveBeenLastCalledWith("none");
@@ -68,18 +60,13 @@ describe("Todas: os times viram chips com o total", () => {
 
   it("o time com gente esperando ganha 'N na fila', e a dica diz por quê", () => {
     pintar({ motivos: [{ team_id: "time-b", motivo: "todos_ocupados" }] });
-    const suporte = screen.getByRole("button", { name: "Filtrar por time: Suporte" });
-    expect(suporte).toHaveTextContent("3 na fila");
+    // O número vai no nome acessível: o selo vermelho é só um ícone e um dígito.
+    const suporte = screen.getByRole("button", { name: "Filtrar por time: Suporte (3 na fila)" });
+    expect(suporte.querySelector('[data-testid="chip-na-fila"]')).toHaveTextContent("3");
     expect(suporte).toHaveAttribute("title", "Todos os atendentes disponíveis estão no limite de conversas.");
-    expect(screen.getByRole("button", { name: "Filtrar por time: Cobrança" })).not.toHaveTextContent("na fila");
-  });
-
-  it("os dois chips de alternância avisam o pai", async () => {
-    const { onSoNaFila, onPorEspera } = pintar();
-    await userEvent.click(screen.getByRole("button", { name: /Só na fila/ }));
-    expect(onSoNaFila).toHaveBeenCalledWith(true);
-    await userEvent.click(screen.getByRole("button", { name: /Mais tempo esperando/ }));
-    expect(onPorEspera).toHaveBeenCalledWith(true);
+    expect(
+      screen.getByRole("button", { name: "Filtrar por time: Cobrança" }).querySelector('[data-testid="chip-na-fila"]'),
+    ).toBeNull();
   });
 
   it("avisa quando não pode confirmar a contagem, sem inventar número", () => {
@@ -87,11 +74,40 @@ describe("Todas: os times viram chips com o total", () => {
     expect(screen.getByText("Não foi possível carregar o volume por time.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Filtrar por time: Cobrança" })).not.toBeInTheDocument();
   });
+});
+
+describe("as alternâncias da lista, na linha do título", () => {
+  it("avisam o pai, com o nome por extenso para quem usa leitor de tela", async () => {
+    const onSoNaFila = vi.fn();
+    const onPorEspera = vi.fn();
+    render(
+      <AlternanciasDaLista
+        mostrarFila
+        naFilaTotal={3}
+        soNaFila={false}
+        onSoNaFila={onSoNaFila}
+        porEspera={false}
+        onPorEspera={onPorEspera}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Só na fila" }));
+    expect(onSoNaFila).toHaveBeenCalledWith(true);
+    expect(screen.getByRole("button", { name: "Só na fila" })).toHaveTextContent("3");
+    await userEvent.click(screen.getByRole("button", { name: "Mais tempo esperando" }));
+    expect(onPorEspera).toHaveBeenCalledWith(true);
+  });
 
   it("em Minhas, só a ordem por espera", () => {
-    pintar({ mostrarTimes: false });
-    expect(screen.queryByRole("button", { name: /^Filtrar por time/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Só na fila/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Mais tempo esperando/ })).toBeInTheDocument();
+    render(
+      <AlternanciasDaLista
+        mostrarFila={false}
+        soNaFila={false}
+        onSoNaFila={vi.fn()}
+        porEspera={false}
+        onPorEspera={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Só na fila" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mais tempo esperando" })).toBeInTheDocument();
   });
 });

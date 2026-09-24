@@ -45,7 +45,7 @@ import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import { useFilaDosTimes } from "@/hooks/inbox/useFilaDosTimes";
-import { ChipsDosTimes } from "./ChipsDosTimes";
+import { AlternanciasDaLista, ChipsDosTimes } from "./ChipsDosTimes";
 
 /**
  * QUAL COLUNA APARECE NO CELULAR — as duas saem da MESMA pergunta.
@@ -543,10 +543,25 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
           {/* O NOME da aba, por extenso. No trilho só cabe o ícone, e dica de
               mouse não existe em tela de toque — sem esta linha, quem atende do
               celular não teria onde LER em que visão está. */}
-          <div className="flex items-center justify-between px-3 pt-2.5" data-testid="inbox-aba-atual">
-            <h2 className="text-sm font-semibold text-text">
+          <div className="flex items-center justify-between gap-2 px-3 pt-2.5">
+            {/* O testid no TÍTULO, não na linha: a linha passou a ter os botões
+                de alternância à direita, e o nome da aba é o que se mede. */}
+            <h2 className="text-sm font-semibold text-text" data-testid="inbox-aba-atual">
               {t(INBOX_TABS.find((m) => m.value === tab)?.label ?? "Fila")}
             </h2>
+            {/* "Só na fila" (Todas) e "Mais tempo esperando" (Todas e Minhas):
+                na linha do título, que tinha a direita vazia — zero altura a
+                mais na lista. */}
+            {(tab === "all" || tab === "mine") && (
+              <AlternanciasDaLista
+                mostrarFila={tab === "all"}
+                naFilaTotal={(contagensQ.data?.by_team ?? []).reduce((soma, g) => soma + (g.na_fila ?? 0), 0)}
+                soNaFila={Boolean(filterValue.na_fila)}
+                onSoNaFila={(ligado) => setFilterValue({ ...filterValue, na_fila: ligado || undefined })}
+                porEspera={filterValue.ordem === "espera"}
+                onPorEspera={(ligado) => setFilterValue({ ...filterValue, ordem: ligado ? "espera" : undefined })}
+              />
+            )}
           </div>
           <InboxFilters
             value={filterValue}
@@ -563,20 +578,15 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             ocultarEncerrados={tab === "closed"}
           />
           {/* TODAS: os times viram chips com o total (e "N na fila"), no lugar
-              dos grupos que empurravam o último time para o fim da lista. Em
-              Minhas, só a ordem por espera. O trilho de abas não muda. */}
-          {(tab === "all" || tab === "mine") && (
+              dos grupos que empurravam o último time para o fim da lista. O
+              trilho de abas não muda. */}
+          {tab === "all" && (
             <ChipsDosTimes
-              mostrarTimes={tab === "all"}
               contagens={contagensQ.data?.by_team}
               erro={contagensQ.isError}
               onRecarregar={() => void contagensQ.refetch()}
               timeEscolhido={filterValue.team_id}
               onEscolherTime={(teamId) => setFilterValue({ ...filterValue, team_id: teamId })}
-              soNaFila={Boolean(filterValue.na_fila)}
-              onSoNaFila={(ligado) => setFilterValue({ ...filterValue, na_fila: ligado || undefined })}
-              porEspera={filterValue.ordem === "espera"}
-              onPorEspera={(ligado) => setFilterValue({ ...filterValue, ordem: ligado ? "espera" : undefined })}
               motivos={filaDosTimesQ.data}
             />
           )}

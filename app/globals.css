@@ -901,10 +901,10 @@
 @keyframes deskcomm-sirene {
   0%,
   100% {
-    box-shadow: 0 0 0 0 var(--color-error-bg);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-error) 55%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 4px var(--color-error-bg);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 0%, transparent);
   }
 }
 
@@ -915,7 +915,7 @@
 @media (prefers-reduced-motion: reduce) {
   .espera-sirene {
     animation: none;
-    box-shadow: 0 0 0 2px var(--color-error-bg);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-error) 35%, transparent);
   }
 }
 

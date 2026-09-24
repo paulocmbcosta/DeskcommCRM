@@ -131,9 +131,11 @@ function relativeTime(iso: string | null, locale: Locale): string {
  */
 const COR_DA_ESPERA: Record<NivelDeEspera, string> = {
   normal: "text-text-muted",
+  // A intensidade sobe junto com a cor: tinta clara, tinta forte, sólido. Só a
+  // cor (amarelo × laranja em tinta clara) ficava parecida demais na tela.
   amarelo: "bg-warning-bg text-warning-fg",
-  laranja: "bg-alert-bg text-alert-fg",
-  vermelho: "bg-error-bg text-error-fg espera-sirene",
+  laranja: "bg-alert/25 text-alert-fg",
+  vermelho: "bg-error text-bg espera-sirene",
 };
 
 export function ConversationListItem({
