@@ -28793,6 +28793,69 @@ end;
 $$;
 revoke execute on function public.fn_atendimento_acompanha_conversa() from public, anon, authenticated;
 
+-- ---- RLS de conversa numa consulta só (migration 0283) ----
+-- A regra da 0281 sem funções security definer aninhadas por linha: 1,5 s →
+-- 120 ms para contar 102 conversas como atendente. Racional na migration 0283.
+create or replace function public.fn_can_view_conversation(
+  p_org uuid,
+  p_assigned_to_user_id uuid,
+  p_team_id uuid
+) returns boolean
+language plpgsql stable security definer
+set search_path = public
+as $$
+declare
+  v_uid  uuid := auth.uid();
+  v_role text;
+  v_modo text;
+begin
+  if v_uid is null then
+    return false;
+  end if;
+  if exists (select 1 from public.platform_admins pa
+              where pa.user_id = v_uid and pa.revoked_at is null) then
+    return true;
+  end if;
+
+  select uo.role into v_role
+    from public.user_organizations uo
+   where uo.user_id = v_uid and uo.organization_id = p_org and uo.revoked_at is null
+   limit 1;
+  if v_role is null then
+    return false;                                                    -- não é membro
+  end if;
+  if v_role in ('viewer','manager','admin') then
+    return true;
+  end if;
+  if p_assigned_to_user_id = v_uid then
+    return true;                                                     -- as suas
+  end if;
+
+  select coalesce(o.settings->>'visibility_mode', 'own_and_unassigned') into v_modo
+    from public.organizations o where o.id = p_org;
+
+  return case coalesce(v_modo, 'own_and_unassigned')
+    when 'all' then true
+    when 'own_and_unassigned' then p_assigned_to_user_id is null
+    when 'own_and_team_queue' then p_assigned_to_user_id is null and p_team_id is not null
+      and exists (select 1 from public.attendance_team_members m
+                   where m.organization_id = p_org and m.team_id = p_team_id
+                     and m.user_id = v_uid)
+    when 'own_and_team' then p_team_id is not null
+      and exists (select 1 from public.attendance_team_members m
+                   where m.organization_id = p_org and m.team_id = p_team_id
+                     and m.user_id = v_uid)
+    else false
+  end;
+end;
+$$;
+
+revoke execute on function public.fn_can_view_conversation(uuid, uuid, uuid) from public, anon;
+grant  execute on function public.fn_can_view_conversation(uuid, uuid, uuid) to authenticated, service_role;
+
+notify pgrst, 'reload schema';
+
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

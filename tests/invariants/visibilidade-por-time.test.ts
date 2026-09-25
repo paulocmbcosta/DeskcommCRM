@@ -281,3 +281,28 @@ describe("quem RECEBE uma conversa é avisado, mesmo com 'só as minhas'", () =>
     expect(avisosDeAtribuicao(A)).toBe(0);
   });
 });
+
+describe("0283 — os caminhos que a regra trata à parte", () => {
+  const PLAT = "7e7e0281-1111-4000-8000-0000000000ee";
+  const FORA = "7e7e0281-1111-4000-8000-0000000000ff";
+
+  it("administrador da plataforma vê tudo, mesmo sem vínculo com a organização", () => {
+    sql(`insert into auth.users (id, email) values ('${PLAT}', 'vt-plat@invariant.test');
+         insert into public.platform_admins (user_id, granted_by, reason) values ('${PLAT}', '${PLAT}', 'fixture');`);
+    modo("own");
+    expect(quaisVe(PLAT)).toBe(5);
+  });
+
+  it("quem não é membro não vê nada", () => {
+    sql(`insert into auth.users (id, email) values ('${FORA}', 'vt-fora@invariant.test');`);
+    modo("all");
+    expect(quaisVe(FORA)).toBe(0);
+  });
+
+  it("vínculo revogado não vê nada, nem no modo 'all'", () => {
+    modo("all");
+    sql(`update public.user_organizations set revoked_at = now() where organization_id = '${ORG}' and user_id = '${C}';`);
+    expect(quaisVe(C)).toBe(0);
+    sql(`update public.user_organizations set revoked_at = null where organization_id = '${ORG}' and user_id = '${C}';`);
+  });
+});
