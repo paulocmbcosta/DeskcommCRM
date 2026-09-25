@@ -9,6 +9,8 @@ import { JanelaSelo } from "@/components/inbox/JanelaSelo";
 import { SeloDeSentimento } from "@/components/inbox/SeloDeSentimento";
 import { Phone, ArrowRight } from "@/lib/ui/icons";
 import { useAuth } from "@/hooks/auth/AuthProvider";
+import { ROLE_RANK } from "@/lib/auth/types";
+import { DesbloquearContatoDialog } from "@/components/contacts/DesbloquearContatoDialog";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
 import { useReleaseConversation } from "@/hooks/inbox/useReleaseConversation";
 import { useCloseConversation, useReopenConversation } from "@/hooks/inbox/useCloseConversation";
@@ -65,7 +67,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export function ConversationHeader({ conversation, somenteLeitura = false }: Props) {
   const t = useT();
-  const { user } = useAuth();
+  const { user, activeOrg } = useAuth();
   const claim = useClaimConversation();
   const release = useReleaseConversation();
   const close = useCloseConversation();
@@ -77,6 +79,7 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
   const automaticoDaOrg = useAutomaticoAtivo();
   const [reassignOpen, setReassignOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
+  const [desbloquearOpen, setDesbloquearOpen] = useState(false);
   /**
    * O catálogo de times. Uma consulta para o inbox inteiro (o react-query dedupa
    * pela chave), e é dela que sai o NOME do setor — a conversa carrega só o id.
@@ -112,6 +115,11 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
   });
 
   const encerrada = status === "closed" || status === "archived" || status === "resolved";
+  const podeDesbloquear =
+    Boolean(c?.id) &&
+    !somenteLeitura &&
+    activeOrg != null &&
+    ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager;
   /**
    * A VOLTA aparece sempre que há algo a devolver — inclusive em conversa
    * ENCERRADA. Antes ela era condicionada a `status !== "closed"`, e o resultado
@@ -206,7 +214,24 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
               o clica, e rótulo visível é contrato. O que mudou é o texto DIZER o
               motivo — "alguém assumiu" e "pausado para este cliente" pediam ações
               diferentes e tinham a mesma frase. */}
-          {motivo !== null && (
+          {/* O SELO DO OPT-OUT É A PORTA DO DESBLOQUEIO — para manager+, que é
+              a régua da rota. Mesmo raciocínio do selo do time logo abaixo: a
+              barra de ações não comporta mais um botão, e o gesto fica onde a
+              informação está. Para os demais papéis, segue só selo. */}
+          {motivo === "contato_descadastrado" && podeDesbloquear ? (
+            <button
+              type="button"
+              data-testid="badge-atendimento-humano"
+              title={t("Desbloquear este contato para voltar a enviar mensagens.")}
+              onClick={() => setDesbloquearOpen(true)}
+              className={cn(
+                badgeVariants({ variant: "outline" }),
+                "h-4 cursor-pointer px-1.5 text-[10px] hover:bg-surface-elevated",
+              )}
+            >
+              {t(ROTULO_DO_MOTIVO[motivo])}
+            </button>
+          ) : motivo !== null ? (
             <Badge
               variant="outline"
               className="h-4 px-1.5 text-[10px]"
@@ -214,7 +239,7 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
             >
               {t(ROTULO_DO_MOTIVO[motivo])}
             </Badge>
-          )}
+          ) : null}
           {/* O SELO DO TIME É A PORTA DO ENCAMINHAMENTO.
               Um botão a mais na barra de ações custa ~85px numa fileira que já
               estourou a caixa útil em 1280px uma vez (ver o comentário no topo
@@ -413,6 +438,14 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
         open={timeOpen}
         onOpenChange={setTimeOpen}
       />
+      {podeDesbloquear && c?.id && (
+        <DesbloquearContatoDialog
+          contactId={c.id}
+          nome={displayName}
+          open={desbloquearOpen}
+          onOpenChange={setDesbloquearOpen}
+        />
+      )}
     </div>
   );
 }

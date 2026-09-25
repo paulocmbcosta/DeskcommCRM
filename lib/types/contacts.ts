@@ -14,6 +14,8 @@ export interface Contact {
   birthdate: string | null;
   is_blocked: boolean;
   blocked_reason: string | null;
+  /** Quando o bloqueio (opt-out) foi gravado — o diálogo de desbloqueio o cita. */
+  blocked_at: string | null;
   is_anonymized: boolean;
   anonymized_at: string | null;
   is_merged_into: string | null;

@@ -8,6 +8,21 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.43.0] — 2026-09-25
+
+### Adicionado
+
+- **Gerentes e administradores podem desbloquear pela tela um contato bloqueado por opt-out** Quando o sistema entende que o cliente pediu para não receber mensagens, o contato fica
+  **bloqueado** e o Inbox mostra o selo "Cliente pediu para não receber mensagens". Até aqui
+  não havia como desfazer isso pela tela. Agora quem é **gerente ou administrador** tem o
+  botão **Desbloquear** na ficha do contato, e no Inbox o próprio selo abre o desbloqueio.
+
+  A confirmação explica que o cliente **pode ter pedido para sair de verdade** e pede duas
+  coisas: o **motivo**, e a marcação de que a conversa foi conferida. Quem desbloqueou e o
+  motivo ficam na auditoria (`contact.unblocked`). O que foi cancelado enquanto o contato
+  estava bloqueado não é reenviado. Se ele pedir para sair de novo, o bloqueio volta sozinho.
+  Atendentes continuam vendo o selo, mas sem o botão.
+
 ## [1.42.1] — 2026-09-24
 
 ### Corrigido
@@ -5475,7 +5490,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.43.0...HEAD
+[1.43.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.1...v1.43.0
 [1.42.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.0...v1.42.1
 [1.42.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.3...v1.42.0
 [1.41.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.2...v1.41.3

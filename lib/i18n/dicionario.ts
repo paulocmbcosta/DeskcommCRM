@@ -9309,6 +9309,28 @@ export const DICIONARIO: Traducoes = {
   "Cliente muito insatisfeito abaixo da nota": { es: "Cliente muy insatisfecho por debajo de la nota" },
   "Salvar limite": { es: "Guardar límite" },
   "De 0 a 1. Abaixo desta nota o momento entra na linha do tempo da conversa e o agente acolhe o cliente e passa para o setor responsável. Mais baixo = só os casos mais graves. Padrão 0,30.": { es: "De 0 a 1. Por debajo de esta nota el momento entra en la línea de tiempo de la conversación y el agente acoge al cliente y lo pasa al sector responsable. Más bajo = solo los casos más graves. Estándar 0,30." },
+  // Desbloqueio de contato (opt-out revertido por manager+).
+  "Desbloquear contato": { es: "Desbloquear contacto" },
+  Desbloquear: { es: "Desbloquear" },
+  "Desbloqueando…": { es: "Desbloqueando…" },
+  "bloqueado em": { es: "bloqueado el" },
+  "Motivo do desbloqueio": { es: "Motivo del desbloqueo" },
+  "Explique o motivo do desbloqueio.": { es: "Explique el motivo del desbloqueo." },
+  "Explique o motivo em pelo menos 10 caracteres.": { es: "Explique el motivo en al menos 10 caracteres." },
+  "O motivo pode ter no máximo 500 caracteres.": { es: "El motivo puede tener como máximo 500 caracteres." },
+  "Contato desbloqueado. Ele volta a receber mensagens.": { es: "Contacto desbloqueado. Vuelve a recibir mensajes." },
+  "O cliente foi bloqueado por pedir para não receber mensagens.": { es: "El cliente fue bloqueado por pedir no recibir mensajes." },
+  "Desbloquear este contato para voltar a enviar mensagens.": { es: "Desbloquear este contacto para volver a enviar mensajes." },
+  "Este contato foi bloqueado porque o sistema entendeu que ele pediu para não receber mensagens. Pode ter sido um engano — mas pode ter sido um pedido de verdade.": { es: "Este contacto fue bloqueado porque el sistema entendió que pidió no recibir mensajes. Puede haber sido un error, pero también puede haber sido un pedido real." },
+  "Desbloqueie só depois de conferir a conversa. Voltar a escrever para quem pediu para sair desrespeita o cliente e a LGPD. Seu nome e o motivo ficam registrados na auditoria.": { es: "Desbloquee solo después de revisar la conversación. Volver a escribir a quien pidió salir irrespeta al cliente y la ley de protección de datos (LGPD). Su nombre y el motivo quedan registrados en la auditoría." },
+  "O que foi cancelado enquanto ele estava bloqueado não volta a ser enviado. Se ele pedir para sair de novo, o bloqueio volta sozinho.": { es: "Lo que se canceló mientras estaba bloqueado no se vuelve a enviar. Si pide salir de nuevo, el bloqueo vuelve solo." },
+  "Ex.: o cliente pediu para cancelar o plano, não para sair da lista.": { es: "Ej.: el cliente pidió cancelar el plan, no salir de la lista." },
+  "Conferi a conversa e o cliente não pediu para deixar de receber mensagens.": { es: "Revisé la conversación y el cliente no pidió dejar de recibir mensajes." },
+  "Contato anonimizado não pode ser desbloqueado.": { es: "Un contacto anonimizado no puede ser desbloqueado." },
+  "Este contato não está bloqueado.": { es: "Este contacto no está bloqueado." },
+  "Este contato já não está bloqueado.": { es: "Este contacto ya no está bloqueado." },
+  "Não foi possível ler o contato.": { es: "No fue posible leer el contacto." },
+  "Não foi possível desbloquear o contato.": { es: "No fue posible desbloquear el contacto." },
 };
 
 /**
