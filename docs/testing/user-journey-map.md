@@ -580,6 +580,13 @@ funcional, e é por isso que o `workflow_dispatch` existe.
 | J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **PASS** (28,5 s) |
 | J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **PASS** (29,4 s) |
 
+**2026-09-25 — Devolver a conversa à fila do próprio time (troca de turno)** — `tests/e2e/devolver-ao-proprio-time.spec.ts`
+
+| Caso | Prioridade | Estado |
+|---|---|---|
+| Atendente responsável abre **Transferir → Fila do time**; o diálogo diz a consequência antes do clique; a conversa volta **sem dono, no mesmo time, com o automático parado** (`bot_silenced_until = infinity`) | `[P1]` | **PASS** (4,3 s) |
+| O rodízio não devolve a conversa a quem a devolveu (se só ele está elegível, ela espera) | `[P1]` | unidade: `lib/routing/worker-nao-devolve-a-quem-devolveu.test.ts` (sabotado: 2 vermelhos) |
+
 **A primeira execução reprovou 6 dos 8, e o defeito era do TESTE** — vale registrar
 porque é o argumento inteiro da doutrina em miniatura. `createContactHandler`
 devolve `{ contact, action }`, o helper lia `data.id`, e o `undefined` chegava ao

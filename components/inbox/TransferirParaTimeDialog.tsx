@@ -58,7 +58,11 @@ export function TransferirParaTimeDialog({ conversationId, timeAtual, open, onOp
 
   // Arquivado não é destino: ele existe na lista só para o selo saber nomear o
   // passado. Oferecê-lo aqui seria oferecer um setor que ninguém mais atende.
-  const opcoes = (times.data ?? []).filter((time) => !time.archived && time.id !== timeAtual);
+  //
+  // O time ATUAL entra, e é de propósito: devolver a conversa à fila do próprio
+  // time é a troca de turno — quem vai embora sai da conversa, a IA segue
+  // calada e o rodízio entrega a outra pessoa do time, nunca de volta a ele.
+  const opcoes = (times.data ?? []).filter((time) => !time.archived);
   const escolhido = (times.data ?? []).find((time) => time.id === destino) ?? null;
 
   function fechar(v: boolean) {
@@ -103,7 +107,9 @@ export function TransferirParaTimeDialog({ conversationId, timeAtual, open, onOp
                 {opcoes.map((time) => (
                   <SelectItem key={time.id} value={time.id}>
                     {time.name}
-                    <span className="ml-1 text-muted-foreground">· {estado(time)}</span>
+                    <span className="ml-1 text-muted-foreground">
+                      · {time.id === timeAtual ? t("devolver à fila") : estado(time)}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
