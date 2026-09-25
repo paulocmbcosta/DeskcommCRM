@@ -37,6 +37,8 @@ export interface FiltrosDaContagem {
   by_team?: boolean;
   /** Só a fila dos times (ninguém pegou) — o chip "Só na fila" de Todas. */
   na_fila?: boolean;
+  /** Só insatisfeitos — vale para Todas e Minhas (as abas que mostram o botão). */
+  insatisfeitos?: boolean;
 }
 
 /**
@@ -55,6 +57,7 @@ export function useConversationCounts(
   if (filtros.search) qs.set("search", filtros.search);
   if (filtros.by_team) qs.set("by_team", "true");
   if (filtros.na_fila) qs.set("na_fila", "true");
+  if (filtros.insatisfeitos) qs.set("insatisfeitos", "true");
   const sufixo = qs.toString();
 
   return useQuery({

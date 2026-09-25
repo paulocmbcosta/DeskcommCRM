@@ -227,6 +227,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       na_fila: filterValue.tab === "all" ? filterValue.na_fila || undefined : undefined,
       ordem:
         filterValue.tab === "all" || filterValue.tab === "mine" ? filterValue.ordem : undefined,
+      insatisfeitos:
+        filterValue.tab === "all" || filterValue.tab === "mine"
+          ? filterValue.insatisfeitos || undefined
+          : undefined,
     }),
     [
       filterValue.tab,
@@ -238,6 +242,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       filterValue.onlyUnread,
       filterValue.na_fila,
       filterValue.ordem,
+      filterValue.insatisfeitos,
     ],
   );
 
@@ -266,6 +271,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
     search: filters.search,
     by_team: tab === "all",
     na_fila: filters.na_fila,
+    insatisfeitos: filters.insatisfeitos,
   });
   // POR QUE a fila de cada time não anda — só pergunta quando há fila.
   const haFilaDeTime = (contagensQ.data?.by_team ?? []).some((g) => (g.na_fila ?? 0) > 0);
@@ -560,6 +566,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 onSoNaFila={(ligado) => setFilterValue({ ...filterValue, na_fila: ligado || undefined })}
                 porEspera={filterValue.ordem === "espera"}
                 onPorEspera={(ligado) => setFilterValue({ ...filterValue, ordem: ligado ? "espera" : undefined })}
+                soInsatisfeitos={Boolean(filterValue.insatisfeitos)}
+                onSoInsatisfeitos={(ligado) =>
+                  setFilterValue({ ...filterValue, insatisfeitos: ligado || undefined })
+                }
               />
             )}
           </div>

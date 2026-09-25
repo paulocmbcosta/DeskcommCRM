@@ -38,6 +38,9 @@ export {
   Siren,
   HourglassMedium,
   SortAscending,
+  // sentimento do cliente (migration 0280): selo no topo da conversa, card e filtro.
+  SmileySad,
+  SmileyMeh,
   // marca da instalação (o revendedor troca nome e cor do produto)
   Palette,
   // anúncios (Análise → Meta Ads). Megaphone e não outro ChartX: os dois
@@ -111,6 +114,7 @@ export {
   Note,
   FileText,
   Lock,
+  LockOpen,
   Receipt,
   Tag,
   Question,

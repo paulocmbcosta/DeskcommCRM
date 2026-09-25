@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "O tom do cliente, visível para a equipe",
+    "subtitle": "o worker dá a nota a cada mensagem; a conversa guarda a última e a pior; a tela mostra; a IA é orientada a passar adiante",
+    "output": "sentimento-do-cliente.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "tela", "label": "Tela" },
+    { "id": "worker", "label": "Workers" },
+    { "id": "banco", "label": "Banco" }
+  ],
+  "mainPath": ["mensagem", "classifica", "registra", "conversa", "selos"],
+  "nodes": [
+    { "id": "selos", "lane": "tela", "col": 4, "type": "frontend", "label": "Inbox — selo no topo da conversa, no card (insatisfeito/crítico), ponto na mensagem e botão Insatisfeitos" },
+    { "id": "linha", "lane": "tela", "col": 3, "type": "frontend", "label": "Linha do tempo da conversa — 'Cliente muito insatisfeito (nota 0,05)'" },
+    { "id": "limite", "lane": "tela", "col": 1, "type": "frontend", "label": "Agentes › Operação do agente — 'Cliente muito insatisfeito abaixo da nota' (ai_agents.config.sentiment_threshold)" },
+    { "id": "classifica", "lane": "worker", "col": 2, "type": "backend", "label": "ai-sentiment-worker — nota 0..1 de toda mensagem do cliente (IA ou pessoa atendendo)" },
+    { "id": "sinal", "lane": "worker", "col": 3, "type": "backend", "label": "ai-handoff-from-sentiment.v1 — abaixo do limite: registra na linha do tempo (1 a cada 30 min); NÃO transfere" },
+    { "id": "turno", "lane": "worker", "col": 4, "type": "backend", "label": "inbound-turn — lê a pior nota desde a última resposta; abaixo do limite, o agente acolhe e passa para o setor" },
+    { "id": "mensagem", "lane": "banco", "col": 1, "type": "database", "label": "messages.metadata.sentiment_score" },
+    { "id": "registra", "lane": "banco", "col": 2, "type": "database", "label": "fn_registrar_sentimento_da_conversa (0280) — última e pior do atendimento; encerrar zera" },
+    { "id": "conversa", "lane": "banco", "col": 3, "type": "database", "label": "conversations.sentimento_atual / sentimento_minimo" }
+  ],
+  "edges": [
+    { "from": "classifica", "to": "mensagem", "label": "grava a nota da mensagem" },
+    { "from": "classifica", "to": "registra", "label": "grava a nota na conversa" },
+    { "from": "registra", "to": "conversa", "label": "atual + pior do atendimento" },
+    { "from": "conversa", "to": "selos", "label": "lista e topo leem as colunas; filtro por sentimento_atual < 0,3" },
+    { "from": "mensagem", "to": "selos", "label": "ponto colorido na mensagem" },
+    { "from": "classifica", "to": "sinal", "label": "ai.sentiment_alert (abaixo do limite do agente)" },
+    { "from": "sinal", "to": "linha", "label": "cliente_insatisfeito" },
+    { "from": "mensagem", "to": "turno", "label": "pior nota da rajada" },
+    { "from": "limite", "to": "classifica", "label": "limite do alerta" },
+    { "from": "limite", "to": "turno", "label": "limite do aviso ao agente" }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "O que a forma não mostra",
+      "items": [
+        "A transferência automática por sentimento foi desligada: ela calava a IA com frase genérica e deixava a conversa sem time — 42 alertas em 48 h num provedor, a maioria o cliente só descrevendo o defeito",
+        "A faixa da tela (0,1 / 0,3 / 0,6) é fixa; o limite do agente é outra coisa — decide quando a IA é orientada a passar adiante",
+        "Nota que chega depois do encerramento não reacende o selo; atendimento novo começa sem nota",
+        "Laço de retorno: limite errado aparece na linha do tempo (muitos ou nenhum 'cliente muito insatisfeito') e se corrige na tela do agente"
+      ]
+    }
+  ]
+}

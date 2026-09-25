@@ -60,6 +60,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     // aqui — `rota-le-todo-filtro-do-schema.test.ts` reprova o esquecimento.
     na_fila: url.searchParams.get("na_fila") ?? undefined,
     ordem: url.searchParams.get("ordem") ?? undefined,
+    insatisfeitos: url.searchParams.get("insatisfeitos") ?? undefined,
     channel_session_id: url.searchParams.get("channel_session_id") ?? undefined,
     // O TIME (migration 0263): `none` = fila geral, `mine` = meus times + a
     // fila geral, ou o uuid de um time. A cerca de

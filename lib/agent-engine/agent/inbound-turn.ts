@@ -1,4 +1,5 @@
 import { setExecutionAgentOperation } from '@/lib/atendimento/fronteira-server';
+import { AVISO_CLIENTE_INSATISFEITO, notaCriticaDoTurno } from './sentimento-do-turno';
 import { TIPOS_DE_CASO, TIPOS_DE_CASO_PARA_A_IA } from "@/lib/ai/case-copy";
 import { DEFAULT_CHANNEL_PROVIDER } from '@/lib/channels/capabilities';
 import { applyPreviewPolicy, previewGateContext, type TurnPreview } from './preview';
@@ -3976,8 +3977,36 @@ async function executarTurnoDoAgente(
     // ponto só cobre os três — e alcança de carona a chamada de fechamento, que
     // reusa `openingTextOnly` e é onde nasce o `prazo` ISO da declaração.
     const agoraBlock = renderAgora(clock(), fusoDaOrg);
+    // O cliente está muito insatisfeito? Substitui a transferência automática por
+    // sentimento (ver `sentimento-do-turno.ts`): o agente acolhe e passa para o
+    // setor certo. Fora da prévia (sandbox não tem mensagem classificada) e só com
+    // agente resolvido — o limite é dele. Falha na leitura = sem aviso (o turno
+    // segue normal; a equipe ainda vê a nota na tela).
+    let sentimentoBlock = '';
+    if (preview?.kind !== 'sandbox' && agentConfig !== null) {
+      try {
+        const nota = await notaCriticaDoTurno(pool, {
+          tenantId,
+          conversationId: input.conversationId,
+          agentId: agentConfig.agentId,
+        });
+        if (nota !== null) {
+          sentimentoBlock = AVISO_CLIENTE_INSATISFEITO;
+          runLog.info('turno com cliente muito insatisfeito — agente orientado a transferir', {
+            conversation_id: input.conversationId,
+            nota,
+          });
+        }
+      } catch (err) {
+        runLog.warn('leitura do sentimento do turno falhou — segue sem aviso', {
+          conversation_id: input.conversationId,
+          detail: err instanceof Error ? err.message.slice(0, 160) : 'desconhecido',
+        });
+      }
+    }
     const openingSuffixes = [
       agoraBlock,
+      sentimentoBlock,
       matchedSkillsBlock,
       stageHintBlock,
       splitHint,

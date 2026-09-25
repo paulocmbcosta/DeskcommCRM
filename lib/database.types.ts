@@ -3858,6 +3858,9 @@ export type Database = {
           id: string
           is_group: boolean
           espera_desde: string | null
+          sentimento_atual: number | null
+          sentimento_em: string | null
+          sentimento_minimo: number | null
           last_handoff_at: string | null
           last_handoff_reason: string | null
           last_inbound_at: string | null
@@ -3904,6 +3907,9 @@ export type Database = {
           id?: string
           is_group?: boolean
           espera_desde?: string | null
+          sentimento_atual?: number | null
+          sentimento_em?: string | null
+          sentimento_minimo?: number | null
           last_handoff_at?: string | null
           last_handoff_reason?: string | null
           last_inbound_at?: string | null
@@ -3950,6 +3956,9 @@ export type Database = {
           id?: string
           is_group?: boolean
           espera_desde?: string | null
+          sentimento_atual?: number | null
+          sentimento_em?: string | null
+          sentimento_minimo?: number | null
           last_handoff_at?: string | null
           last_handoff_reason?: string | null
           last_inbound_at?: string | null

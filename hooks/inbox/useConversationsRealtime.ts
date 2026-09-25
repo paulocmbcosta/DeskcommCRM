@@ -108,6 +108,8 @@ export interface ConversationsFilters {
   na_fila?: boolean;
   /** `espera` = quem espera resposta há mais tempo primeiro. */
   ordem?: "espera";
+  /** Só as de cliente insatisfeito ou crítico (sentimento, migration 0280). */
+  insatisfeitos?: boolean;
 }
 
 interface ListResponse {
@@ -152,6 +154,7 @@ export function useConversationsRealtime(
       // Fila do time e ordem por espera (migration 0279) — mesma razão da linha acima.
       if (filters.na_fila) qs.set("na_fila", "true");
       if (filters.ordem) qs.set("ordem", filters.ordem);
+      if (filters.insatisfeitos) qs.set("insatisfeitos", "true");
       if (pageParam) qs.set("cursor", pageParam);
       qs.set("limit", "50");
       try {
