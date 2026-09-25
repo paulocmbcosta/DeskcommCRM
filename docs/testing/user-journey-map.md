@@ -2890,3 +2890,26 @@ acordava a IA; e toda resposta de colega aparecia como "Atendente".
 **Não medido aqui:** a reação saindo de verdade para um celular (sem token da Meta local) e
 se a reação do cliente abre a janela de 24h (por conservadorismo, não mexe em
 `last_inbound_at`). WAHA e o canal intermediado declaram `reacoes: false`.
+
+## J32 — Desbloquear um contato bloqueado por opt-out `[P1]` (2026-09-25)
+
+Até aqui `contacts.is_blocked` só ia para `true`: a reversão do falso positivo de
+2026-09-25 (corrigido na v1.42.1) foi SQL à mão. A porta é `POST
+/api/v1/contacts/[id]/unblock` (manager+, motivo obrigatório, audit `contact.unblocked`),
+aberta por duas telas: o botão **Desbloquear** da ficha e o selo "Cliente pediu para não
+receber mensagens" do Inbox, que vira botão para manager+.
+
+| Caso | O que prova | Onde | Estado |
+|---|---|---|---|
+| J32.1 | O bloqueio nasce pelo caminho real (`aplicarEfeitosPosEntrada` com "SAIR") | `tests/e2e/desbloquear-contato.spec.ts` | PASS |
+| J32.2 | `agent` vê o selo e o "Bloqueado", sem porta; a API devolve 403 e o banco não muda | e2e acima | PASS |
+| J32.3 | O gerente só confirma com motivo ≥ 10 caracteres E a marcação de que conferiu | e2e acima | PASS |
+| J32.4 | Desbloquear zera as três colunas e audita quem, motivo e o bloqueio desfeito | e2e acima + `lib/contacts/desbloquear.test.ts` | PASS |
+| J32.5 | Pedir para sair de novo bloqueia de novo; a ficha desbloqueia e cita a data do bloqueio | e2e acima | PASS |
+| J32.6 | Filtra `organization_id` nas duas queries; anonimizado é 403; corrida perdida é 409 sem auditoria | `lib/contacts/desbloquear.test.ts` | PASS |
+
+**Não medido aqui:** o próximo envio real (WAHA/Meta) depois do desbloqueio — o motor lê
+`is_blocked` direto da fonte a cada turno, então não há cache a limpar, mas o envio não foi
+exercitado. A RLS de `contacts` deixa qualquer membro fazer UPDATE, então a régua manager+
+vale para esta rota e para a tela, não para quem escrever direto no PostgREST com a própria
+sessão.

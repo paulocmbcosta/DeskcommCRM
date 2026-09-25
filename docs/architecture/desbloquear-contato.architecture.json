@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Desbloquear contato",
+    "subtitle": "A porta de volta do opt-out: quem pediu para sair sai; quem foi calado por engano volta, com nome e motivo",
+    "output": "desbloquear-contato.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    {
+      "id": "cliente",
+      "label": "Cliente"
+    },
+    {
+      "id": "humano",
+      "label": "Gerente"
+    },
+    {
+      "id": "app",
+      "label": "Aplicativo"
+    },
+    {
+      "id": "db",
+      "label": "Banco"
+    }
+  ],
+  "mainPath": [
+    "selo",
+    "dialogo",
+    "rota",
+    "regra",
+    "contato",
+    "audit"
+  ],
+  "nodes": [
+    {
+      "id": "frase",
+      "lane": "cliente",
+      "col": 0,
+      "type": "ui",
+      "label": "Mensagem de entrada",
+      "sublabel": "\"SAIR\", \"parar de me mandar\"…"
+    },
+    {
+      "id": "optout",
+      "lane": "app",
+      "col": 1,
+      "type": "service",
+      "label": "aplicarOptOut",
+      "sublabel": "lib/channels/pos-entrada.ts — regra de lib/opt-out/deteccao.ts"
+    },
+    {
+      "id": "contato",
+      "lane": "db",
+      "col": 2,
+      "type": "database",
+      "label": "contacts.is_blocked / blocked_reason / blocked_at",
+      "sublabel": "o motor lê direto da fonte a cada turno — não há cache"
+    },
+    {
+      "id": "motor",
+      "lane": "app",
+      "col": 3,
+      "type": "service",
+      "label": "stopGate / sendMessageHandler",
+      "sublabel": "recusam envio a contato bloqueado"
+    },
+    {
+      "id": "selo",
+      "lane": "humano",
+      "col": 3,
+      "type": "ui",
+      "label": "Inbox — selo \"Cliente pediu para não receber mensagens\"",
+      "sublabel": "vira botão para manager+; ficha do contato tem o botão Desbloquear"
+    },
+    {
+      "id": "dialogo",
+      "lane": "humano",
+      "col": 4,
+      "type": "ui",
+      "label": "DesbloquearContatoDialog",
+      "sublabel": "explica o risco (LGPD); motivo ≥ 10 + \"conferi a conversa\""
+    },
+    {
+      "id": "rota",
+      "lane": "app",
+      "col": 5,
+      "type": "service",
+      "label": "POST /api/v1/contacts/[id]/unblock",
+      "sublabel": "manager+ (requireRole); org do cookie; Zod"
+    },
+    {
+      "id": "regra",
+      "lane": "app",
+      "col": 6,
+      "type": "service",
+      "label": "desbloquearContato",
+      "sublabel": "lib/contacts/desbloquear.ts — admin client, org filtrada, UPDATE condicional (409 na corrida)"
+    },
+    {
+      "id": "audit",
+      "lane": "db",
+      "col": 7,
+      "type": "database",
+      "label": "api_audit_log — contact.blocked / contact.unblocked",
+      "sublabel": "quem, motivo e o bloqueio desfeito; visível em /app/audit"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "frase",
+      "to": "optout",
+      "label": "ingestão (de novo, se pedir de novo)"
+    },
+    {
+      "id": "e2",
+      "from": "optout",
+      "to": "contato",
+      "label": "is_blocked = true"
+    },
+    {
+      "id": "e3",
+      "from": "optout",
+      "to": "audit",
+      "label": "contact.blocked"
+    },
+    {
+      "id": "e4",
+      "from": "contato",
+      "to": "motor",
+      "label": "parada dura"
+    },
+    {
+      "id": "e5",
+      "from": "contato",
+      "to": "selo",
+      "label": "a tela mostra"
+    },
+    {
+      "id": "e6",
+      "from": "selo",
+      "to": "dialogo"
+    },
+    {
+      "id": "e7",
+      "from": "dialogo",
+      "to": "rota",
+      "label": "{ motivo }"
+    },
+    {
+      "id": "e8",
+      "from": "rota",
+      "to": "regra"
+    },
+    {
+      "id": "e9",
+      "from": "regra",
+      "to": "contato",
+      "label": "is_blocked = false"
+    },
+    {
+      "id": "e10",
+      "from": "regra",
+      "to": "audit",
+      "label": "contact.unblocked"
+    }
+  ]
+}

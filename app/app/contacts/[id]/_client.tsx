@@ -5,7 +5,7 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { useState } from "react";
 import { format } from "date-fns";
-import { ShieldCheck, PencilSimple } from "@/lib/ui/icons";
+import { ShieldCheck, PencilSimple, LockOpen } from "@/lib/ui/icons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import { ROLE_RANK } from "@/lib/auth/types";
 import { TimelineView } from "@/components/contacts/TimelineView";
 import { EditContactDialog } from "@/components/contacts/EditContactDialog";
 import { AnonymizeDialog } from "@/components/contacts/AnonymizeDialog";
+import { DesbloquearContatoDialog } from "@/components/contacts/DesbloquearContatoDialog";
 import { PropostasDeDado } from "@/components/contacts/PropostasDeDado";
 import { ConversaNoDossie } from "@/components/kanban/ConversaNoDossie";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
@@ -40,6 +41,7 @@ export function ContactDetailClient({ contactId }: Props) {
   const pipelineQuery = useDefaultPipeline(Boolean(activeOrg));
   const [editOpen, setEditOpen] = useState(false);
   const [anonOpen, setAnonOpen] = useState(false);
+  const [desbloquearOpen, setDesbloquearOpen] = useState(false);
 
   if (q.isLoading) {
     return (
@@ -61,6 +63,14 @@ export function ContactDetailClient({ contactId }: Props) {
   const contact = q.data.data;
   const isAdmin =
     (user.is_platform_admin && !user.support) || (activeOrg && ROLE_RANK[activeOrg.role] >= ROLE_RANK.admin);
+  // Desbloquear é manager+ — a mesma régua da rota (`contacts/[id]/unblock`).
+  // Para quem não pode, o selo "Bloqueado" continua só selo: botão que a rota
+  // recusaria seria controle decorativo.
+  const podeDesbloquear =
+    contact.is_blocked &&
+    !contact.is_anonymized &&
+    user.support?.access_mode !== "support_readonly" &&
+    Boolean(activeOrg && ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager);
 
   // Uma decisão, um lugar (lib/contacts/rotulo-do-contato.ts). Esta tela era
   // uma das DUAS que ignoravam o telefone: contato com número e sem nome
@@ -108,6 +118,18 @@ export function ContactDetailClient({ contactId }: Props) {
         {!contact.is_anonymized && user.support?.access_mode !== "support_readonly" && (
           <div className="flex shrink-0 items-center gap-2">
             <DialButton contactId={contactId} hasPhone={!!contact.phone_number} />
+            {podeDesbloquear && (
+              <Button
+                variant="outline"
+                onClick={() => setDesbloquearOpen(true)}
+                className="shrink-0"
+                data-testid="desbloquear-contato"
+                title={t("O cliente foi bloqueado por pedir para não receber mensagens.")}
+              >
+                <LockOpen size={16} weight="bold" aria-hidden />
+                <span>{t("Desbloquear")}</span>
+              </Button>
+            )}
             <Button variant="outline" onClick={() => setEditOpen(true)} className="shrink-0">
               <PencilSimple size={16} weight="bold" aria-hidden />
               <span>{t("Editar")}</span>
@@ -256,6 +278,15 @@ export function ContactDetailClient({ contactId }: Props) {
         customFieldDefs={camposDoFunil(pipelineQuery.data?.pipeline.settings ?? null)}
       />
       <AnonymizeDialog contactId={contactId} open={anonOpen} onOpenChange={setAnonOpen} />
+      {podeDesbloquear && (
+        <DesbloquearContatoDialog
+          contactId={contactId}
+          nome={displayName}
+          bloqueadoEm={contact.blocked_at}
+          open={desbloquearOpen}
+          onOpenChange={setDesbloquearOpen}
+        />
+      )}
     </div>
   );
 }
