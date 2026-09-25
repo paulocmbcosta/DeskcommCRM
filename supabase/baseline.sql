@@ -28793,7 +28793,7 @@ end;
 $$;
 revoke execute on function public.fn_atendimento_acompanha_conversa() from public, anon, authenticated;
 
--- ---- RLS de conversa numa consulta só (migration 0283) ----
+-- ---- RLS de conversa e comando_da_conversa numa consulta só (migration 0283) ----
 -- A regra da 0281 sem funções security definer aninhadas por linha: 1,5 s →
 -- 120 ms para contar 102 conversas como atendente. Racional na migration 0283.
 create or replace function public.fn_can_view_conversation(
@@ -28855,6 +28855,59 @@ grant  execute on function public.fn_can_view_conversation(uuid, uuid, uuid) to 
 
 notify pgrst, 'reload schema';
 
+
+-- ─── comando_da_conversa: a outra metade do mesmo incidente ────────────────
+-- Medido na mesma tarde: com a RLS de conversa já barata, o filtro das abas
+-- (`?comando_da_conversa=eq.x`, 264 chamadas em 90 s) seguia em 1,2 s — o campo
+-- calculado lia `contacts` DUAS vezes por linha, cada leitura sob a RLS de
+-- contatos. No banco real, com zero divergência linha a linha contra a versão
+-- anterior: admin 927 → 24 ms, atendente 349 → 33 ms.
+-- Campo calculado do PostgREST (`?comando_da_conversa=eq.x`), avaliado POR
+-- LINHA. Lia `contacts` duas vezes sob a RLS de contatos (`fn_user_org_ids()`
+-- por linha): 0,9 s para 102 conversas como admin. Agora uma leitura só, sem a
+-- RLS de contatos — com as guardas que ela fazia, escritas aqui: o contato é
+-- da MESMA organização da conversa, e quem pergunta é membro ativo dela (ou
+-- administrador da plataforma; sem usuário = chave de serviço). A função também é alcançável avulsa, com uma
+-- linha forjada; as guardas valem para esse caminho também.
+create or replace function public.comando_da_conversa(c public.conversations)
+returns text
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select public.fn_comando_da_conversa(
+    c.status,
+    c.assigned_to_user_id,
+    c.bot_silenced_until,
+    -- `coalesce`: contato ausente (ou fora de alcance) não derruba a linha de
+    -- todo filtro — viraria conversa invisível em TODAS as abas.
+    coalesce(x.force_human, false),
+    coalesce(x.is_blocked, false),
+    now()
+  )
+  from (select 1) d
+  left join lateral (
+    select ct.force_human, ct.is_blocked
+      from public.contacts ct
+     where ct.id = c.contact_id
+       and ct.organization_id = c.organization_id
+       -- Sem usuário na sessão, quem chega aqui é service_role/postgres
+       -- (anon está revogado): a chave de serviço sempre viu o contato.
+       and (auth.uid() is null
+            or exists (select 1 from public.user_organizations uo
+                     where uo.user_id = auth.uid()
+                       and uo.organization_id = c.organization_id
+                       and uo.revoked_at is null)
+            or exists (select 1 from public.platform_admins pa
+                        where pa.user_id = auth.uid() and pa.revoked_at is null))
+  ) x on true;
+$function$;
+
+revoke execute on function public.comando_da_conversa(public.conversations) from public, anon;
+grant  execute on function public.comando_da_conversa(public.conversations) to authenticated, service_role;
+
+notify pgrst, 'reload schema';
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

@@ -306,3 +306,38 @@ describe("0283 — os caminhos que a regra trata à parte", () => {
     sql(`update public.user_organizations set revoked_at = null where organization_id = '${ORG}' and user_id = '${C}';`);
   });
 });
+
+describe("0283 — comando_da_conversa lê o contato sem a RLS, com as guardas dela", () => {
+  const ESTRANHO = "7e7e0281-1111-4000-8000-0000000000dd";
+  // Linha FORJADA: a função também é alcançável avulsa, sem ler a tabela.
+  const forjada = `jsonb_populate_record(null::public.conversations, jsonb_build_object(
+      'id', '${c(2)}', 'organization_id', '${ORG}', 'contact_id', '${contato(2)}',
+      'status', 'open', 'assigned_to_user_id', null))`;
+
+  function comandoComo(user: string): string {
+    return lastLine(
+      sql(`set role authenticated;
+           select set_config('request.jwt.claims', '{"sub":"${user}"}', false);
+           select public.comando_da_conversa(${forjada});`),
+    );
+  }
+
+  it("membro vê o efeito do contato; quem não é membro não descobre nada", () => {
+    sql(`insert into auth.users (id, email) values ('${ESTRANHO}', 'vt-estranho@invariant.test');
+         update public.contacts set force_human = false, is_blocked = false where id = '${contato(2)}';`);
+    const semNada = comandoComo(M);
+    sql(`update public.contacts set force_human = true, is_blocked = true where id = '${contato(2)}';`);
+    const doMembro = comandoComo(M);
+    const doEstranho = comandoComo(ESTRANHO);
+    expect(doMembro).not.toBe(semNada); // controle: o contato muda o resultado
+    expect(doEstranho).toBe(semNada);   // o estranho enxerga como se não houvesse contato
+    sql(`update public.contacts set force_human = false, is_blocked = false where id = '${contato(2)}';`);
+  });
+
+  it("a chave de serviço (sem usuário) continua vendo o contato", () => {
+    sql(`update public.contacts set force_human = true, is_blocked = true where id = '${contato(2)}';`);
+    const doServico = lastLine(sql(`select public.comando_da_conversa(${forjada});`));
+    expect(doServico).toBe(comandoComo(M));
+    sql(`update public.contacts set force_human = false, is_blocked = false where id = '${contato(2)}';`);
+  });
+});
