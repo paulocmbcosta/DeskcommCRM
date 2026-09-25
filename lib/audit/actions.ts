@@ -622,6 +622,9 @@ export const AUDIT_ACTIONS = [
   // O atendente reagiu (ou tirou a reação) com emoji a uma mensagem da
   // conversa (DYD-16, migration 0276). `metadata` traz o emoji e a mensagem alvo.
   "message.reaction_sent",
+  // Quem chamou o cliente ("Chamar no WhatsApp") abriu a conversa num time e
+  // ficou como dono dela (migration 0284). `metadata` traz o time e o dono.
+  "conversation.started_in_team",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

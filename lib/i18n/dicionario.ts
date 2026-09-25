@@ -9375,6 +9375,17 @@ export const DICIONARIO: Traducoes = {
   "próximo atendente disponível": { es: "próximo agente disponible" },
   "devolver à fila": { es: "devolver a la cola" },
   "A conversa volta para a fila do time: você deixa de ser o responsável, o atendimento automático continua parado e o próximo atendente disponível do time a recebe — ela não volta para você.": { es: "La conversación vuelve a la cola del equipo: dejas de ser el responsable, la atención automática sigue detenida y el próximo agente disponible del equipo la recibe; no vuelve a ti." },
+  // Chamar o cliente exige o time da conversa (migration 0284).
+  "Time da conversa": { es: "Equipo de la conversación" },
+  "Escolha o time…": { es: "Elige el equipo…" },
+  "A conversa fica com você, dentro deste time.": { es: "La conversación queda contigo, dentro de este equipo." },
+  "Não consegui carregar os times. Tente de novo em instantes.": { es: "No pude cargar los equipos. Inténtalo de nuevo en unos instantes." },
+  "Escolha o time desta conversa.": { es: "Elige el equipo de esta conversación." },
+  "Você não pode abrir conversa neste time.": { es: "No puedes abrir una conversación en este equipo." },
+  "Este cliente já está em atendimento com": { es: "Este cliente ya está siendo atendido por" },
+  "Peça a transferência para chamar por aqui.": { es: "Pide la transferencia para contactarlo desde aquí." },
+  "Este cliente já está em atendimento com outra pessoa. Peça a transferência para chamar por aqui.": { es: "Este cliente ya está siendo atendido por otra persona. Pide la transferencia para contactarlo desde aquí." },
+  "Não foi possível iniciar a conversa. Tente novamente.": { es: "No fue posible iniciar la conversación. Inténtalo de nuevo." },
 };
 
 /**

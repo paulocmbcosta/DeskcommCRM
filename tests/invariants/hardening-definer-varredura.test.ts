@@ -221,6 +221,14 @@ const AUTHENTICATED_PERMITIDO: readonly Excecao[] = [
       "janela de assinatura divergente durante a atualização. Mesmo invariante da linha acima.",
   },
   {
+    fn: "fn_conversation_iniciar_no_time(uuid,uuid,uuid)",
+    razao:
+      "POST app/api/v1/conversations/iniciar/route.ts usa createClient da sessão: o dono da " +
+      "conversa é auth.uid(), nunca parâmetro (com o admin client a RPC recusaria tudo). Papel " +
+      "agent, suporte de escrita, time ativo da org e — para agent com time — membro dele; " +
+      "recusa conversa com outro dono. Atribui via fn_conversation_assign (migration 0284).",
+  },
+  {
     fn: "fn_conversation_set_team(uuid,uuid,uuid)",
     razao:
       "POST app/api/v1/conversations/[id]/team/route.ts usa createClient da sessão (com o " +

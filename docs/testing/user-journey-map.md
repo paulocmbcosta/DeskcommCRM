@@ -579,6 +579,8 @@ funcional, e é por isso que o `workflow_dispatch` existe.
 | J27.6 Chamar duas vezes reaproveita a MESMA conversa (o índice 1-para-1 não tem filtro de status; um insert daria 23505) | `[P0]` | **PASS** (27,9 s) |
 | J27.7 A rota de modelos responde com `exige_modelo` e a **chave pronta** de cada parâmetro | `[P1]` | **PASS** (28,5 s) |
 | J27.8 Conexão de outra organização devolve 404 (a rota usa service role e filtra o tenant à mão) | `[P0]` | **PASS** (29,4 s) |
+| J27.9 (2026-09-25, migration 0284) Com time cadastrado, o diálogo pede **Time da conversa**; com vários times começa vazio e o envio fica **travado** até escolher | `[P0]` | **PASS** (30,5 s) |
+| J27.10 (2026-09-25, migration 0284) Sem `team_id` a rota recusa com 422 `team_required`; com time, a conversa volta com `team_id` gravado e **dono = quem chamou** | `[P0]` | **PASS** (29,2 s) |
 
 **2026-09-25 — Devolver a conversa à fila do próprio time (troca de turno)** — `tests/e2e/devolver-ao-proprio-time.spec.ts`
 
