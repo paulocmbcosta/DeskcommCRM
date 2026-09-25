@@ -82,6 +82,14 @@ export async function iniciarConversaEEnviar(
   db: SupabaseClient,
   ctx: HandlerCtx,
   input: IniciarConversaInput,
+  opts: {
+    /**
+     * Roda com a conversa ABERTA e antes do envio. Lançar aqui impede o envio
+     * e sobe para quem chamou. A tela usa para gravar time e dono (migration
+     * 0284) antes que a resposta do cliente chegue sem ninguém responsável.
+     */
+    antesDeEnviar?: (aberta: { conversation_id: string; contact_id: string }) => Promise<void>;
+  } = {},
 ): Promise<IniciarConversaResultado> {
   const aberta = await openSharedContactConversation(db, ctx.organization_id, {
     channel_session_id: input.channel_session_id,
@@ -89,6 +97,8 @@ export async function iniciarConversaEEnviar(
     phone_number: input.phone_number,
     name: input.name,
   });
+
+  if (opts.antesDeEnviar) await opts.antesDeEnviar(aberta);
 
   // Reparseia com o `conversation_id` já resolvido: é o mesmo schema que a rota
   // de envio usa, então um corpo inválido é recusado aqui pelas MESMAS regras —

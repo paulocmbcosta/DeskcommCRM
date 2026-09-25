@@ -32,6 +32,14 @@
  * pergunta "e quando a segunda falha?" dentro de um componente de tela — e a
  * resposta (manter a conversa, mostrar o motivo real, deixar tentar de novo lá
  * dentro) é regra de produto, que a próxima tela precisa herdar.
+ *
+ * ─── O time da conversa é obrigatório (migration 0284) ─────────────────────
+ *
+ * Conversa começada daqui nascia sem time: sumia da vista do próprio time e a
+ * resposta do cliente caía no rodízio. Agora a pessoa escolhe o time — só entre
+ * os que o servidor marca como `pode_iniciar` — e fica como dona da conversa.
+ * Com um time só, ele já vem escolhido e aparece para ser lido. Sem time
+ * cadastrado na empresa, não há o que escolher e o campo não aparece.
  */
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -51,6 +59,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useT } from "@/hooks/i18n/useT";
+import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 import { apiClient } from "@/lib/api/client";
 import { lerConteudo } from "@/lib/channels/template-conteudo";
 import { cn } from "@/lib/utils";
@@ -115,6 +124,17 @@ export function ChamarNoWhatsAppDialog({
   const [valores, setValores] = useState<Record<string, string>>({});
   const [texto, setTexto] = useState("");
   const [enviando, setEnviando] = useState(false);
+  /** Vazio = "ainda não escolhi"; com um time só, o efetivo é derivado abaixo. */
+  const [timeEscolhido, setTimeEscolhido] = useState("");
+
+  const {
+    data: times,
+    isLoading: carregandoTimes,
+    isError: falhouTimes,
+  } = useTimesDoInbox(open);
+  const timesPossiveis = useMemo(() => (times ?? []).filter((x) => x.pode_iniciar), [times]);
+  const timeId = timeEscolhido || (timesPossiveis.length === 1 ? timesPossiveis[0]!.id : "");
+  const precisaDeTime = timesPossiveis.length > 0;
 
   const { data: conexoes } = useQuery({
     queryKey: ["channel-sessions-para-chamar"],
@@ -211,6 +231,9 @@ export function ChamarNoWhatsAppDialog({
   const podeEnviar =
     !falhouAoPerguntar &&
     !carregandoModelos &&
+    !carregandoTimes &&
+    !falhouTimes &&
+    (!precisaDeTime || !!timeId) &&
     (exigeModelo
       ? !!atual && faltando.length === 0 && !!conexaoId
       : texto.trim().length > 0 && !!conexaoId);
@@ -243,6 +266,7 @@ export function ChamarNoWhatsAppDialog({
         contact_id: contactId,
         phone_number: phoneNumber,
         name: nome,
+        team_id: precisaDeTime ? timeId : null,
         mensagem,
       });
 
@@ -277,6 +301,37 @@ export function ChamarNoWhatsAppDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {precisaDeTime && (
+            <div className="space-y-1">
+              <Label htmlFor="chamar-time" className="text-xs">
+                {t("Time da conversa")}
+              </Label>
+              <select
+                id="chamar-time"
+                value={timeId}
+                onChange={(e) => setTimeEscolhido(e.target.value)}
+                disabled={enviando}
+                className={CLASSE_SELECT}
+              >
+                {timesPossiveis.length > 1 && <option value="">{t("Escolha o time…")}</option>}
+                {timesPossiveis.map((time) => (
+                  <option key={time.id} value={time.id}>
+                    {time.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-text-muted">
+                {t("A conversa fica com você, dentro deste time.")}
+              </p>
+            </div>
+          )}
+
+          {falhouTimes && (
+            <p className="rounded-md border border-amber-300 bg-amber-50/60 px-3 py-2 text-xs text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200">
+              {t("Não consegui carregar os times. Tente de novo em instantes.")}
+            </p>
+          )}
+
           {(conexoes?.length ?? 0) > 1 && (
             <div className="space-y-1">
               <Label htmlFor="chamar-conexao" className="text-xs">

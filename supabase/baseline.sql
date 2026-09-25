@@ -28909,6 +28909,100 @@ grant  execute on function public.comando_da_conversa(public.conversations) to a
 
 notify pgrst, 'reload schema';
 
+-- ---- chamar o cliente exige time e deixa quem chamou como dono (migration 0284) ----
+-- Racional completo na migration 0284. Idempotente: create or replace + grants.
+
+create or replace function public.fn_conversation_iniciar_no_time(
+  p_org uuid,
+  p_conversation uuid,
+  p_team uuid
+) returns jsonb
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  v_uid      uuid := auth.uid();
+  v_role     text;
+  v_owner    uuid;
+  v_nome     text;
+  v_assumiu  boolean := false;
+begin
+  if v_uid is null
+     or not public.fn_role_at_least(p_org, 'agent')
+     or not public.fn_support_write_allowed(p_org)
+  then
+    raise exception 'iniciar_forbidden' using errcode = '42501';
+  end if;
+
+  select role into v_role
+    from public.user_organizations
+   where organization_id = p_org and user_id = v_uid and revoked_at is null;
+
+  if p_team is null then
+    if exists (select 1 from public.attendance_teams
+                where organization_id = p_org and archived_at is null) then
+      raise exception 'team_required' using errcode = '22023';
+    end if;
+  else
+    if not exists (select 1 from public.attendance_teams
+                    where organization_id = p_org and id = p_team and archived_at is null) then
+      raise exception 'team_not_found' using errcode = 'P0002';
+    end if;
+    if v_role = 'agent'
+       and exists (select 1 from public.attendance_team_members m
+                     join public.attendance_teams t
+                       on t.organization_id = m.organization_id and t.id = m.team_id
+                    where m.organization_id = p_org and m.user_id = v_uid
+                      and t.archived_at is null)
+       and not exists (select 1 from public.attendance_team_members
+                        where organization_id = p_org and team_id = p_team and user_id = v_uid)
+    then
+      raise exception 'team_not_member' using errcode = '42501';
+    end if;
+  end if;
+
+  select assigned_to_user_id, assigned_to_user_name into v_owner, v_nome
+    from public.conversations
+   where organization_id = p_org and id = p_conversation
+   for no key update;
+  if not found then
+    raise exception 'conversation_not_found' using errcode = 'P0002';
+  end if;
+
+  if v_owner is not null and v_owner <> v_uid then
+    raise exception 'conversation_owned' using errcode = 'P0001', detail = coalesce(v_nome, '');
+  end if;
+
+  update public.conversations
+     set team_id = p_team, updated_at = now()
+   where organization_id = p_org and id = p_conversation
+     and team_id is distinct from p_team;
+
+  -- Só membro agent+ pode ser dono (`fn_conversation_assign` recusa os outros).
+  -- Quem opera em modo de suporte não é membro: a conversa fica no time e vai
+  -- para o roteamento, como numa transferência.
+  if v_owner is null then
+    if v_role in ('agent', 'manager', 'admin') then
+      perform public.fn_conversation_assign(p_org, p_conversation, v_uid, 'claim', null, true);
+      v_assumiu := true;
+    else
+      perform public.fn_request_channel_routing(p_org, p_conversation);
+    end if;
+  end if;
+
+  return jsonb_build_object(
+    'conversation_id', p_conversation,
+    'team_id', p_team,
+    'assigned_to_user_id', case when v_assumiu or v_owner = v_uid then v_uid end
+  );
+end;
+$$;
+
+revoke execute on function public.fn_conversation_iniciar_no_time(uuid, uuid, uuid) from public, anon;
+grant  execute on function public.fn_conversation_iniciar_no_time(uuid, uuid, uuid) to authenticated;
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

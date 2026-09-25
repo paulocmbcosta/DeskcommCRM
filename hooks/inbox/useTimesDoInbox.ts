@@ -18,6 +18,11 @@ export interface TimeDoInbox {
    * time de uma conversa antiga. Quem escolhe DESTINO filtra estes fora.
    */
   archived: boolean;
+  /**
+   * Quem está logado pode abrir neste time a conversa que ele mesmo inicia
+   * ("Chamar no WhatsApp", migration 0284). A regra mora no servidor.
+   */
+  pode_iniciar: boolean;
 }
 
 /**

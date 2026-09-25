@@ -49,6 +49,7 @@ function time(over: Partial<TimeDoInbox> = {}): TimeDoInbox {
     aberto_agora: true,
     horario_invalido: false,
     archived: false,
+    pode_iniciar: true,
     ...over,
   };
 }
