@@ -85,6 +85,9 @@ const FORA_DO_SEAM: Record<string, { arquivo: string; marcador: string }> = {
   // troca, que é o comportamento pretendido: o marcador existe para que apagar
   // o chamador reprove aqui, e trocá-lo obriga a confirmar que o ponto continua
   // vivo — não que ele continua sendo chamado do mesmo jeito.
+  // Desde a 1.46 o sentimento usa o Jev quando há chave da OpenRouter; o
+  // modelo do painel segue valendo para quem não tem — e é ele que o marcador
+  // prova vivo (a escolha na tela continua controlando algo).
   sentiment_classify: {
     arquivo: "workers/ai-sentiment-worker.ts",
     marcador: "resolverModeloDoPonto",

@@ -2487,14 +2487,14 @@ export const DICIONARIO: Traducoes = {
   "Os leads param de andar sozinhos pelo funil e ficam todos na etapa em que entraram.": {
     es: "Los leads dejan de avanzar solos por el embudo y quedan todos en la etapa en la que entraron.",
   },
-  "Medir o clima da conversa": {
-    es: "Medir el clima de la conversación",
+  "Medir o clima do atendimento": {
+    es: "Medir el clima de la atención",
   },
-  "Avalia se o cliente está satisfeito ou irritado, para escalar ao humano antes de perder a venda.": {
-    es: "Evalúa si el cliente está satisfecho o molesto, para escalar a una persona antes de perder la venta.",
+  "A cada mensagem do cliente, lê o atendimento em aberto inteiro e avalia se ele está satisfeito, neutro ou insatisfeito — o selo da conversa, o filtro \"Insatisfeitos\" e o aviso para a IA passar a conversa a uma pessoa. Com uma chave da OpenRouter usa o Jev, mais barato e mais rápido; sem ela, usa o modelo escolhido aqui.": {
+    es: "En cada mensaje del cliente, lee toda la atención en curso y evalúa si está satisfecho, neutro o insatisfecho — la etiqueta de la conversación, el filtro \"Insatisfechos\" y el aviso para que la IA pase la conversación a una persona. Con una clave de OpenRouter usa Jev, más barato y más rápido; sin ella, usa el modelo elegido aquí.",
   },
-  "Cliente irritado não é mais escalado para um humano, e a insatisfação só aparece quando ele já sumiu.": {
-    es: "El cliente molesto ya no se escala a una persona, y la insatisfacción solo aparece cuando ya desapareció.",
+  "As conversas param de mostrar se o cliente está satisfeito ou insatisfeito, o filtro \"Insatisfeitos\" fica vazio e a IA deixa de ser avisada quando o cliente está muito insatisfeito.": {
+    es: "Las conversaciones dejan de mostrar si el cliente está satisfecho o insatisfecho, el filtro \"Insatisfechos\" queda vacío y la IA deja de ser avisada cuando el cliente está muy insatisfecho.",
   },
   "Ler a resposta ao follow-up": {
     es: "Leer la respuesta al seguimiento",
@@ -9336,12 +9336,13 @@ export const DICIONARIO: Traducoes = {
   "Neutro": { es: "Neutro" },
   "Insatisfeito": { es: "Insatisfecho" },
   "Insatisfeitos": { es: "Insatisfechos" },
-  "Clientes insatisfeitos ou em estado crítico, pelo tom das mensagens": { es: "Clientes insatisfechos o en estado crítico, por el tono de los mensajes" },
+  "Clientes insatisfeitos ou em estado crítico, pela avaliação do atendimento": { es: "Clientes insatisfechos o en estado crítico, por la evaluación de la atención" },
   "Tom do cliente": { es: "Tono del cliente" },
-  "Tom do cliente, pelas mensagens dele": { es: "Tono del cliente, por sus mensajes" },
+  "Tom do cliente no atendimento": { es: "Tono del cliente en la atención" },
   "pior momento do atendimento": { es: "peor momento de la atención" },
   "nota": { es: "nota" },
   "Tom desta mensagem": { es: "Tono de este mensaje" },
+  "Atendimento até esta mensagem": { es: "Atención hasta este mensaje" },
   "Cliente muito insatisfeito": { es: "Cliente muy insatisfecho" },
   "Nota": { es: "Nota" },
   "A IA foi orientada a passar para o setor responsável.": { es: "La IA fue orientada a pasar al sector responsable." },

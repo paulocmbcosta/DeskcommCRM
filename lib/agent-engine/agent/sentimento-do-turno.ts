@@ -6,15 +6,16 @@
  * SEM TIME, o próprio agente recebe o aviso no turno e passa para o setor que
  * cuida do assunto — escolhendo o time, com uma frase coerente com a conversa.
  *
- * A nota vem de `messages.metadata.sentiment_score`, gravada pelo worker de
- * sentimento; o limite, de `ai_agents.config.sentiment_threshold` (o campo da
- * tela "Operação do agente"; padrão 0,3 — o mesmo do worker). Olha as mensagens
- * do cliente DESDE a última resposta da empresa: o turno responde à rajada
- * inteira, e a pior nota dela é a que conta.
+ * A nota é a do ATENDIMENTO, não a da mensagem: `conversations.sentimento_atual`,
+ * gravada pelo worker de sentimento, que a cada mensagem do cliente faz o Jev
+ * ler o atendimento em aberto inteiro (`workers/ai-sentiment-worker.ts`). Até a
+ * 1.45 o turno lia a pior nota POR MENSAGEM desde a última resposta — e um
+ * cliente que passou dez mensagens reclamando e mandou um "ok" deixava de
+ * contar como insatisfeito. O limite vem de `ai_agents.config.sentiment_threshold`
+ * (o campo da tela "Operação do agente"; padrão 0,3 — o mesmo do worker).
  *
- * Nota ainda não calculada (o worker corre em paralelo e pode chegar depois) =
- * sem aviso — o turno segue normal, e o registro na linha do tempo acontece do
- * mesmo jeito quando a nota chegar.
+ * Nota ainda não calculada (atendimento novo; o worker corre em paralelo) = sem
+ * aviso — o turno segue normal. Conversa encerrada não tem nota (o banco zera).
  */
 import type pg from 'pg';
 
@@ -29,12 +30,9 @@ export async function notaCriticaDoTurno(
 ): Promise<number | null> {
   const { rows } = await db.query<{ nota: number | null; limite: number | null }>(
     `select
-       (select min((m.metadata->>'sentiment_score')::float8)
-          from messages m join conversations c on c.id = m.conversation_id
-         where m.organization_id = $1 and m.conversation_id = $2
-           and m.direction = 'inbound'
-           and m.metadata ? 'sentiment_score'
-           and m.created_at > coalesce(c.last_outbound_at, '-infinity'::timestamptz)) as nota,
+       (select c.sentimento_atual::float8
+          from conversations c
+         where c.organization_id = $1 and c.id = $2) as nota,
        (select case when jsonb_typeof(a.config->'sentiment_threshold') = 'number'
                     then (a.config->>'sentiment_threshold')::float8 end
           from ai_agents a where a.id = $3 and a.organization_id = $1) as limite`,
@@ -51,6 +49,6 @@ export async function notaCriticaDoTurno(
  */
 export const AVISO_CLIENTE_INSATISFEITO =
   '## Cliente muito insatisfeito\n' +
-  'As últimas mensagens mostram que o cliente está muito insatisfeito. Acolha em uma frase curta e sincera, ' +
+  'O atendimento mostra que o cliente está muito insatisfeito. Acolha em uma frase curta e sincera, ' +
   'sem desculpa pronta, e passe agora para uma pessoa do setor que cuida do assunto dele — escolha o setor ' +
   'antes de passar. Não insista em resolver sozinha.';

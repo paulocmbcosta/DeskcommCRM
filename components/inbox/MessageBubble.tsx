@@ -119,6 +119,10 @@ export function MessageBubble({
   const notaLida = (message.metadata as Record<string, unknown> | null)?.["sentiment_score"];
   const notaDaMensagem = typeof notaLida === "number" ? notaLida : null;
   const faixaDaMensagem = faixaDoSentimento(notaDaMensagem);
+  // Desde a 1.46 a nota gravada na mensagem é a do ATENDIMENTO inteiro naquele
+  // momento (o Jev lê tudo a cada mensagem); as antigas eram da frase sozinha.
+  const escopoDoAtendimento =
+    (message.metadata as Record<string, unknown> | null)?.["sentiment_escopo"] === "atendimento";
   // Só reage a quem existe no WhatsApp: sem `external_id` a mensagem não saiu,
   // e apagada não tem mais o que reagir.
   const reagirAqui =
@@ -291,7 +295,7 @@ export function MessageBubble({
               <span
                 data-testid="tom-da-mensagem"
                 data-faixa={faixaDaMensagem ?? undefined}
-                title={`${t("Tom desta mensagem")}: ${t(ROTULO_DA_FAIXA[faixaDaMensagem!])} (${formatarNota(notaDaMensagem)})`}
+                title={`${t(escopoDoAtendimento ? "Atendimento até esta mensagem" : "Tom desta mensagem")}: ${t(ROTULO_DA_FAIXA[faixaDaMensagem!])} (${formatarNota(notaDaMensagem)})`}
                 className={cn(
                   "inline-block h-2 w-2 rounded-full",
                   faixaDaMensagem === "critico" ? "bg-error" : "bg-alert",
