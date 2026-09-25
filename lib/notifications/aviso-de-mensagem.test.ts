@@ -8,6 +8,7 @@ import {
   rotuloDaRajada,
   tituloParaBandeja,
 } from "./aviso-de-mensagem";
+import { comandoDaConversa } from "@/lib/inbox/comando-da-conversa";
 
 describe("aviso de mensagem — quem, de onde, o quê", () => {
   it("QUEM: nome escolhido, depois o telefone; identificador técnico nunca", () => {
@@ -19,31 +20,47 @@ describe("aviso de mensagem — quem, de onde, o quê", () => {
     expect(nomeDoRemetente(null)).toBe("Nova mensagem");
   });
 
-  it("DE ONDE: o time e com quem a conversa está", () => {
+  it("DE ONDE: o time e quem está no comando, na régua do Inbox", () => {
     const eu = "u1";
-    expect(linhaDeContexto({ time: "Suporte", atendente: "Ana Lima", assignedTo: "u2" }, eu)).toBe(
-      "Suporte · com Ana",
-    );
-    expect(linhaDeContexto({ time: "Suporte", atendente: "Eu Mesmo", assignedTo: eu }, eu)).toBe(
-      "Suporte · com você",
-    );
-    expect(linhaDeContexto({ time: null, atendente: null, assignedTo: null }, eu)).toBe("na fila");
-    expect(linhaDeContexto({ time: "Financeiro", atendente: null, assignedTo: null }, eu)).toBe(
+    const humano = (userId: string, nome: string | null) => ({ quem: "humano" as const, userId, nome });
+    expect(linhaDeContexto({ time: "Suporte", comando: humano("u2", "Ana Lima") }, eu)).toBe("Suporte · com Ana");
+    expect(linhaDeContexto({ time: "Suporte", comando: humano(eu, "Eu Mesmo") }, eu)).toBe("Suporte · com você");
+    expect(linhaDeContexto({ time: "Financeiro", comando: { quem: "aguardando" } }, eu)).toBe(
       "Financeiro · na fila",
     );
-    // Sem dono humano, mas com a IA: não é fila — dizer "na fila" mandaria o
-    // gestor assumir uma conversa que a IA está conduzindo.
-    expect(linhaDeContexto({ time: "Suporte", atendente: null, assignedTo: null, comIa: true }, eu)).toBe(
-      "Suporte · com a IA",
+    // Sem time, a mesma situação é "aguardando atendente" — como no cabeçalho.
+    expect(linhaDeContexto({ time: null, comando: { quem: "aguardando" } }, eu)).toBe("aguardando atendente");
+    // Sem dono e sem silêncio: o automático está atendendo — NÃO é fila. Era o
+    // defeito da primeira versão: conversa nova com o automático saía "na fila".
+    expect(linhaDeContexto({ time: "Suporte", comando: { quem: "automatico" } }, eu)).toBe(
+      "Suporte · no automático",
     );
+    expect(linhaDeContexto({ time: null, comando: { quem: "encerrada" } }, eu)).toBe("encerrada");
     // Dono sem nome gravado: diz o time e não inventa "com undefined".
-    expect(linhaDeContexto({ time: "Vendas", atendente: null, assignedTo: "u2" }, eu)).toBe("Vendas");
-    expect(linhaDeContexto({ time: null, atendente: "  ", assignedTo: "u2" }, eu)).toBeNull();
+    expect(linhaDeContexto({ time: "Vendas", comando: humano("u2", null) }, eu)).toBe("Vendas");
+    expect(linhaDeContexto({ time: null, comando: humano("u2", "  ") }, eu)).toBeNull();
+    expect(linhaDeContexto({ time: null, comando: null }, eu)).toBeNull();
+  });
+
+  it("a conversa nova que o automático atende não sai 'na fila' (régua canônica)", () => {
+    const { comando } = comandoDaConversa({
+      status: "open",
+      assigned_to_user_id: null,
+      assignee_kind: null,
+      bot_silenced_until: null,
+    });
+    expect(linhaDeContexto({ time: "Suporte", comando }, "u1")).toBe("Suporte · no automático");
+    const escalada = comandoDaConversa({
+      status: "open",
+      assigned_to_user_id: null,
+      bot_silenced_until: "infinity",
+    });
+    expect(linhaDeContexto({ time: "Suporte", comando: escalada.comando }, "u1")).toBe("Suporte · na fila");
   });
 
   it("traduz só os rótulos fixos, nunca o nome do time", () => {
     const t = (s: string) => ({ "na fila": "en la cola", "com você": "contigo" })[s] ?? s;
-    expect(linhaDeContexto({ time: "Suporte", atendente: null, assignedTo: null }, "u1", t)).toBe(
+    expect(linhaDeContexto({ time: "Suporte", comando: { quem: "aguardando" } }, "u1", t)).toBe(
       "Suporte · en la cola",
     );
   });

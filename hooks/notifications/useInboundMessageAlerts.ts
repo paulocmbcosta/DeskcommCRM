@@ -3,7 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
 
-import { mostrarToastDeMensagem } from "@/components/notifications/ToastDeMensagem";
+import {
+  DURACAO_DO_TOAST_DE_MENSAGEM_MS,
+  mostrarToastDeMensagem,
+} from "@/components/notifications/ToastDeMensagem";
 import { useActiveOrg, useUser } from "@/hooks/auth/AuthProvider";
 import { getOpenConversationId } from "@/hooks/notifications/OpenConversationContext";
 import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
@@ -49,58 +52,60 @@ function rowFromRealtime(payload: unknown): Record<string, unknown> | null {
 }
 
 interface ContextoComFoto extends ContextoDaConversa {
-  contactId: string | null;
   foto: string | null;
 }
 
-// Por aba, em memória: a rajada de um mesmo cliente pede o contexto UMA vez.
-const contextoPorConversa = criarCacheComValidade<ContextoComFoto>(VALIDADE_DO_CONTEXTO_MS);
+// Por aba, em memória. Guarda a PROMESSA, não o resultado: "oi" e "tudo bem?"
+// com 50 ms de diferença esperam a mesma chamada, em vez de fazerem duas. E
+// guarda a falha (`null`) pelo mesmo prazo — com o banco lento, repetir a
+// chamada a cada mensagem, em cada aba aberta, é piorar a lentidão.
+const contextoPorConversa = criarCacheComValidade<Promise<ContextoComFoto | null>>(
+  VALIDADE_DO_CONTEXTO_MS,
+);
 const rajadaPorConversa = new Map<string, { contagem: number; ultima: number }>();
-const JANELA_DA_RAJADA_MS = 30_000;
+/** Igual à vida do cartão: contar mensagem de um cartão que já sumiu confunde. */
+const JANELA_DA_RAJADA_MS = DURACAO_DO_TOAST_DE_MENSAGEM_MS;
 
 /**
- * Tudo que o aviso precisa, numa chamada: de quem é a conversa, o contato, o
- * time e a foto já assinada.
+ * Tudo que o aviso precisa, numa chamada: o contato, o time, quem está no
+ * comando e a foto já assinada.
  *
  * Pela ROTA, e não pelo supabase-js do navegador: o cookie de sessão é
  * httpOnly, e a consulta direta saía anônima — a RLS devolvia vazio, o título
  * caía para "Nova mensagem" e, com "só as minhas", o aviso nem aparecia. O
  * porquê inteiro está no cabeçalho de `app/api/v1/conversations/[id]/aviso`.
  */
-async function contextoDaConversa(conversationId: string): Promise<ContextoComFoto | null> {
+function contextoDaConversa(conversationId: string): Promise<ContextoComFoto | null> {
   const guardado = contextoPorConversa.ler(conversationId);
   if (guardado) return guardado;
-  let r: Response;
+  const pedido = buscarContexto(conversationId);
+  contextoPorConversa.gravar(conversationId, pedido);
+  return pedido;
+}
+
+async function buscarContexto(conversationId: string): Promise<ContextoComFoto | null> {
   try {
-    r = await fetch(`/api/v1/conversations/${conversationId}/aviso`, { credentials: "include" });
+    const r = await fetch(`/api/v1/conversations/${conversationId}/aviso`, { credentials: "include" });
+    if (!r.ok) return null;
+    const corpo = (await r.json()) as {
+      data?: {
+        contato?: ContextoDaConversa["contato"];
+        time?: string | null;
+        comando?: ContextoDaConversa["comando"];
+        foto?: string | null;
+      };
+    };
+    const d = corpo?.data;
+    if (!d) return null;
+    return {
+      contato: d.contato ?? null,
+      time: d.time ?? null,
+      comando: d.comando ?? null,
+      foto: d.foto ?? null,
+    };
   } catch {
     return null;
   }
-  if (!r.ok) return null;
-  const corpo = (await r.json().catch(() => null)) as {
-    data?: {
-      contact_id?: string | null;
-      contato?: ContextoDaConversa["contato"];
-      time?: string | null;
-      atendente?: string | null;
-      assigned_to?: string | null;
-      com_ia?: boolean;
-      foto?: string | null;
-    };
-  } | null;
-  const d = corpo?.data;
-  if (!d) return null;
-  const contexto: ContextoComFoto = {
-    contactId: d.contact_id ?? null,
-    contato: d.contato ?? null,
-    time: d.time ?? null,
-    atendente: d.atendente ?? null,
-    assignedTo: d.assigned_to ?? null,
-    comIa: d.com_ia === true,
-    foto: d.foto ?? null,
-  };
-  contextoPorConversa.gravar(conversationId, contexto);
-  return contexto;
 }
 
 function contarRajada(conversationId: string, agora = Date.now()): number {
@@ -148,7 +153,8 @@ export function useInboundMessageAlerts(): void {
       const escopoAgora = escolhaDaSessaoAtual() ?? escopo;
       const ctx = await contextoDaConversa(conversationId as string);
       if (!ctx) return;
-      if (!mensagemMereceAviso(escopoAgora, { assignedTo: ctx.assignedTo, userId })) return;
+      const assignedTo = ctx.comando?.quem === "humano" ? ctx.comando.userId : null;
+      if (!mensagemMereceAviso(escopoAgora, { assignedTo, userId })) return;
       const icon = ctx.foto ?? undefined;
       const idioma = idiomaAtual();
       const t = (texto: string) => traduzir(texto, idioma);

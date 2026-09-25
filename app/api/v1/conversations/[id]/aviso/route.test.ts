@@ -5,13 +5,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { requireRole } from "@/lib/auth/require-role";
+import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 import { GET } from "./route";
 
-vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
+vi.mock("@/lib/auth/server", () => ({ loadAuthUser: vi.fn(), resolveActiveOrg: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 
@@ -36,11 +36,8 @@ const assinar = vi.fn(async () => ({ data: { signedUrl: "https://storage/foto?to
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(requireRole).mockResolvedValue({
-    ok: true,
-    user: { id: "u1" },
-    org: { orgId: org, role: "agent" },
-  } as never);
+  vi.mocked(loadAuthUser).mockResolvedValue({ id: "u1" } as never);
+  vi.mocked(resolveActiveOrg).mockResolvedValue({ orgId: org, name: "Org", role: "agent" } as never);
   vi.mocked(createAdminClient).mockReturnValue({
     storage: { from: () => ({ createSignedUrl: assinar }) },
   } as never);
@@ -49,7 +46,8 @@ beforeEach(() => {
 const chamar = (id: string) => GET({} as never, { params: Promise.resolve({ id }) });
 
 const linhaCompleta = {
-  contact_id: "c1",
+  status: "open",
+  bot_silenced_until: "infinity",
   assigned_to_user_id: "u2",
   assigned_to_user_name: "Ana Lima",
   assignee_kind: "user",
@@ -59,6 +57,8 @@ const linhaCompleta = {
     phone_number: "+5532984790001",
     avatar_storage_path: "org/c1.jpg",
     is_anonymized: false,
+    force_human: false,
+    is_blocked: false,
   },
   attendance_teams: { name: "Financeiro" },
 };
@@ -72,15 +72,19 @@ describe("GET /api/v1/conversations/{id}/aviso", () => {
     expect(data).toMatchObject({
       contato: { display_name: "Maria Souza" },
       time: "Financeiro",
-      atendente: "Ana Lima",
-      assigned_to: "u2",
-      com_ia: false,
+      comando: { quem: "humano", userId: "u2", nome: "Ana Lima" },
       foto: "https://storage/foto?token=x",
     });
     // O caminho do arquivo no bucket não sai da rota — só a URL assinada.
     expect(JSON.stringify(data)).not.toContain("org/c1.jpg");
     expect(filtros).toContainEqual(["organization_id", org]);
     expect(filtros).toContainEqual(["id", conversa]);
+  });
+
+  it("sem dono e com o silêncio vigente é 'aguardando' — a mesma régua do Inbox", async () => {
+    leitura({ ...linhaCompleta, assigned_to_user_id: null, assigned_to_user_name: null, assignee_kind: null });
+    const { data } = (await (await chamar(conversa)).json()) as { data: { comando: unknown } };
+    expect(data.comando).toEqual({ quem: "aguardando" });
   });
 
   it("conversa que a RLS esconde é 404 — não se descobre de quem ela é", async () => {
@@ -107,12 +111,11 @@ describe("GET /api/v1/conversations/{id}/aviso", () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 
-  it("preserva a negativa de autorização", async () => {
-    vi.mocked(requireRole).mockResolvedValue({
-      ok: false,
-      response: new Response(null, { status: 401 }),
-    } as never);
+  it("sem sessão é 401 e sem organização ativa é 403, sem tocar na conversa", async () => {
+    vi.mocked(loadAuthUser).mockResolvedValueOnce(null);
     expect((await chamar(conversa)).status).toBe(401);
+    vi.mocked(resolveActiveOrg).mockResolvedValueOnce(null);
+    expect((await chamar(conversa)).status).toBe(403);
     expect(createClient).not.toHaveBeenCalled();
   });
 });

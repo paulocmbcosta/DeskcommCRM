@@ -2924,7 +2924,8 @@ cookie httpOnly — a consulta saía ANÔNIMA, a RLS devolvia vazio, e o título
 nula e o aviso **nem aparecia**. Medido: 401 `42501` na primeira execução da spec.
 
 O contexto agora vem de `GET /api/v1/conversations/[id]/aviso` (sessão + RLS, uma leitura
-com contato e time embutidos, foto já assinada), guardado 15 s por conversa na aba. O push
+com contato e time embutidos, foto já assinada, "quem está no comando" pela régua do Inbox),
+guardado 15 s por conversa na aba — o pedido em voo e a falha também. O push
 do servidor ganhou o time no título sem consulta a mais (a leitura do contato virou a da
 conversa com o contato embutido).
 
@@ -2935,7 +2936,7 @@ conversa com o contato embutido).
 | J33.3 | A rajada pede o contexto uma vez só, e nenhuma consulta REST direta sai do navegador | e2e acima | PASS |
 | J33.4 | O cartão abre a conversa | e2e acima | PASS |
 | J33.5 | Conversa que a RLS esconde é 404; anonimizado não devolve foto; o caminho do arquivo não vaza | `app/api/v1/conversations/[id]/aviso/route.test.ts` | PASS |
-| J33.6 | "com a IA" não vira "na fila"; nome técnico do WhatsApp nunca vira título | `lib/notifications/aviso-de-mensagem.test.ts` | PASS |
+| J33.6 | Conversa com o automático sai "no automático", não "na fila" (régua `comandoDaConversa` do Inbox); nome técnico do WhatsApp nunca vira título | `lib/notifications/aviso-de-mensagem.test.ts` | PASS |
 
 **Não medido aqui:** a notificação na bandeja do sistema e o push com a aba fechada
 (headless nega `Notification`; push depende de FCM — ver J12). O título da bandeja e do

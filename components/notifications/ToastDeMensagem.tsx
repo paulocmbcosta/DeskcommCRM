@@ -19,7 +19,7 @@ export interface ToastDeMensagemInput {
 }
 
 /** Mensagens chegam para ser lidas — 4 s do toast padrão não dão tempo. */
-const DURACAO_MS = 8_000;
+export const DURACAO_DO_TOAST_DE_MENSAGEM_MS = 8_000;
 
 function iniciais(nome: string): string {
   const partes = nome.trim().split(/\s+/).filter(Boolean);
@@ -91,6 +91,6 @@ export function mostrarToastDeMensagem(input: ToastDeMensagemInput): void {
         </button>
       </div>
     ),
-    { id: input.id, duration: DURACAO_MS },
+    { id: input.id, duration: DURACAO_DO_TOAST_DE_MENSAGEM_MS },
   );
 }

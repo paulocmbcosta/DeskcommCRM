@@ -17,18 +17,20 @@
  * Nada aqui consulta banco — é tudo sobre dados que o chamador já trouxe.
  */
 import { rotuloDoContato, SEM_NOME, type ContatoNomeavel } from "@/lib/contacts/rotulo-do-contato";
+import type { Comando } from "@/lib/inbox/comando-da-conversa";
 
 export const TITULO_SEM_CONTATO = "Nova mensagem";
 
-/** O que o aviso sabe da conversa — tudo vem de UMA leitura (ou do cache). */
+/** O que o aviso sabe da conversa — tudo vem de UMA chamada (ou do cache). */
 export interface ContextoDaConversa {
   contato: ContatoNomeavel | null;
   time: string | null;
-  /** O nome de quem atende agora (`assigned_to_user_name`), quando é gente. */
-  atendente: string | null;
-  assignedTo: string | null;
-  /** `assignee_kind = 'ai'`: sem dono humano, mas NÃO está na fila. */
-  comIa?: boolean;
+  /**
+   * Quem está no comando, pela régua ÚNICA do Inbox (`comandoDaConversa`), e
+   * não por uma cópia daqui: o cabeçalho da conversa e o aviso não podem
+   * discordar sobre "na fila" x "no automático".
+   */
+  comando: Comando | null;
 }
 
 const MIDIA_POR_EXTENSO: Record<string, string> = {
@@ -68,24 +70,33 @@ export function nomeDoRemetente(
 }
 
 /**
- * DE ONDE, numa linha: "Suporte · com Ana", "Suporte · na fila", "com a IA",
- * "com você".
- * `null` quando não há nada a dizer — linha vazia é pior que linha ausente.
+ * DE ONDE, numa linha: "Suporte · com Ana", "Suporte · na fila",
+ * "no automático", "com você". `null` quando não há nada a dizer — linha vazia
+ * é pior que linha ausente.
+ *
+ * "Na fila" só com time: é o selo "Na fila · <time>" do Inbox
+ * (`estaNaFilaDoTime`). Sem time, a mesma situação se chama "aguardando
+ * atendente", como no cabeçalho da conversa.
  */
 export function linhaDeContexto(
-  ctx: Pick<ContextoDaConversa, "time" | "atendente" | "assignedTo" | "comIa">,
+  ctx: Pick<ContextoDaConversa, "time" | "comando">,
   userId: string | null,
   t: Traduzir = semTraducao,
 ): string | null {
   const partes: string[] = [];
   const time = ctx.time?.trim();
   if (time) partes.push(time);
-  if (ctx.assignedTo && userId && ctx.assignedTo === userId) partes.push(t("com você"));
-  else if (ctx.assignedTo) {
-    const quem = ctx.atendente?.trim();
-    if (quem) partes.push(`${t("com")} ${quem.split(/\s+/)[0]}`);
-  } else if (ctx.comIa) partes.push(t("com a IA"));
-  else partes.push(t("na fila"));
+  const c = ctx.comando;
+  if (c?.quem === "humano") {
+    if (userId && c.userId === userId) partes.push(t("com você"));
+    else {
+      const quem = c.nome?.trim();
+      if (quem) partes.push(`${t("com")} ${quem.split(/\s+/)[0]}`);
+    }
+  } else if (c?.quem === "automatico") partes.push(t("no automático"));
+  else if (c?.quem === "aguardando") partes.push(t(time ? "na fila" : "aguardando atendente"));
+  else if (c?.quem === "ninguem") partes.push(t("sem atendente"));
+  else if (c?.quem === "encerrada") partes.push(t("encerrada"));
   return partes.length ? partes.join(" · ") : null;
 }
 
