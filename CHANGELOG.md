@@ -8,6 +8,15 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.45.1] — 2026-09-25
+
+### Corrigido
+
+- **Transferir uma conversa para um time não aparece mais duas vezes na linha do tempo** Desde a 1.42.0, transferir para um time também tira a IA da conversa, e a linha do tempo
+  registrava o mesmo gesto duas vezes: "Transferida para a fila do time" e "Atendimento
+  automático pausado". Agora fica só a transferência. A migration 0282 é aplicada sozinha
+  pelo `update.sh`.
+
 ## [1.45.0] — 2026-09-25
 
 ### Adicionado
@@ -5531,7 +5540,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.1...HEAD
+[1.45.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.0...v1.45.1
 [1.45.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.44.0...v1.45.0
 [1.44.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.1...v1.43.0
