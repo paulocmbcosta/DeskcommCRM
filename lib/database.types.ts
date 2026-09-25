@@ -7640,6 +7640,7 @@ export type Database = {
           id: string
           invited_at: string | null
           invited_by: string | null
+          message_alert_scope: string | null
           organization_id: string
           revoked_at: string | null
           role: string
@@ -7654,6 +7655,7 @@ export type Database = {
           id?: string
           invited_at?: string | null
           invited_by?: string | null
+          message_alert_scope?: string | null
           organization_id: string
           revoked_at?: string | null
           role: string
@@ -7668,6 +7670,7 @@ export type Database = {
           id?: string
           invited_at?: string | null
           invited_by?: string | null
+          message_alert_scope?: string | null
           organization_id?: string
           revoked_at?: string | null
           role?: string

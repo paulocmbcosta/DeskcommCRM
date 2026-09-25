@@ -4050,8 +4050,35 @@ export const DICIONARIO: Traducoes = {
   "Os seus, mais os que ainda não têm dono": {
     es: "Los tuyos, más los que todavía no tienen dueño",
   },
-  "O atendente vê a própria carteira e a fila de quem chegou agora. Não vê o que já é de um colega.": {
-    es: "El agente ve su propia cartera y la fila de quien acaba de llegar. No ve lo que ya es de un colega.",
+  "O atendente vê a própria carteira e a fila de quem chegou agora, de todos os times. Não vê o que já é de um colega.": {
+    es: "El agente ve su propia cartera y la fila de quien acaba de llegar, de todos los equipos. No ve lo que ya es de un colega.",
+  },
+  "Só das conversas que são minhas": { es: "Solo de las conversaciones que son mías" },
+  "Você é avisado quando o cliente escreve numa conversa atribuída a você.": {
+    es: "Se te avisa cuando el cliente escribe en una conversación asignada a ti.",
+  },
+  "De todas as conversas que eu vejo": { es: "De todas las conversaciones que veo" },
+  "Inclui a fila e as conversas dos colegas que você enxerga. Útil para quem distribui o atendimento; barulhento para quem atende.": {
+    es: "Incluye la fila y las conversaciones de los colegas que ves. Útil para quien distribuye la atención; ruidoso para quien atiende.",
+  },
+  "Preferência de aviso salva.": { es: "Preferencia de aviso guardada." },
+  "Avisar de mensagem nova": { es: "Avisar de mensaje nuevo" },
+  "Vale para o aviso na tela e para o push. Só você muda esta escolha.": {
+    es: "Vale para el aviso en pantalla y para el push. Solo tú cambias esta elección.",
+  },
+  "Vínculo com a organização não encontrado.": {
+    es: "Vínculo con la organización no encontrado.",
+  },
+  "Os seus, mais tudo do seu time": { es: "Los tuyos, más todo lo de tu equipo" },
+  "O atendente vê a própria carteira e todas as conversas do time dele — as sem dono e as dos colegas —, para ajudar quem está do lado. Não vê outros times nem a fila geral, que fica com gerente e administrador.": {
+    es: "El agente ve su propia cartera y todas las conversaciones de su equipo — las sin dueño y las de los colegas —, para ayudar a quien está al lado. No ve otros equipos ni la fila general, que queda con el gerente y el administrador.",
+  },
+  "Os seus, mais a fila do seu time": { es: "Los tuyos, más la fila de tu equipo" },
+  "O atendente vê a própria carteira e as conversas sem dono do time dele. Não vê o que já é de um colega, nem outros times, nem a fila geral, que fica com gerente e administrador.": {
+    es: "El agente ve su propia cartera y las conversaciones sin dueño de su equipo. No ve lo que ya es de un colega, ni otros equipos, ni la fila general, que queda con el gerente y el administrador.",
+  },
+  "A conversa que não foi encaminhada para nenhum time (a fila geral) só aparece para gerente e administrador. É deles a tarefa de encaminhá-la — ou de atribuí-la a alguém. Atendente sem time vê apenas o que for atribuído a ele.": {
+    es: "La conversación que no fue derivada a ningún equipo (la fila general) solo aparece para el gerente y el administrador. A ellos les toca derivarla — o asignarla a alguien. El agente sin equipo ve solo lo que se le asigne.",
   },
   "Só os seus": { es: "Solo los tuyos" },
   "O atendente vê apenas o que foi direcionado a ele — nem a fila. Combine com o rodízio: sem alguém distribuindo, ninguém recebe nada e as telas ficam vazias.": {

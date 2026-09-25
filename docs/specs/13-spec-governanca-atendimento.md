@@ -195,8 +195,11 @@ padrão de `crm_pipelines.settings.fields`):
     // default: "manual" (derivado de G1-06b: round-robin é opt-in por org)
     "max_retries": 5, "backoff_seconds": 60       // knobs: nunca constantes hardcoded no worker
   },
-  "visibility_mode": "all" | "own_and_unassigned" | "own"
+  "visibility_mode": "all" | "own_and_team" | "own_and_unassigned" | "own_and_team_queue" | "own"
   // escopo do role agent em conversations/messages; default: "own_and_unassigned" (decisão G1-06a)
+  // own_and_team / own_and_team_queue (migration 0281): por conversations.team_id —
+  // tudo do time / fila do time; a fila geral (sem time) fica só com manager/admin.
+  // A regra vive em fn_agent_sees_conversation; a lista vigente em lib/schemas/routing.ts.
 }
 ```
 

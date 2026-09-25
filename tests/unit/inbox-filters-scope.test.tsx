@@ -100,6 +100,12 @@ describe("visibleInboxTabs (lógica pura de visões)", () => {
   it("agent em 'all' VÊ 'all'", () => {
     expect(visibleInboxTabs("agent", "all")).toContain("all");
   });
+  it("agent em 'own_and_team' VÊ 'all' — é onde mora a conversa do colega de time", () => {
+    expect(visibleInboxTabs("agent", "own_and_team")).toContain("all");
+  });
+  it("agent em 'own_and_team_queue' NÃO vê 'all'", () => {
+    expect(visibleInboxTabs("agent", "own_and_team_queue")).not.toContain("all");
+  });
   it("manager sempre vê 'all' (org-wide read)", () => {
     expect(visibleInboxTabs("manager", "own")).toContain("all");
   });

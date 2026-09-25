@@ -47,11 +47,25 @@ const VISIBILIDADE_COPY: Record<VisibilityMode, { titulo: string; corpo: string 
     titulo: "Todos veem tudo",
     corpo: "Qualquer atendente abre a conversa e o negócio de qualquer colega.",
   },
+  own_and_team: {
+    titulo: "Os seus, mais tudo do seu time",
+    corpo:
+      "O atendente vê a própria carteira e todas as conversas do time dele — as sem dono e " +
+      "as dos colegas —, para ajudar quem está do lado. Não vê outros times nem a fila " +
+      "geral, que fica com gerente e administrador.",
+  },
   own_and_unassigned: {
     titulo: "Os seus, mais os que ainda não têm dono",
     corpo:
-      "O atendente vê a própria carteira e a fila de quem chegou agora. Não vê o que já é " +
-      "de um colega.",
+      "O atendente vê a própria carteira e a fila de quem chegou agora, de todos os times. " +
+      "Não vê o que já é de um colega.",
+  },
+  own_and_team_queue: {
+    titulo: "Os seus, mais a fila do seu time",
+    corpo:
+      "O atendente vê a própria carteira e as conversas sem dono do time dele. Não vê o " +
+      "que já é de um colega, nem outros times, nem a fila geral, que fica com gerente e " +
+      "administrador.",
   },
   own: {
     titulo: "Só os seus",
@@ -119,6 +133,14 @@ export function AtendimentoForm({ initial }: { initial: AtendimentoConfig }) {
    * nada é atendido — e a tela de todo mundo fica vazia sem explicação.
    */
   const combinacaoMorta = form.visibility_mode === "own" && form.mode === "manual";
+
+  /**
+   * Nos modos por time, a conversa que não foi encaminhada para setor nenhum só
+   * aparece para gerente e administrador. Isso é o pedido, não defeito — mas quem
+   * escolhe precisa saber que alguém tem de encaminhar a fila geral.
+   */
+  const filaGeralSoDoGestor =
+    form.visibility_mode === "own_and_team" || form.visibility_mode === "own_and_team_queue";
 
   function salvar(e: React.FormEvent) {
     e.preventDefault();
@@ -229,6 +251,17 @@ export function AtendimentoForm({ initial }: { initial: AtendimentoConfig }) {
             {t("Com")} <strong>&ldquo;{t("só os seus")}&rdquo;</strong>{" "}
             {t(
               "e distribuição manual, ninguém enxerga a fila para pegar — e nenhum cliente é atendido. Ligue o rodízio para que alguém receba.",
+            )}
+          </p>
+        ) : null}
+
+        {filaGeralSoDoGestor ? (
+          <p
+            data-testid="aviso-fila-geral-do-gestor"
+            className="rounded-md border border-sky-500/40 bg-sky-50/60 p-3 text-xs dark:bg-sky-900/10"
+          >
+            {t(
+              "A conversa que não foi encaminhada para nenhum time (a fila geral) só aparece para gerente e administrador. É deles a tarefa de encaminhá-la — ou de atribuí-la a alguém. Atendente sem time vê apenas o que for atribuído a ele.",
             )}
           </p>
         ) : null}

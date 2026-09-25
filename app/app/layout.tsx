@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { isMfaEnrolled, loadAuthUser, requiresMfa, resolveActiveOrg } from "@/lib/auth/server";
 import { DEFAULT_VISIBILITY_MODE, type VisibilityMode } from "@/lib/auth/types";
 import { clientePelaAgendaLigado, reguaDeEspera } from "@/lib/schemas/settings";
+import { escopoEfetivo } from "@/lib/notifications/escopo-de-aviso";
 import { AuthProvider } from "@/hooks/auth/AuthProvider";
 import { AppShell } from "./_components/AppShell";
 import { EstiloDaMarcaDaOrganizacao } from "./_components/EstiloDaMarcaDaOrganizacao";
@@ -113,9 +114,27 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // Fonte confiável (admin client, org do cookie validado) — nunca do body.
     const mode = (orgRow?.settings as { visibility_mode?: VisibilityMode } | null)
       ?.visibility_mode;
+    // De quais conversas esta pessoa recebe aviso (0281). Consulta à parte e
+    // tolerante: sem a coluna (banco ainda sem a 0281) ou em erro, vale o padrão
+    // do papel — um aviso a mais ou a menos não pode derrubar o layout.
+    let escopoGravado: string | null = null;
+    try {
+      const { data: vinculo } = await admin
+        .from("user_organizations")
+        .select("message_alert_scope")
+        .eq("organization_id", activeOrg.orgId)
+        .eq("user_id", user.id)
+        .is("revoked_at", null)
+        .maybeSingle();
+      escopoGravado =
+        vinculo?.message_alert_scope ?? null;
+    } catch {
+      escopoGravado = null;
+    }
     activeOrg = {
       ...activeOrg,
       visibility_mode: mode ?? DEFAULT_VISIBILITY_MODE,
+      aviso_de_mensagem: escopoEfetivo(activeOrg.role, escopoGravado),
       // Mesma linha de `settings` já lida acima — nenhuma consulta a mais.
       cliente_pela_agenda: clientePelaAgendaLigado(orgRow?.settings),
       regua_de_espera: reguaDeEspera(orgRow?.settings),

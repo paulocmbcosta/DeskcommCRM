@@ -28,11 +28,13 @@ export const INBOX_TABS: { value: InboxTab; label: string }[] = [
 
 /**
  * Visões visíveis por papel + escopo (G4-02, acceptance 1). 'Todas' fica oculta
- * para `agent` quando visibility_mode ≠ 'all'; viewer/manager/admin sempre veem.
+ * para `agent`, salvo nos modos em que ele enxerga conversa de colega: `all` e
+ * `own_and_team` (0281) — sem a aba, a conversa do colega de time só existiria
+ * na busca. viewer/manager/admin sempre veem.
  * É apenas cosmético — a RLS (G4-01) é quem garante o escopo mesmo via ?filter=all.
  */
 export function visibleInboxTabs(role: Role, mode: VisibilityMode | undefined): InboxTab[] {
-  const hideAll = role === "agent" && mode !== "all";
+  const hideAll = role === "agent" && mode !== "all" && mode !== "own_and_team";
   return INBOX_TABS.filter((t) => !(t.value === "all" && hideAll)).map((t) => t.value);
 }
 
