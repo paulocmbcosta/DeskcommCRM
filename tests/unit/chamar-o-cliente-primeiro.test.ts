@@ -208,9 +208,19 @@ describe("os elos de tela que somem sem barulho", () => {
     // O baseline entra na asserção de propósito: se um dia a função for
     // concedida a `authenticated`, este caso passa a medir uma verdade velha,
     // e é melhor que ele quebre e obrigue alguém a reler.
+    //
+    // Desde a 0284 a rota tem TAMBÉM o client de sessão, e é de propósito: a
+    // escolha de time e dono (`fn_conversation_iniciar_no_time`) lê
+    // `auth.uid()`. O que não pode voltar é ABRIR e ENVIAR pelo de sessão — é
+    // isso que as duas asserções abaixo prendem.
     const rota = readFileSync("app/api/v1/conversations/iniciar/route.ts", "utf8");
-    expect(rota).toMatch(/createAdminClient\(\)/);
-    expect(rota, "voltou ao client de sessão").not.toMatch(/createClient\(\)/);
+    expect(rota).toMatch(/const supabase = createAdminClient\(\);/);
+    expect(rota, "abrir/enviar deixou de receber o admin client").toMatch(
+      /iniciarConversaEEnviar\(\s*supabase,/,
+    );
+    expect(rota, "o client de sessão passou a abrir a conversa").not.toMatch(
+      /iniciarConversaEEnviar\(\s*sessao,/,
+    );
 
     const baseline = readFileSync("supabase/baseline.sql", "utf8");
     const revogacoes = baseline

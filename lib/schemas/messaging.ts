@@ -258,6 +258,13 @@ export const iniciarConversaSchema = z
     contact_id: z.string().uuid().optional(),
     phone_number: z.string().min(8).max(32).optional(),
     name: z.string().trim().min(1).max(200).optional(),
+    /**
+     * O time da conversa (migration 0284). Opcional NO SCHEMA porque a
+     * obrigatoriedade depende do estado da organização — sem time cadastrado
+     * não há o que escolher. Quem decide é a rota, e depois o banco
+     * (`fn_conversation_iniciar_no_time`).
+     */
+    team_id: z.string().uuid().nullable().optional(),
     mensagem: mensagemDeAberturaSchema,
   })
   .refine((d) => !!d.contact_id || !!d.phone_number?.trim(), {

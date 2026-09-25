@@ -48,6 +48,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { createClient } from "@/lib/supabase/server";
 import { carregarTimes } from "@/lib/times/catalogo";
+import { timesParaIniciarConversa } from "@/lib/times/iniciar-conversa";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,12 @@ export interface TimeDoInbox {
   horario_invalido: boolean;
   /** Arquivado: continua nomeando o passado, não recebe conversa nova. */
   archived: boolean;
+  /**
+   * Quem pergunta pode abrir neste time a conversa que ELE inicia ("Chamar no
+   * WhatsApp", migration 0284). Calculado aqui, pela mesma função que a rota
+   * `iniciar` usa, para a tela não reescrever a regra.
+   */
+  pode_iniciar: boolean;
 }
 
 export async function GET(): Promise<Response> {
@@ -77,6 +84,9 @@ export async function GET(): Promise<Response> {
     const times = await carregarTimes(db, authz.org.orgId, new Date(), {
       incluirArquivados: true,
     });
+    const iniciaveis = new Set(
+      timesParaIniciarConversa(times, authz.user.id, authz.org.role).map((time) => time.id),
+    );
     const enxuto: TimeDoInbox[] = times.map((time) => ({
       id: time.id,
       name: time.name,
@@ -85,6 +95,7 @@ export async function GET(): Promise<Response> {
       aberto_agora: time.aberto_agora,
       horario_invalido: time.horario_invalido,
       archived: time.archived_at !== null,
+      pode_iniciar: iniciaveis.has(time.id),
     }));
     return ok(enxuto, { requestId });
   } catch {

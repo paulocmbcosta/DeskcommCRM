@@ -80,6 +80,31 @@ async function criarContatoSemConversa(
   return { id, telefone };
 }
 
+/**
+ * Um time em que quem está logado pode abrir conversa, ou `null` se a
+ * organização não tem time nenhum (migration 0284: aí não há o que escolher).
+ *
+ * Lido da rota, e não fixado: este Supabase é compartilhado entre specs, e
+ * outras criam e arquivam times enquanto esta roda.
+ */
+async function timeParaChamar(page: import("@playwright/test").Page): Promise<string | null> {
+  const r = await page.request.get("/api/v1/conversations/teams");
+  expect(r.ok(), await r.text()).toBe(true);
+  const { data } = (await r.json()) as { data: Array<{ id: string; pode_iniciar: boolean }> };
+  return data.find((t) => t.pode_iniciar)?.id ?? null;
+}
+
+/** Com vários times e nenhum escolhido, o envio fica travado — escolhe o primeiro. */
+async function escolherTimeSeHouver(dialogo: import("@playwright/test").Locator): Promise<void> {
+  const seletor = dialogo.getByLabel("Time da conversa");
+  if ((await seletor.count()) === 0) return;
+  if ((await seletor.inputValue()) !== "") return;
+  const opcoes = await seletor.locator("option").evaluateAll((os) =>
+    os.map((o) => (o as HTMLOptionElement).value).filter(Boolean),
+  );
+  await seletor.selectOption(opcoes[0]!);
+}
+
 test.beforeEach(async ({ page }) => {
   await loginComoAdmin(page, lerCreds());
 });
@@ -154,6 +179,7 @@ test("o botão de enviar fica travado enquanto não há o que mandar", async ({ 
 
   // Controle POSITIVO: sem ele, um botão permanentemente desabilitado — que é
   // um defeito — passaria neste caso tão bem quanto o comportamento certo.
+  await escolherTimeSeHouver(dialogo);
   const campo = dialogo.getByLabel("Mensagem");
   if ((await campo.count()) > 0) {
     await campo.fill("Olá! Tudo bem?");
@@ -203,6 +229,7 @@ test("a conversa nasce e o operador cai nela — mesmo se o envio não completar
       contact_id: id,
       phone_number: telefone,
       name: nome,
+      team_id: await timeParaChamar(page),
       mensagem: { type: "text", body: "Olá! Somos da Deskcomm." },
     },
   });
@@ -237,6 +264,7 @@ test("chamar de novo reaproveita a conversa, não cria uma segunda", async ({ pa
     contact_id: id,
     phone_number: telefone,
     name: nome,
+    team_id: await timeParaChamar(page),
     mensagem: { type: "text", body: "Primeira tentativa." },
   };
 
@@ -246,6 +274,105 @@ test("chamar de novo reaproveita a conversa, não cria uma segunda", async ({ pa
   expect(dois.ok(), await dois.text()).toBe(true);
 
   expect((await dois.json()).data.conversation_id).toBe((await um.json()).data.conversation_id);
+});
+
+test.describe("chamar o cliente exige o time da conversa (migration 0284)", () => {
+  // Um time criado pela spec e arquivado no fim: com ele, a organização TEM
+  // time, e o caminho que exige a escolha é o que se mede — nas duas pontas,
+  // a tela e o contrato da rota.
+  // DOIS times: com um só, o seletor já vem preenchido e o caso "nenhum
+  // escolhido trava o envio" nunca seria exercitado.
+  const SUFIXO = Date.now().toString().slice(-6);
+  const NOME_DO_TIME = `Chamar ${SUFIXO}`;
+  const NOME_DO_OUTRO = `Chamar outro ${SUFIXO}`;
+  let timeCriado: string | null = null;
+  const criados: string[] = [];
+
+  test.beforeEach(async ({ page }) => {
+    if (criados.length) return;
+    for (const [nome, slug] of [[NOME_DO_TIME, `chamar-${SUFIXO}`], [NOME_DO_OUTRO, `chamar-outro-${SUFIXO}`]]) {
+      const r = await page.request.post("/api/v1/settings/teams", { data: { name: nome, slug } });
+      expect(r.ok(), await r.text()).toBe(true);
+      criados.push((await r.json()).data.id as string);
+    }
+    timeCriado = criados[0]!;
+  });
+
+  test.afterAll(async ({ browser }) => {
+    if (!criados.length) return;
+    const page = await browser.newPage();
+    await loginComoAdmin(page, lerCreds());
+    for (const id of criados) {
+      await page.request.post(`/api/v1/settings/teams/${id}/archive`, { data: { arquivar: true } });
+    }
+    await page.close();
+  });
+
+  test("o diálogo pede o time e só libera o envio com ele escolhido", async ({ page }) => {
+    const nome = `Cliente Time ${Date.now()}`;
+    await criarContatoSemConversa(page, nome);
+
+    await page.goto("/app/contacts");
+    await page
+      .getByRole("row", { name: new RegExp(nome) })
+      .getByRole("button", { name: /Chamar no WhatsApp/i })
+      .click();
+
+    const dialogo = page.getByRole("dialog");
+    const seletor = dialogo.getByLabel("Time da conversa");
+    await expect(seletor).toBeVisible();
+    await expect(seletor.locator("option", { hasText: NOME_DO_TIME })).toHaveCount(1);
+    await expect(dialogo.getByText(/A conversa fica com você, dentro deste time/i)).toBeVisible();
+
+    // Espera o diálogo dizer o que o canal permite: medir antes disso mediria o
+    // "Verificando…" e pularia o controle positivo sem avisar.
+    const campo = dialogo.getByLabel("Mensagem");
+    const soModelo = dialogo.getByText(/só permite falar primeiro com um modelo aprovado/i);
+    await expect(campo.or(soModelo).first()).toBeVisible();
+    const enviar = dialogo.getByRole("button", { name: /Enviar e abrir conversa/i });
+    if ((await campo.count()) > 0) {
+      await campo.fill("Olá!");
+      // Vários times: começa sem escolha, e o botão não libera — é a regra nova.
+      await expect(seletor).toHaveValue("");
+      await expect(enviar).toBeDisabled();
+      await seletor.selectOption({ label: NOME_DO_TIME });
+      await expect(enviar).toBeEnabled();
+    } else {
+      test.info().annotations.push({ type: "nao-medido", description: "canal só aceita modelo: a trava do texto livre não foi exercitada" });
+    }
+    await page.screenshot({ path: ".superpowers/evidence/chamar-cliente-exige-time.png" });
+  });
+
+  test("sem time a rota recusa; com time a conversa fica no time e com quem chamou", async ({ page }) => {
+    const nome = `Cliente Contrato Time ${Date.now()}`;
+    const { id, telefone } = await criarContatoSemConversa(page, nome);
+    const { data: canais } = await (await page.request.get("/api/v1/channel-sessions")).json();
+    test.skip(!canais?.length, "instalação sem canal conectado — nada a chamar");
+
+    const corpo = {
+      channel_session_id: canais[0].id,
+      contact_id: id,
+      phone_number: telefone,
+      name: nome,
+      mensagem: { type: "text", body: "Olá!" },
+    };
+
+    const semTime = await page.request.post("/api/v1/conversations/iniciar", { data: corpo });
+    expect(semTime.status()).toBe(422);
+    expect((await semTime.json()).error.code).toBe("team_required");
+
+    const comTime = await page.request.post("/api/v1/conversations/iniciar", {
+      data: { ...corpo, team_id: timeCriado },
+    });
+    expect(comTime.ok(), await comTime.text()).toBe(true);
+    const { conversation_id } = (await comTime.json()).data;
+
+    const conversa = await page.request.get(`/api/v1/conversations/${conversation_id}`);
+    expect(conversa.ok(), await conversa.text()).toBe(true);
+    const { data } = await conversa.json();
+    expect(data.team_id).toBe(timeCriado);
+    expect(data.assigned_to_user_id, "quem chamou não ficou como dono").toBeTruthy();
+  });
 });
 
 test("quem atende (agent) consegue ler os modelos — não só quem administra", async ({ page }) => {

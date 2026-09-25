@@ -33,8 +33,13 @@ import { requireRole } from "@/lib/auth/require-role";
 import { iniciarConversaEEnviar } from "@/lib/messaging/iniciar-conversa";
 import { CANAL_NAO_FALA_PRIMEIRO } from "@/lib/messaging/open-shared-contact-conversation";
 import { iniciarConversaSchema, validateRequest } from "@/lib/schemas";
+import { audit } from "@/lib/audit";
+import { registrarTrocaDeComando } from "@/lib/inbox/atividade-de-comando";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { carregarTimes } from "@/lib/times/catalogo";
+import { timesParaIniciarConversa } from "@/lib/times/iniciar-conversa";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -85,12 +90,35 @@ export async function POST(req: NextRequest): Promise<Response> {
   // consulta justamente porque metade dos chamadores dele já é service role
   // (ver o comentário longo em `_handler.ts`, que nomeia o vazamento medido).
   const supabase = createAdminClient();
+  // O client do USUÁRIO para o que é decisão dele: a lista de times passa pela
+  // RLS, e `fn_conversation_iniciar_no_time` lê `auth.uid()` para saber quem
+  // fica como dono — com o admin client ela recusaria tudo com `42501`.
+  const sessao = await createClient();
+  const orgId = authz.org.orgId;
+  const teamId = input.team_id ?? null;
+
+  let permitidos;
+  try {
+    permitidos = timesParaIniciarConversa(
+      await carregarTimes(sessao, orgId, new Date()),
+      authz.user.id,
+      authz.org.role,
+    );
+  } catch {
+    return fail("internal_error", t("Não foi possível carregar os times."), 500, { requestId });
+  }
+  if (permitidos.length > 0 && !teamId) {
+    return fail("team_required", t("Escolha o time desta conversa."), 422, { requestId });
+  }
+  if (teamId && !permitidos.some((time) => time.id === teamId)) {
+    return fail("team_not_allowed", t("Você não pode abrir conversa neste time."), 422, { requestId });
+  }
 
   try {
     const resultado = await iniciarConversaEEnviar(
       supabase,
       {
-        organization_id: authz.org.orgId,
+        organization_id: orgId,
         actor: { type: "user", id: authz.user.id },
         requestId,
       },
@@ -100,6 +128,39 @@ export async function POST(req: NextRequest): Promise<Response> {
         phone_number: input.phone_number,
         name: input.name,
         mensagem: input.mensagem,
+      },
+      {
+        antesDeEnviar: async (aberta) => {
+          const { data, error } = await sessao.rpc("fn_conversation_iniciar_no_time", {
+            p_org: orgId,
+            p_conversation: aberta.conversation_id,
+            p_team: teamId,
+          });
+          if (error) {
+            throw new ConversaNaoAtribuida(error.message, error.details ?? "");
+          }
+          const assumiu = (data as { assigned_to_user_id: string | null } | null)?.assigned_to_user_id;
+          await audit({
+            action: "conversation.started_in_team",
+            actorUserId: authz.user.id,
+            organizationId: orgId,
+            resourceType: "conversation",
+            resourceId: aberta.conversation_id,
+            requestId,
+            metadata: { team_id: teamId, assigned_to_user_id: assumiu ?? null },
+          });
+          if (assumiu) {
+            await registrarTrocaDeComando({
+              supabase: sessao,
+              organizationId: orgId,
+              conversationId: aberta.conversation_id,
+              contactId: aberta.contact_id,
+              tipo: "conversation_claimed",
+              actor: { type: "user", id: authz.user.id, role: authz.org.role },
+              motivo: "Assumiu o atendimento desta conversa",
+            });
+          }
+        },
       },
     );
 
@@ -117,6 +178,27 @@ export async function POST(req: NextRequest): Promise<Response> {
       { requestId },
     );
   } catch (err) {
+    if (err instanceof ConversaNaoAtribuida) {
+      // Nada foi enviado: o envio só acontece depois desta etapa.
+      if (err.codigo === "conversation_owned") {
+        const dono = err.detalhe.trim();
+        return fail(
+          "conversation_owned",
+          dono
+            ? `${t("Este cliente já está em atendimento com")} ${dono}. ${t("Peça a transferência para chamar por aqui.")}`
+            : t("Este cliente já está em atendimento com outra pessoa. Peça a transferência para chamar por aqui."),
+          409,
+          { requestId },
+        );
+      }
+      if (err.codigo === "team_required") {
+        return fail("team_required", t("Escolha o time desta conversa."), 422, { requestId });
+      }
+      if (err.codigo === "team_not_member" || err.codigo === "team_not_found") {
+        return fail("team_not_allowed", t("Você não pode abrir conversa neste time."), 422, { requestId });
+      }
+      return fail("internal_error", t("Não foi possível iniciar a conversa. Tente novamente."), 500, { requestId });
+    }
     const msg = err instanceof Error ? err.message : "erro";
     if (msg === "contact_not_found") {
       return fail("not_found", t("Contato não encontrado."), 404, { requestId });
@@ -136,5 +218,15 @@ export async function POST(req: NextRequest): Promise<Response> {
       );
     }
     return fail("internal_error", msg, 500, { requestId });
+  }
+}
+
+/** A etapa de time/dono recusou — com o código do banco, para a rota traduzir. */
+class ConversaNaoAtribuida extends Error {
+  constructor(
+    readonly codigo: string,
+    readonly detalhe: string,
+  ) {
+    super(codigo);
   }
 }

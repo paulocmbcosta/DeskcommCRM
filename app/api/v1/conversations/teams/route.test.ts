@@ -91,6 +91,7 @@ describe("GET /api/v1/conversations/teams", () => {
         aberto_agora: true,
         horario_invalido: false,
         archived: false,
+        pode_iniciar: true,
       },
       {
         id: arquivado,
@@ -100,8 +101,24 @@ describe("GET /api/v1/conversations/teams", () => {
         aberto_agora: false,
         horario_invalido: false,
         archived: true,
+        pode_iniciar: false,
       },
     ]);
+  });
+
+  it("atendente de um time só pode INICIAR conversa nos times dele", async () => {
+    const outro = "60000000-0000-4000-8000-00000000000c";
+    vi.mocked(carregarTimes).mockResolvedValue([
+      { id: time, name: "Financeiro", slug: "financeiro", description: "", schedule: {}, archived_at: null,
+        max_concurrent: null, aberto_agora: true, horario_invalido: false, user_ids: ["u1"] },
+      { id: outro, name: "Suporte", slug: "suporte", description: "", schedule: {}, archived_at: null,
+        max_concurrent: null, aberto_agora: true, horario_invalido: false, user_ids: ["u"] },
+    ]);
+    const body = await (await GET()).json();
+    const pode = Object.fromEntries(
+      (body.data as Array<{ id: string; pode_iniciar: boolean }>).map((x) => [x.id, x.pode_iniciar]),
+    );
+    expect(pode).toEqual({ [time]: false, [outro]: true });
   });
 
   it("não vaza quem está em cada time", async () => {
