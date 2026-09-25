@@ -8,6 +8,19 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.45.3] — 2026-09-25
+
+### Corrigido
+
+- **O aviso de mensagem nova diz de quem é, de qual time e com quem a conversa está** O aviso que aparece na tela quando chega mensagem mostrava só o texto do cliente — com várias
+  conversas abertas, o atendente não sabia de quem era. E, para atendentes com a opção "só as
+  minhas conversas", o aviso às vezes nem aparecia. Agora o aviso traz a foto e o nome do contato
+  em destaque, o time e com quem a conversa está (por exemplo, "Financeiro · com você" ou "na
+  fila"), e a mensagem — áudio, imagem e documento aparecem por extenso. Várias mensagens seguidas
+  do mesmo cliente atualizam o mesmo aviso, com a contagem, em vez de empilhar. Clicar no aviso
+  abre a conversa. A notificação do sistema e a do celular também passaram a trazer o time junto
+  do nome. Nada precisa ser configurado.
+
 ## [1.45.2] — 2026-09-25
 
 ### Corrigido
@@ -5550,7 +5563,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.2...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.3...HEAD
+[1.45.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.2...v1.45.3
 [1.45.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.1...v1.45.2
 [1.45.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.0...v1.45.1
 [1.45.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.44.0...v1.45.0
