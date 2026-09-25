@@ -8,6 +8,30 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.45.4] — 2026-09-25
+
+### Adicionado
+
+- **Na troca de turno, o atendente devolve a conversa à fila do próprio time sem a IA voltar** O atendente que vai embora com um atendimento aberto agora pode devolver a conversa à fila do
+  próprio time: em "Transferir", a primeira opção é "Fila do time". Ele deixa de ser o responsável,
+  o atendimento automático continua parado — a IA não volta a falar com o cliente — e o rodízio
+  entrega a conversa ao próximo atendente disponível do time. Ela não volta para quem a devolveu:
+  se ninguém mais estiver disponível, ela espera na fila do time até alguém do turno seguinte
+  entrar. O botão "Liberar" continua existindo e continua devolvendo a conversa ao atendimento
+  automático. Nada precisa ser configurado.
+
+### Alterado
+
+- **Quem chama o cliente escolhe o time da conversa e fica como dono dela** Ao usar "Chamar no WhatsApp", a conversa nascia sem time e sem ninguém responsável: ela sumia da
+  vista do próprio time, e a resposta do cliente ia para o rodízio — ou era respondida pela IA —
+  em vez de chegar a quem o chamou. Agora a janela pede o time da conversa antes de enviar. O
+  atendente vê só os times de que faz parte (com um time só, ele já vem escolhido); gestor e
+  administrador escolhem qualquer time; quem não é de time nenhum escolhe entre todos. A conversa
+  fica no time escolhido e com quem chamou, e a resposta do cliente cai direto para essa pessoa.
+  Se o cliente já estiver em atendimento com outra pessoa, a janela avisa com quem está em vez de
+  tomar a conversa. Empresas sem time cadastrado seguem como antes, sem o campo. Nada precisa ser
+  configurado.
+
 ## [1.45.3] — 2026-09-25
 
 ### Corrigido
@@ -5563,7 +5587,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.3...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.4...HEAD
+[1.45.4]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.3...v1.45.4
 [1.45.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.2...v1.45.3
 [1.45.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.1...v1.45.2
 [1.45.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.0...v1.45.1
