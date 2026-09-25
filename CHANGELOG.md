@@ -8,6 +8,16 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.45.2] — 2026-09-25
+
+### Corrigido
+
+- **A caixa de entrada volta a ficar rápida — conferir quem vê cada conversa ficou até 35 vezes mais barato** Com vários atendentes conectados, o sistema ficava lento e o banco chegava ao limite de
+  conexões. O banco repetia duas conferências conversa por conversa, a cada recontagem das abas e a
+  cada atualização em tempo real: quem pode ver aquela conversa, e em que situação ela está. As duas
+  agora são feitas numa consulta só. Quem vê o quê, e em qual aba cada conversa aparece, continua
+  exatamente igual.
+
 ## [1.45.1] — 2026-09-25
 
 ### Corrigido
@@ -5540,7 +5550,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.2...HEAD
+[1.45.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.1...v1.45.2
 [1.45.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.0...v1.45.1
 [1.45.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.44.0...v1.45.0
 [1.44.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.43.0...v1.44.0
