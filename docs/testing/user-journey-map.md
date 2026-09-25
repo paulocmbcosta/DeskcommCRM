@@ -2913,3 +2913,31 @@ receber mensagens" do Inbox, que vira botão para manager+.
 exercitado. A RLS de `contacts` deixa qualquer membro fazer UPDATE, então a régua manager+
 vale para esta rota e para a tela, não para quem escrever direto no PostgREST com a própria
 sessão.
+
+## J33 — O aviso de mensagem diz de quem é `[P0]` (2026-09-25)
+
+Pedido do dono: o aviso chegava só com o texto do cliente, e o atendente com várias
+conversas abertas não sabia de quem era. **A causa não era de apresentação:** o aviso
+com a aba aberta lia contato e conversa pelo supabase-js do navegador, que não enxerga o
+cookie httpOnly — a consulta saía ANÔNIMA, a RLS devolvia vazio, e o título caía para
+"Nova mensagem". Com "só as minhas" (padrão do atendente desde a 0281) a conversa voltava
+nula e o aviso **nem aparecia**. Medido: 401 `42501` na primeira execução da spec.
+
+O contexto agora vem de `GET /api/v1/conversations/[id]/aviso` (sessão + RLS, uma leitura
+com contato e time embutidos, foto já assinada), guardado 15 s por conversa na aba. O push
+do servidor ganhou o time no título sem consulta a mais (a leitura do contato virou a da
+conversa com o contato embutido).
+
+| Caso | O que prova | Onde | Estado |
+|---|---|---|---|
+| J33.1 | Fora do Inbox, o aviso mostra nome, "Financeiro · com você" e a prévia | `tests/e2e/aviso-de-mensagem-diz-de-quem-e.spec.ts` | FAIL → PASS |
+| J33.2 | A rajada atualiza o MESMO aviso ("2 mensagens"); áudio chega como "🎤 Áudio" | e2e acima | PASS |
+| J33.3 | A rajada pede o contexto uma vez só, e nenhuma consulta REST direta sai do navegador | e2e acima | PASS |
+| J33.4 | O cartão abre a conversa | e2e acima | PASS |
+| J33.5 | Conversa que a RLS esconde é 404; anonimizado não devolve foto; o caminho do arquivo não vaza | `app/api/v1/conversations/[id]/aviso/route.test.ts` | PASS |
+| J33.6 | "com a IA" não vira "na fila"; nome técnico do WhatsApp nunca vira título | `lib/notifications/aviso-de-mensagem.test.ts` | PASS |
+
+**Não medido aqui:** a notificação na bandeja do sistema e o push com a aba fechada
+(headless nega `Notification`; push depende de FCM — ver J12). O título da bandeja e do
+push ("Maria Souza · Financeiro") está coberto em unidade (`push_payload.test.ts`,
+`deliver.test.ts`), não na tela.

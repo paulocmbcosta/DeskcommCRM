@@ -6,7 +6,7 @@ import { enviarPushAoUsuario } from "./web_push";
 import { logger } from "@/lib/logger";
 import { vapidPronto } from "./vapid";
 import type { PushPayload } from "./push_payload";
-import { rotuloDoContato, SEM_NOME } from "@/lib/contacts/rotulo-do-contato";
+import { nomeDoRemetente, previaDaMensagem, TITULO_SEM_CONTATO } from "./aviso-de-mensagem";
 
 export const WEB_PUSH_INBOUND_KEY = "web-push-inbound.v1";
 
@@ -62,54 +62,54 @@ async function handleInbound(row: EventRow): Promise<HandlerResult> {
     return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "skipped", detail: "sem_destinatario" };
   }
   const previewRaw = row.payload.body_preview;
-  const preview = typeof previewRaw === "string" && previewRaw.trim() ? previewRaw : "Nova mensagem";
-  const type = typeof row.payload.type === "string" ? row.payload.type : "text";
-  const body = type === "text" ? preview : "Mídia";
+  const body = previaDaMensagem(
+    typeof row.payload.type === "string" ? row.payload.type : "text",
+    typeof previewRaw === "string" ? previewRaw : "",
+  );
 
   const marca = await marcaDaSaida(row.organization_id);
-  const contactId = typeof row.payload.contact_id === "string" ? row.payload.contact_id : null;
-  let contactName: string | null = null;
-  let icon: string | null = null;
-  if (contactId) {
-    const admin = createAdminClient();
-    const { data } = await admin
-      .from("contacts")
-      .select("display_name, name, phone_number, avatar_storage_path, is_anonymized")
-      .eq("id", contactId)
-      .eq("organization_id", row.organization_id)
-      .maybeSingle();
-    const c = data as {
+  // UMA leitura: a conversa traz o contato e o time pelas FKs. Antes era a
+  // leitura do contato sozinha — o time custou zero consulta a mais.
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("conversations")
+    .select(
+      "contacts(display_name, name, phone_number, avatar_storage_path, is_anonymized), attendance_teams(name)",
+    )
+    .eq("id", conversationId)
+    .eq("organization_id", row.organization_id)
+    .maybeSingle();
+  const conversa = data as {
+    contacts?: {
       display_name?: string | null;
       name?: string | null;
       phone_number?: string | null;
       avatar_storage_path?: string | null;
       is_anonymized?: boolean | null;
     } | null;
-    // A cadeia CANÔNICA, e não a de dois campos remontada aqui: aquela deixava
-    // passar o identificador técnico do WhatsApp — a notificação chegaria à tela
-    // de bloqueio do celular escrita "Contato 543134@lid". `rotuloDoContato`
-    // recusa identificador, cai para o telefone formatado, e só então desiste.
-    //
-    // (A varredura de `rotulo-do-contato.test.ts` lê o arquivo INTEIRO, comentário
-    // incluído — por isso a cadeia proibida não é escrita nem aqui em prosa.)
-    //
-    // `SEM_NOME` volta a `null` de propósito: o payload já tem um desfecho
-    // melhor para "não sei o nome" (`"Nova mensagem"`, em push_payload.ts), e
-    // trocá-lo por "Sem nome" pioraria o título sem ninguém pedir.
-    const rotulo = rotuloDoContato(c);
-    contactName = rotulo === SEM_NOME ? null : rotulo;
-    if (c?.avatar_storage_path && !c.is_anonymized) {
-      const { data: signed } = await admin.storage
-        .from("whatsapp-media")
-        .createSignedUrl(c.avatar_storage_path, 300);
-      icon = signed?.signedUrl ?? null;
-    }
+    attendance_teams?: { name?: string | null } | null;
+  } | null;
+  const c = conversa?.contacts ?? null;
+  // A cadeia CANÔNICA (`rotuloDoContato`, via `nomeDoRemetente`), e não uma
+  // remontada aqui: ela recusa o identificador técnico do WhatsApp — sem isso a
+  // notificação chegaria à tela de bloqueio escrita com o id da conta — e cai
+  // para o telefone formatado antes de desistir.
+  const nome = c ? nomeDoRemetente(c) : null;
+  const contactName = nome === TITULO_SEM_CONTATO ? null : nome;
+  const teamName = conversa?.attendance_teams?.name ?? null;
+  let icon: string | null = null;
+  if (c?.avatar_storage_path && !c.is_anonymized) {
+    const { data: signed } = await admin.storage
+      .from("whatsapp-media")
+      .createSignedUrl(c.avatar_storage_path, 300);
+    icon = signed?.signedUrl ?? null;
   }
   const payload = montarPayloadDeInbound({
     brand: marca.nome,
     conversationId,
     preview: body,
     contactName,
+    teamName,
     icon,
   });
   let sent = 0;

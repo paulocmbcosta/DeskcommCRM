@@ -25,6 +25,27 @@ describe("entregarAviso", () => {
     expect(emitNotification).toHaveBeenCalledTimes(1);
   });
 
+  it("quem desenha o próprio aviso na tela substitui o toast padrão, e o push segue", () => {
+    const mostrarNaTela = vi.fn();
+    entregarAviso({
+      category: "message",
+      kind: "message_inbound",
+      title: "Maria · Suporte",
+      body: "oi",
+      mostrarNaTela,
+    });
+    expect(mostrarNaTela).toHaveBeenCalledTimes(1);
+    expect(toast).not.toHaveBeenCalled();
+    expect(emitNotification).toHaveBeenCalledWith(expect.objectContaining({ title: "Maria · Suporte" }));
+  });
+
+  it("com o canal da tela desligado, o aviso próprio também não aparece", () => {
+    gravarCanal("message", "in_app", false);
+    const mostrarNaTela = vi.fn();
+    entregarAviso({ category: "message", kind: "message_inbound", title: "x", body: "y", mostrarNaTela });
+    expect(mostrarNaTela).not.toHaveBeenCalled();
+  });
+
   it("omite push quando o canal está desligado", () => {
     gravarCanal("lead_won", "push", false);
     entregarAviso({
