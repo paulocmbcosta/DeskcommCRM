@@ -30,6 +30,15 @@ describe("push_payload", () => {
     expect(p.title).toBe("Maria");
   });
 
+  it("põe o time no título, colado ao nome — é o que o olho lê primeiro", () => {
+    const base = { brand: "Clínica", conversationId: "c1", preview: "olá" };
+    expect(montarPayloadDeInbound({ ...base, contactName: "Maria", teamName: "Suporte" }).title).toBe(
+      "Maria · Suporte",
+    );
+    expect(montarPayloadDeInbound({ ...base, teamName: "Suporte" }).title).toBe("Nova mensagem · Suporte");
+    expect(montarPayloadDeInbound({ ...base, contactName: "Maria", teamName: "  " }).title).toBe("Maria");
+  });
+
   it("só mostra bandeja via push quando nenhum cliente está visível", () => {
     expect(pushDeveMostrarBandeja(0)).toBe(true);
     expect(pushDeveMostrarBandeja(1)).toBe(false);

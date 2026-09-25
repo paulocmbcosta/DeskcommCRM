@@ -662,6 +662,7 @@ jobs:
         inbox-quem-manda.spec.ts
         inbox-protocolo-e-historico.spec.ts
         inbox-fila-e-termometro.spec.ts
+        aviso-de-mensagem-diz-de-quem-e.spec.ts
         pausa-do-atendente.spec.ts
         inbox-rotulo-de-origem.spec.ts
         troca-de-organizacao-tem-volta.spec.ts

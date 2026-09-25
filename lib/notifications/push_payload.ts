@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { TITULO_SEM_CONTATO, tituloParaBandeja } from "./aviso-de-mensagem";
+
 export const PUSH_PAYLOAD_MAX = 140;
 
 export const pushPayloadSchema = z.object({
@@ -17,9 +19,11 @@ export function montarPayloadDeInbound(input: {
   conversationId: string | null;
   preview: string;
   contactName?: string | null;
+  /** O time da conversa: vai no título, colado ao nome ("Maria · Suporte"). */
+  teamName?: string | null;
   icon?: string | null;
 }): PushPayload {
-  const title = input.contactName?.trim() || "Nova mensagem";
+  const title = tituloParaBandeja(input.contactName?.trim() || TITULO_SEM_CONTATO, input.teamName);
   void input.brand;
   const body = truncar(input.preview);
   const tag = input.conversationId ? `msg:${input.conversationId}` : "msg";

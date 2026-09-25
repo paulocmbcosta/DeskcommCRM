@@ -1,11 +1,27 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
 
+import {
+  DURACAO_DO_TOAST_DE_MENSAGEM_MS,
+  mostrarToastDeMensagem,
+} from "@/components/notifications/ToastDeMensagem";
 import { useActiveOrg, useUser } from "@/hooks/auth/AuthProvider";
 import { getOpenConversationId } from "@/hooks/notifications/OpenConversationContext";
 import { useRealtimeChannel } from "@/hooks/realtime/useRealtimeChannel";
-import { avatarUrlServivel } from "@/lib/notifications/avatar_url";
+import {
+  criarCacheComValidade,
+  linhaDeContexto,
+  nomeDoRemetente,
+  previaDaMensagem,
+  rotuloDaRajada,
+  tituloParaBandeja,
+  VALIDADE_DO_CONTEXTO_MS,
+  type ContextoDaConversa,
+} from "@/lib/notifications/aviso-de-mensagem";
+import { traduzir } from "@/lib/i18n/dicionario";
+import { idiomaAtual } from "@/lib/i18n/IdiomaProvider";
 import { entregarAviso } from "@/lib/notifications/deliver";
 import {
   escolhaDaSessaoAtual,
@@ -14,7 +30,6 @@ import {
 } from "@/lib/notifications/escopo-de-aviso";
 import { shouldNotifyInbound } from "@/lib/notifications/policy";
 import { syncPushSubscription } from "@/lib/notifications/push_client";
-import { createClient } from "@/lib/supabase/browser";
 
 function tabFocused(): boolean {
   if (typeof document === "undefined") return false;
@@ -36,56 +51,77 @@ function rowFromRealtime(payload: unknown): Record<string, unknown> | null {
   return raw as Record<string, unknown>;
 }
 
-function previewFromMessage(row: { type?: unknown; body?: unknown }): string {
-  if (row.type !== "text") return "Mídia";
-  const body = typeof row.body === "string" ? row.body.trim() : "";
-  return body || "Nova mensagem";
+interface ContextoComFoto extends ContextoDaConversa {
+  foto: string | null;
 }
 
-async function contactNotifyBits(contactId: string): Promise<{ title: string; icon?: string }> {
-  const supabase = createClient();
-  const { data } = await supabase
-    .from("contacts")
-    .select("display_name, name")
-    .eq("id", contactId)
-    .maybeSingle();
-  const row = data as { display_name?: string | null; name?: string | null } | null;
-  const title = (row?.display_name || row?.name || "Nova mensagem").trim() || "Nova mensagem";
-  let icon: string | undefined;
+// Por aba, em memória. Guarda a PROMESSA, não o resultado: "oi" e "tudo bem?"
+// com 50 ms de diferença esperam a mesma chamada, em vez de fazerem duas. E
+// guarda a falha (`null`) pelo mesmo prazo — com o banco lento, repetir a
+// chamada a cada mensagem, em cada aba aberta, é piorar a lentidão.
+const contextoPorConversa = criarCacheComValidade<Promise<ContextoComFoto | null>>(
+  VALIDADE_DO_CONTEXTO_MS,
+);
+const rajadaPorConversa = new Map<string, { contagem: number; ultima: number }>();
+/** Igual à vida do cartão: contar mensagem de um cartão que já sumiu confunde. */
+const JANELA_DA_RAJADA_MS = DURACAO_DO_TOAST_DE_MENSAGEM_MS;
+
+/**
+ * Tudo que o aviso precisa, numa chamada: o contato, o time, quem está no
+ * comando e a foto já assinada.
+ *
+ * Pela ROTA, e não pelo supabase-js do navegador: o cookie de sessão é
+ * httpOnly, e a consulta direta saía anônima — a RLS devolvia vazio, o título
+ * caía para "Nova mensagem" e, com "só as minhas", o aviso nem aparecia. O
+ * porquê inteiro está no cabeçalho de `app/api/v1/conversations/[id]/aviso`.
+ */
+function contextoDaConversa(conversationId: string): Promise<ContextoComFoto | null> {
+  const guardado = contextoPorConversa.ler(conversationId);
+  if (guardado) return guardado;
+  const pedido = buscarContexto(conversationId);
+  contextoPorConversa.gravar(conversationId, pedido);
+  return pedido;
+}
+
+async function buscarContexto(conversationId: string): Promise<ContextoComFoto | null> {
   try {
-    const r = await fetch(`/api/v1/contacts/${contactId}/avatar`, {
-      credentials: "include",
-      redirect: "follow",
-    });
-    icon = r.ok ? avatarUrlServivel(r.url, window.location.origin) : undefined;
+    const r = await fetch(`/api/v1/conversations/${conversationId}/aviso`, { credentials: "include" });
+    if (!r.ok) return null;
+    const corpo = (await r.json()) as {
+      data?: {
+        contato?: ContextoDaConversa["contato"];
+        time?: string | null;
+        comando?: ContextoDaConversa["comando"];
+        foto?: string | null;
+      };
+    };
+    const d = corpo?.data;
+    if (!d) return null;
+    return {
+      contato: d.contato ?? null,
+      time: d.time ?? null,
+      comando: d.comando ?? null,
+      foto: d.foto ?? null,
+    };
   } catch {
-    // sem foto: badge da marca
+    return null;
   }
-  return { title, icon };
 }
 
-/** A conversa da mensagem: de quem é, e o contato (quando a linha não trouxe). */
-async function conversaDaMensagem(
-  conversationId: string,
-): Promise<{ contactId: string | null; assignedTo: string | null } | null> {
-  const supabase = createClient();
-  const { data } = await supabase
-    .from("conversations")
-    .select("contact_id, assigned_to_user_id")
-    .eq("id", conversationId)
-    .maybeSingle();
-  const c = data as { contact_id?: string | null; assigned_to_user_id?: string | null } | null;
-  if (!c) return null;
-  return {
-    contactId: typeof c.contact_id === "string" ? c.contact_id : null,
-    assignedTo: typeof c.assigned_to_user_id === "string" ? c.assigned_to_user_id : null,
-  };
+function contarRajada(conversationId: string, agora = Date.now()): number {
+  const r = rajadaPorConversa.get(conversationId);
+  if (!r && rajadaPorConversa.size >= 200) rajadaPorConversa.clear();
+  const contagem = r && agora - r.ultima < JANELA_DA_RAJADA_MS ? r.contagem + 1 : 1;
+  rajadaPorConversa.set(conversationId, { contagem, ultima: agora });
+  return contagem;
 }
 
 export function useInboundMessageAlerts(): void {
   const activeOrg = useActiveOrg();
   const orgId = activeOrg?.orgId ?? null;
   const userId = useUser().id;
+  const router = useRouter();
+  const abrir = useCallback((href: string) => router.push(href), [router]);
   // O que a RLS deixa chegar aqui é tudo que a pessoa ENXERGA; o escopo decide
   // de quais delas ela quer ser avisada (0281 — atendente: só as suas).
   const escopo = activeOrg
@@ -115,32 +151,39 @@ export function useInboundMessageAlerts(): void {
     }
     void (async () => {
       const escopoAgora = escolhaDaSessaoAtual() ?? escopo;
-      const contatoDaLinha = typeof row.contact_id === "string" ? row.contact_id : null;
-      // Só relê a conversa quando precisa: para saber de quem ela é ("só as
-      // minhas") ou o contato que a linha não trouxe. Com "todas que vejo" e o
-      // contato na linha, nenhuma consulta a mais por mensagem — cada navegador
-      // aberto faria a sua.
-      let contactId = contatoDaLinha;
-      if (escopoAgora === "mine" || !contatoDaLinha) {
-        const conversa = await conversaDaMensagem(conversationId as string);
-        if (!conversa) return;
-        if (!mensagemMereceAviso(escopoAgora, { assignedTo: conversa.assignedTo, userId })) return;
-        contactId = contatoDaLinha ?? conversa.contactId;
-      }
-      const bits = contactId
-        ? await contactNotifyBits(contactId)
-        : { title: "Nova mensagem" as const, icon: undefined };
+      const ctx = await contextoDaConversa(conversationId as string);
+      if (!ctx) return;
+      const assignedTo = ctx.comando?.quem === "humano" ? ctx.comando.userId : null;
+      if (!mensagemMereceAviso(escopoAgora, { assignedTo, userId })) return;
+      const icon = ctx.foto ?? undefined;
+      const idioma = idiomaAtual();
+      const t = (texto: string) => traduzir(texto, idioma);
+      const nome = nomeDoRemetente(ctx.contato, t);
+      const previa = previaDaMensagem(row.type, row.body, t);
+      const contexto = linhaDeContexto(ctx, userId, t);
+      const rajada = rotuloDaRajada(contarRajada(conversationId as string), t);
+      const href = `/app/inbox?id=${conversationId}`;
       entregarAviso({
         category: "message",
         kind: "message_inbound",
-        title: bits.title,
-        body: previewFromMessage(row),
+        title: tituloParaBandeja(nome, ctx.time),
+        body: previa,
         tag: conversationId ?? undefined,
-        href: conversationId ? `/app/inbox?id=${conversationId}` : undefined,
-        icon: bits.icon,
+        href,
+        icon,
+        mostrarNaTela: () =>
+          mostrarToastDeMensagem({
+            id: `msg:${conversationId}`,
+            nome,
+            contexto,
+            previa,
+            rajada,
+            foto: icon,
+            aoAbrir: () => abrir(href),
+          }),
       });
     })();
-  }, [escopo, userId]);
+  }, [escopo, userId, abrir]);
 
   useRealtimeChannel({
     name: orgId ? `alerts-messages-${orgId}` : "alerts-messages-disabled",

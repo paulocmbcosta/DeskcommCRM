@@ -14,6 +14,11 @@ export interface EntregarAvisoInput {
   tag?: string;
   href?: string;
   icon?: string;
+  /**
+   * Desenha o aviso da tela por conta própria (o de mensagem tem foto, time e
+   * botão de abrir). Sem isto, o toast padrão de título + descrição.
+   */
+  mostrarNaTela?: () => void;
 }
 
 export function entregarAviso(input: EntregarAvisoInput): void {
@@ -25,7 +30,8 @@ export function entregarAviso(input: EntregarAvisoInput): void {
   const body = traduzir(input.body, idioma);
 
   if (canalLigado(input.category, "in_app")) {
-    toast(title, { description: body });
+    if (input.mostrarNaTela) input.mostrarNaTela();
+    else toast(title, { description: body });
   }
   if (canalLigado(input.category, "push")) {
     emitNotification({
