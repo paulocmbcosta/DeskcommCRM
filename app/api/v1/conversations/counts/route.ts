@@ -22,6 +22,7 @@ import { createClient } from "@/lib/supabase/server";
 import { aplicarPredicadoDeTime, predicadoDeTime, type ConsultaFiltravel } from "../_filtro-de-time";
 import { filtroDaBuscaDeConversas } from "../_handler";
 import { aplicarNaFilaDoTime } from "../_na-fila";
+import { LIMITE_INSATISFEITO } from "@/lib/inbox/sentimento";
 import { predicadoDaBuscaDosFechados } from "@/app/api/v1/atendimentos/_handler";
 
 export const dynamic = "force-dynamic";
@@ -150,8 +151,14 @@ export async function GET(req: NextRequest): Promise<Response> {
   // Minhas (fila de time é conversa SEM dono) e encolhia os das outras abas,
   // cujas listas ignoram o filtro — badge contando o que a aba não mostra.
   const soNaFila = sp.get("na_fila") === "true";
-  const daTodas = <Q extends Parameters<typeof aplicarNaFilaDoTime>[0]>(q: Q): Q =>
-    soNaFila ? aplicarNaFilaDoTime(q, agora) : q;
+  // "Insatisfeitos" é botão de Todas E de Minhas: vale para os dois números e
+  // para os chips de time (que são de Todas), pela mesma régua da lista.
+  const soInsatisfeitos = sp.get("insatisfeitos") === "true";
+  const insatisfeitos = <Q extends { lt(coluna: string, valor: number): Q }>(q: Q): Q =>
+    soInsatisfeitos ? q.lt("sentimento_atual", LIMITE_INSATISFEITO) : q;
+  const daTodas = <Q extends Parameters<typeof aplicarNaFilaDoTime>[0] & { lt(coluna: string, valor: number): Q }>(
+    q: Q,
+  ): Q => insatisfeitos(soNaFila ? aplicarNaFilaDoTime(q, agora) : q);
   const countExact = (comTime = true) => {
     let q = supabase
       .from("conversations")
@@ -238,9 +245,11 @@ export async function GET(req: NextRequest): Promise<Response> {
     // A aba "Automático". Antes ela pedia `status='ai_handling'`, escrito por UM
     // caminho só em produção — por isso vivia quase vazia.
     countExact().eq("comando_da_conversa", "automatico"),
-    countExact()
-      .eq("assigned_to_user_id", user.id)
-      .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`),
+    insatisfeitos(
+      countExact()
+        .eq("assigned_to_user_id", user.id)
+        .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`),
+    ),
     daTodas(countExact().not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)),
     // A aba "Fechadas" existia SEM número nenhum. Num inbox antigo, é o número
     // que diz o tamanho do arquivo — e a sua ausência fazia a aba parecer um

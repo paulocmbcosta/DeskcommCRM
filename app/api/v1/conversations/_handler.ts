@@ -13,6 +13,7 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { CONVERSATION_TERMINAL_STATUSES } from "@/lib/schemas";
 
 import { aplicarNaFilaDoTime } from "./_na-fila";
+import { LIMITE_INSATISFEITO } from "@/lib/inbox/sentimento";
 import type {
   ListConversationsQuery,
   PatchConversationInput,
@@ -131,7 +132,7 @@ const SELECT_COLS = `
   last_outbound_at, last_message_at, last_message_preview,
   unread_count_for_assignee, is_group, group_chat_id, tags, metadata,
   snooze_until, created_at, updated_at, team_id, protocol,
-  bot_silenced_until, last_handoff_at, espera_desde,
+  bot_silenced_until, last_handoff_at, espera_desde, sentimento_atual, sentimento_minimo,
   comando_da_conversa,
   contacts:contact_id (id, display_name, name, phone_number, email, is_anonymized, tags, is_blocked, avatar_storage_path, force_human),
   channel_sessions:channel_session_id (phone_number, display_name, provider)
@@ -281,6 +282,10 @@ export async function listConversationsHandler(
   // Na fila do time: mesma régua da contagem do chip (`_na-fila.ts`). Compõe
   // sobre `query`, que já tem o `organization_id` — a única barreira aqui.
   if (q.na_fila) query = aplicarNaFilaDoTime(query, new Date());
+  // "Insatisfeitos" (migration 0280): nota atual abaixo da régua da tela
+  // (`lib/inbox/sentimento.ts`). Encerrar zera a nota, então conversa fechada
+  // nunca casa — e o `exclude_finished` das abas cobre a resposta em cache.
+  if (q.insatisfeitos) query = query.lt("sentimento_atual", LIMITE_INSATISFEITO);
 
   if (q.assigned_to === "me") {
     if (ctx.actor.type !== "user") {

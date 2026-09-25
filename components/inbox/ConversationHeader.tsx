@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge, badgeVariants } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { JanelaSelo } from "@/components/inbox/JanelaSelo";
+import { SeloDeSentimento } from "@/components/inbox/SeloDeSentimento";
 import { Phone, ArrowRight } from "@/lib/ui/icons";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
@@ -195,6 +196,9 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
             provider={conversation.channel_sessions?.provider ?? null}
             lastInboundAt={conversation.last_inbound_at}
           />
+          {/* O TOM DO CLIENTE — quem pega a conversa sabe, antes de ler, se ele
+              está irritado (migration 0280). */}
+          <SeloDeSentimento conversa={conversation} />
           {/* Sem esta marca, a conversa em que o robô está calado tem exatamente
               a mesma cara de uma conversa normal — e ninguém entende por que as
               respostas automáticas pararam.

@@ -1,5 +1,6 @@
 "use client";
 
+import { faixaDoSentimento, formatarNota, pedeAtencao, ROTULO_DA_FAIXA } from "@/lib/inbox/sentimento";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { format } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
@@ -115,6 +116,9 @@ export function MessageBubble({
     return null;
   })();
   const reacoes = reacoesDe(message.metadata);
+  const notaLida = (message.metadata as Record<string, unknown> | null)?.["sentiment_score"];
+  const notaDaMensagem = typeof notaLida === "number" ? notaLida : null;
+  const faixaDaMensagem = faixaDoSentimento(notaDaMensagem);
   // Só reage a quem existe no WhatsApp: sem `external_id` a mensagem não saiu,
   // e apagada não tem mais o que reagir.
   const reagirAqui =
@@ -279,6 +283,20 @@ export function MessageBubble({
               // ou endereço é lido como se sempre tivesse dito aquilo — e a
               // divergência só aparece quando alguém cobra o que não foi.
               <span title={t("O autor editou esta mensagem")}>{t("editada")}</span>
+            )}
+            {/* O TOM desta mensagem (migration 0280): só nas do cliente que pedem
+                atenção — um ponto ao lado da hora, para achar onde ele se irritou
+                sem reler a conversa inteira. */}
+            {!isOutbound && pedeAtencao(faixaDaMensagem) && notaDaMensagem !== null && (
+              <span
+                data-testid="tom-da-mensagem"
+                data-faixa={faixaDaMensagem ?? undefined}
+                title={`${t("Tom desta mensagem")}: ${t(ROTULO_DA_FAIXA[faixaDaMensagem!])} (${formatarNota(notaDaMensagem)})`}
+                className={cn(
+                  "inline-block h-2 w-2 rounded-full",
+                  faixaDaMensagem === "critico" ? "bg-error" : "bg-alert",
+                )}
+              />
             )}
             <span>{time}</span>
             {showCitationButton && <CitationButton citations={citations} messageId={message.id} />}

@@ -43,6 +43,8 @@ export interface InboxFiltersValue {
   na_fila?: boolean;
   /** `espera` = quem está há mais tempo sem resposta primeiro. */
   ordem?: "espera";
+  /** Só as de cliente insatisfeito ou crítico (sentimento). Todas e Minhas. */
+  insatisfeitos?: boolean;
 }
 
 /** "Os times de quem está olhando, mais a fila geral." */

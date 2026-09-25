@@ -5,7 +5,7 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import type { Locale } from "date-fns";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
-import { Clock, Globe, HourglassMedium, Phone, Robot, Siren, Thermometer, UsersThree } from "@/lib/ui/icons";
+import { Clock, Globe, HourglassMedium, Phone, Robot, Siren, SmileySad, Thermometer, UsersThree } from "@/lib/ui/icons";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { OwnerBadge } from "@/components/kanban/OwnerBadge";
@@ -16,6 +16,7 @@ import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
 import { esperaDaConversa, estaNaFilaDoTime, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
 import type { ReguaDeEspera } from "@/lib/schemas/settings";
+import { formatarNota, pedeAtencao, ROTULO_DA_FAIXA, sentimentoDaConversa } from "@/lib/inbox/sentimento";
 import { canalPorExtenso as canalInteiro, rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 
 interface Props {
@@ -217,6 +218,11 @@ export function ConversationListItem({
     relogio,
     regua,
   );
+  // O TOM DO CLIENTE (migration 0280): o card só fala quando pede atenção —
+  // insatisfeito ou crítico. Satisfeito e neutro ficam no topo da conversa, não
+  // aqui: selo em toda linha ensinaria o olho a ignorar a faixa.
+  const sentimento = sentimentoDaConversa(conversation);
+  const mostrarSentimento = sentimento !== null && pedeAtencao(sentimento.faixa);
   // NA FILA DO TIME: foi para um setor e ninguém pegou (`lib/inbox/espera.ts`,
   // mesma régua do filtro "Só na fila" e do número vermelho do chip).
   const naFilaDoTime = estaNaFilaDoTime(
@@ -342,7 +348,7 @@ export function ConversationListItem({
             há dez minutos precisa gritar tanto quanto a que ninguém pegou.
             Ao lado, o selo "Na fila · <time>": foi para um setor e ninguém
             pegou — o gargalo, visível sem abrir nada. */}
-        {(espera || queuePosition !== undefined || naFilaDoTime) && (
+        {(espera || queuePosition !== undefined || naFilaDoTime || mostrarSentimento) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-medium">
             {queuePosition !== undefined && (
               <span
@@ -373,6 +379,20 @@ export function ConversationListItem({
                 <span className="truncate">
                   {espera ? `${t("Aguardando há")} ${formatarEspera(espera.ms, t)}` : t("Aguardando")}
                 </span>
+              </span>
+            )}
+            {mostrarSentimento && sentimento && (
+              <span
+                className={cn(
+                  "inline-flex min-w-0 items-center gap-1 rounded-full px-1.5 py-0.5",
+                  sentimento.faixa === "critico" ? "bg-error text-bg" : "bg-alert/25 text-alert-fg",
+                )}
+                data-testid="selo-sentimento"
+                data-faixa={sentimento.faixa}
+                title={`${t("Tom do cliente")}: ${t(ROTULO_DA_FAIXA[sentimento.faixa])} (${formatarNota(sentimento.atual)})`}
+              >
+                <SmileySad size={12} weight="fill" aria-hidden />
+                <span className="truncate">{t(ROTULO_DA_FAIXA[sentimento.faixa])}</span>
               </span>
             )}
             {naFilaDoTime && (

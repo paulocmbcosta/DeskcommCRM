@@ -485,6 +485,11 @@ export const listConversationsQuerySchema = z.object({
    * Ausente = a ordem da aba (atividade recente; na Fila, tempo de espera).
    */
   ordem: z.enum(["espera"]).optional(),
+  /** Só as de cliente insatisfeito ou crítico (sentimento, migration 0280). Mesma forma de `na_fila`. */
+  insatisfeitos: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .transform((v) => v === true || v === "true" || undefined)
+    .optional(),
   /**
    * O termo de busca. A régua inteira vive em `lib/inbox/termo-de-busca.ts`, e a
    * tela lê a MESMA — repetir aqui faria os dois divergirem, e a divergência

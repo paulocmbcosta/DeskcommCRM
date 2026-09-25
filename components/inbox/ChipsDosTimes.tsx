@@ -22,7 +22,7 @@
 import { useT } from "@/hooks/i18n/useT";
 import type { ConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import type { FilaDoTime, MotivoDaFila } from "@/lib/inbox/fila-do-time";
-import { HourglassMedium, SortAscending } from "@/lib/ui/icons";
+import { HourglassMedium, SmileySad, SortAscending } from "@/lib/ui/icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -159,6 +159,8 @@ export function AlternanciasDaLista({
   onSoNaFila,
   porEspera,
   onPorEspera,
+  soInsatisfeitos = false,
+  onSoInsatisfeitos,
 }: {
   /** `false` em Minhas: a fila do time é pergunta de Todas. */
   mostrarFila: boolean;
@@ -167,10 +169,13 @@ export function AlternanciasDaLista({
   onSoNaFila: (ligado: boolean) => void;
   porEspera: boolean;
   onPorEspera: (ligado: boolean) => void;
+  /** "Insatisfeitos" — cliente insatisfeito ou crítico pelo sentimento (migration 0280). */
+  soInsatisfeitos?: boolean;
+  onSoInsatisfeitos?: (ligado: boolean) => void;
 }) {
   const t = useT();
   return (
-    <div className="flex items-center gap-1" data-testid="alternancias-da-lista">
+    <div className="flex flex-wrap items-center justify-end gap-1" data-testid="alternancias-da-lista">
       {mostrarFila && (
         <button
           type="button"
@@ -199,6 +204,22 @@ export function AlternanciasDaLista({
         <SortAscending size={12} weight="regular" aria-hidden />
         {t("Espera")}
       </button>
+      {onSoInsatisfeitos && (
+        <button
+          type="button"
+          className={cn(
+            ALTERNANCIA,
+            soInsatisfeitos ? "border-alert bg-alert/25 text-alert-fg" : CHIP_DESLIGADO,
+          )}
+          aria-pressed={soInsatisfeitos}
+          aria-label={t("Insatisfeitos")}
+          onClick={() => onSoInsatisfeitos(!soInsatisfeitos)}
+          title={t("Clientes insatisfeitos ou em estado crítico, pelo tom das mensagens")}
+        >
+          <SmileySad size={12} weight={soInsatisfeitos ? "fill" : "regular"} aria-hidden />
+          {t("Insatisfeitos")}
+        </button>
+      )}
     </div>
   );
 }

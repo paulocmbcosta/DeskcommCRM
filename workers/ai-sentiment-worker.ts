@@ -100,7 +100,7 @@ export async function processSentiment(event: EventRow): Promise<SentimentResult
     // ── Load message (programmatic org filter) ────────────────────────────
     const { data: message, error: msgErr } = await admin
       .from("messages")
-      .select("id, body, direction, conversation_id, organization_id, metadata")
+      .select("id, body, direction, conversation_id, organization_id, metadata, sent_at, created_at")
       .eq("id", messageId)
       .eq("organization_id", event.organization_id)
       .maybeSingle();
@@ -293,6 +293,31 @@ export async function processSentiment(event: EventRow): Promise<SentimentResult
         message_id: messageId,
         error: updateErr.message,
       });
+    }
+
+    // A NOTA NA CONVERSA (migration 0280): é o que a equipe vê — o selo no topo da
+    // conversa, no card e o filtro "Insatisfeitos". A função guarda a última e a
+    // pior do atendimento, ignora nota de atendimento anterior e de conversa
+    // encerrada. Falha aqui não derruba a classificação (a nota da mensagem já
+    // foi gravada acima), mas é `warn`: sem ela a tela fica muda.
+    const conversaDaNota = conversationId ?? (message.conversation_id as string | null);
+    if (conversaDaNota) {
+      const quando =
+        (message as { sent_at?: string | null }).sent_at ??
+        (message as { created_at?: string | null }).created_at ??
+        new Date().toISOString();
+      const { error: convErr } = await admin.rpc("fn_registrar_sentimento_da_conversa" as never, {
+        p_org: event.organization_id,
+        p_conversation: conversaDaNota,
+        p_score: result.sentiment_score,
+        p_em: quando,
+      } as never);
+      if (convErr) {
+        console.warn("[ai-sentiment-worker] sentimento da conversa não gravado", {
+          message_id: messageId,
+          error: convErr.message,
+        });
+      }
     }
 
     // ── Log invocation (fire-and-forget) ──────────────────────────────────

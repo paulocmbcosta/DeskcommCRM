@@ -72,6 +72,13 @@ export interface Conversation {
    * razão de sempre: resposta de versão anterior ainda em cache não a tem.
    */
   espera_desde?: string | null;
+  /**
+   * Sentimento do cliente no atendimento em curso (migration 0280): a nota
+   * (0..1) da última mensagem dele e a pior do atendimento. `null` = ainda sem
+   * nota. Zerado ao encerrar. Régua de faixas em `lib/inbox/sentimento.ts`.
+   */
+  sentimento_atual?: number | null;
+  sentimento_minimo?: number | null;
   created_at: string;
   updated_at: string;
 }

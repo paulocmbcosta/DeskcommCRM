@@ -111,3 +111,23 @@ describe("as alternâncias da lista, na linha do título", () => {
     expect(screen.getByRole("button", { name: "Mais tempo esperando" })).toBeInTheDocument();
   });
 });
+
+describe("o botão Insatisfeitos", () => {
+  it("aparece quando a tela o liga e avisa o pai", async () => {
+    const onSoInsatisfeitos = vi.fn();
+    render(
+      <AlternanciasDaLista
+        mostrarFila
+        soNaFila={false}
+        onSoNaFila={vi.fn()}
+        porEspera={false}
+        onPorEspera={vi.fn()}
+        soInsatisfeitos={false}
+        onSoInsatisfeitos={onSoInsatisfeitos}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Insatisfeitos" }));
+    expect(onSoInsatisfeitos).toHaveBeenCalledWith(true);
+  });
+});
+

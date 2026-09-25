@@ -88,6 +88,13 @@ export const agentConfigSchema = z.object({
   rag_top_k: z.number().int().min(1).max(20).default(5),
   rag_similarity_threshold: z.number().min(0).max(1).default(0.4),
   confidence_threshold: z.number().min(0).max(1).default(0.6),
+  /**
+   * Abaixo desta nota de sentimento (0..1) a mensagem do cliente é tratada como
+   * MUITO insatisfeita: entra na linha do tempo da conversa e o agente é orientado
+   * a acolher e passar para o setor responsável (`sentimento-do-turno.ts`).
+   * Ausente = 0,3 (o padrão do worker). Editável em "Operação do agente".
+   */
+  sentiment_threshold: z.number().min(0).max(1).optional(),
 });
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
