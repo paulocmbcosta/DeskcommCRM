@@ -8,6 +8,26 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.44.0] — 2026-09-25
+
+### Adicionado
+
+- **O tom do cliente aparece na conversa, no card e num filtro, e a IA passa a conversa irritada para o setor certo** - **Tom do cliente na tela:** o sistema já dava uma nota ao tom de cada mensagem do cliente
+    (de 0 a 1), mas ninguém via. Agora o topo da conversa mostra a faixa e a nota, por exemplo
+    "Crítico · 0,05", com o pior momento do atendimento na dica. As faixas são Satisfeito,
+    Neutro, Insatisfeito e Crítico.
+  - **Card das filas:** mostra "Insatisfeito" ou "Crítico" quando o cliente pede atenção. As
+    mensagens do cliente com nota baixa ganham um ponto colorido ao lado da hora.
+  - **Filtro:** o botão **Insatisfeitos** (em Todas e Minhas) mostra só essas conversas.
+  - **IA e sentimento baixo:** o tom baixo **não transfere mais sozinho** para a fila sem time
+    com a frase genérica. O momento entra na linha do tempo da conversa, e a IA recebe o
+    aviso, acolhe o cliente e passa para o **setor que cuida do assunto**.
+  - **Novo ajuste por agente:** em Agentes › Operação do agente, o campo "Cliente muito
+    insatisfeito abaixo da nota" define esse limite (padrão 0,30).
+
+  A migration 0280 é aplicada sozinha pelo `update.sh`. As notas aparecem a partir da próxima
+  mensagem de cada cliente.
+
 ## [1.43.0] — 2026-09-25
 
 ### Adicionado
@@ -5490,7 +5510,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.43.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.44.0...HEAD
+[1.44.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.1...v1.43.0
 [1.42.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.0...v1.42.1
 [1.42.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.41.3...v1.42.0
