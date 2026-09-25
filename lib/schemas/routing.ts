@@ -40,7 +40,13 @@ export type RoutingConfig = z.infer<typeof routingConfigSchema>;
  * aqui só se declara a validação do input externo. A `satisfies` abaixo é o que
  * impede as duas listas de divergirem sem ninguém notar.
  */
-export const VISIBILITY_MODES = ["all", "own_and_unassigned", "own"] as const;
+export const VISIBILITY_MODES = [
+  "all",
+  "own_and_team",
+  "own_and_unassigned",
+  "own_and_team_queue",
+  "own",
+] as const;
 export type VisibilityModeInput = (typeof VISIBILITY_MODES)[number];
 
 /**

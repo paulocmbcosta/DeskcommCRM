@@ -67,6 +67,13 @@ const ANON_PERMITIDO: readonly Excecao[] = [];
  */
 const AUTHENTICATED_PERMITIDO: readonly Excecao[] = [
   {
+    fn: "fn_definir_escopo_de_aviso(uuid,text)",
+    razao:
+      "PATCH app/api/v1/notifications/escopo/route.ts usa createClient da sessão: a " +
+      "função grava SÓ a linha de auth.uid() (sem parâmetro de usuário), e com service " +
+      "role auth.uid() é nulo e nada seria gravado (migration 0281).",
+  },
+  {
     fn: "fn_reply_action(uuid,uuid,text,text,text,text)",
     razao:
       "POST app/api/v1/ai/replies/[id]/route.ts usa createClient da sessão. " +

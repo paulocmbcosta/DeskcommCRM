@@ -3,6 +3,7 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { Card } from "@/components/ui/card";
 import { vapidPronto } from "@/lib/notifications/vapid";
 import { NotificationPrefsClient } from "./_client";
+import { EscopoDoAvisoDeMensagem } from "./_escopo";
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +92,8 @@ export default async function NotificationsPage() {
           </p>
         </Card>
       )}
+
+      <EscopoDoAvisoDeMensagem />
 
       <NotificationPrefsClient />
     </div>

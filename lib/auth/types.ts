@@ -60,7 +60,17 @@ export const ROTULO_DO_PAPEL: Record<Role, string> = {
  * Escopo de visualização de conversas por atendente (G4-01, spec 13 §3.5).
  * Só restringe o role `agent`; viewer/manager/admin seguem org-wide.
  */
-export type VisibilityMode = "all" | "own_and_unassigned" | "own";
+/**
+ * O que o papel `agent` enxerga (RLS em `fn_agent_sees_conversation`, 0281).
+ * Os dois `*_team*` usam `conversations.team_id`: a fila geral (sem time) fica
+ * só com gerente e administrador.
+ */
+export type VisibilityMode =
+  | "all"
+  | "own_and_team"
+  | "own_and_unassigned"
+  | "own_and_team_queue"
+  | "own";
 export const DEFAULT_VISIBILITY_MODE: VisibilityMode = "own_and_unassigned"; // G1-06a
 
 export interface UserOrgMembership {
@@ -147,6 +157,13 @@ export interface ActiveOrg {
    * de autorização — a RLS (fn_can_view_conversation) é quem garante o escopo.
    */
   visibility_mode?: VisibilityMode;
+  /**
+   * De quais conversas ESTA pessoa recebe aviso de mensagem, já resolvido para
+   * o padrão do papel (`lib/notifications/escopo-de-aviso.ts`, migration 0281).
+   * Só o layout de `/app` preenche; ausente, o aviso do navegador usa o padrão
+   * do papel. Não é autorização: o que chega já passou pela RLS.
+   */
+  aviso_de_mensagem?: "mine" | "all_visible";
   /**
    * A regra "cliente pela agenda" está ligada nesta organização
    * (`organizations.settings.crm.cliente_pela_agenda`, migration 0262)?

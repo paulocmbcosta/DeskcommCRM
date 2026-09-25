@@ -2,16 +2,65 @@ import type { EventHandler, EventRow, HandlerResult } from "@/lib/event-log/disp
 import { marcaDaSaida } from "@/lib/branding/saida";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { montarPayloadDeInbound, truncar } from "./push_payload";
-import { enviarPushAoUsuario, enviarPushDaOrg } from "./web_push";
+import { enviarPushAoUsuario } from "./web_push";
+import { logger } from "@/lib/logger";
 import { vapidPronto } from "./vapid";
 import type { PushPayload } from "./push_payload";
 import { rotuloDoContato, SEM_NOME } from "@/lib/contacts/rotulo-do-contato";
 
 export const WEB_PUSH_INBOUND_KEY = "web-push-inbound.v1";
 
+/**
+ * Quem recebe o push de uma mensagem nesta conversa — perguntado ao banco.
+ *
+ * Até a 0281 o push ia para TODA inscrição da organização: o atendente recebia
+ * na tela de bloqueio o texto de conversa que a RLS não o deixava abrir, e
+ * recebia de todas as outras. `fn_destinatarios_do_aviso_de_mensagem` aplica a
+ * MESMA régua da RLS (`fn_agent_sees_conversation`) e a escolha de cada pessoa
+ * (`user_organizations.message_alert_scope`, padrão "só as minhas" para
+ * atendente). Em erro, ninguém recebe: aviso a menos é melhor que vazamento.
+ */
+export async function destinatariosDoAviso(
+  organizationId: string,
+  conversationId: string,
+): Promise<string[] | null> {
+  const { data, error } = await createAdminClient().rpc(
+    "fn_destinatarios_do_aviso_de_mensagem" as never,
+    { p_org: organizationId, p_conversation: conversationId } as never,
+  );
+  if (error) {
+    logger.warn("push_destinatarios_falhou", { detail: error.message });
+    return null;
+  }
+  // `setof uuid` chega como lista de valores; aceita também a forma de objeto.
+  return ((data as unknown[] | null) ?? [])
+    .map((v) =>
+      typeof v === "string"
+        ? v
+        : v && typeof v === "object"
+          ? (Object.values(v as Record<string, unknown>)[0] as string | undefined)
+          : undefined,
+    )
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+}
+
 async function handleInbound(row: EventRow): Promise<HandlerResult> {
   const conversationId =
     (typeof row.payload.conversation_id === "string" ? row.payload.conversation_id : null) ?? null;
+  // Sem conversa não há dono nem escopo para medir — e mandar para a
+  // organização inteira é exatamente o defeito que a 0281 fechou.
+  if (!conversationId) {
+    return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "skipped", detail: "sem_conversa" };
+  }
+  const destinatarios = await destinatariosDoAviso(row.organization_id, conversationId);
+  // Erro ≠ ninguém: devolve `error` para o dispatcher tentar de novo, em vez de
+  // descartar o aviso de vez. Nunca cai para "manda para todo mundo".
+  if (destinatarios === null) {
+    return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "error", detail: "destinatarios_indisponiveis" };
+  }
+  if (destinatarios.length === 0) {
+    return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "skipped", detail: "sem_destinatario" };
+  }
   const previewRaw = row.payload.body_preview;
   const preview = typeof previewRaw === "string" && previewRaw.trim() ? previewRaw : "Nova mensagem";
   const type = typeof row.payload.type === "string" ? row.payload.type : "text";
@@ -63,7 +112,10 @@ async function handleInbound(row: EventRow): Promise<HandlerResult> {
     contactName,
     icon,
   });
-  const { sent } = await enviarPushDaOrg(row.organization_id, payload);
+  let sent = 0;
+  for (const userId of destinatarios) {
+    sent += (await enviarPushAoUsuario(row.organization_id, userId, payload)).sent;
+  }
   return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "ok", detail: `sent:${sent}` };
 }
 
@@ -109,12 +161,34 @@ async function enviarParaUsuario(
 
 export const webPushInboundHandler: EventHandler = {
   key: WEB_PUSH_INBOUND_KEY,
-  events: ["message.received", "lead.assigned", "lead.won", "lead.lost", "user.mentioned"],
+  events: [
+    "message.received",
+    "conversation.assigned",
+    "lead.assigned",
+    "lead.won",
+    "lead.lost",
+    "user.mentioned",
+  ],
   async handle(row): Promise<HandlerResult> {
     if (!vapidPronto()) {
       return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "skipped", detail: "vapid_ausente" };
     }
     if (row.event_type === "message.received") return handleInbound(row);
+
+    if (row.event_type === "conversation.assigned") {
+      // Emitido pelo trigger da 0281 quando alguém RECEBE uma conversa (rodízio,
+      // transferência) — a primeira mensagem chegou antes de ela ter dono, e
+      // "só as minhas" não teria avisado ninguém.
+      const toUserId = typeof row.payload.to_user_id === "string" ? row.payload.to_user_id : null;
+      const conversationId =
+        typeof row.payload.conversation_id === "string" ? row.payload.conversation_id : null;
+      return enviarParaUsuario(row.organization_id, toUserId, {
+        title: "Conversa atribuída a você",
+        body: "Um cliente está esperando a sua resposta.",
+        tag: conversationId ? `assigned:${conversationId}` : "assigned",
+        href: conversationId ? `/app/inbox?id=${conversationId}` : "/app/inbox",
+      });
+    }
 
     if (row.event_type === "user.mentioned") {
       const toUserId = typeof row.payload.to_user_id === "string" ? row.payload.to_user_id : null;

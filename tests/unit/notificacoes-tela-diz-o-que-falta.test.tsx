@@ -57,6 +57,11 @@ vi.mock("@/lib/auth/server", () => ({ requireAuth: vi.fn().mockResolvedValue({})
 vi.mock("@/app/app/settings/notifications/_client", () => ({
   NotificationPrefsClient: () => <table />,
 }));
+// A escolha "de quais conversas" (0281) é cliente e lê a sessão; esta suíte
+// mede o que a página afirma sobre a INSTALAÇÃO, não essa escolha.
+vi.mock("@/app/app/settings/notifications/_escopo", () => ({
+  EscopoDoAvisoDeMensagem: () => <section />,
+}));
 
 async function telaCom(chaves: boolean): Promise<string> {
   vapidPronto.mockReturnValue(chaves);
