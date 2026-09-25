@@ -1,38 +1,49 @@
 import { serviceFromMessage } from "@/lib/atendimento/origem-mensagem";
 /**
- * Handler: ai-handoff-from-sentiment.v1
+ * Handler: ai-handoff-from-sentiment.v1 — o alerta de sentimento vira SINAL.
  *
- * Consume `ai.sentiment_alert` (emitido por `ai-sentiment-worker` quando
- * sentiment_score < threshold) e dispara handoff via orquestrador central
- * com reason='low_sentiment' (gate G2 do EPIC-06).
+ * Consome `ai.sentiment_alert` (emitido por `ai-sentiment-worker` quando a nota
+ * da mensagem cai abaixo do limite do agente, `ai_agents.config.sentiment_threshold`).
+ *
+ * ─── Por que não transfere mais (decisão do dono, 2026-09-25) ────────────────
+ * Até aqui ele chamava `triggerHandoff(reason='low_sentiment')`: calava a IA,
+ * mandava a frase genérica "Esse caso é melhor resolvido por uma pessoa… ninguém
+ * está disponível" e deixava a conversa SEM TIME — o atalho não sabe escolher
+ * setor. Medido em produção num provedor: 42 alertas em 48 h, a maioria o
+ * cliente DESCREVENDO o defeito ("Sem sinal" 0,25, "Estou sem internet" 0,20),
+ * e a IA calada antes de tentar o suporte que o prompt manda.
+ *
+ * Agora:
+ *   · quem transfere é a própria IA, no turno — `inbound-turn.ts` lê a nota da
+ *     mensagem e, abaixo do limite, orienta o agente a acolher e passar para o
+ *     setor que cuida do assunto (escolhendo o time);
+ *   · este handler deixa o momento na LINHA DO TEMPO da conversa
+ *     (`cliente_insatisfeito`), para a equipe ver — uma vez por atendimento a
+ *     cada 30 min, para uma rajada de mensagens irritadas não virar dez linhas.
  *
  * Service-role bypassa RLS → toda query filtra `organization_id` programático.
  */
 
 import type { EventHandler, HandlerResult } from "@/lib/event-log/dispatcher";
-import { triggerHandoff } from "@/lib/ai/handoff/orchestrator";
+import { EVENTO_CLIENTE_INSATISFEITO } from "@/lib/inbox/eventos-da-conversa";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logger } from "@/lib/logger";
 
 export const AI_HANDOFF_FROM_SENTIMENT_KEY = "ai-handoff-from-sentiment.v1";
 
+/** Uma linha na linha do tempo por atendimento a cada meia hora, no máximo. */
+export const INTERVALO_ENTRE_REGISTROS_MS = 30 * 60_000;
+
 export const aiHandoffFromSentimentHandler: EventHandler = {
   key: AI_HANDOFF_FROM_SENTIMENT_KEY,
   events: ["ai.sentiment_alert"],
   async handle(row): Promise<HandlerResult> {
-    const messageId =
-      (row.payload?.["message_id"] as string | undefined) ?? row.entity_id ?? null;
-    const conversationIdHint =
-      (row.payload?.["conversation_id"] as string | undefined) ?? null;
-    const sentimentScore =
-      (row.payload?.["sentiment_score"] as number | undefined) ?? null;
+    const messageId = (row.payload?.["message_id"] as string | undefined) ?? row.entity_id ?? null;
+    const conversationIdHint = (row.payload?.["conversation_id"] as string | undefined) ?? null;
+    const sentimentScore = (row.payload?.["sentiment_score"] as number | undefined) ?? null;
 
     if (!messageId && !conversationIdHint) {
-      return {
-        consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY,
-        status: "skipped",
-        detail: "missing_ids",
-      };
+      return { consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY, status: "skipped", detail: "missing_ids" };
     }
 
     const admin = createAdminClient();
@@ -42,53 +53,45 @@ export const aiHandoffFromSentimentHandler: EventHandler = {
       return { consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY, status: "skipped", detail: "service_boundary_stale" };
     }
     const conversationId = boundary.conversation_id;
-    const contactId = boundary.contact_id;
 
-    // Best-effort: resolve the most recent open lead for this contact so the
-    // orchestrator can write a timeline activity. If unavailable we still
-    // proceed — handoff itself doesn't depend on having a lead.
-    let leadId: string | null = null;
-    if (contactId) {
-      const { data: lead } = await admin
-        .from("crm_leads")
-        .select("id, organization_id, status, created_at")
-        .eq("organization_id", row.organization_id)
-        .eq("contact_id", contactId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (lead) leadId = (lead as { id: string }).id;
+    const desde = new Date(Date.now() - INTERVALO_ENTRE_REGISTROS_MS).toISOString();
+    const { data: recente } = await admin
+      .from("conversation_events")
+      .select("id")
+      .eq("organization_id", row.organization_id)
+      .eq("conversation_id", conversationId)
+      .eq("type", EVENTO_CLIENTE_INSATISFEITO)
+      .gte("created_at", desde)
+      .limit(1)
+      .maybeSingle();
+    if (recente) {
+      return { consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY, status: "skipped", detail: "ja_registrado_recentemente" };
     }
 
-    const result = await triggerHandoff({
-      serviceBoundary: boundary,
-      conversationId,
-      organizationId: row.organization_id,
-      reason: "low_sentiment",
-      leadId,
-      metadata: {
-        sentiment_score: sentimentScore,
-        message_id: messageId,
-        source: "ai.sentiment_alert",
-      },
+    // Quem responde a próxima mensagem? Se é a IA, a linha do tempo diz que ela
+    // foi orientada a passar adiante — é o que a equipe precisa saber.
+    const { data: conversa } = await admin
+      .from("conversations")
+      .select("comando_da_conversa")
+      .eq("organization_id", row.organization_id)
+      .eq("id", conversationId)
+      .maybeSingle();
+    const iaOrientada = (conversa as { comando_da_conversa?: string } | null)?.comando_da_conversa === "automatico";
+
+    const { error } = await admin.rpc("fn_conversation_event_add", {
+      p_org: row.organization_id,
+      p_conversation: conversationId,
+      p_type: EVENTO_CLIENTE_INSATISFEITO,
+      p_payload: { sentiment_score: sentimentScore, message_id: messageId, ia_orientada: iaOrientada },
     });
-
-    if (!result.triggered) {
-      logger.info("[ai-handoff-from-sentiment] handoff not triggered", {
+    if (error) {
+      logger.warn("[ai-handoff-from-sentiment] linha do tempo não gravada", {
         conversation_id: conversationId,
-        reason: result.reason,
+        detail: error.message.slice(0, 160),
       });
-      return {
-        consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY,
-        status: "skipped",
-        detail: result.reason,
-      };
+      return { consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY, status: "error", detail: "evento_nao_gravado" };
     }
 
-    return {
-      consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY,
-      status: "ok",
-      detail: result.reason,
-    };
+    return { consumer_key: AI_HANDOFF_FROM_SENTIMENT_KEY, status: "ok", detail: "registrado_na_linha_do_tempo" };
   },
 };

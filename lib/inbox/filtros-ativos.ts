@@ -26,5 +26,6 @@ export function filtrosAuxiliaresAtivos(filters: ConversationsFilters): string[]
   if (filters.channel_session_id) ativos.push("Canal");
   // Ordem ("Mais tempo esperando") não entra: não esconde conversa nenhuma.
   if (filters.na_fila) ativos.push("Só na fila");
+  if (filters.insatisfeitos) ativos.push("Insatisfeitos");
   return ativos;
 }

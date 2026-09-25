@@ -129,3 +129,27 @@ describe("o selo 'Na fila · <time>'", () => {
     expect(screen.queryByTestId("selo-na-fila-do-time")).not.toBeInTheDocument();
   });
 });
+
+describe("o selo do tom do cliente no card (migration 0280)", () => {
+  it("insatisfeito aparece, com a nota na dica", () => {
+    pintar({ sentimento_atual: 0.2, sentimento_minimo: 0.2 });
+    const selo = screen.getByTestId("selo-sentimento");
+    expect(selo).toHaveAttribute("data-faixa", "insatisfeito");
+    expect(selo).toHaveTextContent("Insatisfeito");
+    expect(selo.getAttribute("title")).toContain("0,20");
+  });
+
+  it("crítico aparece em vermelho sólido", () => {
+    pintar({ sentimento_atual: 0.05 });
+    expect(screen.getByTestId("selo-sentimento")).toHaveAttribute("data-faixa", "critico");
+  });
+
+  it("neutro e satisfeito não poluem o card", () => {
+    pintar({ sentimento_atual: 0.45 });
+    expect(screen.queryByTestId("selo-sentimento")).not.toBeInTheDocument();
+    cleanup();
+    pintar({ sentimento_atual: 0.9 });
+    expect(screen.queryByTestId("selo-sentimento")).not.toBeInTheDocument();
+  });
+});
+

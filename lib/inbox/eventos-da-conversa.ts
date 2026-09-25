@@ -25,7 +25,13 @@ export const TIPOS_DE_EVENTO_DA_CONVERSA = [
   "ai_paused",
   "ai_resumed",
   "snoozed",
+  // Emitido por TypeScript (não pelo trigger): `workers/ai-handoff-from-sentiment.handler.ts`,
+  // quando a nota de uma mensagem cai abaixo do limite do agente (migration 0280).
+  "cliente_insatisfeito",
 ] as const;
+
+/** O tipo emitido pelo alerta de sentimento — constante, nunca string solta (CLAUDE.md). */
+export const EVENTO_CLIENTE_INSATISFEITO: TipoDeEventoDaConversa = "cliente_insatisfeito";
 
 export type TipoDeEventoDaConversa = (typeof TIPOS_DE_EVENTO_DA_CONVERSA)[number];
 
@@ -176,6 +182,17 @@ export function descreverEventoDaConversa(evento: EventoDaConversa, t: Tradutor)
       return { titulo: t("Devolvida ao atendimento automático"), detalhe: por("Por"), tom: "neutro" };
     case "snoozed":
       return { titulo: t("Lembrete agendado"), detalhe: por("Por"), tom: "neutro" };
+    case "cliente_insatisfeito": {
+      const nota = typeof p.sentiment_score === "number" ? p.sentiment_score.toFixed(2).replace(".", ",") : null;
+      return {
+        titulo: t("Cliente muito insatisfeito"),
+        detalhe:
+          [nota ? `${t("Nota")} ${nota}.` : null, p.ia_orientada === true ? t("A IA foi orientada a passar para o setor responsável.") : null]
+            .filter(Boolean)
+            .join(" ") || null,
+        tom: "espera",
+      };
+    }
     default:
       // Tipo que esta versão da tela não conhece (banco mais novo que o código,
       // no meio de uma atualização). Mostra que ALGO aconteceu, sem inventar o quê.

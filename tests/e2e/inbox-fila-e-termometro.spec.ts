@@ -158,6 +158,22 @@ test("Todas por chips, fila do time e termômetro de espera", async ({ browser }
     [user, amarelo],
   );
 
+  // O TOM DO CLIENTE (migration 0280): a nota entra pela MESMA função que o
+  // worker de sentimento chama, não por update direto na coluna.
+  for (const [id, notaDoCliente] of [
+    [naFila, 0.05],
+    [laranja, 0.2],
+    [amarelo, 0.8],
+  ] as const) {
+    const r = await db.rpc("fn_registrar_sentimento_da_conversa", {
+      p_org: org,
+      p_conversation: id,
+      p_score: notaDoCliente,
+      p_em: new Date().toISOString(),
+    });
+    if (r.error) throw r.error;
+  }
+
   try {
     await login(page, email, password);
     await page.goto("/app/inbox?filter=all");
@@ -221,6 +237,22 @@ test("Todas por chips, fila do time e termômetro de espera", async ({ browser }
     await expect(page.getByRole("option", { name: "Totus · +551140630000" })).toBeVisible();
     await page.screenshot({ path: `${evidence}/04-filtro-de-numero.png` });
     await page.keyboard.press("Escape");
+
+    // ─── 6b. O tom do cliente: card, filtro e topo da conversa ──────────────
+    await expect(card(naFila).getByTestId("selo-sentimento")).toHaveAttribute("data-faixa", "critico");
+    await expect(card(laranja).getByTestId("selo-sentimento")).toHaveAttribute("data-faixa", "insatisfeito");
+    // Satisfeito não polui o card.
+    await expect(card(amarelo).getByTestId("selo-sentimento")).toHaveCount(0);
+    await page.getByRole("button", { name: "Insatisfeitos" }).click();
+    await expect(lista).toHaveCount(2);
+    await page.screenshot({ path: `${evidence}/04b-insatisfeitos.png` });
+    await page.getByRole("button", { name: "Insatisfeitos" }).click();
+    await expect(lista).toHaveCount(3);
+    await card(naFila).click();
+    const seloDoTopo = page.getByTestId("selo-sentimento-da-conversa").first();
+    await expect(seloDoTopo).toHaveAttribute("data-faixa", "critico");
+    await expect(seloDoTopo).toContainText("Crítico · 0,05");
+    await page.screenshot({ path: `${evidence}/04c-tom-no-topo.png` });
 
     // ─── 7. A régua da organização muda a cor ───────────────────────────────
     await page.goto("/app/settings/atendimento");
