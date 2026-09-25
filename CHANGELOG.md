@@ -8,6 +8,27 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.45.0] — 2026-09-25
+
+### Adicionado
+
+- **O atendente pode enxergar só o próprio time, e o aviso de mensagem chega só a quem a conversa é** Em **Configurações › Distribuição de atendimento › O que cada atendente enxerga**, surgem
+  duas opções novas para o papel Atendente:
+
+  - **"Os seus, mais a fila do seu time"**: o atendente vê as próprias conversas e as sem
+    dono do time dele.
+  - **"Os seus, mais tudo do seu time"**: vê também as conversas dos colegas de time, para
+    poder ajudar. A aba **Todas** aparece para ele nesse modo.
+
+  Nos dois modos, a conversa que não foi encaminhada para nenhum time (a fila geral) só
+  aparece para gerente e administrador. As três opções que já existiam não mudaram.
+
+  O aviso de mensagem nova mudou também. O push ia para **todos** da organização, até para
+  quem não podia abrir a conversa. Agora vai para quem a conversa é e respeita o que cada um
+  enxerga. O **atendente passa a ser avisado só das conversas atribuídas a ele**. Gerente e
+  administrador continuam recebendo de tudo que veem. Em **Configurações › Notificações**,
+  cada pessoa escolhe entre "só das minhas" e "de todas que eu vejo".
+
 ## [1.44.0] — 2026-09-25
 
 ### Adicionado
@@ -5510,7 +5531,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.44.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.0...HEAD
+[1.45.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.44.0...v1.45.0
 [1.44.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.1...v1.43.0
 [1.42.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.42.0...v1.42.1
