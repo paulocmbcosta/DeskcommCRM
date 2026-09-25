@@ -582,6 +582,13 @@ funcional, e é por isso que o `workflow_dispatch` existe.
 | J27.9 (2026-09-25, migration 0284) Com time cadastrado, o diálogo pede **Time da conversa**; com vários times começa vazio e o envio fica **travado** até escolher | `[P0]` | **PASS** (30,5 s) |
 | J27.10 (2026-09-25, migration 0284) Sem `team_id` a rota recusa com 422 `team_required`; com time, a conversa volta com `team_id` gravado e **dono = quem chamou** | `[P0]` | **PASS** (29,2 s) |
 
+**2026-09-25 — Devolver a conversa à fila do próprio time (troca de turno)** — `tests/e2e/devolver-ao-proprio-time.spec.ts`
+
+| Caso | Prioridade | Estado |
+|---|---|---|
+| Atendente responsável abre **Transferir → Fila do time**; o diálogo diz a consequência antes do clique; a conversa volta **sem dono, no mesmo time, com o automático parado** (`bot_silenced_until = infinity`) | `[P1]` | **PASS** (4,3 s) |
+| O rodízio não devolve a conversa a quem a devolveu (se só ele está elegível, ela espera) | `[P1]` | unidade: `lib/routing/worker-nao-devolve-a-quem-devolveu.test.ts` (sabotado: 2 vermelhos) |
+
 **A primeira execução reprovou 6 dos 8, e o defeito era do TESTE** — vale registrar
 porque é o argumento inteiro da doutrina em miniatura. `createContactHandler`
 devolve `{ contact, action }`, o helper lia `data.id`, e o `undefined` chegava ao

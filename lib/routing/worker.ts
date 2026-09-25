@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logger } from "@/lib/logger";
 import { decideRouting } from "@/lib/routing/decide";
+import { carregarQuemDevolveu } from "./quem-devolveu";
 import { iaAtendeAConversa } from "@/lib/routing/ia-atende";
 import { loadEligibleAttendants, InvalidRoutingChannel } from "@/lib/routing/eligibles";
 import { routingConfigSchema } from "@/lib/schemas/routing";
@@ -147,7 +148,7 @@ async function processEvent(event: EventRow, now: Date): Promise<RoutingOutcome>
 
   const { data: conv, error: convError } = await admin
     .from("conversations")
-    .select("id, organization_id, contact_id, channel_session_id, assigned_to_user_id, status, team_id")
+    .select("id, organization_id, contact_id, channel_session_id, assigned_to_user_id, status, team_id, service_started_at")
     .eq("id", conversationId)
     .eq("organization_id", orgId)
     .maybeSingle();
@@ -198,6 +199,15 @@ async function processEvent(event: EventRow, now: Date): Promise<RoutingOutcome>
         // qualquer elegível da organização — o comercial inclusive.
         teamId: conv.team_id,
       });
+      // Quem devolveu a conversa à fila (troca de turno) não a recebe de volta
+      // pelo rodízio — ver `quem-devolveu.ts`.
+      const devolveu = await carregarQuemDevolveu(
+        admin,
+        orgId,
+        conversationId,
+        (conv as { service_started_at?: string | null }).service_started_at ?? null,
+      );
+      if (devolveu) eligibles = eligibles.filter((candidato) => candidato.userId !== devolveu);
     } catch (error) {
       if (!(error instanceof InvalidRoutingChannel)) throw error;
       await notice(orgId, conversationId, "invalid_channel");

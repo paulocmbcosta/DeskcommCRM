@@ -9370,6 +9370,11 @@ export const DICIONARIO: Traducoes = {
   "Este contato já não está bloqueado.": { es: "Este contacto ya no está bloqueado." },
   "Não foi possível ler o contato.": { es: "No fue posible leer el contacto." },
   "Não foi possível desbloquear o contato.": { es: "No fue posible desbloquear el contacto." },
+  // Devolver a conversa à fila do próprio time — a troca de turno.
+  "Fila do time": { es: "Cola del equipo" },
+  "próximo atendente disponível": { es: "próximo agente disponible" },
+  "devolver à fila": { es: "devolver a la cola" },
+  "A conversa volta para a fila do time: você deixa de ser o responsável, o atendimento automático continua parado e o próximo atendente disponível do time a recebe — ela não volta para você.": { es: "La conversación vuelve a la cola del equipo: dejas de ser el responsable, la atención automática sigue detenida y el próximo agente disponible del equipo la recibe; no vuelve a ti." },
   // Chamar o cliente exige o time da conversa (migration 0284).
   "Time da conversa": { es: "Equipo de la conversación" },
   "Escolha o time…": { es: "Elige el equipo…" },

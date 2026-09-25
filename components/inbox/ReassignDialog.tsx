@@ -21,13 +21,29 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useAssignableMembers } from "@/hooks/inbox/useAssignableMembers";
+import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 import { useTransferConversation } from "@/hooks/inbox/useTransferConversation";
+import { useTransferirParaTime } from "@/hooks/inbox/useTransferirParaTime";
 
 interface Props {
   conversationId: string;
+  /** O time em que a conversa está — `null` = sem time, e a opção de fila não aparece. */
+  timeAtual?: string | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }
+
+/**
+ * DEVOLVER À FILA DO TIME — a troca de turno.
+ *
+ * Quem vai embora com um atendimento aberto devolve a conversa ao próprio time:
+ * deixa de ser o responsável, a IA continua calada (`fn_conversation_set_team`
+ * mantém o silêncio) e o rodízio entrega ao próximo atendente disponível do
+ * time — nunca de volta a quem devolveu (`lib/routing/quem-devolveu.ts`).
+ * Mora aqui, e não só no selo do time, porque "Transferir" é onde a pessoa
+ * procura o gesto de passar a conversa adiante.
+ */
+const FILA_DO_TIME = "__fila_do_time__";
 
 const ROLE_LABEL: Record<string, string> = {
   agent: "Atendente",
@@ -40,12 +56,16 @@ const ROLE_LABEL: Record<string, string> = {
  * outro atendente da org, com motivo opcional. Cada transferência vira evento
  * auditável em conversation_assignment_events.
  */
-export function ReassignDialog({ conversationId, open, onOpenChange }: Props) {
+export function ReassignDialog({ conversationId, timeAtual = null, open, onOpenChange }: Props) {
   const t = useT();
   const { user } = useAuth();
   const members = useAssignableMembers(open);
   const transfer = useTransferConversation();
+  const devolver = useTransferirParaTime();
+  const times = useTimesDoInbox(open && timeAtual !== null);
+  const nomeDoTime = (times.data ?? []).find((time) => time.id === timeAtual)?.name ?? null;
   const [toUserId, setToUserId] = useState<string>("");
+  const paraFila = toUserId === FILA_DO_TIME;
   const [reason, setReason] = useState("");
 
   const options = (members.data ?? []).filter((m) => m.user_id !== user.id);
@@ -64,9 +84,13 @@ export function ReassignDialog({ conversationId, open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle>{t("Transferir conversa")}</DialogTitle>
           <DialogDescription>
-            {t(
-              "A transferência é imediata: o atendente escolhido vira o responsável agora e a mudança fica registrada no histórico.",
-            )}
+            {paraFila
+              ? t(
+                  "A conversa volta para a fila do time: você deixa de ser o responsável, o atendimento automático continua parado e o próximo atendente disponível do time a recebe — ela não volta para você.",
+                )
+              : t(
+                  "A transferência é imediata: o atendente escolhido vira o responsável agora e a mudança fica registrada no histórico.",
+                )}
           </DialogDescription>
         </DialogHeader>
 
@@ -80,6 +104,14 @@ export function ReassignDialog({ conversationId, open, onOpenChange }: Props) {
                 />
               </SelectTrigger>
               <SelectContent>
+                {timeAtual !== null && (
+                  <SelectItem value={FILA_DO_TIME}>
+                    {nomeDoTime
+                      ? `${t("Fila do time")} ${nomeDoTime}`
+                      : t("Fila do time")}
+                    <span className="ml-1 text-muted-foreground">· {t("próximo atendente disponível")}</span>
+                  </SelectItem>
+                )}
                 {options.map((m) => (
                   <SelectItem key={m.user_id} value={m.user_id}>
                     {m.full_name ?? `${t("Atendente")} ${m.user_id.slice(0, 8)}`}
@@ -97,7 +129,7 @@ export function ReassignDialog({ conversationId, open, onOpenChange }: Props) {
             )}
           </div>
 
-          <div className="space-y-1.5">
+          {!paraFila && <div className="space-y-1.5">
             <Label htmlFor="reassign-reason">{t("Motivo (opcional)")}</Label>
             <Textarea
               id="reassign-reason"
@@ -107,7 +139,7 @@ export function ReassignDialog({ conversationId, open, onOpenChange }: Props) {
               maxLength={500}
               rows={2}
             />
-          </div>
+          </div>}
         </div>
 
         <DialogFooter>
@@ -115,9 +147,14 @@ export function ReassignDialog({ conversationId, open, onOpenChange }: Props) {
             {t("Cancelar")}
           </Button>
           <Button
-            disabled={!toUserId || transfer.isPending}
+            disabled={!toUserId || transfer.isPending || devolver.isPending}
             onClick={() =>
-              transfer.mutate(
+              paraFila
+                ? devolver.mutate(
+                    { conversation_id: conversationId, team_id: timeAtual },
+                    { onSuccess: () => close(false) },
+                  )
+                : transfer.mutate(
                 {
                   conversation_id: conversationId,
                   to_user_id: toUserId,
@@ -127,7 +164,7 @@ export function ReassignDialog({ conversationId, open, onOpenChange }: Props) {
               )
             }
           >
-            {transfer.isPending ? t("Transferindo…") : t("Transferir")}
+            {transfer.isPending || devolver.isPending ? t("Transferindo…") : t("Transferir")}
           </Button>
         </DialogFooter>
       </DialogContent>

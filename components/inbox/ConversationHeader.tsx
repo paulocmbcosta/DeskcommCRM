@@ -429,6 +429,7 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
       </div>
       <ReassignDialog
         conversationId={conversation.id}
+        timeAtual={timeId}
         open={reassignOpen}
         onOpenChange={setReassignOpen}
       />
