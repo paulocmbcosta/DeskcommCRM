@@ -6,10 +6,11 @@
  * não seja "dispensada" deixa a espera contando, como antes da feature.
  *
  * Ordem, do mais barato ao mais caro: é entrada? a conversa espera gente
- * (humano/aguardando) e ainda espera? um humano já mandou contar? → só então
- * transcrição, chave e Jev. A dispensa é um UPDATE condicional
- * (`lib/espera/dados.ts`): se o cliente escreveu ou alguém respondeu enquanto
- * o Jev pensava, não grava nada — o evento da mensagem nova decide de novo.
+ * (humano/aguardando) e ainda espera? um humano já mandou contar? há chave?
+ * → só então transcrição e Jev. A dispensa é a RPC `fn_dispensar_espera`
+ * (`lib/espera/dados.ts`, migration 0285): se o cliente escreveu — mesmo no
+ * mesmo segundo — ou alguém respondeu enquanto o Jev pensava, não grava nada;
+ * o evento da mensagem nova decide de novo.
  *
  * Custo: toda chamada vira linha em `llm_calls` com `purpose = wait_classify`
  * (IA › Execuções). Sem chave da OpenRouter a feature não roda (decisão G).
@@ -69,18 +70,57 @@ function texto(v: unknown): string | null {
   return typeof v === "string" && v !== "" ? v : null;
 }
 
-/** Predicado `foraDaRequisicao`: só adia (paga o Jev fora do webhook) quem pode ser dispensado. Falha ⇒ adia. */
+type ChaveDoJev = Awaited<ReturnType<typeof chaveDaOpenRouter>>;
+
+/**
+ * A chave da OpenRouter deste EVENTO, resolvida uma vez só.
+ *
+ * O dispatcher chama `foraDaRequisicao` e `handle` com o MESMO objeto `row`
+ * (lib/event-log/dispatcher.ts) — a mesma convenção de `REGRA_DO_EVENTO` em
+ * workers/classificador-comercial.ts. Sem isto, todo evento adiado decifrava
+ * a credencial duas vezes. `null` (sem chave) também fica guardado.
+ */
+const CHAVE_DO_EVENTO = new WeakMap<EventRow, ChaveDoJev>();
+
+async function chaveDoEvento(event: EventRow, chave: DependenciasDaEspera["chave"]): Promise<ChaveDoJev> {
+  if (CHAVE_DO_EVENTO.has(event)) return CHAVE_DO_EVENTO.get(event) ?? null;
+  const resolvida = await chave(event.organization_id);
+  CHAVE_DO_EVENTO.set(event, resolvida);
+  return resolvida;
+}
+
+function dependenciasDoPredicado(): Pick<DependenciasDaEspera, "espera" | "chave"> {
+  const admin = createAdminClient();
+  return { espera: dadosDaEsperaViaSupabase(admin), chave: (org) => chaveDaOpenRouter(admin, org) };
+}
+
+/**
+ * Predicado `foraDaRequisicao`: só adia (paga o Jev fora do webhook) a conversa
+ * que o worker PODE dispensar — espera gente, ainda espera, sem trava humana e
+ * com chave da OpenRouter (sem chave a feature não roda, decisão G). Adiar as
+ * outras só devolveria à fila um evento que termina em `skipped`.
+ *
+ * ⚠️ FALHA LÊ COMO `false`, a convenção do classificador
+ * (`ehOrganizacaoComClassificador`) e o contrato do dispatcher: na dúvida,
+ * roda na requisição, onde o handler lê de novo e, se o banco seguir fora,
+ * LANÇA para o drain tentar com backoff.
+ */
 export async function esperaPodeSerDispensada(
   event: EventRow,
-  espera: Pick<DadosDaEspera, "conversa"> = dadosDaEsperaViaSupabase(createAdminClient()),
+  deps: Pick<DependenciasDaEspera, "espera" | "chave"> = dependenciasDoPredicado(),
 ): Promise<boolean> {
   const conversationId = texto(event.payload?.conversation_id);
   if (event.payload?.direction !== "inbound" || !conversationId) return false;
   try {
-    const c = await espera.conversa(event.organization_id, conversationId);
-    return Boolean(c?.espera_desde && !c.espera_mantida_em && COMANDOS_QUE_ESPERAM_GENTE.has(c.comando_da_conversa ?? ""));
-  } catch {
-    return true;
+    const c = await deps.espera.conversa(event.organization_id, conversationId);
+    if (!c?.espera_desde || c.espera_mantida_em || !COMANDOS_QUE_ESPERAM_GENTE.has(c.comando_da_conversa ?? "")) return false;
+    return (await chaveDoEvento(event, deps.chave)) !== null;
+  } catch (err) {
+    logger.warn("espera-da-assistente: conversa ilegível ao decidir o adiamento — roda na requisição", {
+      organization_id: event.organization_id,
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 160),
+    });
+    return false;
   }
 }
 
@@ -98,6 +138,9 @@ export async function processarEspera(event: EventRow, deps: DependenciasDaEsper
   if (!COMANDOS_QUE_ESPERAM_GENTE.has(c.comando_da_conversa ?? "")) return { status: "pulado", motivo: "automatico" };
   if (c.espera_mantida_em) return { status: "pulado", motivo: "mantida_por_humano" };
 
+  const chave = await chaveDoEvento(event, deps.chave);
+  if (!chave) return { status: "pulado", motivo: "sem_chave" };
+
   const agora = deps.agora().getTime();
   const idadeMs = event.created_at ? agora - new Date(event.created_at).getTime() : Number.POSITIVE_INFINITY;
 
@@ -110,9 +153,6 @@ export async function processarEspera(event: EventRow, deps: DependenciasDaEsper
 
   const estado = montarEstadoDaEspera(await deps.mensagens.ultimasMensagens(org, conversationId, 40));
   if (!estado) return { status: "pulado", motivo: "sem_texto_para_ler" };
-
-  const chave = await deps.chave(org);
-  if (!chave) return { status: "pulado", motivo: "sem_chave" };
 
   const atribuicao = cabecalhosDeAtribuicaoOpenRouter();
   const r = await deps.consultar({
@@ -156,8 +196,12 @@ export async function processarEspera(event: EventRow, deps: DependenciasDaEsper
   const probabilidade = Number(leitura.pedeResposta.toFixed(3));
   if (!decidirDispensa(leitura.pedeResposta)) return { status: "pede_resposta", probabilidade };
 
-  const dispensou = await deps.espera.dispensar(org, conversationId, { espera_desde: c.espera_desde, last_inbound_at: c.last_inbound_at });
+  const dispensou = await deps.espera.dispensar(
+    org,
+    conversationId,
+    { espera_desde: c.espera_desde, last_inbound_at: c.last_inbound_at, mensagem_id: messageId },
+    { probabilidade, ate: c.last_inbound_at, modelo: leitura.modelo },
+  );
   if (!dispensou) return { status: "pulado", motivo: "conversa_mudou" };
-  await deps.espera.registrarEvento(org, conversationId, { probabilidade, ate: c.last_inbound_at, modelo: leitura.modelo });
   return { status: "dispensada", probabilidade };
 }

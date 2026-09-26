@@ -8406,6 +8406,17 @@ export type Database = {
         }
         Returns: string
       }
+      fn_dispensar_espera: {
+        Args: {
+          p_conversation: string
+          p_espera_desde: string
+          p_last_inbound_at: string
+          p_mensagem: string
+          p_org: string
+          p_payload: Json
+        }
+        Returns: boolean
+      }
       fn_proximo_protocolo: {
         Args: { p_org: string; p_quando: string }
         Returns: string
