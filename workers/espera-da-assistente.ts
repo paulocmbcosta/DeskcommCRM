@@ -59,7 +59,7 @@ function dependenciasReais(): DependenciasDaEspera {
     mensagens: dadosViaSupabase(admin),
     chave: (org) => chaveDaOpenRouter(admin, org),
     consultar: consultarSystemOne,
-    registrarChamada: registrarNoLlmCalls(admin, "wait_classify"),
+    registrarChamada: registrarNoLlmCalls(admin, { purpose: "wait_classify" }),
     agora: () => new Date(),
     baseUrl: process.env.CLASSIFICADOR_COMERCIAL_BASE_URL?.trim() || undefined,
   };

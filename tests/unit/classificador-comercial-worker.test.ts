@@ -477,7 +477,7 @@ describe("llm_calls — a linha que IA › Execuções lê", () => {
 
   it("sucesso: purpose commercial_classify, custo e tokens da resposta, sem erro", async () => {
     const { admin, linhas } = adminFalso();
-    registrarNoLlmCalls(admin)({
+    registrarNoLlmCalls(admin, { purpose: "commercial_classify" })({
       organizationId: "org-1",
       contactId: "contato-1",
       modelo: "jev-1.13.0",
@@ -507,7 +507,7 @@ describe("llm_calls — a linha que IA › Execuções lê", () => {
 
   it("falha: custo null (nunca 0), tokens 0 e o código no vocabulário da tela", async () => {
     const { admin, linhas } = adminFalso();
-    registrarNoLlmCalls(admin)({
+    registrarNoLlmCalls(admin, { purpose: "commercial_classify" })({
       organizationId: "org-1",
       contactId: "contato-1",
       modelo: "typesafe/jev-1.13",

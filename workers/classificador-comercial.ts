@@ -131,8 +131,16 @@ export function codigoDeErroDaFalha(falha: FalhaDoJev): string {
   return falha.status === 404 ? "modelo_inexistente" : "erro_desconhecido";
 }
 
-/** Fire-and-forget: a telemetria não derruba a decisão que ela descreve. */
-export function registrarNoLlmCalls(admin: SupabaseClient, purpose = "commercial_classify") {
+/**
+ * Fire-and-forget: a telemetria não derruba a decisão que ela descreve.
+ *
+ * `purpose` vem num OBJETO e é obrigatório de propósito: cada chamador escreve
+ * `{ purpose: "..." }` LITERAL, e é essa propriedade que
+ * `tests/unit/pontos-de-ia-completude.test.ts` varre para provar que o ponto
+ * está no registro de IA. Um parâmetro com default escondia o literal da
+ * varredura — o ponto existia e o teste não o via.
+ */
+export function registrarNoLlmCalls(admin: SupabaseClient, { purpose }: { purpose: string }) {
   return (l: LinhaDeChamada): void => {
     void (async () => {
       try {
@@ -233,7 +241,7 @@ function dependenciasReais(): DependenciasDoClassificador {
     chave: chaveDaOpenRouter,
     perguntar: perguntarAoJev,
     garantir: garantirLeadDaConversa,
-    registrarChamada: registrarNoLlmCalls(admin),
+    registrarChamada: registrarNoLlmCalls(admin, { purpose: "commercial_classify" }),
     agora: () => new Date(),
     baseUrl: process.env.CLASSIFICADOR_COMERCIAL_BASE_URL?.trim() || undefined,
   };
