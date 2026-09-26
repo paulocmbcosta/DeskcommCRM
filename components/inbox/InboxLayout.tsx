@@ -25,6 +25,7 @@ import { InboxAbas } from "./InboxAbas";
 import { ChatThread } from "./ChatThread";
 import { Composer, type ComposerHandle } from "./Composer";
 import { ConversationHeader } from "./ConversationHeader";
+import { FaixaDaEspera } from "./FaixaDaEspera";
 import { RetentionNotice } from "./RetentionNotice";
 import { PainelDaConversa, type AbaDoPainel } from "./PainelDaConversa";
 import { ResultadosPorProtocolo } from "./ResultadosPorProtocolo";
@@ -730,6 +731,15 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 podeReagir={podeReagir}
               />
             </div>
+            {/* A espera ao pé do chat: há quanto o cliente aguarda, ou por que a
+                Assistente deixou de contar (migration 0285) e o botão de religar. */}
+            <FaixaDaEspera
+              conversa={selectedConversation}
+              automaticoDaOrg={automaticoDaOrg}
+              regua={activeOrg?.regua_de_espera}
+              agora={agoraJanela}
+              somenteLeitura={vendoAtendimentoAntigo}
+            />
             <RetentionNotice conversationId={selectedConversation.id} />
             {motivoDaJanela && (
               <JanelaFechadaAviso

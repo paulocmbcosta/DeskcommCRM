@@ -9397,6 +9397,11 @@ export const DICIONARIO: Traducoes = {
   "A Assistente viu que a mensagem do cliente não pede resposta.": {
     es: "La Asistente vio que el mensaje del cliente no requiere respuesta.",
   },
+  "Cliente aguardando resposta há": { es: "Cliente esperando respuesta hace" },
+  "Assistente: o cliente só confirmou ou agradeceu — não pede resposta.": {
+    es: "Asistente: el cliente solo confirmó o agradeció — no requiere respuesta.",
+  },
+  "Contar mesmo assim": { es: "Contar de todos modos" },
 };
 
 /**
