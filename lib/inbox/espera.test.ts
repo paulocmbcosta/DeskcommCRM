@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { reguaDeEspera } from "@/lib/schemas/settings";
 
-import { esperaDaConversa, estaNaFilaDoTime, formatarEspera, nivelDaEspera } from "./espera";
+import { esperaDaConversa, esperaDispensada, estaNaFilaDoTime, formatarEspera, nivelDaEspera } from "./espera";
 
 const agora = new Date("2026-09-18T15:00:00Z");
 const ha = (ms: number) => new Date(agora.getTime() - ms).toISOString();
@@ -145,5 +145,25 @@ describe("o tempo por extenso", () => {
     [(2 * 24 + 4) * 60 * 60_000, "2d 4h"],
   ])("%d ms → %s", (ms, esperado) => {
     expect(formatarEspera(ms)).toBe(esperado);
+  });
+});
+
+describe("esperaDispensada", () => {
+  const base = {
+    status: "open",
+    espera_desde: null,
+    espera_dispensada_ate: "2026-09-26T10:00:00Z",
+    comando_da_conversa: "humano",
+  };
+  it("true quando a Assistente dispensou e a conversa espera gente", () => {
+    expect(esperaDispensada(base)).toBe(true);
+    expect(esperaDispensada({ ...base, comando_da_conversa: "aguardando" })).toBe(true);
+  });
+  it("false sem dispensa, com espera contando, encerrada ou no automático", () => {
+    expect(esperaDispensada({ ...base, espera_dispensada_ate: null })).toBe(false);
+    expect(esperaDispensada({ ...base, espera_dispensada_ate: undefined })).toBe(false);
+    expect(esperaDispensada({ ...base, espera_desde: "2026-09-26T10:05:00Z" })).toBe(false);
+    expect(esperaDispensada({ ...base, status: "closed" })).toBe(false);
+    expect(esperaDispensada({ ...base, comando_da_conversa: "automatico" })).toBe(false);
   });
 });

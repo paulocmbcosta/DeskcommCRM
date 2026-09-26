@@ -5,7 +5,7 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import type { Locale } from "date-fns";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
-import { Clock, Globe, HourglassMedium, Phone, Robot, Siren, SmileySad, Thermometer, UsersThree } from "@/lib/ui/icons";
+import { CheckCircle, Clock, Globe, HourglassMedium, Phone, Robot, Siren, SmileySad, Thermometer, UsersThree } from "@/lib/ui/icons";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { OwnerBadge } from "@/components/kanban/OwnerBadge";
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import type { ConversationWithContact } from "@/hooks/inbox/useConversationsRealtime";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
-import { esperaDaConversa, estaNaFilaDoTime, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
+import { esperaDaConversa, esperaDispensada, estaNaFilaDoTime, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
 import type { ReguaDeEspera } from "@/lib/schemas/settings";
 import { formatarNota, pedeAtencao, ROTULO_DA_FAIXA, sentimentoDaConversa } from "@/lib/inbox/sentimento";
 import { canalPorExtenso as canalInteiro, rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
@@ -218,6 +218,16 @@ export function ConversationListItem({
     relogio,
     regua,
   );
+  // A Assistente julgou que a última fala não pede resposta (migration 0285):
+  // sem termômetro, mas o card diz POR QUÊ — sumir em silêncio pareceria bug.
+  const dispensada =
+    !espera &&
+    esperaDispensada({
+      status: conversation.status,
+      espera_desde: conversation.espera_desde,
+      espera_dispensada_ate: conversation.espera_dispensada_ate,
+      comando_da_conversa: comando.quem === "ninguem" ? "aguardando" : comando.quem,
+    });
   // O TOM DO CLIENTE (migration 0280): o card só fala quando pede atenção —
   // insatisfeito ou crítico. Satisfeito e neutro ficam no topo da conversa, não
   // aqui: selo em toda linha ensinaria o olho a ignorar a faixa.
@@ -348,7 +358,7 @@ export function ConversationListItem({
             há dez minutos precisa gritar tanto quanto a que ninguém pegou.
             Ao lado, o selo "Na fila · <time>": foi para um setor e ninguém
             pegou — o gargalo, visível sem abrir nada. */}
-        {(espera || queuePosition !== undefined || naFilaDoTime || mostrarSentimento) && (
+        {(espera || queuePosition !== undefined || naFilaDoTime || mostrarSentimento || dispensada) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-medium">
             {queuePosition !== undefined && (
               <span
@@ -379,6 +389,16 @@ export function ConversationListItem({
                 <span className="truncate">
                   {espera ? `${t("Aguardando há")} ${formatarEspera(espera.ms, t)}` : t("Aguardando")}
                 </span>
+              </span>
+            )}
+            {dispensada && (
+              <span
+                className="inline-flex min-w-0 items-center gap-1 text-text-muted"
+                data-testid="espera-dispensada"
+                title={t("A Assistente viu que a mensagem do cliente não pede resposta.")}
+              >
+                <CheckCircle size={12} weight="regular" aria-hidden />
+                <span className="truncate">{t("Não pede resposta")}</span>
               </span>
             )}
             {mostrarSentimento && sentimento && (

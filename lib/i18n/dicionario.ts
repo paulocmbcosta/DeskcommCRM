@@ -9393,6 +9393,10 @@ export const DICIONARIO: Traducoes = {
   "Espera contada mesmo assim": { es: "Espera contada de todos modos" },
   "A espera desta conversa já está sendo contada.": { es: "La espera de esta conversación ya se está contando." },
   "A conversa mudou enquanto você clicava. Atualize e veja de novo.": { es: "La conversación cambió mientras hacías clic. Actualiza y vuelve a ver." },
+  "Não pede resposta": { es: "No requiere respuesta" },
+  "A Assistente viu que a mensagem do cliente não pede resposta.": {
+    es: "La Asistente vio que el mensaje del cliente no requiere respuesta.",
+  },
 };
 
 /**
