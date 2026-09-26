@@ -12,6 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
+import { z } from "zod";
 
 import { audit } from "@/lib/audit";
 import { fail, ok } from "@/lib/api/wrappers";
@@ -39,6 +40,12 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
   if (!authz.ok) return authz.response;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
   const { user, org } = authz;
+  // Sem isto, um id que não é uuid chega ao Postgres como `invalid input
+  // syntax` e vira 500 — erro de sistema para o que é uma URL inválida. Mesma
+  // régua de `../team/route.ts`.
+  if (!z.string().uuid().safeParse(id).success) {
+    return fail("invalid_request", t("Conversa inválida."), 400, { requestId });
+  }
 
   const supabase = await createClient();
   const { data: conv, error: convErr } = await supabase

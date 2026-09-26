@@ -102,6 +102,15 @@ describe("POST /api/v1/conversations/[id]/manter-espera", () => {
     expect(res.status).toBe(403);
   });
 
+  it("id que não é uuid é 400 antes de tocar o banco (não vira 500 do Postgres)", async () => {
+    mockSupabase(null, null);
+    const res = await POST(req(), ctx("nao-e-uuid"));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("invalid_request");
+    expect(createClient).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it("conversa inexistente/fora do escopo é 404", async () => {
     mockSupabase(null, null);
     const res = await POST(req(), ctx());
