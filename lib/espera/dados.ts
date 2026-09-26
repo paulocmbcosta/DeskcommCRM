@@ -5,6 +5,8 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { EVENTO_ESPERA_DISPENSADA } from "@/lib/inbox/eventos-da-conversa";
+
 export interface ConversaDaEspera {
   espera_desde: string | null;
   last_inbound_at: string | null;
@@ -53,7 +55,7 @@ export function dadosDaEsperaViaSupabase(admin: SupabaseClient): DadosDaEspera {
       const { error } = await admin.rpc("fn_conversation_event_add", {
         p_org: org,
         p_conversation: conversationId,
-        p_type: "espera_dispensada",
+        p_type: EVENTO_ESPERA_DISPENSADA,
         p_payload: payload,
       });
       if (error) throw new Error(`evento espera_dispensada: ${error.message}`);

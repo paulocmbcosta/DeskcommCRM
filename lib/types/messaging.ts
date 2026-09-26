@@ -73,6 +73,12 @@ export interface Conversation {
    */
   espera_desde?: string | null;
   /**
+   * Não-nulo = a Assistente dispensou a espera: a fala do cliente não pedia
+   * resposta (migration 0285). Nesse estado `espera_desde` é nulo. O trigger
+   * limpa a coluna quando o cliente escreve de novo ou a empresa responde.
+   */
+  espera_dispensada_ate?: string | null;
+  /**
    * Sentimento do cliente no atendimento em curso (migration 0280): a nota
    * (0..1) da última mensagem dele e a pior do atendimento. `null` = ainda sem
    * nota. Zerado ao encerrar. Régua de faixas em `lib/inbox/sentimento.ts`.

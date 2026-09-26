@@ -28,10 +28,19 @@ export const TIPOS_DE_EVENTO_DA_CONVERSA = [
   // Emitido por TypeScript (não pelo trigger): `workers/ai-handoff-from-sentiment.handler.ts`,
   // quando a nota de uma mensagem cai abaixo do limite do agente (migration 0280).
   "cliente_insatisfeito",
+  // Emitidos por TypeScript (migration 0285): a Assistente dispensou a espera
+  // (`workers/espera-da-assistente.ts`) e um humano a religou
+  // (`app/api/v1/conversations/[id]/manter-espera/route.ts`).
+  "espera_dispensada",
+  "espera_mantida",
 ] as const;
 
 /** O tipo emitido pelo alerta de sentimento — constante, nunca string solta (CLAUDE.md). */
 export const EVENTO_CLIENTE_INSATISFEITO: TipoDeEventoDaConversa = "cliente_insatisfeito";
+
+/** Os tipos emitidos pela feature "espera que pede resposta" — constantes, nunca string solta (CLAUDE.md). */
+export const EVENTO_ESPERA_DISPENSADA: TipoDeEventoDaConversa = "espera_dispensada";
+export const EVENTO_ESPERA_MANTIDA: TipoDeEventoDaConversa = "espera_mantida";
 
 export type TipoDeEventoDaConversa = (typeof TIPOS_DE_EVENTO_DA_CONVERSA)[number];
 
@@ -193,6 +202,14 @@ export function descreverEventoDaConversa(evento: EventoDaConversa, t: Tradutor)
         tom: "espera",
       };
     }
+    case "espera_dispensada":
+      return {
+        titulo: t("Assistente: a mensagem do cliente não pede resposta"),
+        detalhe: t("A espera deixou de ser contada."),
+        tom: "neutro",
+      };
+    case "espera_mantida":
+      return { titulo: t("Espera contada mesmo assim"), detalhe: por("Por"), tom: "espera" };
     default:
       // Tipo que esta versão da tela não conhece (banco mais novo que o código,
       // no meio de uma atualização). Mostra que ALGO aconteceu, sem inventar o quê.
