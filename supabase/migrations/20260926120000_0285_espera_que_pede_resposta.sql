@@ -106,21 +106,31 @@ create or replace function public.fn_dispensar_espera(
   p_org uuid, p_conversation uuid, p_espera_desde timestamptz, p_last_inbound_at timestamptz,
   p_mensagem uuid, p_payload jsonb
 ) returns boolean language plpgsql security definer set search_path = public as $$
-declare v_criada timestamptz;
+declare v_criada timestamptz; v_enviada timestamptz;
 begin
   perform 1 from public.conversations
    where id = p_conversation and organization_id = p_org
    for no key update;
   if not found then return false; end if;
 
-  select created_at into v_criada from public.messages
+  select created_at, sent_at into v_criada, v_enviada from public.messages
    where id = p_mensagem and organization_id = p_org and conversation_id = p_conversation and direction = 'inbound';
   if not found then return false; end if;
 
+  -- `and m.sent_at >= v_enviada - interval '1 day'` usa o
+  -- `idx_messages_conversation_sent (conversation_id, sent_at desc)`; sem ele
+  -- este EXISTS varre a conversa inteira por `created_at`, que não tem índice,
+  -- segurando o `for no key update` da conversa acima. A janela de 1 dia é
+  -- generosa contra o relógio do provedor (`last_inbound_at` já é um
+  -- `greatest`) e ainda assim segura: uma entrada rara que ficasse FORA da
+  -- janela e comitasse só depois deste SELECT chegaria depois do lock e, pelo
+  -- `fn_mark_conversation_message`, desfaria a dispensa — o pior caso é a
+  -- espera voltar a ser contada, nunca ela sumir.
   if exists (
     select 1 from public.messages m
      where m.organization_id = p_org and m.conversation_id = p_conversation
        and m.direction = 'inbound' and m.id <> p_mensagem and m.created_at >= v_criada
+       and m.sent_at >= v_enviada - interval '1 day'
   ) then
     return false;
   end if;

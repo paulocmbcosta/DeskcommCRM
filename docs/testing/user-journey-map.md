@@ -2989,4 +2989,9 @@ nem Redis — a chave é a credencial da organização, cifrada como o produto c
 **Não medido aqui:** o Jev real (calibração em português com conversas reais), mensagem
 de áudio aguardando transcrição, e a corrida "o cliente escreve enquanto o Jev pensa"
 (coberta em `tests/invariants/espera-dispensada-pela-assistente.test.ts` e nos testes do
-worker, não na tela).
+worker, não na tela). Também não medida: a corrida estreita entre o INSERT de `messages`
+(que emite `message.received` no MESMO trigger) e `fn_mark_conversation_message`, que só
+carimba `espera_desde` depois — se o dreno pegar o evento nesse intervalo, o worker lê
+`espera_desde` nulo e termina `sem_espera` sem nunca chamar o Jev, e aquela mensagem do
+cliente nunca é julgada pela Assistente. O lado seguro: a espera continua contando (o
+termômetro não pára por causa disso), só a dispensa é que não acontece para essa mensagem.

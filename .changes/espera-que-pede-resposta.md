@@ -13,10 +13,11 @@ conversa. Na dúvida, a espera continua contando. Se o cliente escrever de novo,
 volta a partir da mensagem nova.
 
 Quem discorda clica em "Contar mesmo assim" (qualquer `agent` ou acima), e a espera volta desde
-a primeira mensagem sem resposta. Ninguém consegue desligar a contagem na mão. Cada religada
-fica registrada na linha do tempo da conversa e na auditoria.
+a primeira mensagem sem resposta. Ninguém consegue desligar a contagem na mão pela tela. Cada
+religada fica registrada na linha do tempo da conversa e na auditoria.
 
 Funciona com uma chave da OpenRouter (em IA › Credenciais ou na instalação), pelo Jev — o mesmo
 modelo que já decide se uma conversa vira card. Sem a chave, a espera continua sendo contada
-como antes, sem dispensa nenhuma. Nada precisa ser configurado; o banco recebe três colunas e
-duas funções novas por `update.sh`.
+como antes, sem dispensa nenhuma. Nada precisa ser configurado; o banco recebe três colunas
+novas, uma função nova (`fn_dispensar_espera`) e duas reescritas (o trigger
+`fn_conversations_espera_desde` e `fn_mark_conversation_message`) por `update.sh`.

@@ -11,6 +11,7 @@
  * card nunca discordarem sobre haver espera.
  */
 import { Button } from "@/components/ui/button";
+import { usePermission } from "@/hooks/auth/AuthProvider";
 import type { ConversationWithContact } from "@/hooks/inbox/useConversationsRealtime";
 import { useManterEspera } from "@/hooks/inbox/useManterEspera";
 import { useT } from "@/hooks/i18n/useT";
@@ -43,6 +44,10 @@ const COR: Record<NivelDeEspera, string> = {
 export function FaixaDaEspera({ conversa, automaticoDaOrg, regua, agora, somenteLeitura = false }: Props) {
   const t = useT();
   const manter = useManterEspera();
+  // Mesmo piso da rota (`requireRole("agent")`): viewer e sessão de suporte
+  // somente-leitura (rebaixada a viewer em `resolveActiveOrg`) recebem 403 ao
+  // clicar — o botão some, o texto explicativo fica.
+  const podeEscrever = usePermission("inbox.reply");
   if (somenteLeitura) return null;
 
   const { comando } = comandoDaConversa(
@@ -107,15 +112,17 @@ export function FaixaDaEspera({ conversa, automaticoDaOrg, regua, agora, somente
         <CheckCircle size={14} weight="regular" aria-hidden />
         <span>{t("Assistente: o cliente só confirmou ou agradeceu — não pede resposta.")}</span>
       </span>
-      <Button
-        size="sm"
-        variant="outline"
-        className="h-7 text-xs"
-        disabled={manter.isPending}
-        onClick={() => manter.mutate(conversa.id)}
-      >
-        {t("Contar mesmo assim")}
-      </Button>
+      {podeEscrever && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          disabled={manter.isPending}
+          onClick={() => manter.mutate(conversa.id)}
+        >
+          {t("Contar mesmo assim")}
+        </Button>
+      )}
     </div>
   );
 }

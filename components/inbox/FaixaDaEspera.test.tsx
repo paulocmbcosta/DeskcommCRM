@@ -14,6 +14,11 @@ vi.mock("@/hooks/inbox/useManterEspera", () => ({
   useManterEspera: () => ({ mutate, isPending }),
 }));
 
+let podeEscrever = true;
+vi.mock("@/hooks/auth/AuthProvider", () => ({
+  usePermission: () => podeEscrever,
+}));
+
 const agora = new Date("2026-09-26T15:00:00Z");
 const ha = (min: number) => new Date(agora.getTime() - min * 60_000).toISOString();
 
@@ -39,6 +44,7 @@ const pintar = (mudancas: Record<string, unknown> = {}, props: { somenteLeitura?
 beforeEach(() => {
   mutate.mockReset();
   isPending = false;
+  podeEscrever = true;
 });
 afterEach(() => cleanup());
 
@@ -82,5 +88,14 @@ describe("a faixa da espera no corpo do chat", () => {
   it("atendimento antigo (somente leitura): nada", () => {
     const { container } = pintar({}, { somenteLeitura: true });
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("viewer ou suporte somente-leitura: mantém o texto, esconde o botão (receberia 403)", () => {
+    podeEscrever = false;
+    pintar({ espera_desde: null, espera_dispensada_ate: ha(6) });
+    expect(screen.getByTestId("faixa-da-espera-dispensada")).toHaveTextContent(
+      "Assistente: o cliente só confirmou ou agradeceu — não pede resposta.",
+    );
+    expect(screen.queryByRole("button", { name: "Contar mesmo assim" })).toBeNull();
   });
 });
