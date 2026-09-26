@@ -14,6 +14,26 @@
  *
  * Custo: toda chamada vira linha em `llm_calls` com `purpose = wait_classify`
  * (IA › Execuções). Sem chave da OpenRouter a feature não roda (decisão G).
+ *
+ * LAÇO DE RETORNO (invariante 7 do Sistema Vivo) — o erro da Assistente é
+ * medido, não suposto. Toda dispensa grava `espera_dispensada` e toda religada
+ * humana (`app/api/v1/conversations/[id]/manter-espera/route.ts`) grava
+ * `espera_mantida`, os dois em `conversation_events`. A proporção entre os dois
+ * é a taxa de erro observável:
+ *
+ *   select date_trunc('day', created_at) dia,
+ *          count(*) filter (where type = 'espera_dispensada') dispensadas,
+ *          count(*) filter (where type = 'espera_mantida')    religadas
+ *     from conversation_events
+ *    where organization_id = :org and type in ('espera_dispensada', 'espera_mantida')
+ *    group by 1 order by 1 desc;
+ *
+ * Religadas/dispensadas alto (a Assistente erra para o lado de dispensar quem
+ * ainda esperava resposta) ⇒ baixe `LIMIAR_PARA_DISPENSAR` em
+ * `lib/espera/pede-resposta.ts` (hoje ≤ 0,15) ou reescreva
+ * `PERGUNTAS_DA_ESPERA` — o prompt que decide. Zero religada por muito tempo
+ * não é sinal de acerto: pode ser ninguém percebendo a dispensa errada; olhe
+ * também os dias sem nenhuma linha de nenhum dos dois tipos.
  */
 import { cabecalhosDeAtribuicaoOpenRouter } from "@/lib/agent-engine/edge/llm/providers";
 import { chaveDaOpenRouter } from "@/lib/classificador-comercial/chave";

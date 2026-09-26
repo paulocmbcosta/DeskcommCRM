@@ -417,7 +417,8 @@ test.describe("a Assistente de verdade, pelo webhook e pelo dreno", () => {
           timeout: 20_000,
         })
         .toBe(1);
-      const [{ id: conversa }] = await sql<{ id: string }>(`select id from public.conversations where organization_id = $1`, [org]);
+      const [linhaConversa] = await sql<{ id: string }>(`select id from public.conversations where organization_id = $1`, [org]);
+      const conversa = linhaConversa!.id;
       await sql(
         `update public.conversations set assigned_to_user_id = $1, assignee_kind = 'user',
            status = 'claimed', bot_silenced_until = 'infinity' where id = $2`,
