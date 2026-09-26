@@ -9387,6 +9387,12 @@ export const DICIONARIO: Traducoes = {
   "Peça a transferência para chamar por aqui.": { es: "Pide la transferencia para contactarlo desde aquí." },
   "Este cliente já está em atendimento com outra pessoa. Peça a transferência para chamar por aqui.": { es: "Este cliente ya está siendo atendido por otra persona. Pide la transferencia para contactarlo desde aquí." },
   "Não foi possível iniciar a conversa. Tente novamente.": { es: "No fue posible iniciar la conversación. Inténtalo de nuevo." },
+  // ── Espera que pede resposta (migration 0285) ──
+  "Assistente: a mensagem do cliente não pede resposta": { es: "Asistente: el mensaje del cliente no requiere respuesta" },
+  "A espera deixou de ser contada.": { es: "La espera dejó de contarse." },
+  "Espera contada mesmo assim": { es: "Espera contada de todos modos" },
+  "A espera desta conversa já está sendo contada.": { es: "La espera de esta conversación ya se está contando." },
+  "A conversa mudou enquanto você clicava. Atualize e veja de novo.": { es: "La conversación cambió mientras hacías clic. Actualiza y vuelve a ver." },
 };
 
 /**
