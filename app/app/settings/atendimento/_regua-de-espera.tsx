@@ -89,6 +89,14 @@ export function ReguaDeEsperaForm({ inicial }: { inicial: ReguaDeEspera }) {
             "Quanto tempo o cliente pode ficar sem resposta de uma pessoa antes de o card mudar de cor no Inbox. Conta a partir da primeira mensagem dele que ninguém respondeu.",
           )}
         </p>
+        {/* Transparência (LGPD): para onde vão as mensagens quando a Assistente
+            decide se a fala pede resposta (migration 0285). É o ÚNICO lugar da
+            tela que nomeia o Jev — para quem opera, ela é só "Assistente". */}
+        <p className="mt-2 text-xs text-muted-foreground" data-testid="transparencia-da-assistente">
+          {t(
+            "Quando a mensagem do cliente só confirma ou agradece, a Assistente deixa de contar a espera. Com uma chave da OpenRouter, ela usa o Jev, da TypeSafe: as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe. Sem a chave, a espera é sempre contada.",
+          )}
+        </p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">

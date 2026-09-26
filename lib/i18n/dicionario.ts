@@ -9402,6 +9402,9 @@ export const DICIONARIO: Traducoes = {
     es: "Asistente: el cliente solo confirmó o agradeció — no requiere respuesta.",
   },
   "Contar mesmo assim": { es: "Contar de todos modos" },
+  "Quando a mensagem do cliente só confirma ou agradece, a Assistente deixa de contar a espera. Com uma chave da OpenRouter, ela usa o Jev, da TypeSafe: as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe. Sem a chave, a espera é sempre contada.": {
+    es: "Cuando el mensaje del cliente solo confirma o agradece, la Asistente deja de contar la espera. Con una clave de OpenRouter usa Jev, de TypeSafe: los últimos mensajes de la conversación se envían a OpenRouter y a TypeSafe. Sin la clave, la espera siempre se cuenta.",
+  },
 };
 
 /**
