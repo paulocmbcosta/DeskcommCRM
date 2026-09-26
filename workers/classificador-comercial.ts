@@ -132,14 +132,14 @@ export function codigoDeErroDaFalha(falha: FalhaDoJev): string {
 }
 
 /** Fire-and-forget: a telemetria não derruba a decisão que ela descreve. */
-export function registrarNoLlmCalls(admin: SupabaseClient) {
+export function registrarNoLlmCalls(admin: SupabaseClient, purpose = "commercial_classify") {
   return (l: LinhaDeChamada): void => {
     void (async () => {
       try {
         const { error } = await admin.from("llm_calls").insert({
           organization_id: l.organizationId,
           contact_id: l.contactId,
-          purpose: "commercial_classify",
+          purpose,
           provider: "openrouter",
           model: l.modelo,
           // `input_tokens` é NOT NULL (default 0); quem diz "não sei" é `cost_cents`,
@@ -157,14 +157,14 @@ export function registrarNoLlmCalls(admin: SupabaseClient) {
           http_status: l.falha?.status ?? null,
         });
         if (error) {
-          logger.warn("classificador-comercial: llm_calls não gravou", {
+          logger.warn(`${purpose}: llm_calls não gravou`, {
             organization_id: l.organizationId,
             codigo: error.code || "rede",
             error: error.message.slice(0, 120),
           });
         }
       } catch (erro) {
-        logger.warn("classificador-comercial: llm_calls não gravou", {
+        logger.warn(`${purpose}: llm_calls não gravou`, {
           organization_id: l.organizationId,
           erro: erro instanceof Error ? erro.name : typeof erro,
         });
