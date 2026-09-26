@@ -8,6 +8,22 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.46.0] — 2026-09-26
+
+### Alterado
+
+- **O tom do cliente passa a ser avaliado pelo atendimento inteiro, não pela última mensagem** A avaliação de satisfação do cliente (o selo "Satisfeito / Neutro / Insatisfeito / Crítico" da
+  conversa, o filtro "Insatisfeitos" e o aviso para a IA passar a conversa a uma pessoa) olhava só a
+  última mensagem: dez reclamações seguidas de um "ok, obrigado" viravam "satisfeito". Agora, a cada
+  mensagem do cliente, o atendimento em aberto é lido inteiro, do começo até ali, e uma frase educada
+  no fim não apaga reclamações que continuam sem solução. Quando o cliente manda várias mensagens
+  seguidas, a avaliação é feita uma vez só, pela mais recente.
+
+  Com uma chave da OpenRouter (cadastrada em IA › Credenciais ou na instalação), a avaliação usa o
+  Jev, o mesmo modelo que já decide se a conversa vira card — mais barato e mais rápido. Sem ela,
+  continua usando o modelo escolhido em IA › Provedores para "Medir o clima do atendimento". Nada
+  precisa ser configurado.
+
 ## [1.45.4] — 2026-09-25
 
 ### Adicionado
@@ -5587,7 +5603,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.4...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.46.0...HEAD
+[1.46.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.4...v1.46.0
 [1.45.4]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.3...v1.45.4
 [1.45.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.2...v1.45.3
 [1.45.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.1...v1.45.2
