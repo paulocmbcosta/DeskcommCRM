@@ -55,3 +55,23 @@ begin
 end; $$;
 
 revoke execute on function public.fn_conversations_espera_desde() from public, anon, authenticated;
+
+-- ---- cura 0285: início ----
+-- O backfill da 0279 (bloco "-- Backfill: quem espera hoje recebe a última
+-- entrada", em supabase/baseline.sql) roda em TODO update.sh e não conhece a
+-- dispensa — ela nasceu depois. Ele reescreve `espera_desde` a partir de
+-- `last_inbound_at` sempre que a conversa está "sem resposta", inclusive
+-- quando a dispensa está ativa (`espera_desde` nulo DE PROPÓSITO). Essa
+-- reescrita não passa pelas colunas do trigger (só toca `espera_desde`), então
+-- ele não dispara: sem esta cura, todo `update.sh` deixaria `espera_desde` E
+-- `espera_dispensada_ate` preenchidos ao mesmo tempo — o termômetro
+-- ressuscitado numa conversa que a Assistente dispensou. No baseline, este
+-- bloco entra DEPOIS do apêndice da 0279 na ordem de aplicação, então desfaz
+-- exatamente essa ressurreição na mesma passada. Idempotente: só toca a linha
+-- que a dispensa cobre.
+update public.conversations
+   set espera_desde = null
+ where espera_dispensada_ate is not null
+   and espera_desde is not null
+   and last_inbound_at <= espera_dispensada_ate;
+-- ---- cura 0285: fim ----
