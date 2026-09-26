@@ -48,16 +48,9 @@ vi.mock("@/lib/env", () => ({
 }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/ai/log-invocation", () => ({ logInvocation: vi.fn() }));
-vi.mock("@/lib/ai/cost", () => ({ computeCost: vi.fn(async () => 1) }));
-vi.mock("@/lib/ai/gateway-binding", () => ({ resolverModeloDoPonto: vi.fn() }));
-vi.mock("ai", () => ({ generateObject: vi.fn() }));
 
-import { generateObject } from "ai";
-
-import { processSentiment } from "@/workers/ai-sentiment-worker";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { processSentiment, type DependenciasDoSentimento } from "@/workers/ai-sentiment-worker";
 import { logInvocation } from "@/lib/ai/log-invocation";
-import { resolverModeloDoPonto } from "@/lib/ai/gateway-binding";
 import type { EventRow } from "@/lib/event-log/dispatcher";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
@@ -117,6 +110,13 @@ function fazerAdmin(banco: Banco, rpcs: Linha[]) {
         } else if (c.op === "is") {
           const [col, val] = c.args as [string, unknown];
           linhas = linhas.filter((l) => (l[col] ?? null) === val);
+        } else if (c.op === "neq") {
+          const [col, val] = c.args as [string, unknown];
+          linhas = linhas.filter((l) => l[col] !== val);
+        } else if (c.op === "gt") {
+          // Sem a coluna, a linha não é "maior" que nada — como no Postgres com NULL.
+          const [col, val] = c.args as [string, unknown];
+          linhas = linhas.filter((l) => l[col] != null && (l[col] as never) > (val as never));
         } else if (c.op === "in") {
           const [col, vals] = c.args as [string, unknown[]];
           linhas = linhas.filter((l) => vals.includes(l[col]));
@@ -214,6 +214,8 @@ function montarBanco(c: Cenario): Banco {
         conversation_id: CONV,
         body: "meu aparelho voltou com o mesmo defeito",
         direction: "inbound",
+        type: "text",
+        media_derived_status: null,
         metadata: {},
       },
     ],
@@ -259,11 +261,29 @@ async function rodar(c: Cenario): Promise<{
   agenteDoCusto: string | null;
 }> {
   const rpcs: Linha[] = [];
-  vi.mocked(createAdminClient).mockReturnValue(
-    fazerAdmin(montarBanco(c), rpcs) as unknown as ReturnType<typeof createAdminClient>,
-  );
+  const deps: DependenciasDoSentimento = {
+    admin: fazerAdmin(montarBanco(c), rpcs) as unknown as DependenciasDoSentimento["admin"],
+    dados: {
+      ultimasMensagens: async () => [{ direcao: "inbound", texto: "meu aparelho voltou com o mesmo defeito" }],
+    },
+    chave: async () => ({ apiKey: "sk-or-teste-0000", origem: "instalacao" }),
+    // O Jev devolve o score na escala de 5 níveis (0..4); NOTA*4 volta a NOTA.
+    consultar: async () => ({
+      ok: true,
+      corpo: { answers: { satisfacao: { type: "score", score: NOTA * 4 } }, usage: { input_tokens: 10 } },
+      status: 200,
+      latenciaMs: 5,
+    }),
+    modeloDoPonto: async () => {
+      throw new Error("com chave da OpenRouter o modelo de conversa não é consultado");
+    },
+    gerarObjeto: (async () => {
+      throw new Error("com chave da OpenRouter o modelo de conversa não é chamado");
+    }) as unknown as DependenciasDoSentimento["gerarObjeto"],
+    agora: () => new Date(),
+  };
 
-  const resultado = await processSentiment(evento);
+  const resultado = await processSentiment(evento, deps);
   expect(resultado.skipped, `o worker desistiu: ${resultado.reason ?? "-"}`).toBe(false);
 
   const alertas = rpcs.filter((r) => r["p_event_type"] === "ai.sentiment_alert");
@@ -280,14 +300,6 @@ async function rodar(c: Cenario): Promise<{
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(resolverModeloDoPonto).mockResolvedValue({
-    model: "modelo-dublê",
-    modelId: "anthropic/claude-haiku-4-5",
-  } as unknown as Awaited<ReturnType<typeof resolverModeloDoPonto>>);
-  vi.mocked(generateObject).mockResolvedValue({
-    object: { sentiment_score: NOTA, reasoning_short: "cliente reclamando de recorrência" },
-    usage: { inputTokens: 10, outputTokens: 5 },
-  } as unknown as Awaited<ReturnType<typeof generateObject>>);
 });
 
 describe("limiar de sentimento — o agente da conversa é quem manda (#486)", () => {

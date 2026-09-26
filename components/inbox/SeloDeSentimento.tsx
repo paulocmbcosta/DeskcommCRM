@@ -5,8 +5,8 @@
  *
  * Pedido do dono (2026-09-25): quem pega a conversa precisa saber, antes de ler,
  * se o cliente está irritado — para dar atenção. A nota vem do worker de
- * sentimento, que classifica toda mensagem do cliente (com a IA ou com uma
- * pessoa); a conversa guarda a última e a pior do atendimento.
+ * sentimento, que a cada mensagem do cliente avalia o ATENDIMENTO inteiro (Jev);
+ * a conversa guarda a leitura mais recente e a pior do atendimento.
  *
  * Aqui aparece em TODA faixa (satisfeito também informa); no card só quando pede
  * atenção. Texto E cor: a faixa vem escrita, e a dica diz a nota e o pior momento.
@@ -47,7 +47,7 @@ export function SeloDeSentimento({
       )}
       data-testid="selo-sentimento-da-conversa"
       data-faixa={s.faixa}
-      title={`${t("Tom do cliente, pelas mensagens dele")}: ${t(ROTULO_DA_FAIXA[s.faixa])} · ${t("nota")} ${formatarNota(s.atual)} (0 ${t("a")} 1)${pior}`}
+      title={`${t("Tom do cliente no atendimento")}: ${t(ROTULO_DA_FAIXA[s.faixa])} · ${t("nota")} ${formatarNota(s.atual)} (0 ${t("a")} 1)${pior}`}
     >
       <Icone size={11} weight="fill" aria-hidden />
       {t(ROTULO_DA_FAIXA[s.faixa])} · {formatarNota(s.atual)}

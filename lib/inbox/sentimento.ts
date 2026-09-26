@@ -1,9 +1,10 @@
 /**
  * O SENTIMENTO DO CLIENTE NA TELA — uma régua, um lugar.
  *
- * A nota (0..1) vem do worker de sentimento, que classifica toda mensagem do
- * cliente (com a IA ou com uma pessoa atendendo). A conversa guarda a última e a
- * pior do atendimento (`sentimento_atual`, `sentimento_minimo`, migration 0280).
+ * A nota (0..1) vem do worker de sentimento: a cada mensagem do cliente (com a
+ * IA ou com uma pessoa atendendo), o Jev avalia o ATENDIMENTO em aberto inteiro
+ * — não a frase. A conversa guarda a leitura mais recente e a pior do
+ * atendimento (`sentimento_atual`, `sentimento_minimo`, migration 0280).
  *
  * Faixas (pedido do dono, 2026-09-25 — a equipe precisa ACHAR a conversa
  * crítica, não ler números):

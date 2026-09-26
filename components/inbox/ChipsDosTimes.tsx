@@ -214,7 +214,7 @@ export function AlternanciasDaLista({
           aria-pressed={soInsatisfeitos}
           aria-label={t("Insatisfeitos")}
           onClick={() => onSoInsatisfeitos(!soInsatisfeitos)}
-          title={t("Clientes insatisfeitos ou em estado crítico, pelo tom das mensagens")}
+          title={t("Clientes insatisfeitos ou em estado crítico, pela avaliação do atendimento")}
         >
           <SmileySad size={12} weight={soInsatisfeitos ? "fill" : "regular"} aria-hidden />
           {t("Insatisfeitos")}

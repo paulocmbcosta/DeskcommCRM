@@ -173,15 +173,30 @@ function redigirDetalhe(bruto: string, chave: string): string {
   return Array.from(texto).slice(0, 200).join("");
 }
 
-export async function perguntarAoJev(entrada: {
+/** O que qualquer pergunta ao Jev recebe. `perguntas` é o objeto `questions` da System One. */
+export interface EntradaDoSystemOne {
   apiKey: string;
-  estado: EstadoDoJev;
+  estado: unknown;
+  perguntas: Record<string, unknown>;
   modelo: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   tempoLimiteMs?: number;
   cabecalhosExtras?: Record<string, string>;
-}): Promise<ResultadoDoJev> {
+}
+
+export type ResultadoDoSystemOne =
+  | { ok: true; corpo: unknown; status: number; latenciaMs: number }
+  | { ok: false; falha: FalhaDoJev; latenciaMs: number };
+
+/**
+ * A CHAMADA, sem interpretar a resposta: HTTP, tempo, chave e redação do erro.
+ * Devolve o corpo JSON cru — quem pergunta valida o formato da SUA pergunta
+ * (o classificador comercial em `perguntarAoJev`, abaixo; a satisfação do
+ * atendimento em `workers/ai-sentiment-worker.ts`). Mesmas regras do topo do
+ * arquivo: nunca lança, toda falha volta classificada.
+ */
+export async function consultarSystemOne(entrada: EntradaDoSystemOne): Promise<ResultadoDoSystemOne> {
   const inicio = Date.now();
   const base = (entrada.baseUrl?.trim() || OPENROUTER_BASE_PADRAO).replace(/\/+$/, "");
   const f = entrada.fetchImpl ?? fetch;
@@ -218,7 +233,7 @@ export async function perguntarAoJev(entrada: {
         Authorization: `Bearer ${chave}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ model: entrada.modelo, state: entrada.estado, questions: PERGUNTAS }),
+      body: JSON.stringify({ model: entrada.modelo, state: entrada.estado, questions: entrada.perguntas }),
       signal: AbortSignal.timeout(entrada.tempoLimiteMs ?? TEMPO_LIMITE_MS),
     });
   } catch (err) {
@@ -267,6 +282,22 @@ export async function perguntarAoJev(entrada: {
     };
   }
 
+  return { ok: true, corpo, status: resp.status, latenciaMs };
+}
+
+export async function perguntarAoJev(entrada: {
+  apiKey: string;
+  estado: EstadoDoJev;
+  modelo: string;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+  tempoLimiteMs?: number;
+  cabecalhosExtras?: Record<string, string>;
+}): Promise<ResultadoDoJev> {
+  const r = await consultarSystemOne({ ...entrada, perguntas: PERGUNTAS });
+  if (!r.ok) return r;
+  const { corpo, latenciaMs, status } = r;
+
   const lido = respostaSchema.safeParse(corpo);
   if (!lido.success) {
     // `|| "(raiz)"` por ISSUE: um problema no corpo INTEIRO (ex.: `corpo` é
@@ -276,7 +307,7 @@ export async function perguntarAoJev(entrada: {
     return {
       ok: false,
       latenciaMs,
-      falha: { tipo: "contrato", status: resp.status, detalhe: `resposta fora do formato esperado: ${caminhos}` },
+      falha: { tipo: "contrato", status, detalhe: `resposta fora do formato esperado: ${caminhos}` },
     };
   }
 

@@ -280,14 +280,14 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
   },
   {
     id: "sentiment_classify",
-    rotulo: "Medir o clima da conversa",
+    rotulo: "Medir o clima do atendimento",
     oQueFaz:
-      "Avalia se o cliente está satisfeito ou irritado, para escalar ao humano antes de perder a venda.",
+      "A cada mensagem do cliente, lê o atendimento em aberto inteiro e avalia se ele está satisfeito, neutro ou insatisfeito — o selo da conversa, o filtro \"Insatisfeitos\" e o aviso para a IA passar a conversa a uma pessoa. Com uma chave da OpenRouter usa o Jev, mais barato e mais rápido; sem ela, usa o modelo escolhido aqui.",
     papel: "entender",
     exige: {},
     emissor: "workers/ai-sentiment-worker.ts",
     sintomaDeFalha:
-      "Cliente irritado não é mais escalado para um humano, e a insatisfação só aparece quando ele já sumiu.",
+      "As conversas param de mostrar se o cliente está satisfeito ou insatisfeito, o filtro \"Insatisfeitos\" fica vazio e a IA deixa de ser avisada quando o cliente está muito insatisfeito.",
     registraEm: "llm_calls",
   },
   {

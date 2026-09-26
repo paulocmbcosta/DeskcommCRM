@@ -3,44 +3,166 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "O tom do cliente, visível para a equipe",
-    "subtitle": "o worker dá a nota a cada mensagem; a conversa guarda a última e a pior; a tela mostra; a IA é orientada a passar adiante",
+    "subtitle": "a cada mensagem do cliente o Jev avalia o atendimento inteiro; a conversa guarda a leitura atual e a pior; a tela mostra; a IA é orientada a passar adiante",
     "output": "sentimento-do-cliente.html",
     "quality_profile": "standard"
   },
   "lanes": [
-    { "id": "tela", "label": "Tela" },
-    { "id": "worker", "label": "Workers" },
-    { "id": "banco", "label": "Banco" }
+    {
+      "id": "tela",
+      "label": "Tela"
+    },
+    {
+      "id": "worker",
+      "label": "Workers"
+    },
+    {
+      "id": "banco",
+      "label": "Banco"
+    }
   ],
-  "mainPath": ["mensagem", "classifica", "registra", "conversa", "selos"],
+  "mainPath": [
+    "mensagem",
+    "classifica",
+    "registra",
+    "conversa",
+    "selos"
+  ],
   "nodes": [
-    { "id": "selos", "lane": "tela", "col": 4, "type": "frontend", "label": "Inbox — selo no topo da conversa, no card (insatisfeito/crítico), ponto na mensagem e botão Insatisfeitos" },
-    { "id": "linha", "lane": "tela", "col": 3, "type": "frontend", "label": "Linha do tempo da conversa — 'Cliente muito insatisfeito (nota 0,05)'" },
-    { "id": "limite", "lane": "tela", "col": 1, "type": "frontend", "label": "Agentes › Operação do agente — 'Cliente muito insatisfeito abaixo da nota' (ai_agents.config.sentiment_threshold)" },
-    { "id": "classifica", "lane": "worker", "col": 2, "type": "backend", "label": "ai-sentiment-worker — nota 0..1 de toda mensagem do cliente (IA ou pessoa atendendo)" },
-    { "id": "sinal", "lane": "worker", "col": 3, "type": "backend", "label": "ai-handoff-from-sentiment.v1 — abaixo do limite: registra na linha do tempo (1 a cada 30 min); NÃO transfere" },
-    { "id": "turno", "lane": "worker", "col": 4, "type": "backend", "label": "inbound-turn — lê a pior nota desde a última resposta; abaixo do limite, o agente acolhe e passa para o setor" },
-    { "id": "mensagem", "lane": "banco", "col": 1, "type": "database", "label": "messages.metadata.sentiment_score" },
-    { "id": "registra", "lane": "banco", "col": 2, "type": "database", "label": "fn_registrar_sentimento_da_conversa (0280) — última e pior do atendimento; encerrar zera" },
-    { "id": "conversa", "lane": "banco", "col": 3, "type": "database", "label": "conversations.sentimento_atual / sentimento_minimo" }
+    {
+      "id": "selos",
+      "lane": "tela",
+      "col": 4,
+      "type": "frontend",
+      "label": "Inbox — selo no topo da conversa, no card (insatisfeito/crítico), ponto na mensagem e botão Insatisfeitos"
+    },
+    {
+      "id": "linha",
+      "lane": "tela",
+      "col": 3,
+      "type": "frontend",
+      "label": "Linha do tempo da conversa — 'Cliente muito insatisfeito (nota 0,05)'"
+    },
+    {
+      "id": "limite",
+      "lane": "tela",
+      "col": 1,
+      "type": "frontend",
+      "label": "Agentes › Operação do agente — 'Cliente muito insatisfeito abaixo da nota' (ai_agents.config.sentiment_threshold)"
+    },
+    {
+      "id": "classifica",
+      "lane": "worker",
+      "col": 2,
+      "type": "backend",
+      "label": "ai-sentiment-worker — a cada mensagem do cliente, nota 0..1 do ATENDIMENTO inteiro (Jev, pergunta score de 5 níveis; sem chave da OpenRouter, o modelo de conversa)"
+    },
+    {
+      "id": "sinal",
+      "lane": "worker",
+      "col": 3,
+      "type": "backend",
+      "label": "ai-handoff-from-sentiment.v1 — abaixo do limite: registra na linha do tempo (1 a cada 30 min); NÃO transfere"
+    },
+    {
+      "id": "turno",
+      "lane": "worker",
+      "col": 4,
+      "type": "backend",
+      "label": "inbound-turn — lê a nota do atendimento (sentimento_atual); abaixo do limite, o agente acolhe e passa para o setor"
+    },
+    {
+      "id": "mensagem",
+      "lane": "banco",
+      "col": 1,
+      "type": "database",
+      "label": "messages.metadata.sentiment_score — leitura do atendimento até aquela mensagem (sentiment_escopo = atendimento)"
+    },
+    {
+      "id": "registra",
+      "lane": "banco",
+      "col": 2,
+      "type": "database",
+      "label": "fn_registrar_sentimento_da_conversa (0280) — leitura atual e pior do atendimento; encerrar zera"
+    },
+    {
+      "id": "conversa",
+      "lane": "banco",
+      "col": 3,
+      "type": "database",
+      "label": "conversations.sentimento_atual / sentimento_minimo"
+    },
+    {
+      "id": "atendimento",
+      "lane": "banco",
+      "col": 0,
+      "type": "database",
+      "label": "messages do atendimento vigente (janelaDoAtendimento, 0269) — até 50 falas"
+    }
   ],
   "edges": [
-    { "from": "classifica", "to": "mensagem", "label": "grava a nota da mensagem" },
-    { "from": "classifica", "to": "registra", "label": "grava a nota na conversa" },
-    { "from": "registra", "to": "conversa", "label": "atual + pior do atendimento" },
-    { "from": "conversa", "to": "selos", "label": "lista e topo leem as colunas; filtro por sentimento_atual < 0,3" },
-    { "from": "mensagem", "to": "selos", "label": "ponto colorido na mensagem" },
-    { "from": "classifica", "to": "sinal", "label": "ai.sentiment_alert (abaixo do limite do agente)" },
-    { "from": "sinal", "to": "linha", "label": "cliente_insatisfeito" },
-    { "from": "mensagem", "to": "turno", "label": "pior nota da rajada" },
-    { "from": "limite", "to": "classifica", "label": "limite do alerta" },
-    { "from": "limite", "to": "turno", "label": "limite do aviso ao agente" }
+    {
+      "from": "classifica",
+      "to": "mensagem",
+      "label": "grava a nota da mensagem"
+    },
+    {
+      "from": "classifica",
+      "to": "registra",
+      "label": "grava a nota na conversa"
+    },
+    {
+      "from": "registra",
+      "to": "conversa",
+      "label": "atual + pior do atendimento"
+    },
+    {
+      "from": "conversa",
+      "to": "selos",
+      "label": "lista e topo leem as colunas; filtro por sentimento_atual < 0,3"
+    },
+    {
+      "from": "mensagem",
+      "to": "selos",
+      "label": "ponto colorido: o atendimento até aquela mensagem"
+    },
+    {
+      "from": "classifica",
+      "to": "sinal",
+      "label": "ai.sentiment_alert (abaixo do limite do agente)"
+    },
+    {
+      "from": "sinal",
+      "to": "linha",
+      "label": "cliente_insatisfeito"
+    },
+    {
+      "from": "conversa",
+      "to": "turno",
+      "label": "nota do atendimento"
+    },
+    {
+      "from": "limite",
+      "to": "classifica",
+      "label": "limite do alerta"
+    },
+    {
+      "from": "limite",
+      "to": "turno",
+      "label": "limite do aviso ao agente"
+    },
+    {
+      "from": "atendimento",
+      "to": "classifica",
+      "label": "o Jev lê o atendimento inteiro"
+    }
   ],
   "cards": [
     {
       "dot": "rose",
       "title": "O que a forma não mostra",
       "items": [
+        "Atendimento como um todo (1.46): antes a nota era da última frase — dez reclamações e um 'ok, obrigado' viravam satisfeito; agora a pergunta manda pesar o histórico, e rajada é avaliada uma vez (a mensagem mais nova cobre as anteriores)",
         "A transferência automática por sentimento foi desligada: ela calava a IA com frase genérica e deixava a conversa sem time — 42 alertas em 48 h num provedor, a maioria o cliente só descrevendo o defeito",
         "A faixa da tela (0,1 / 0,3 / 0,6) é fixa; o limite do agente é outra coisa — decide quando a IA é orientada a passar adiante",
         "Nota que chega depois do encerramento não reacende o selo; atendimento novo começa sem nota",
