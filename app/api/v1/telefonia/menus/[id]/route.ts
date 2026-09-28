@@ -4,7 +4,7 @@
  *        `menu_em_uso`, com os números em `details`) enquanto algum número o toca:
  *        arquivar calaria a URA daquele número. `arquivarMenu` trava a linha do menu
  *        e confere o uso num comando separado, então não corre com quem aponta um
- *        número para ele (`travarMenuAtivo`).
+ *        número para ele (`travarMenuAtivo`). As falas do menu saem junto.
  *
  * O id do caminho é conferido DEPOIS do papel: quem não é admin não aprende nada
  * sobre o formato. A organização é a da SESSÃO em toda consulta.
@@ -61,7 +61,8 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     organizationId: authz.org.orgId,
     resourceType: "phone_menu",
     resourceId: menuId,
-    metadata: {},
+    // As falas do menu saem junto (a limpeza do worker leva o áudio do Storage).
+    metadata: { falas_descartadas: r.falasDescartadas },
     requestId,
   });
   return ok({ arquivado: true }, { requestId });

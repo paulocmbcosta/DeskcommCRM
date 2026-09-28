@@ -14,7 +14,7 @@
  *  - `55P03` vira `gravacao_em_andamento`, a FK composta do time vira
  *    `time_invalido`, e a conexão com rollback quebrado é descartada;
  *  - D15: o módulo não carrega o cliente da ElevenLabs.
- * O SQL de verdade (FK composta, `for update`, "últimos 7 dias" só com ligação
+ * O SQL de verdade (FK composta, `for no key update`, "últimos 7 dias" só com ligação
  * encerrada) é medido em Postgres real em tests/invariants/telefonia-menus-no-banco.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +26,7 @@ import {
   arquivarMenu,
   mensagemDoMenuEmUso,
   menuSchema,
+  rotuloDoNumero,
   menusDaOrg,
   salvarMenuDaOrg,
   situacaoDoMenuParaNumero,
@@ -100,22 +101,22 @@ const erroDoBanco = (code: string, constraint?: string): ErroDoBanco =>
  * antes da conexão".
  */
 class Banco {
-  times = new Map<string, { org: string; arquivado: boolean }>([
-    [TIME_A, { org: ORG, arquivado: false }],
-    [TIME_B, { org: ORG, arquivado: false }],
-    [TIME_ARQUIVADO, { org: ORG, arquivado: true }],
-    [TIME_DE_FORA, { org: OUTRA, arquivado: false }],
+  times = new Map<string, { org: string; arquivado: boolean; nome: string }>([
+    [TIME_A, { org: ORG, arquivado: false, nome: "Suporte" }],
+    [TIME_B, { org: ORG, arquivado: false, nome: "Financeiro" }],
+    [TIME_ARQUIVADO, { org: ORG, arquivado: true, nome: "Antigo" }],
+    [TIME_DE_FORA, { org: OUTRA, arquivado: false, nome: "De fora" }],
   ]);
   vozes = new Map<string, { voice_id: string; model_id: string }>([[ORG, VOZ]]);
   /** Os números (channel_sessions) e o menu que cada um toca. */
-  numeros: Array<{ org: string; menu_id: string; nome: string; arquivado: boolean }> = [];
+  numeros: Array<{ org: string; menu_id: string; nome: string | null; numero: string | null; arquivado: boolean }> = [];
   estado: Estado = { menus: new Map(), opcoes: [], falas: new Map() };
   eventos: string[] = [];
   naTransacao: Array<{ sql: string; params: unknown[] }> = [];
   liberacoes: Array<Error | undefined> = [];
   falhar: { quando: RegExp; erro: ErroDoBanco } | null = null;
   falharRollback = false;
-  /** Roda logo ANTES do `select ... for update` do menu: o que outra gravação fez entre a conferência e a trava. */
+  /** Roda logo ANTES do `select ... for no key update` do menu: o que outra gravação fez entre a conferência e a trava. */
   antesDaTrava: ((e: Estado) => void) | null = null;
   private foto: Estado | null = null;
   private seq = 0;
@@ -158,12 +159,30 @@ class Banco {
       return linhas([{ n }]);
     }
     if (s.startsWith("select id, prompt_id, invalid_prompt_id from phone_menus")) {
-      if (s.endsWith("for update")) this.antesDaTrava?.(this.estado);
+      if (s.endsWith("for no key update")) this.antesDaTrava?.(this.estado);
       const m = this.estado.menus.get(p[0] as string);
       return linhas(m && m.organization_id === p[1] && !m.archived ? [{ id: m.id, prompt_id: m.prompt_id, invalid_prompt_id: m.invalid_prompt_id }] : []);
     }
-    if (s.startsWith("select coalesce(c.display_name, c.phone_number) as nome from channel_sessions")) {
-      return linhas(this.numeros.filter((n) => n.org === p[0] && n.menu_id === p[1] && !n.arquivado).map((n) => ({ nome: n.nome })));
+    if (s.startsWith("select c.display_name as nome, c.phone_number as numero from channel_sessions")) {
+      return linhas(
+        this.numeros.filter((n) => n.org === p[0] && n.menu_id === p[1] && !n.arquivado).map((n) => ({ nome: n.nome, numero: n.numero })),
+      );
+    }
+    if (s.startsWith("select id, name from attendance_teams")) {
+      const ids = p[1] as string[];
+      return linhas(ids.filter((id) => this.times.get(id)?.org === p[0]).map((id) => ({ id, name: this.times.get(id)!.nome })));
+    }
+    if (s.startsWith("delete from phone_prompts where organization_id = $1 and id = any")) {
+      const apagadas = (p[1] as string[]).filter((id) => e.falas.get(id)?.organization_id === p[0]);
+      for (const id of apagadas) {
+        e.falas.delete(id);
+        // A FK `set null (coluna)` solta o menu.
+        for (const m of e.menus.values()) {
+          if (m.prompt_id === id) m.prompt_id = null;
+          if (m.invalid_prompt_id === id) m.invalid_prompt_id = null;
+        }
+      }
+      return linhas(apagadas.map((id) => ({ id })));
     }
     if (s.startsWith("update phone_menus set archived_at")) {
       const m = e.menus.get(p[0] as string);
@@ -392,6 +411,7 @@ describe("salvarMenuDaOrg — conferir fora da transação, gravar tudo junto so
       "insert into phone_prompts",
       "insert into phone_menus",
       "insert into phone_menu_options",
+      "select id, name",
       "commit",
     ]);
     expect(banco.naTransacao[1]!.sql).toBe("set local lock_timeout = '4s'");
@@ -409,6 +429,31 @@ describe("salvarMenuDaOrg — conferir fora da transação, gravar tudo junto so
       ["1", TIME_A],
       ["2", TIME_B],
     ]);
+    // O menu da resposta sai da transação, com os nomes dos times e sem número (é novo).
+    expect(r.ok && r.menu).toMatchObject({
+      id: menu.id,
+      nome: "Principal",
+      time_padrao_id: TIME_A,
+      time_padrao_nome: "Suporte",
+      opcoes: [
+        { tecla: "1", time_id: TIME_A, time_nome: "Suporte" },
+        { tecla: "2", time_id: TIME_B, time_nome: "Financeiro" },
+      ],
+      fala: { id: falas[0]!.id, hash: HASH_MENU },
+      fala_invalida: { id: falas[1]!.id, hash: HASH_INVALIDA },
+      pronto: true,
+      numeros: [],
+    });
+    expect(banco.naTransacao.some((c) => c.sql.includes("from channel_sessions"))).toBe(false);
+  });
+
+  it("editar: o menu da resposta traz as opções em ordem de tecla e os números que o tocam, lidos na transação", async () => {
+    const criado = await salvar();
+    const id = criado.ok ? criado.id : "";
+    banco.numeros.push({ org: ORG, menu_id: id, nome: "Recepção", numero: "+556136861503", arquivado: false });
+    const r = await salvar({ opcoes: [{ tecla: "9", time_id: TIME_B }, { tecla: "3", time_id: TIME_A }] }, id);
+    expect(r.ok && r.menu.opcoes.map((o) => o.tecla)).toEqual(["3", "9"]);
+    expect(r.ok && r.menu.numeros).toEqual(["Recepção"]);
   });
 
   it("editar: trava a linha do menu ANTES de ler as falas, regrava a MESMA linha da fala e troca as opções", async () => {
@@ -423,7 +468,7 @@ describe("salvarMenuDaOrg — conferir fora da transação, gravar tudo junto so
     const r = await salvar({ fala: { texto: TEXTO_NOVO, hash: HASH_NOVO }, opcoes: [{ tecla: "3", time_id: TIME_B }] }, id);
     expect(r).toMatchObject({ ok: true, id, fala: { mudou: true, fala: { id: falaId, hash: HASH_NOVO } } });
     const sqls = banco.naTransacao.map((c) => c.sql);
-    const trava = sqls.findIndex((s) => s.endsWith("for update"));
+    const trava = sqls.findIndex((s) => s.endsWith("for no key update"));
     const leituraDaFala = sqls.findIndex((s) => s.includes("from phone_prompts where id = $1"));
     expect(trava).toBe(2);
     expect(leituraDaFala).toBeGreaterThan(trava);
@@ -500,7 +545,7 @@ describe("salvarMenuDaOrg — conferir fora da transação, gravar tudo junto so
   it("a trava está com outra gravação há mais que o prazo (55P03): gravacao_em_andamento, desfeito e a conexão devolvida", async () => {
     const criado = await salvar();
     const id = criado.ok ? criado.id : "";
-    banco.falhar = { quando: /for update$/, erro: erroDoBanco("55P03") };
+    banco.falhar = { quando: /for no key update$/, erro: erroDoBanco("55P03") };
     expect(await salvar({ nome: "Outro" }, id)).toEqual({ ok: false, motivo: "gravacao_em_andamento" });
     expect(banco.eventos.slice(-2)).toEqual(["rollback", "release"]);
     expect(banco.liberacoes.at(-1)).toBeUndefined();
@@ -598,11 +643,11 @@ describe("menusDaOrg", () => {
 });
 
 describe("travarMenuAtivo", () => {
-  it("trava a linha do menu ativo DESTA organização (for update) e o devolve; de fora, arquivado ou inexistente: null", async () => {
+  it("trava a linha do menu ativo DESTA organização (for no key update) e o devolve; de fora, arquivado ou inexistente: null", async () => {
     const { db, consultas } = dbCom([[{ id: "m", prompt_id: "f1", invalid_prompt_id: null }], []]);
     expect(await travarMenuAtivo(db, ORG, "m")).toEqual({ id: "m", prompt_id: "f1", invalid_prompt_id: null });
     expect(await travarMenuAtivo(db, OUTRA, "m")).toBeNull();
-    expect(consultas[0]!.sql).toMatch(/where id = \$1 and organization_id = \$2 and archived_at is null for update$/);
+    expect(consultas[0]!.sql).toMatch(/where id = \$1 and organization_id = \$2 and archived_at is null for no key update$/);
     expect(consultas.map((c) => c.params)).toEqual([
       ["m", ORG],
       ["m", OUTRA],
@@ -619,47 +664,70 @@ describe("arquivarMenu — em transação: trava, confere o uso num comando SEPA
     return r.id;
   };
 
-  it("menu livre: prazo de trava, for update, o uso conferido DEPOIS num comando próprio, e só então arquiva", async () => {
+  it("menu livre: prazo de trava, for no key update, o uso conferido DEPOIS num comando próprio, e só então arquiva", async () => {
     const id = await criar();
-    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: true });
+    expect(await arquivarMenu(banco.pool, ORG, id)).toMatchObject({ ok: true });
     expect(comandosDaTransacao()).toEqual([
       "begin",
       "set local lock_timeout",
       "select id, prompt_id,",
-      "select coalesce(c.display_name, c.phone_number)",
+      "select c.display_name as",
       "update phone_menus set",
+      "delete from phone_prompts",
       "commit",
     ]);
-    expect(banco.naTransacao[2]!.sql).toMatch(/for update$/);
+    expect(banco.naTransacao[2]!.sql).toMatch(/for no key update$/);
     expect(banco.naTransacao[3]!.params).toEqual([ORG, id]);
     expect(banco.naTransacao[4]!.params).toEqual([id, ORG]);
     expect(banco.estado.menus.get(id)!.archived).toBe(true);
     expect(banco.eventos.slice(-2)).toEqual(["commit", "release"]);
   });
 
-  it("menu que atende número: menu_em_uso com os NOMES dos números, desfeito e nada arquivado", async () => {
+  it("as falas do menu arquivado saem na MESMA transação (e só as dele); o menu fica, solto delas", async () => {
+    const criado = await salvar({ fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } });
+    if (!criado.ok) throw new Error("criar devia passar");
+    const outro = await salvar({ nome: "Outro" });
+    const falasDoMenu = [criado.fala.fala.id, criado.falaInvalida!.fala.id];
+
+    const r = await arquivarMenu(banco.pool, ORG, criado.id);
+
+    expect(r.ok && [...r.falasDescartadas].sort()).toEqual([...falasDoMenu].sort());
+    for (const f of falasDoMenu) expect(banco.estado.falas.has(f)).toBe(false);
+    expect(banco.estado.falas.has(outro.ok ? outro.fala.fala.id : "")).toBe(true);
+    expect(banco.estado.menus.get(criado.id)).toMatchObject({ archived: true, prompt_id: null, invalid_prompt_id: null });
+    const apagar = banco.naTransacao.find((c) => c.sql.startsWith("delete from phone_prompts"))!;
+    expect(apagar.params[0]).toBe(ORG);
+  });
+
+  it("menu que atende número: menu_em_uso com o nome e o número de cada um, desfeito, nada arquivado nem apagado", async () => {
     const id = await criar();
     banco.numeros.push(
-      { org: ORG, menu_id: id, nome: "Recepção", arquivado: false },
-      { org: ORG, menu_id: id, nome: "Antigo", arquivado: true },
-      { org: OUTRA, menu_id: id, nome: "De fora", arquivado: false },
+      { org: ORG, menu_id: id, nome: "Recepção", numero: "+556136861503", arquivado: false },
+      { org: ORG, menu_id: id, nome: "Antigo", numero: "+556136861504", arquivado: true },
+      { org: OUTRA, menu_id: id, nome: "De fora", numero: "+556136861505", arquivado: false },
     );
-    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: false, motivo: "menu_em_uso", numeros: ["Recepção"] });
+    const falasAntes = banco.estado.falas.size;
+    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({
+      ok: false,
+      motivo: "menu_em_uso",
+      numeros: [{ nome: "Recepção", numero: "+556136861503" }],
+    });
     expect(comandosDaTransacao().at(-1)).toBe("rollback");
     expect(banco.estado.menus.get(id)!.archived).toBe(false);
+    expect(banco.estado.falas.size).toBe(falasAntes);
   });
 
   it("de outra organização, já arquivado ou inexistente: nao_encontrado, desfeito, sem conferir uso", async () => {
     const id = await criar();
     expect(await arquivarMenu(banco.pool, OUTRA, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
     expect(comandosDaTransacao().slice(-2)).toEqual(["select id, prompt_id,", "rollback"]);
-    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: true });
+    expect(await arquivarMenu(banco.pool, ORG, id)).toMatchObject({ ok: true });
     expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
   });
 
   it("a trava está com outra gravação além do prazo (55P03): gravacao_em_andamento, desfeito e a conexão devolvida", async () => {
     const id = await criar();
-    banco.falhar = { quando: /for update$/, erro: erroDoBanco("55P03") };
+    banco.falhar = { quando: /for no key update$/, erro: erroDoBanco("55P03") };
     expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: false, motivo: "gravacao_em_andamento" });
     expect(banco.eventos.slice(-2)).toEqual(["rollback", "release"]);
     expect(banco.liberacoes.at(-1)).toBeUndefined();
@@ -674,24 +742,37 @@ describe("arquivarMenu — em transação: trava, confere o uso num comando SEPA
   });
 });
 
-describe("mensagemDoMenuEmUso", () => {
-  it("nomeia o número (ou os números) que usam o menu", () => {
-    expect(mensagemDoMenuEmUso(["Recepção"])).toBe(
-      "Este menu está em uso pelo número Recepção. Troque o destino do número antes de arquivar.",
+describe("rotuloDoNumero e mensagemDoMenuEmUso", () => {
+  it("o rótulo mostra o nome e o número quando há os dois; só um, quando falta o outro ou o nome É o número", () => {
+    expect(rotuloDoNumero({ nome: "Recepção", numero: "+556136861503" })).toBe("Recepção ((61) 3686-1503)");
+    expect(rotuloDoNumero({ nome: null, numero: "+5561999990000" })).toBe("(61) 99999-0000");
+    expect(rotuloDoNumero({ nome: "Recepção", numero: null })).toBe("Recepção");
+    expect(rotuloDoNumero({ nome: "+556136861503", numero: "+556136861503" })).toBe("(61) 3686-1503");
+    expect(rotuloDoNumero({ nome: "  ", numero: "+14155550100" })).toBe("+14155550100");
+  });
+
+  it("nomeia o número (ou os números) que usam o menu, no singular e no plural", () => {
+    expect(mensagemDoMenuEmUso([{ nome: "Recepção", numero: "+556136861503" }])).toBe(
+      "Este menu está em uso por: Recepção ((61) 3686-1503). Troque o destino do número antes de arquivar.",
     );
-    expect(mensagemDoMenuEmUso(["Recepção", "+556130000000"])).toBe(
-      "Este menu está em uso pelos números Recepção, +556130000000. Troque o destino dos números antes de arquivar.",
+    expect(
+      mensagemDoMenuEmUso([
+        { nome: "Recepção", numero: "+556136861503" },
+        { nome: null, numero: "+556136861504" },
+      ]),
+    ).toBe(
+      "Este menu está em uso por: Recepção ((61) 3686-1503), (61) 3686-1504. Troque o destino dos números antes de arquivar.",
     );
   });
 
-  it("traduz o MODELO antes de pôr o nome: a chave do dicionário é o texto com o marcador", () => {
+  it("traduz o MODELO antes de pôr o rótulo: a chave do dicionário é o texto com o marcador", () => {
     const vistos: string[] = [];
     const t = (texto: string) => {
       vistos.push(texto);
-      return texto.replace("Este menu está em uso pelo número", "Este menú está en uso por el número");
+      return texto.replace("Este menu está em uso por:", "Este menú está en uso por:");
     };
-    expect(mensagemDoMenuEmUso(["Recepción"], t)).toMatch(/^Este menú está en uso por el número Recepción\./);
-    expect(vistos).toEqual(["Este menu está em uso pelo número {numero}. Troque o destino do número antes de arquivar."]);
+    expect(mensagemDoMenuEmUso([{ nome: "Recepción", numero: null }], t)).toMatch(/^Este menú está en uso por: Recepción\./);
+    expect(vistos).toEqual(["Este menu está em uso por: {numero}. Troque o destino do número antes de arquivar."]);
   });
 });
 

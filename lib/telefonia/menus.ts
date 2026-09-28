@@ -21,7 +21,8 @@
  *     não salva menu nenhum. O Storage não tem prazo no supabase-js, e lido com a
  *     trava segura prenderia a linha do menu e uma conexão que as rotas da IA e do
  *     MCP também usam.
- *  2. Numa transação com `lock_timeout`: trava a linha do menu (`for update`),
+ *  2. Numa transação com `lock_timeout` (`emTransacao`): trava a linha do menu
+ *     (`travarMenuAtivo`, `for no key update`),
  *     relê as falas dele e DECIDE DE NOVO (`reconferirFala`, sem Storage) — outra
  *     gravação do mesmo menu pode ter criado ou trocado uma fala no meio, e gravar
  *     com a decisão velha deixaria uma linha de `phone_prompts` órfã. Depois grava
@@ -43,6 +44,7 @@ import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
 import type { PortaDoArmazem } from "./armazem";
 import {
+  PRAZO_DA_TRAVA,
   conferirFala,
   descartarFala,
   falaParaSalvarSchema,
@@ -50,13 +52,13 @@ import {
   gravarFalaConferida,
   reconferirFala,
   vozDaOrganizacao,
-  type ConexaoDaTransacao,
   type FalaConferida,
   type PedidoDeSalvar,
-  type PoolDeTransacao,
 } from "./falas";
+import { numeroParaFalar } from "./texto-do-menu";
+import { confirmar, desfazer, emTransacao, type PoolDeTransacao } from "./transacao";
 import { somarUltimosSeteDias, type LinhaDoMenuNaSemana } from "./ultimos-sete-dias";
-import type { FalaPublica, FalhaDaFala, MenuPublico, OpcaoDoMenuPublica, TipoDeFala } from "./vocabulario";
+import type { FalaPublica, FalhaDaFala, MenuPublico, OpcaoDoMenuPublica, TipoDeFala, UltimosSeteDias } from "./vocabulario";
 
 export const menuSchema = z
   .object({
@@ -110,20 +112,40 @@ export const MENSAGEM_DO_AUDIO_DA_FALA_DO_MENU: Record<"previa_ausente" | "armaz
   },
 };
 
+/** Um número que toca o menu, como o banco o guarda: o nome dado a ele (se houver) e o número. */
+export interface NumeroDoMenu {
+  nome: string | null;
+  numero: string | null;
+}
+
+/**
+ * Como a tela e a recusa mostram um número: "Recepção ((61) 3686-1503)" com os
+ * dois; só o nome, ou só o número, quando falta o outro — ou quando o nome É o
+ * número.
+ */
+export function rotuloDoNumero(n: NumeroDoMenu): string {
+  const nome = n.nome?.trim() || null;
+  const bruto = n.numero?.trim() || null;
+  const numero = bruto ? (numeroParaFalar(bruto) ?? bruto) : null;
+  if (nome && numero) return nome.replace(/\D/g, "") === bruto!.replace(/\D/g, "") ? numero : `${nome} (${numero})`;
+  return nome ?? numero ?? "";
+}
+
 /** O menu em uso por um número (ou vários), NOMEANDO-os. `{numero}`/`{numeros}` entram depois da tradução. */
 export const MENSAGEM_DO_MENU_EM_USO = {
-  um: "Este menu está em uso pelo número {numero}. Troque o destino do número antes de arquivar.",
-  varios: "Este menu está em uso pelos números {numeros}. Troque o destino dos números antes de arquivar.",
+  um: "Este menu está em uso por: {numero}. Troque o destino do número antes de arquivar.",
+  varios: "Este menu está em uso por: {numeros}. Troque o destino dos números antes de arquivar.",
 } as const;
 
 /**
  * A recusa de arquivar, com os números que usam o menu. `t` traduz o MODELO (a
- * chave do dicionário é o texto com o marcador) e o nome entra depois.
+ * chave do dicionário é o texto com o marcador) e os rótulos entram depois.
  */
-export function mensagemDoMenuEmUso(numeros: readonly string[], t: (texto: string) => string = (x) => x): string {
-  if (numeros.length === 0) return t(MENSAGEM_DA_FALHA_DO_MENU.menu_em_uso);
-  if (numeros.length === 1) return t(MENSAGEM_DO_MENU_EM_USO.um).replaceAll("{numero}", numeros[0]!);
-  return t(MENSAGEM_DO_MENU_EM_USO.varios).replaceAll("{numeros}", numeros.join(", "));
+export function mensagemDoMenuEmUso(numeros: readonly NumeroDoMenu[], t: (texto: string) => string = (x) => x): string {
+  const rotulos = numeros.map(rotuloDoNumero).filter(Boolean);
+  if (rotulos.length === 0) return t(MENSAGEM_DA_FALHA_DO_MENU.menu_em_uso);
+  if (rotulos.length === 1) return t(MENSAGEM_DO_MENU_EM_USO.um).replaceAll("{numero}", rotulos[0]!);
+  return t(MENSAGEM_DO_MENU_EM_USO.varios).replaceAll("{numeros}", rotulos.join(", "));
 }
 
 export function teclaRepetida(opcoes: ReadonlyArray<{ tecla: string }>): boolean {
@@ -161,8 +183,8 @@ export interface MenuTravado {
 }
 
 /**
- * TRAVA a linha de um menu ATIVO desta organização (`select … for update`) e o
- * devolve — ou `null` se ele não existe, é de outra organização ou está arquivado.
+ * TRAVA a linha de um menu ATIVO desta organização (`select … for no key update`)
+ * e o devolve — ou `null` se ele não existe, é de outra organização ou está arquivado.
  *
  * CONTRATO de quem chama:
  *  - `cliente` é UMA conexão com a transação JÁ aberta (`begin`), com
@@ -176,7 +198,8 @@ export interface MenuTravado {
  * É a catraca comum das três escritas que dependem do menu ativo — salvar o menu
  * (`salvarMenuDaOrg`), arquivá-lo (`arquivarMenu`) e apontar um número para ele
  * (`lib/channels/telefonia/numeros.ts`, na transação da troca do destino). As três
- * travam a MESMA linha em `for update` e por isso se serializam:
+ * travam a MESMA linha em `for no key update`, que conflita consigo mesmo, e por
+ * isso se serializam:
  *  - arquivar primeiro: quem aponta o número espera a trava; quando o arquivamento
  *    confirma, o Postgres reconfere `archived_at is null` na versão nova da linha e
  *    devolve `null` — nenhum número passa a tocar um menu arquivado;
@@ -185,17 +208,35 @@ export interface MenuTravado {
  * A FK composta `channel_sessions → phone_menus` sozinha NÃO serializa: ela trava o
  * menu em `key share`, que não conflita com o UPDATE de `archived_at` — e o
  * `not exists` de um comando só é avaliado com o snapshot do início dele, sem ver
- * o número recém-apontado (tests/invariants/telefonia-menus-no-banco.test.ts
- * mede as duas coisas, com o controle).
+ * o número recém-apontado.
+ *
+ * Por que `for no key update` e não `for update`: a LIGAÇÃO também toca esta linha.
+ * O INSERT em `voice_calls` com `menu_id` confere a FK composta com `key share`, e
+ * `for update` conflita com `key share` — quem salva o menu faria uma ligação
+ * esperar (e cair no `lock_timeout` do worker). `for no key update` não conflita
+ * com `key share`, e nenhuma das três escritas muda a chave do menu (`id`,
+ * `organization_id`). tests/invariants/telefonia-menus-no-banco.test.ts mede as
+ * três coisas, com os controles.
  */
 export async function travarMenuAtivo(cliente: Queryable, organizationId: string, menuId: string): Promise<MenuTravado | null> {
   const { rows } = await cliente.query<MenuTravado>(
     `select id, prompt_id, invalid_prompt_id from phone_menus
       where id = $1 and organization_id = $2 and archived_at is null
-      for update`,
+      for no key update`,
     [menuId, organizationId],
   );
   return rows[0] ?? null;
+}
+
+/** Os números ATIVOS da organização que tocam o menu, na ordem em que foram criados. */
+export async function numerosDoMenu(db: Queryable, organizationId: string, menuId: string): Promise<NumeroDoMenu[]> {
+  const { rows } = await db.query<NumeroDoMenu>(
+    `select c.display_name as nome, c.phone_number as numero from channel_sessions c
+      where c.organization_id = $1 and c.sip_menu_id = $2 and c.archived_at is null
+      order by c.created_at`,
+    [organizationId, menuId],
+  );
+  return rows;
 }
 
 export interface PedidoDeSalvarMenu {
@@ -215,10 +256,14 @@ export interface FalaGravada {
   mudou: boolean;
 }
 
+/** O menu como a transação o gravou — o `MenuPublico` sem a semana, que é leitura à parte (`semanaDoMenu`). */
+export type MenuSalvo = Omit<MenuPublico, "ultimos_7_dias">;
+
 export type ResultadoDoSalvarMenu =
   | {
       ok: true;
       id: string;
+      menu: MenuSalvo;
       fala: FalaGravada;
       falaInvalida: FalaGravada | null;
       /** A fala de tecla inválida que o menu deixou de ter e saiu junto (a limpeza do worker leva o objeto). */
@@ -226,9 +271,6 @@ export type ResultadoDoSalvarMenu =
     }
   | { ok: false; motivo: Exclude<FalhaDoMenu, "menu_em_uso"> }
   | { ok: false; motivo: FalhaDaFala; fala: QualFala };
-
-/** O `lock_timeout` da transação do menu — o mesmo prazo da fala geral. */
-const PRAZO_DA_TRAVA = "4s";
 
 /** Sob a trava ninguém lê o Storage: a porta que a decisão NÃO pode usar lança se for usada. */
 const SEM_STORAGE_SOB_A_TRAVA: Pick<PortaDoArmazem, "baixar"> = {
@@ -239,11 +281,12 @@ const SEM_STORAGE_SOB_A_TRAVA: Pick<PortaDoArmazem, "baixar"> = {
 
 type ErroDoPg = { code?: unknown; constraint?: unknown } | null;
 
-/** O que um erro do Postgres na transação significa para quem salva — ou `null`, e ele sobe. */
-function falhaDoErro(e: unknown): Exclude<FalhaDoMenu, "menu_em_uso"> | null {
+/**
+ * O que um erro do Postgres na transação significa para quem salva — ou `null`, e
+ * ele sobe. O 55P03 (prazo da trava) é traduzido por `emTransacao`.
+ */
+function falhaDoErro(e: unknown): "time_invalido" | "tecla_repetida" | null {
   const { code, constraint } = (e ?? {}) as NonNullable<ErroDoPg>;
-  // O `lock_timeout` venceu esperando a trava do menu.
-  if (code === "55P03") return "gravacao_em_andamento";
   // A FK composta do time (time padrão ou de uma opção) — o time sumiu ou é de outra organização.
   if (code === "23503" && typeof constraint === "string" && /team_id_fkey$/.test(constraint)) return "time_invalido";
   // A chave (menu_id, digit) das opções.
@@ -251,39 +294,87 @@ function falhaDoErro(e: unknown): Exclude<FalhaDoMenu, "menu_em_uso"> | null {
   return null;
 }
 
+/** A coluna de `phone_menus` de cada fala do menu — lista fechada: nunca texto de fora no SQL. */
+const COLUNA_DA_FALA_DO_MENU: Record<QualFala, "prompt_id" | "invalid_prompt_id"> = {
+  menu: "prompt_id",
+  invalida: "invalid_prompt_id",
+};
+
+type PonteirosDasFalas = Record<"prompt_id" | "invalid_prompt_id", string | null>;
+
 /**
- * Uma transação numa conexão só, com `lock_timeout`: `corpo` devolve o resultado e
- * se é para confirmar (`commit`) ou desfazer (`rollback`). Erro desfaz; `seErro`
- * traduz o que é recusa conhecida e o resto sobe. Se até o rollback falhar, a
- * conexão é DESCARTADA (`release(erro)`), e não devolvida ao pool para a próxima
- * rota herdar uma transação quebrada.
+ * Grava o menu (novo, se `id` é `null`, ou o travado) e TROCA as opções dele.
+ * Devolve o id. Dentro da transação de `salvarMenuDaOrg`, com a trava do menu
+ * segura. É aqui que a versão 3 (ramais) mexe: `accepts_extension` entra ao lado
+ * de nome, time padrão e falas.
  */
-async function naTransacao<T>(
-  pool: PoolDeTransacao,
-  corpo: (c: ConexaoDaTransacao) => Promise<{ confirmar: boolean; valor: T }>,
-  seErro: (e: unknown) => T | null,
-): Promise<T> {
-  const conexao = await pool.connect();
-  let descartar: Error | undefined;
-  try {
-    await conexao.query("begin");
-    await conexao.query(`set local lock_timeout = '${PRAZO_DA_TRAVA}'`);
-    const r = await corpo(conexao);
-    await conexao.query(r.confirmar ? "commit" : "rollback");
-    return r.valor;
-  } catch (erro) {
-    try {
-      await conexao.query("rollback");
-    } catch (falha) {
-      // A conexão morreu: devolvê-la ao pool entregaria a próxima rota a um socket quebrado.
-      descartar = falha instanceof Error ? falha : new Error("rollback falhou");
-    }
-    const traduzido = seErro(erro);
-    if (traduzido !== null) return traduzido;
-    throw erro;
-  } finally {
-    conexao.release(descartar);
+async function gravarMenuEOpcoes(
+  c: Queryable,
+  org: string,
+  id: string | null,
+  e: EntradaDoMenu,
+  falas: PonteirosDasFalas,
+): Promise<string> {
+  let menuId = id;
+  if (menuId) {
+    await c.query(
+      `update phone_menus
+          set name = $3, default_team_id = $4, prompt_id = $5, invalid_prompt_id = $6, updated_at = now()
+        where id = $1 and organization_id = $2 and archived_at is null`,
+      [menuId, org, e.nome, e.time_padrao_id, falas.prompt_id, falas.invalid_prompt_id],
+    );
+    await c.query("delete from phone_menu_options where menu_id = $1 and organization_id = $2", [menuId, org]);
+  } else {
+    const { rows } = await c.query<{ id: string }>(
+      `insert into phone_menus (organization_id, name, default_team_id, prompt_id, invalid_prompt_id)
+       values ($1, $2, $3, $4, $5) returning id`,
+      [org, e.nome, e.time_padrao_id, falas.prompt_id, falas.invalid_prompt_id],
+    );
+    menuId = rows[0]!.id;
   }
+  await c.query(
+    `insert into phone_menu_options (organization_id, menu_id, digit, team_id)
+     select $1, $2, x.tecla, x.time_id from jsonb_to_recordset($3::jsonb) as x(tecla text, time_id uuid)`,
+    [org, menuId, JSON.stringify(e.opcoes)],
+  );
+  return menuId;
+}
+
+/**
+ * O menu gravado como a tela o vê, montado com o que a transação acabou de gravar
+ * — sem reler a lista inteira. Os nomes dos times e os números que o tocam são
+ * lidos na mesma transação; menu novo não tem número (ninguém aponta para um menu
+ * que ainda não foi confirmado).
+ */
+async function descreverMenu(
+  c: Queryable,
+  org: string,
+  id: string,
+  novo: boolean,
+  e: EntradaDoMenu,
+  fala: FalaPublica,
+  falaInvalida: FalaPublica | null,
+): Promise<MenuSalvo> {
+  const ids = [...new Set([...e.opcoes.map((o) => o.time_id), e.time_padrao_id])];
+  const { rows: times } = await c.query<{ id: string; name: string }>(
+    "select id, name from attendance_teams where organization_id = $1 and id = any($2::uuid[])",
+    [org, ids],
+  );
+  const nomeDo = (timeId: string) => times.find((t) => t.id === timeId)?.name ?? "";
+  const numeros = novo ? [] : await numerosDoMenu(c, org, id);
+  return {
+    id,
+    nome: e.nome,
+    time_padrao_id: e.time_padrao_id,
+    time_padrao_nome: nomeDo(e.time_padrao_id),
+    opcoes: [...e.opcoes]
+      .sort((a, b) => a.tecla.localeCompare(b.tecla))
+      .map((o) => ({ tecla: o.tecla, time_id: o.time_id, time_nome: nomeDo(o.time_id) })),
+    fala,
+    fala_invalida: falaInvalida,
+    pronto: fala.status === "ready" && (!falaInvalida || falaInvalida.status === "ready"),
+    numeros: numeros.map((n) => n.nome ?? n.numero ?? ""),
+  };
 }
 
 /**
@@ -315,7 +406,7 @@ export async function salvarMenuDaOrg(p: PedidoDeSalvarMenu): Promise<ResultadoD
 
   const aprovadas: Partial<Record<QualFala, Extract<FalaConferida, { ok: true }>>> = {};
   for (const qual of ["menu", "invalida"] as const) {
-    const pedido = pedidoDaFala(qual, pool, p.armazem, (qual === "menu" ? atual?.prompt_id : atual?.invalid_prompt_id) ?? null);
+    const pedido = pedidoDaFala(qual, pool, p.armazem, atual?.[COLUNA_DA_FALA_DO_MENU[qual]] ?? null);
     if (!pedido) continue;
     const c = await conferirFala(pedido);
     if (!c.ok) return { ok: false, motivo: c.motivo, fala: qual };
@@ -323,10 +414,9 @@ export async function salvarMenuDaOrg(p: PedidoDeSalvarMenu): Promise<ResultadoD
   }
 
   // ── Fase 2: a transação, sob a trava do menu ─────────────────────────────
-  type Resultado = ResultadoDoSalvarMenu;
-  const desfazer = (valor: Resultado) => ({ confirmar: false, valor });
-  return naTransacao<Resultado>(
+  return emTransacao<ResultadoDoSalvarMenu>(
     pool,
+    PRAZO_DA_TRAVA,
     async (conexao) => {
       const travado = p.id ? await travarMenuAtivo(conexao, org, p.id) : null;
       if (p.id && !travado) return desfazer({ ok: false, motivo: "nao_encontrado" });
@@ -334,7 +424,7 @@ export async function salvarMenuDaOrg(p: PedidoDeSalvarMenu): Promise<ResultadoD
       const gravadas: Partial<Record<QualFala, FalaGravada>> = {};
       for (const qual of ["menu", "invalida"] as const) {
         const aprovada = aprovadas[qual];
-        const idAtual = (qual === "menu" ? travado?.prompt_id : travado?.invalid_prompt_id) ?? null;
+        const idAtual = travado?.[COLUNA_DA_FALA_DO_MENU[qual]] ?? null;
         const pedido = pedidoDaFala(qual, conexao, SEM_STORAGE_SOB_A_TRAVA, idAtual);
         if (!aprovada || !pedido) continue;
         const lida = idAtual ? await falaPorId(conexao, org, idAtual) : null;
@@ -345,34 +435,17 @@ export async function salvarMenuDaOrg(p: PedidoDeSalvarMenu): Promise<ResultadoD
       const fala = gravadas.menu!;
       const falaInvalida = gravadas.invalida ?? null;
 
-      let id = p.id;
-      if (id) {
-        await conexao.query(
-          `update phone_menus
-              set name = $3, default_team_id = $4, prompt_id = $5, invalid_prompt_id = $6, updated_at = now()
-            where id = $1 and organization_id = $2 and archived_at is null`,
-          [id, org, e.nome, e.time_padrao_id, fala.fala.id, falaInvalida?.fala.id ?? null],
-        );
-        await conexao.query("delete from phone_menu_options where menu_id = $1 and organization_id = $2", [id, org]);
-      } else {
-        const { rows } = await conexao.query<{ id: string }>(
-          `insert into phone_menus (organization_id, name, default_team_id, prompt_id, invalid_prompt_id)
-           values ($1, $2, $3, $4, $5) returning id`,
-          [org, e.nome, e.time_padrao_id, fala.fala.id, falaInvalida?.fala.id ?? null],
-        );
-        id = rows[0]!.id;
-      }
-      await conexao.query(
-        `insert into phone_menu_options (organization_id, menu_id, digit, team_id)
-         select $1, $2, x.tecla, x.time_id from jsonb_to_recordset($3::jsonb) as x(tecla text, time_id uuid)`,
-        [org, id, JSON.stringify(e.opcoes)],
-      );
+      const id = await gravarMenuEOpcoes(conexao, org, p.id, e, {
+        prompt_id: fala.fala.id,
+        invalid_prompt_id: falaInvalida?.fala.id ?? null,
+      });
 
       // A fala de tecla inválida que o menu deixou de ter sai junto, DEPOIS de o menu soltá-la.
       const falaInvalidaDescartada = !e.fala_invalida && travado?.invalid_prompt_id ? travado.invalid_prompt_id : null;
       if (falaInvalidaDescartada) await descartarFala(conexao, org, falaInvalidaDescartada);
 
-      return { confirmar: true, valor: { ok: true, id, fala, falaInvalida, falaInvalidaDescartada } };
+      const menu = await descreverMenu(conexao, org, id, !p.id, e, fala.fala, falaInvalida?.fala ?? null);
+      return confirmar({ ok: true, id, menu, fala, falaInvalida, falaInvalidaDescartada });
     },
     (erro) => {
       const motivo = falhaDoErro(erro);
@@ -457,42 +530,55 @@ export async function menusDaOrg(db: Queryable, organizationId: string): Promise
   });
 }
 
+/** O "últimos 7 dias" de UM menu — a mesma régua de `menusDaOrg`, só para ele. */
+export async function semanaDoMenu(db: Queryable, organizationId: string, menuId: string): Promise<UltimosSeteDias> {
+  const { rows } = await db.query<LinhaDoMenuNaSemana & { menu_id: string }>(CONSULTA_DA_SEMANA, [organizationId, [menuId]]);
+  return somarUltimosSeteDias(rows);
+}
+
 export type ResultadoDoArquivar =
-  | { ok: true }
+  /** `falasDescartadas` = as linhas de `phone_prompts` do menu que saíram junto. */
+  | { ok: true; falasDescartadas: string[] }
   | { ok: false; motivo: "nao_encontrado" | "gravacao_em_andamento" }
-  /** `numeros` = os nomes (ou, sem nome, os números) que tocam o menu — a tela os mostra. */
-  | { ok: false; motivo: "menu_em_uso"; numeros: string[] };
+  /** `numeros` = os números que tocam o menu — a tela os mostra (`rotuloDoNumero`). */
+  | { ok: false; motivo: "menu_em_uso"; numeros: NumeroDoMenu[] };
 
 /**
  * Arquiva o menu, se nenhum número o toca: arquivar um menu em uso calaria a URA
- * daquele número. Numa transação, em comandos SEPARADOS: trava a linha do menu
- * (`travarMenuAtivo`); DEPOIS, num comando próprio (snapshot novo), confere os
- * números ativos que apontam para ele; só então arquiva. Num comando só
+ * daquele número. Numa transação (`emTransacao`), em comandos SEPARADOS: trava a
+ * linha do menu (`travarMenuAtivo`); DEPOIS, num comando próprio (snapshot novo),
+ * confere os números ativos que apontam para ele; só então arquiva. Num comando só
  * (`update … where not exists`), a subconsulta usaria o snapshot do início do
  * comando e não veria um número apontado por uma transação que acabou de
  * confirmar — nem esperaria por uma que ainda não confirmou.
+ *
+ * As FALAS do menu saem na mesma transação: a linha de `phone_prompts` de cada uma
+ * é apagada, as FKs de `phone_menus.prompt_id`/`invalid_prompt_id` (`set null`
+ * da coluna) soltam o menu, e os objetos, sem referência, saem do Storage na
+ * limpeza do worker (24 h). Sem isso, a referência de um menu arquivado manteria
+ * o áudio vivo para sempre. O menu fica — é dele que `voice_calls.menu_id` fala.
  */
 export async function arquivarMenu(pool: PoolDeTransacao, organizationId: string, id: string): Promise<ResultadoDoArquivar> {
-  const desfazer = (valor: ResultadoDoArquivar) => ({ confirmar: false, valor });
-  return naTransacao<ResultadoDoArquivar>(
-    pool,
-    async (conexao) => {
-      if (!(await travarMenuAtivo(conexao, organizationId, id))) return desfazer({ ok: false, motivo: "nao_encontrado" });
-      const { rows } = await conexao.query<{ nome: string }>(
-        `select coalesce(c.display_name, c.phone_number) as nome from channel_sessions c
-          where c.organization_id = $1 and c.sip_menu_id = $2 and c.archived_at is null
-          order by c.created_at`,
-        [organizationId, id],
+  return emTransacao<ResultadoDoArquivar>(pool, PRAZO_DA_TRAVA, async (conexao) => {
+    const menu = await travarMenuAtivo(conexao, organizationId, id);
+    if (!menu) return desfazer({ ok: false, motivo: "nao_encontrado" });
+    const numeros = await numerosDoMenu(conexao, organizationId, id);
+    if (numeros.length > 0) return desfazer({ ok: false, motivo: "menu_em_uso", numeros });
+    await conexao.query(
+      "update phone_menus set archived_at = now(), updated_at = now() where id = $1 and organization_id = $2",
+      [id, organizationId],
+    );
+    const falas = [menu.prompt_id, menu.invalid_prompt_id].filter((f): f is string => f !== null);
+    let falasDescartadas: string[] = [];
+    if (falas.length > 0) {
+      const { rows } = await conexao.query<{ id: string }>(
+        "delete from phone_prompts where organization_id = $1 and id = any($2::uuid[]) returning id",
+        [organizationId, falas],
       );
-      if (rows.length > 0) return desfazer({ ok: false, motivo: "menu_em_uso", numeros: rows.map((r) => r.nome) });
-      await conexao.query(
-        "update phone_menus set archived_at = now(), updated_at = now() where id = $1 and organization_id = $2",
-        [id, organizationId],
-      );
-      return { confirmar: true, valor: { ok: true } };
-    },
-    (erro) => (falhaDoErro(erro) === "gravacao_em_andamento" ? { ok: false, motivo: "gravacao_em_andamento" } : null),
-  );
+      falasDescartadas = rows.map((r) => r.id);
+    }
+    return confirmar({ ok: true, falasDescartadas });
+  });
 }
 
 /** Um número só toca um menu desta organização, não arquivado, com a fala (e a de inválida, se houver) pronta. */

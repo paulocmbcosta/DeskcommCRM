@@ -11,7 +11,7 @@
  *     recusa vira `time_invalido`, não um 500;
  *  3. duas edições simultâneas do mesmo menu que dão a ele a fala de tecla
  *     inválida saem com UMA linha dessa fala — a trava da linha do menu
- *     (`for update`) e a decisão de novo sob ela; o CONTROLE, sem a trava, mostra
+ *     (`for no key update`) e a decisão de novo sob ela; o CONTROLE, sem a trava, mostra
  *     a linha órfã que o teste diz prender;
  *  4. a trava segurada além do `lock_timeout` desiste com `gravacao_em_andamento`;
  *  5. o "últimos 7 dias" soma só ligações ENCERRADAS: quem desligou no menu conta
@@ -24,12 +24,17 @@
  *     número tocando um menu arquivado — nas duas ordens e com o encontro forçado,
  *     porque as duas escritas travam a linha do menu (`travarMenuAtivo`) e o
  *     arquivamento confere o uso num comando SEPARADO. O CONTROLE (arquivar num
- *     comando só + apontar só com a FK) mostra o defeito que o teste diz prender.
+ *     comando só + apontar só com a FK) mostra o defeito que o teste diz prender;
+ *  8. a trava do menu (`for no key update`) NÃO faz a ligação esperar: o INSERT em
+ *     `voice_calls` com aquele `menu_id` (a FK pede `key share`) entra na hora —
+ *     e o CONTROLE com `for update` mostra a ligação caindo no `lock_timeout`;
+ *  9. arquivar apaga as falas do menu na mesma transação; o menu fica, solto delas,
+ *     para o histórico das ligações.
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { caminhoDaFala, hashDaFala, type ConexaoDaTransacao, type PoolDeTransacao } from "@/lib/telefonia/falas";
+import { caminhoDaFala, hashDaFala } from "@/lib/telefonia/falas";
 import {
   CONSULTA_DA_SEMANA,
   arquivarMenu,
@@ -40,6 +45,13 @@ import {
   type EntradaDoMenu,
   type PedidoDeSalvarMenu,
 } from "@/lib/telefonia/menus";
+import {
+  confirmar,
+  desfazer,
+  emTransacao,
+  type ConexaoDaTransacao,
+  type PoolDeTransacao,
+} from "@/lib/telefonia/transacao";
 import { menuConfunde } from "@/lib/telefonia/ultimos-sete-dias";
 
 import { sql } from "./gov-helpers";
@@ -66,7 +78,14 @@ const TEXTO_MENU = "Para Suporte, digite 1. Para Financeiro, digite 2.";
 const HASH_MENU = hashDaFala(TEXTO_MENU, VOZ, MODELO);
 const TEXTO_INVALIDA = "Opção inválida.";
 const HASH_INVALIDA = hashDaFala(TEXTO_INVALIDA, VOZ, MODELO);
-const TRAVA_DO_MENU = /from phone_menus\s+where id = \$1 and organization_id = \$2 and archived_at is null\s+(for update)?\s*$/i;
+/**
+ * A leitura TRAVADA da linha do menu (`travarMenuAtivo`), reconhecida pelo texto
+ * normalizado — espaço, quebra de linha e indentação do SQL não mudam a resposta.
+ */
+const ehTravaDoMenu = (sql: string) =>
+  /from phone_menus where id = \$1 and organization_id = \$2 and archived_at is null for no key update$/i.test(
+    sql.replace(/\s+/g, " ").trim(),
+  );
 
 /** O Storage em memória: as prévias de A estão guardadas; nada de B. */
 const armazem = {
@@ -111,7 +130,7 @@ const contar = async (tabela: string, org: string) =>
 /**
  * O pool de verdade com o ponto de encontro logo DEPOIS da leitura da linha do menu
  * na transação. `tirarTrava` é a gravação sem o conserto: a mesma leitura, sem
- * `for update`. Mesma técnica de telefonia-fala-geral-concorrente.test.ts: sem o
+ * `for no key update`. Mesma técnica de telefonia-fala-geral-concorrente.test.ts: sem o
  * encontro, a primeira transação podia terminar antes de a segunda começar, e o
  * teste passaria mesmo sem trava.
  */
@@ -135,9 +154,9 @@ function poolComEncontro({ tirarTrava = false, prazoMs = 500 } = {}) {
       return {
         release: (erro?: Error) => c.release(erro),
         query: (async (texto: string, valores?: unknown[]) => {
-          const comando = tirarTrava ? texto.replace(/\s+for update\s*$/i, "") : texto;
+          const comando = tirarTrava ? texto.replace(/\s+for no key update\s*$/i, "") : texto;
           const r = await c.query(comando, valores);
-          if (TRAVA_DO_MENU.test(texto)) await encontro();
+          if (ehTravaDoMenu(texto)) await encontro();
           return r;
         }) as ConexaoDaTransacao["query"],
       };
@@ -209,6 +228,9 @@ describe("salvarMenuDaOrg no Postgres real", () => {
       ultimos_7_dias: { total: 0 },
     });
     expect(menu!.fala!.atualizada_em).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    // O menu que a TRANSAÇÃO devolve é o mesmo que a leitura da lista vê.
+    const { ultimos_7_dias: _semana, ...lido } = menu!;
+    expect(r.menu).toEqual(lido);
     expect(await situacaoDoMenuParaNumero(pool, ORG_A, r.id)).toBe("pronto");
     // B não enxerga o menu de A.
     expect(await menusDaOrg(pool, ORG_B)).toEqual([]);
@@ -287,7 +309,7 @@ describe("salvarMenuDaOrg no Postgres real", () => {
     const dono = await pool.connect();
     try {
       await dono.query("begin");
-      await dono.query("select 1 from phone_menus where id = $1 for update", [id]);
+      await dono.query("select 1 from phone_menus where id = $1 for no key update", [id]);
 
       const inicio = Date.now();
       const r = await salvarMenuDaOrg(pedido({ nome: "Outro nome", fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } }, id));
@@ -407,16 +429,47 @@ describe("arquivarMenu e o destino do número", () => {
     sql(`update public.channel_sessions set sip_team_id = null, sip_menu_id = '${id}' where id = '${NUMERO_A}';`);
     expect((await menusDaOrg(pool, ORG_A))[0]!.numeros).toEqual(["Recepção"]);
 
-    expect(await arquivarMenu(pool, ORG_A, id)).toEqual({ ok: false, motivo: "menu_em_uso", numeros: ["Recepção"] });
+    expect(await arquivarMenu(pool, ORG_A, id)).toEqual({
+      ok: false,
+      motivo: "menu_em_uso",
+      numeros: [{ nome: "Recepção", numero: "+556130008801" }],
+    });
     expect(await arquivarMenu(pool, ORG_B, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
     expect(await menusDaOrg(pool, ORG_A)).toHaveLength(1);
 
     sql(`update public.channel_sessions set sip_menu_id = null where id = '${NUMERO_A}';`);
-    expect(await arquivarMenu(pool, ORG_A, id)).toEqual({ ok: true });
+    expect(await arquivarMenu(pool, ORG_A, id)).toMatchObject({ ok: true });
     expect(await arquivarMenu(pool, ORG_A, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
     expect(await menusDaOrg(pool, ORG_A)).toEqual([]);
     expect(await situacaoDoMenuParaNumero(pool, ORG_A, id)).toBe("inexistente");
     expect(await salvarMenuDaOrg(pedido({ nome: "Ressuscitado" }, id))).toEqual({ ok: false, motivo: "nao_encontrado" });
+  });
+
+  it("arquivar apaga as falas do menu na mesma transação: o menu fica (histórico das ligações), solto delas; as de outro menu ficam", async () => {
+    const r = await criar({ fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } });
+    const outro = await criar({ nome: "Outro" });
+    const falasDoMenu = [r.fala.fala.id, r.falaInvalida!.fala.id];
+    sql(`
+      insert into public.voice_calls
+        (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_id, menu_outcome, menu_digit)
+      values ('${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'historico-' || gen_random_uuid(), 'inbound', '+5561999995555', 'ended',
+              '${r.id}', 'chosen', '1');
+    `);
+
+    const a = await arquivarMenu(pool, ORG_A, r.id);
+
+    expect(a.ok && [...a.falasDescartadas].sort()).toEqual([...falasDoMenu].sort());
+    const { rows: sobraram } = await pool.query("select id from phone_prompts where id = any($1::uuid[])", [falasDoMenu]);
+    expect(sobraram).toEqual([]);
+    const { rows: menu } = await pool.query<{ arquivado: boolean; prompt_id: string | null; invalid_prompt_id: string | null }>(
+      "select archived_at is not null as arquivado, prompt_id, invalid_prompt_id from phone_menus where id = $1",
+      [r.id],
+    );
+    expect(menu).toEqual([{ arquivado: true, prompt_id: null, invalid_prompt_id: null }]);
+    const { rows: ligacoes } = await pool.query("select 1 from voice_calls where menu_id = $1", [r.id]);
+    expect(ligacoes).toHaveLength(1);
+    const { rows: doOutro } = await pool.query("select 1 from phone_prompts where id = $1", [outro.fala.fala.id]);
+    expect(doOutro).toHaveLength(1);
   });
 
   it("menu com a fala que não está pronta: pendente para número", async () => {
@@ -432,27 +485,21 @@ describe("arquivarMenu e o destino do número", () => {
  * usa (contrato de `travarMenuAtivo`): transação com prazo, trava do menu ativo,
  * e a troca do destino num comando SEPARADO depois dela.
  */
-async function apontarNumero(p: PoolDeTransacao, numeroId: string, menuId: string): Promise<"ok" | "menu_inativo"> {
-  const c = await p.connect();
-  try {
-    await c.query("begin");
-    await c.query("set local lock_timeout = '4s'");
-    if (!(await travarMenuAtivo(c, ORG_A, menuId))) {
-      await c.query("rollback");
-      return "menu_inativo";
-    }
-    await c.query(
-      "update channel_sessions set sip_team_id = null, sip_menu_id = $3 where id = $1 and organization_id = $2",
-      [numeroId, ORG_A, menuId],
-    );
-    await c.query("commit");
-    return "ok";
-  } catch (e) {
-    await c.query("rollback").catch(() => undefined);
-    throw e;
-  } finally {
-    c.release();
-  }
+async function apontarNumero(
+  p: PoolDeTransacao,
+  numeroId: string,
+  menuId: string,
+): Promise<"ok" | "menu_inativo" | "gravacao_em_andamento"> {
+  const r = await emTransacao(p, "4s", async (c) => {
+    if (!(await travarMenuAtivo(c, ORG_A, menuId))) return desfazer("menu_inativo" as const);
+    await c.query("update channel_sessions set sip_team_id = null, sip_menu_id = $3 where id = $1 and organization_id = $2", [
+      numeroId,
+      ORG_A,
+      menuId,
+    ]);
+    return confirmar("ok" as const);
+  });
+  return typeof r === "string" ? r : r.motivo;
 }
 
 /** O pool de verdade com um PORTÃO logo depois da trava do menu: a transação para ali até `abrir()`. */
@@ -461,14 +508,15 @@ function poolComPortao() {
   const portao = new Promise<void>((r) => (abrir = r));
   let avisar: () => void = () => undefined;
   const travou = new Promise<void>((r) => (avisar = r));
-  const embrulhado: PoolDeTransacao = {
+  const embrulhado: PedidoDeSalvarMenu["pool"] = {
+    query: pool.query.bind(pool) as PedidoDeSalvarMenu["pool"]["query"],
     connect: async (): Promise<ConexaoDaTransacao> => {
       const c = await pool.connect();
       return {
         release: (erro?: Error) => c.release(erro),
         query: (async (texto: string, valores?: unknown[]) => {
           const r = await c.query(texto, valores);
-          if (TRAVA_DO_MENU.test(texto)) {
+          if (ehTravaDoMenu(texto)) {
             avisar();
             await portao;
           }
@@ -502,15 +550,18 @@ describe("arquivar × apontar um número ao menu, ao mesmo tempo (Postgres real)
     const { id } = await criar();
     const portao = poolComPortao();
     const arquivando = arquivarMenu(portao.pool, ORG_A, id);
-    await portao.travou;
-
-    const apontando = apontarNumero(pool, NUMERO_A, id);
-    const apontou = acompanhar(apontando);
-    await esperar(300);
-    expect(apontou()).toBe(false); // parado na trava do menu
-
-    portao.abrir();
-    expect(await arquivando).toEqual({ ok: true });
+    let apontando: Promise<string> = Promise.resolve("—");
+    try {
+      await portao.travou;
+      apontando = apontarNumero(pool, NUMERO_A, id);
+      const apontou = acompanhar(apontando);
+      await esperar(300);
+      expect(apontou()).toBe(false); // parado na trava do menu
+    } finally {
+      // Abre sempre: uma asserção vermelha acima não pode deixar a transação presa no portão.
+      portao.abrir();
+    }
+    expect(await arquivando).toMatchObject({ ok: true });
     expect(await apontando).toBe("menu_inativo");
     expect(await arquivado(id)).toBe(true);
     expect(await destinoDoNumero()).toBeNull();
@@ -520,16 +571,22 @@ describe("arquivar × apontar um número ao menu, ao mesmo tempo (Postgres real)
     const { id } = await criar();
     const portao = poolComPortao();
     const apontando = apontarNumero(portao.pool, NUMERO_A, id);
-    await portao.travou;
-
-    const arquivando = arquivarMenu(pool, ORG_A, id);
-    const arquivou = acompanhar(arquivando);
-    await esperar(300);
-    expect(arquivou()).toBe(false); // parado na trava do menu
-
-    portao.abrir();
+    let arquivando: ReturnType<typeof arquivarMenu> = Promise.resolve({ ok: false, motivo: "nao_encontrado" });
+    try {
+      await portao.travou;
+      arquivando = arquivarMenu(pool, ORG_A, id);
+      const arquivou = acompanhar(arquivando);
+      await esperar(300);
+      expect(arquivou()).toBe(false); // parado na trava do menu
+    } finally {
+      portao.abrir();
+    }
     expect(await apontando).toBe("ok");
-    expect(await arquivando).toEqual({ ok: false, motivo: "menu_em_uso", numeros: ["Recepção"] });
+    expect(await arquivando).toEqual({
+      ok: false,
+      motivo: "menu_em_uso",
+      numeros: [{ nome: "Recepção", numero: "+556130008801" }],
+    });
     expect(await arquivado(id)).toBe(false);
     expect(await destinoDoNumero()).toBe(id);
   });
@@ -571,9 +628,62 @@ describe("arquivar × apontar um número ao menu, ao mesmo tempo (Postgres real)
       expect(r === "esperou" ? r : r.rowCount).toBe(1);
       await dono.query("commit");
     } finally {
+      // Depois do commit é um no-op; se uma asserção falhou antes, a transação não volta aberta ao pool.
+      await dono.query("rollback").catch(() => undefined);
       dono.release();
     }
     expect(await arquivado(id)).toBe(true);
     expect(await destinoDoNumero()).toBe(id);
+  });
+});
+
+describe("a trava do menu não faz a LIGAÇÃO esperar", () => {
+  /** A ligação entrando no menu: o INSERT em voice_calls com `menu_id`, com 1 s de prazo de trava. */
+  const inserirLigacao = async (menuId: string): Promise<string> => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      await c.query("set local lock_timeout = '1s'");
+      await c.query(
+        `insert into voice_calls (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_id)
+         values ($1, $2, 'sip_trunk', 'trava-' || gen_random_uuid(), 'inbound', '+5561999996666', 'ringing', $3)`,
+        [ORG_A, NUMERO_A, menuId],
+      );
+      await c.query("commit");
+      return "entrou";
+    } catch (e) {
+      await c.query("rollback").catch(() => undefined);
+      return (e as { code?: string }).code ?? "erro";
+    } finally {
+      c.release();
+    }
+  };
+
+  it("com o menu travado por um salvar (for no key update), o INSERT da ligação com aquele menu_id entra na hora", async () => {
+    const { id } = await criar();
+    const portao = poolComPortao();
+    const salvando = salvarMenuDaOrg(pedido({ nome: "Editado" }, id, portao.pool));
+    try {
+      await portao.travou;
+      const inicio = Date.now();
+      expect(await inserirLigacao(id)).toBe("entrou");
+      expect(Date.now() - inicio).toBeLessThan(900);
+    } finally {
+      portao.abrir();
+    }
+    expect(await salvando).toMatchObject({ ok: true });
+  });
+
+  it("CONTROLE — com o menu em for update (a trava antiga), o mesmo INSERT espera e cai no lock_timeout (55P03)", async () => {
+    const { id } = await criar();
+    const dono = await pool.connect();
+    try {
+      await dono.query("begin");
+      await dono.query("select 1 from phone_menus where id = $1 for update", [id]);
+      expect(await inserirLigacao(id)).toBe("55P03");
+    } finally {
+      await dono.query("rollback").catch(() => undefined);
+      dono.release();
+    }
   });
 });

@@ -43,6 +43,7 @@ import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { logger } from "@/lib/logger";
 
 import type { PortaDoArmazem } from "./armazem";
+import { confirmar, desfazer, emTransacao, type PoolDeTransacao } from "./transacao";
 import { duracaoDoUlawMs } from "./ulaw";
 import {
   MODELO_DE_VOZ_PADRAO,
@@ -461,16 +462,9 @@ export async function descartarFala(db: Queryable, organizationId: string, id: s
   await db.query("delete from phone_prompts where id = $1 and organization_id = $2", [id, organizationId]);
 }
 
-/** Uma conexão SÓ desta gravação: a transação e a trava vivem nela. O `pg.PoolClient` serve. */
-export interface ConexaoDaTransacao extends Queryable {
-  /** Com um erro, a conexão é DESCARTADA em vez de voltar ao pool (a semântica do `pg`). */
-  release(erro?: Error): void;
-}
-
-/** De onde sai a conexão da transação. O `pg.Pool` da rota serve. */
-export interface PoolDeTransacao {
-  connect(): Promise<ConexaoDaTransacao>;
-}
+// Os tipos da conexão moram em transacao.ts (a transação única do telefone); o
+// reexport mantém quem já os importava daqui.
+export type { ConexaoDaTransacao, PoolDeTransacao } from "./transacao";
 
 export interface PedidoDaFalaGeral {
   pool: PoolDeTransacao;
@@ -483,13 +477,8 @@ export interface PedidoDaFalaGeral {
   hash: string;
 }
 
-/** O `lock_timeout` da gravação da fala geral: quem espera a trava mais que isto desiste. */
-const PRAZO_DA_TRAVA = "4s";
-
-/** 55P03 (`lock_not_available`): o `lock_timeout` venceu esperando a trava. */
-function ehPrazoDaTrava(e: unknown): boolean {
-  return (e as { code?: unknown } | null)?.code === "55P03";
-}
+/** O `lock_timeout` das gravações do telefone: quem espera a trava mais que isto desiste. */
+export const PRAZO_DA_TRAVA = "4s";
 
 /**
  * O "Salvar e usar" de uma fala GERAL (`waiting`, `nobody`, `after_hours`): confere
@@ -519,19 +508,15 @@ function ehPrazoDaTrava(e: unknown): boolean {
  *     ficaria sem trava nenhuma.
  *  4. Com a trava: a fala atual, a decisão PURA (`decidirFala`) e a gravação. Nada
  *     aqui espera rede. Recusa (ou erro) desfaz tudo, inclusive a linha do upsert.
- * Se até o rollback falhar, a conexão é DESCARTADA (`release(erro)`), e não
- * devolvida ao pool para a próxima rota herdar uma transação quebrada.
+ * A transação é a `emTransacao` (transacao.ts): prazo, rollback, 55P03 e a conexão
+ * descartada quando o rollback falha moram lá, uma vez só.
  */
 export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDoSalvar> {
   if (!textoDaFalaValido(p.texto)) return { ok: false, motivo: "texto_recusado" };
   const objeto = await medirObjeto(p.armazem, p.organizationId, p.hash);
 
   const coluna = COLUNA_DA_FALA_GERAL[p.tipo];
-  const conexao = await p.pool.connect();
-  let descartar: Error | undefined;
-  try {
-    await conexao.query("begin");
-    await conexao.query(`set local lock_timeout = '${PRAZO_DA_TRAVA}'`);
+  return emTransacao<ResultadoDoSalvar>(p.pool, PRAZO_DA_TRAVA, async (conexao) => {
     await conexao.query("insert into phone_settings (organization_id) values ($1) on conflict (organization_id) do nothing", [
       p.organizationId,
     ]);
@@ -553,10 +538,7 @@ export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDo
     };
     const lida = pedido.falaAtualId ? await falaPorId(conexao, p.organizationId, pedido.falaAtualId) : null;
     const c = decidirFala(pedido, lida, objeto);
-    if (!c.ok) {
-      await conexao.query("rollback");
-      return c;
-    }
+    if (!c.ok) return desfazer(c);
     const r = await gravarFalaConferida(pedido, c);
     if (r.mudou) {
       await conexao.query(`update phone_settings set ${coluna} = $2, updated_at = now() where organization_id = $1`, [
@@ -564,18 +546,6 @@ export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDo
         r.fala.id,
       ]);
     }
-    await conexao.query("commit");
-    return { ok: true, ...r };
-  } catch (e) {
-    try {
-      await conexao.query("rollback");
-    } catch (falha) {
-      // A conexão morreu: devolvê-la ao pool entregaria a próxima rota a um socket quebrado.
-      descartar = falha instanceof Error ? falha : new Error("rollback falhou");
-    }
-    if (ehPrazoDaTrava(e)) return { ok: false, motivo: "gravacao_em_andamento" };
-    throw e;
-  } finally {
-    conexao.release(descartar);
-  }
+    return confirmar({ ok: true, ...r });
+  });
 }
