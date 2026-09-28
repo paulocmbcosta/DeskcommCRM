@@ -72,11 +72,26 @@
 -- tudo a tabela nova, e só acrescentar GRANT não retira nada.
 -- Nenhuma função nova.
 --
--- Idempotente e auto-curativa: `if not exists` em tabela, coluna e índice;
--- CHECKs com drop + add depois de corrigir o dado que os violaria; FKs compostas
--- por um bloco `do` que confere o catálogo (um clone que já tenha a FK SIMPLES de
--- um rascunho desta migration sai com a composta, e o ponteiro para outra
--- organização vira nulo antes); policies com drop + create; gatilhos com
+-- Idempotente e auto-curativa: `if not exists` em tabela, coluna e índice.
+--
+-- CHECKs: cada um é criado SÓ quando falta (bloco `do` que confere `pg_constraint`
+-- pelo NOME) — reaplicar o baseline não os derruba, não trava a tabela e não a
+-- varre (em `voice_calls`, que cresce com o histórico, isso pesa a cada
+-- `update.sh`). Mudou a definição? Nome novo, nunca edição da antiga. Ao criar
+-- pela primeira vez: onde há correção segura, o dado que violaria é CURADO antes
+-- (caminho do áudio e fala `ready` sem arquivo → `failed`; `status` fora do
+-- vocabulário → `failed`; nome do menu acima de 80 → cortado; tecla fora de 0–9
+-- → opção apagada, desfecho/tecla da ligação → nulo; número com time E menu →
+-- fica o time; aviso incoerente → desligado). O CHECK nasce `NOT VALID` e é
+-- VALIDADO logo em seguida (bloco 6b), fora do lock exclusivo. Onde não há
+-- correção segura (`kind`, `text`, `content_hash`, nome vazio), uma linha que
+-- viola deixa o CHECK `NOT VALID` — ele vale para toda linha nova — com um
+-- WARNING no log, e cada `update.sh` seguinte tenta validá-lo de novo. A tabela
+-- nunca fica sem o CHECK, e nunca em silêncio.
+--
+-- FKs compostas por um bloco `do` que confere o catálogo (um clone que já tenha a
+-- FK SIMPLES de um rascunho desta migration sai com a composta, e o ponteiro para
+-- outra organização vira nulo antes); policies com drop + create; gatilhos com
 -- `create or replace`; bucket com `on conflict`.
 -- O trecho entre os marcadores `[apêndice 0288]` é copiado, sem mudança, para o
 -- apêndice do baseline.sql.
@@ -101,33 +116,57 @@ create table if not exists public.phone_prompts (
   unique (organization_id, id)
 );
 
--- Cura antes dos CHECKs: a tabela é nova, e só uma linha gravada por fora os violaria.
-update public.phone_prompts
-   set status = 'failed', error = coalesce(error, 'erro_do_provedor'), storage_path = null, duration_ms = null
- where storage_path is not null
-   and storage_path <> organization_id::text || '/' || content_hash || '.ulaw';
-update public.phone_prompts
-   set status = 'failed', error = coalesce(error, 'erro_do_provedor')
- where status = 'ready' and (storage_path is null or duration_ms is null or duration_ms <= 0);
+-- CHECKs: só quando faltam, curados antes onde há correção segura, `NOT VALID` e
+-- validados no bloco 6b (o porquê no cabeçalho). kind, text e hash não têm cura.
+do $chk_falas$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_kind_check') then
+    alter table public.phone_prompts add constraint phone_prompts_kind_check
+      check (kind in ('menu', 'invalid', 'waiting', 'nobody', 'after_hours', 'emergency')) not valid;
+  end if;
 
-alter table public.phone_prompts drop constraint if exists phone_prompts_kind_check;
-alter table public.phone_prompts add constraint phone_prompts_kind_check
-  check (kind in ('menu', 'invalid', 'waiting', 'nobody', 'after_hours', 'emergency'));
-alter table public.phone_prompts drop constraint if exists phone_prompts_status_check;
-alter table public.phone_prompts add constraint phone_prompts_status_check
-  check (status in ('ready', 'failed'));
-alter table public.phone_prompts drop constraint if exists phone_prompts_text_check;
-alter table public.phone_prompts add constraint phone_prompts_text_check
-  check (char_length("text") between 1 and 1000);
-alter table public.phone_prompts drop constraint if exists phone_prompts_hash_check;
-alter table public.phone_prompts add constraint phone_prompts_hash_check
-  check (content_hash ~ '^[0-9a-f]{64}$');
-alter table public.phone_prompts drop constraint if exists phone_prompts_storage_path_check;
-alter table public.phone_prompts add constraint phone_prompts_storage_path_check
-  check (storage_path is null or storage_path = organization_id::text || '/' || content_hash || '.ulaw');
-alter table public.phone_prompts drop constraint if exists phone_prompts_ready_check;
-alter table public.phone_prompts add constraint phone_prompts_ready_check
-  check (status <> 'ready' or (storage_path is not null and duration_ms is not null and duration_ms > 0));
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_status_check') then
+    update public.phone_prompts
+       set status = 'failed', error = coalesce(error, 'erro_do_provedor')
+     where status not in ('ready', 'failed');
+    alter table public.phone_prompts add constraint phone_prompts_status_check
+      check (status in ('ready', 'failed')) not valid;
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_text_check') then
+    alter table public.phone_prompts add constraint phone_prompts_text_check
+      check (char_length("text") between 1 and 1000) not valid;
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_hash_check') then
+    alter table public.phone_prompts add constraint phone_prompts_hash_check
+      check (content_hash ~ '^[0-9a-f]{64}$') not valid;
+  end if;
+
+  -- O worker escreve este caminho no disco: caminho fora da régua perde o arquivo.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_storage_path_check') then
+    update public.phone_prompts
+       set status = 'failed', error = coalesce(error, 'erro_do_provedor'), storage_path = null, duration_ms = null
+     where storage_path is not null
+       and storage_path <> organization_id::text || '/' || content_hash || '.ulaw';
+    alter table public.phone_prompts add constraint phone_prompts_storage_path_check
+      check (storage_path is null or storage_path = organization_id::text || '/' || content_hash || '.ulaw') not valid;
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_ready_check') then
+    update public.phone_prompts
+       set status = 'failed', error = coalesce(error, 'erro_do_provedor')
+     where status = 'ready' and (storage_path is null or duration_ms is null or duration_ms <= 0);
+    alter table public.phone_prompts add constraint phone_prompts_ready_check
+      check (status <> 'ready' or (storage_path is not null and duration_ms is not null and duration_ms > 0)) not valid;
+  end if;
+end $chk_falas$;
 
 create index if not exists phone_prompts_org on public.phone_prompts (organization_id);
 create index if not exists phone_prompts_caminho_pronto on public.phone_prompts (storage_path) where status = 'ready';
@@ -160,11 +199,22 @@ create table if not exists public.phone_menus (
   updated_at        timestamptz not null default now(),
   unique (organization_id, id),
   -- no action: a coluna é not null (set null não cabe) e time é arquivado, não apagado.
+  -- O alvo `attendance_teams(organization_id, id)` é a `unique` que a 0263 criou
+  -- junto com a tabela — antes desta migration na cadeia e antes deste bloco no
+  -- baseline. Sem guarda aqui de propósito: sem a unique, attendance_teams nem
+  -- existiria.
   foreign key (organization_id, default_team_id) references public.attendance_teams(organization_id, id)
 );
-alter table public.phone_menus drop constraint if exists phone_menus_name_check;
-alter table public.phone_menus add constraint phone_menus_name_check
-  check (char_length(btrim(name)) between 1 and 80);
+do $chk_menus$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_menus'::regclass and conname = 'phone_menus_name_check') then
+    -- Nome longo demais é cortado; nome vazio não tem correção segura (NOT VALID + WARNING no 6b).
+    update public.phone_menus set name = left(btrim(name), 80) where char_length(btrim(name)) > 80;
+    alter table public.phone_menus add constraint phone_menus_name_check
+      check (char_length(btrim(name)) between 1 and 80) not valid;
+  end if;
+end $chk_menus$;
 
 create table if not exists public.phone_menu_options (
   organization_id uuid not null references public.organizations(id) on delete cascade,
@@ -176,10 +226,16 @@ create table if not exists public.phone_menu_options (
   foreign key (organization_id, menu_id) references public.phone_menus(organization_id, id) on delete cascade,
   foreign key (organization_id, team_id) references public.attendance_teams(organization_id, id)
 );
-delete from public.phone_menu_options where digit !~ '^[0-9]$';
-alter table public.phone_menu_options drop constraint if exists phone_menu_options_digit_check;
-alter table public.phone_menu_options add constraint phone_menu_options_digit_check
-  check (digit ~ '^[0-9]$');
+do $chk_opcoes$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_menu_options'::regclass and conname = 'phone_menu_options_digit_check') then
+    -- * e # são reservadas: a opção nessa tecla nunca seria escolhida.
+    delete from public.phone_menu_options where digit !~ '^[0-9]$';
+    alter table public.phone_menu_options add constraint phone_menu_options_digit_check
+      check (digit ~ '^[0-9]$') not valid;
+  end if;
+end $chk_opcoes$;
 
 create index if not exists phone_menus_org on public.phone_menus (organization_id) where archived_at is null;
 create index if not exists phone_menu_options_team on public.phone_menu_options (organization_id, team_id);
@@ -188,12 +244,17 @@ create index if not exists phone_menu_options_team on public.phone_menu_options 
 -- FK composta para phone_menus no bloco 7.
 alter table public.channel_sessions
   add column if not exists sip_menu_id uuid;
-update public.channel_sessions
-   set sip_menu_id = null
- where sip_team_id is not null and sip_menu_id is not null;
-alter table public.channel_sessions drop constraint if exists channel_sessions_sip_destino_check;
-alter table public.channel_sessions add constraint channel_sessions_sip_destino_check
-  check (not (sip_team_id is not null and sip_menu_id is not null));
+do $chk_destino$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.channel_sessions'::regclass and conname = 'channel_sessions_sip_destino_check') then
+    update public.channel_sessions
+       set sip_menu_id = null
+     where sip_team_id is not null and sip_menu_id is not null;
+    alter table public.channel_sessions add constraint channel_sessions_sip_destino_check
+      check (not (sip_team_id is not null and sip_menu_id is not null)) not valid;
+  end if;
+end $chk_destino$;
 create index if not exists idx_channel_sessions_sip_menu
   on public.channel_sessions (sip_menu_id) where sip_menu_id is not null;
 
@@ -204,16 +265,21 @@ alter table public.attendance_teams
   add column if not exists phone_emergency_active_since timestamptz,
   add column if not exists phone_emergency_expires_at timestamptz,
   add column if not exists phone_emergency_activated_by uuid references auth.users(id) on delete set null;
-update public.attendance_teams
-   set phone_emergency_active_since = null, phone_emergency_expires_at = null, phone_emergency_activated_by = null
- where (phone_emergency_active_since is null and phone_emergency_expires_at is not null)
-    or (phone_emergency_expires_at is not null and phone_emergency_expires_at <= phone_emergency_active_since);
-alter table public.attendance_teams drop constraint if exists attendance_teams_phone_emergency_check;
-alter table public.attendance_teams add constraint attendance_teams_phone_emergency_check check (
-  (phone_emergency_active_since is null and phone_emergency_expires_at is null)
-  or (phone_emergency_active_since is not null
-      and (phone_emergency_expires_at is null or phone_emergency_expires_at > phone_emergency_active_since))
-);
+do $chk_aviso$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.attendance_teams'::regclass and conname = 'attendance_teams_phone_emergency_check') then
+    update public.attendance_teams
+       set phone_emergency_active_since = null, phone_emergency_expires_at = null, phone_emergency_activated_by = null
+     where (phone_emergency_active_since is null and phone_emergency_expires_at is not null)
+        or (phone_emergency_expires_at is not null and phone_emergency_expires_at <= phone_emergency_active_since);
+    alter table public.attendance_teams add constraint attendance_teams_phone_emergency_check check (
+      (phone_emergency_active_since is null and phone_emergency_expires_at is null)
+      or (phone_emergency_active_since is not null
+          and (phone_emergency_expires_at is null or phone_emergency_expires_at > phone_emergency_active_since))
+    ) not valid;
+  end if;
+end $chk_aviso$;
 create index if not exists attendance_teams_aviso_com_prazo
   on public.attendance_teams (phone_emergency_expires_at) where phone_emergency_expires_at is not null;
 
@@ -224,37 +290,61 @@ alter table public.voice_calls
   add column if not exists menu_digit text,
   add column if not exists menu_outcome text,
   add column if not exists emergency_heard_at timestamptz;
-update public.voice_calls set menu_digit = null where menu_digit is not null and menu_digit !~ '^[0-9]$';
-update public.voice_calls set menu_outcome = null
- where menu_outcome is not null and menu_outcome not in ('chosen', 'default_no_input', 'default_invalid');
-alter table public.voice_calls drop constraint if exists voice_calls_menu_digit_check;
-alter table public.voice_calls add constraint voice_calls_menu_digit_check
-  check (menu_digit is null or menu_digit ~ '^[0-9]$');
-alter table public.voice_calls drop constraint if exists voice_calls_menu_outcome_check;
-alter table public.voice_calls add constraint voice_calls_menu_outcome_check
-  check (menu_outcome is null or menu_outcome in ('chosen', 'default_no_input', 'default_invalid'));
+-- voice_calls cresce com o histórico: o CHECK é criado UMA vez e nunca mais
+-- derrubado; a cura e a validação varrem a tabela só nessa vez.
+do $chk_ligacoes$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_menu_digit_check') then
+    update public.voice_calls set menu_digit = null where menu_digit is not null and menu_digit !~ '^[0-9]$';
+    alter table public.voice_calls add constraint voice_calls_menu_digit_check
+      check (menu_digit is null or menu_digit ~ '^[0-9]$') not valid;
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_menu_outcome_check') then
+    update public.voice_calls set menu_outcome = null
+     where menu_outcome is not null and menu_outcome not in ('chosen', 'default_no_input', 'default_invalid');
+    alter table public.voice_calls add constraint voice_calls_menu_outcome_check
+      check (menu_outcome is null or menu_outcome in ('chosen', 'default_no_input', 'default_invalid')) not valid;
+  end if;
+end $chk_ligacoes$;
 create index if not exists idx_voice_calls_menu_recentes
   on public.voice_calls (menu_id, started_at) where menu_id is not null;
 
--- 7. FKs compostas (organization_id, coluna) ------------------------------------
--- O alvo precisa de `unique (organization_id, id)`. phone_prompts e phone_menus
--- nascem com ela (acima); attendance_teams já a tem desde a 0263 — a guarda
--- abaixo só a cria num clone que não a tenha (id é PK, então nenhum dado viola).
-do $unico$
+-- 6b. Validação dos CHECKs ---------------------------------------------------------
+-- Só toca o CHECK que ainda está NOT VALID: no banco limpo é a primeira aplicação;
+-- depois, só o de um clone com linha sem correção segura. `validate constraint`
+-- varre a tabela SEM o lock exclusivo do `add`. Se uma linha ainda viola, o CHECK
+-- segue valendo para linha nova e o WARNING diz qual — nunca em silêncio.
+do $validar$
+declare
+  r record;
 begin
-  if not exists (
-    select 1 from pg_constraint k
-     where k.conrelid = 'public.attendance_teams'::regclass
-       and k.contype in ('u', 'p')
-       and array_length(k.conkey, 1) = 2
-       and k.conkey @> array[
-             (select attnum from pg_attribute where attrelid = 'public.attendance_teams'::regclass and attname = 'organization_id'),
-             (select attnum from pg_attribute where attrelid = 'public.attendance_teams'::regclass and attname = 'id')]
-  ) then
-    alter table public.attendance_teams
-      add constraint attendance_teams_organization_id_id_key unique (organization_id, id);
-  end if;
-end $unico$;
+  for r in
+    select k.conrelid::regclass as tabela, k.conname
+      from pg_constraint k
+     where k.contype = 'c'
+       and not k.convalidated
+       and k.conname in (
+         'phone_prompts_kind_check', 'phone_prompts_status_check', 'phone_prompts_text_check',
+         'phone_prompts_hash_check', 'phone_prompts_storage_path_check', 'phone_prompts_ready_check',
+         'phone_menus_name_check', 'phone_menu_options_digit_check', 'channel_sessions_sip_destino_check',
+         'attendance_teams_phone_emergency_check', 'voice_calls_menu_digit_check', 'voice_calls_menu_outcome_check')
+  loop
+    begin
+      execute format('alter table %s validate constraint %I', r.tabela, r.conname);
+    exception when check_violation then
+      raise warning '0288: % tem linha que viola % — o CHECK vale para toda linha nova (NOT VALID); corrija a linha e o próximo update.sh o valida',
+        r.tabela, r.conname;
+    end;
+  end loop;
+end $validar$;
+
+-- 7. FKs compostas (organization_id, coluna) ------------------------------------
+-- O alvo precisa de `unique (organization_id, id)`: phone_prompts e phone_menus
+-- nascem com ela (acima). As referências a attendance_teams são as de
+-- phone_menus e phone_menu_options, e usam a unique da 0263 (ver phone_menus).
 
 -- Uma FK por referência anulável, sempre `on delete set null (coluna)`. Para cada
 -- uma: se a FK certa (nome, alvo, as duas colunas, set null só da coluna) já está

@@ -21,13 +21,19 @@
  *     coluna (`on delete set null (coluna)`), nunca o `organization_id`.
  *  5. O bucket é privado.
  *  6. O bloco do apêndice — lido do `baseline.sql` pelo rótulo, não copiado à mão
- *     — reaplica sem erro, CURA cada linha que violaria um CHECK novo, troca a FK
- *     SIMPLES de um rascunho pela composta (anulando antes o ponteiro para outra
- *     organização) e, sob o
- *     default ACL do Supabase (GRANT ALL aos três papéis da REST), devolve as
- *     tabelas a só-leitura. O `pnpm test:db` reproduz o default ACL para FUNÇÕES
- *     e não para TABELAS: sem simular o grant aqui, a prova do `revoke` passaria
- *     num banco onde o defeito não pode existir.
+ *     — reaplica sem erro e SEM derrubar os CHECKs (mesmo oid, todos validados),
+ *     CURA cada linha que violaria um CHECK novo, deixa `NOT VALID` (e não
+ *     ausente) o CHECK sem correção segura, troca a FK SIMPLES de um rascunho pela
+ *     composta (anulando antes o ponteiro para outra organização) e, sob o default
+ *     ACL do Supabase (GRANT ALL aos três papéis da REST), devolve as tabelas a
+ *     só-leitura. O próprio baseline traz esse default ACL (`alter default
+ *     privileges ... grant all on tables`), então no `test:db` as tabelas do
+ *     apêndice já nascem com GRANT ALL (medido: `anon=arwdDxt`) e o `revoke` é
+ *     posto à prova de verdade. O grant explícito do teste só torna a
+ *     pré-condição visível, e a mantém se o default ACL um dia sair do dump.
+ *  7. APAGAR UMA ORGANIZAÇÃO com tudo ligado (número → menu, opções, falas,
+ *     configuração, aviso ligado, ligação com menu) passa e não toca na outra —
+ *     também com os gatilhos de cascata disparando na ordem ADVERSA.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -102,6 +108,34 @@ function privilegiosDaRest(): string[] {
     .filter(Boolean)
     .sort();
 }
+
+/** Os 12 CHECKs da 0288 (o de `agent_inbox_items.kind` é do bloco único do baseline). */
+const CHECKS_DA_0288 = [
+  "attendance_teams_phone_emergency_check",
+  "channel_sessions_sip_destino_check",
+  "phone_menu_options_digit_check",
+  "phone_menus_name_check",
+  "phone_prompts_hash_check",
+  "phone_prompts_kind_check",
+  "phone_prompts_ready_check",
+  "phone_prompts_status_check",
+  "phone_prompts_storage_path_check",
+  "phone_prompts_text_check",
+  "voice_calls_menu_digit_check",
+  "voice_calls_menu_outcome_check",
+] as const;
+const CHECKS_SQL = CHECKS_DA_0288.map((c) => `'${c}'`).join(", ");
+
+/** `nome:validado:oid` de cada CHECK da 0288 que existe. */
+function checksDa0288(): string[] {
+  return sql(`select conname || ':' || convalidated::text || ':' || oid
+                from pg_constraint where contype = 'c' and conname in (${CHECKS_SQL});`)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .sort();
+}
+const TODOS_VALIDADOS = (linhas: string[]) => linhas.map((l) => l.split(":").slice(0, 2).join(":"));
 
 /** Toda referência nova e a FK que a guarda: `tabela.coluna:chaves:on delete:colunas anuladas`. */
 const FKS_ESPERADAS = [
@@ -344,7 +378,8 @@ describe("as catracas do schema", () => {
     expect(
       comoMembro(ADMIN_A, `update public.channel_sessions set sip_team_id = null, sip_menu_id = '${MENU_B}' where id = '${NUMERO_A}'`),
     ).toMatch(/violates foreign key constraint "channel_sessions_sip_menu_id_org_fkey"/);
-    // voice_calls é gravável por agent; o GRANT é o do default ACL do Supabase, que o test:db não reproduz.
+    // voice_calls é gravável por agent. O GRANT já vem do default ACL do baseline;
+    // o grant explícito só deixa a pré-condição à vista (e desfaz no rollback).
     const ligacao = (menu: string) =>
       comoMembro(
         USER_A,
@@ -450,6 +485,31 @@ describe("o bucket e o apêndice", () => {
     expect(privilegiosDaRest()).toEqual(SO_LEITURA);
   });
 
+  it("reaplicar num banco limpo não derruba CHECK nenhum: mesmo oid, e todos seguem validados", () => {
+    const antes = checksDa0288();
+    expect(TODOS_VALIDADOS(antes)).toEqual(CHECKS_DA_0288.map((c) => `${c}:true`));
+    expect(tenta(blocoDa0288())).toBeNull();
+    expect(checksDa0288()).toEqual(antes);
+  });
+
+  it("linha sem correção segura deixa o CHECK NOT VALID — valendo para linha nova —, nunca ausente", () => {
+    sql(`alter table public.phone_prompts drop constraint phone_prompts_kind_check;
+         insert into public.phone_prompts (organization_id, kind, "text", voice_id, model_id, content_hash, status)
+         values ('${ORG_A}', 'musica', 't', 'v', 'm', '${HASH}', 'failed');`);
+
+    expect(tenta(blocoDa0288())).toBeNull();
+    expect(checksDa0288().find((l) => l.startsWith("phone_prompts_kind_check:"))).toMatch(/:false:/);
+    expect(
+      tenta(`insert into public.phone_prompts (organization_id, kind, "text", voice_id, model_id, content_hash, status)
+             values ('${ORG_A}', 'musica', 't', 'v', 'm', '${HASH}', 'failed');`),
+    ).toContain("phone_prompts_kind_check");
+
+    // Corrigida a linha, a reaplicação seguinte valida o CHECK sozinha.
+    sql(`delete from public.phone_prompts where kind = 'musica';`);
+    expect(tenta(blocoDa0288())).toBeNull();
+    expect(checksDa0288().find((l) => l.startsWith("phone_prompts_kind_check:"))).toMatch(/:true:/);
+  });
+
   it("reaplicar o bloco do apêndice não dá erro, e cura cada linha que violaria um CHECK", () => {
     const FALA_TORTA = "c0de0288-3333-4000-8000-0000000000ff";
     // Estado de um clone "bugado": cada CHECK derrubado à mão e uma linha que o viola.
@@ -513,12 +573,8 @@ describe("o bucket e o apêndice", () => {
       sql(`select coalesce(menu_id::text, '-') || '|' || organization_id from public.voice_calls where sip_call_ref = 'ref-0288-cruzada-clone';`),
     ).toBe(`-|${ORG_A}`);
 
-    // As constraints voltaram — e UMA de cada, não duas.
-    expect(
-      sql(`select count(*) from pg_constraint where conname in (
-             'channel_sessions_sip_destino_check', 'attendance_teams_phone_emergency_check',
-             'phone_prompts_storage_path_check', 'phone_menu_options_digit_check', 'voice_calls_menu_outcome_check');`),
-    ).toBe("5");
+    // Os CHECKs voltaram — UM de cada, não dois — e VALIDADOS, não só presentes.
+    expect(TODOS_VALIDADOS(checksDa0288())).toEqual(CHECKS_DA_0288.map((c) => `${c}:true`));
     expect(
       sql(`select count(*) from pg_policies
             where tablename in (${LISTA_SQL}) and policyname like 'tenant_isolation_%_select';`),
@@ -526,9 +582,9 @@ describe("o bucket e o apêndice", () => {
   });
 
   it("sob o default ACL do Supabase (GRANT ALL aos três papéis), o bloco devolve a REST a só-leitura", () => {
-    // O que todo projeto Supabase faz com tabela nova em `public`. O `test:db`
-    // não reproduz isso para TABELAS; sem este passo, o `revoke` seria provado
-    // num banco onde a escrita pela REST nunca foi concedida.
+    // O que todo projeto Supabase faz com tabela nova em `public` — e o que o
+    // default ACL do próprio baseline já fez com estas no `test:db`. O grant aqui
+    // devolve esse estado DEPOIS do revoke, para provar que reaplicar o cura.
     sql(`grant all on ${TABELAS.map((t) => `public.${t}`).join(", ")} to anon, authenticated, service_role;`);
     expect(privilegiosDaRest()).not.toEqual(SO_LEITURA);
 
@@ -540,5 +596,146 @@ describe("o bucket e o apêndice", () => {
         /permission denied/,
       );
     }
+  });
+});
+
+describe("apagar uma organização com tudo ligado", () => {
+  const ORG_C = "c0de0288-0000-4000-8000-00000000000c";
+  const ORG_D = "c0de0288-0000-4000-8000-00000000000d";
+  const id = (bloco: string, n: number, sufixo: string) => `c0de0288-${bloco}-4000-8000-0000000000${n}${sufixo}`;
+
+  /** Uma organização com TUDO da 0288 ligado: número → menu, opções, falas, configuração, aviso, ligação. */
+  function semear(org: string, sufixo: string): void {
+    const u = id("1111", 1, sufixo);
+    const [t1, t2] = [id("2222", 1, sufixo), id("2222", 2, sufixo)];
+    const [f1, f2, f3] = [id("3333", 1, sufixo), id("3333", 2, sufixo), id("3333", 3, sufixo)];
+    const menu = id("4444", 1, sufixo);
+    const numero = id("5555", 1, sufixo);
+    const caminho = (h: string) => `'${org}/${h.repeat(64)}.ulaw'`;
+    sql(`
+      insert into auth.users (id, email) values ('${u}', 'ura-0288-${sufixo}@invariant.test') on conflict do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${org}', 'ura-0288-${sufixo}', 'URA 0288 ${sufixo}', 'URA ${sufixo}');
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at) values ('${u}', '${org}', 'admin', now());
+      insert into public.attendance_teams (id, organization_id, name, slug) values
+        ('${t1}', '${org}', 'Suporte', 'suporte'), ('${t2}', '${org}', 'Financeiro', 'financeiro');
+      insert into public.phone_prompts
+        (id, organization_id, kind, "text", voice_id, model_id, content_hash, storage_path, duration_ms, status) values
+        ('${f1}', '${org}', 'menu', 'Para Suporte, 1', 'v', 'm', repeat('a', 64), ${caminho("a")}, 900, 'ready'),
+        ('${f2}', '${org}', 'invalid', 'Inválida', 'v', 'm', repeat('b', 64), ${caminho("b")}, 900, 'ready'),
+        ('${f3}', '${org}', 'emergency', 'Instabilidade', 'v', 'm', repeat('c', 64), ${caminho("c")}, 900, 'ready');
+      insert into public.phone_settings (organization_id, voice_id, waiting_prompt_id, nobody_prompt_id, after_hours_prompt_id)
+        values ('${org}', 'v', '${f1}', '${f2}', '${f3}');
+      insert into public.phone_menus (id, organization_id, name, prompt_id, invalid_prompt_id, default_team_id)
+        values ('${menu}', '${org}', 'Principal', '${f1}', '${f2}', '${t1}');
+      insert into public.phone_menu_options (organization_id, menu_id, digit, team_id) values
+        ('${org}', '${menu}', '1', '${t1}'), ('${org}', '${menu}', '2', '${t2}');
+      update public.attendance_teams
+         set phone_emergency_prompt_id = '${f3}', phone_emergency_active_since = now(),
+             phone_emergency_expires_at = now() + interval '1 hour', phone_emergency_activated_by = '${u}'
+       where id = '${t2}';
+      insert into public.channel_sessions
+        (id, organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number,
+         sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted, sip_menu_id)
+      values ('${numero}', '${org}', 'sip_trunk', '\\x00', 'STARTING', 'URA ${sufixo}', '+55613000028${sufixo === "c" ? 1 : 2}',
+              'voip.exemplo-0288-${sufixo}.com.br', 5060, 'udp', 'u0288${sufixo}', '\\x00', '${menu}');
+      insert into public.voice_calls
+        (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status,
+         menu_id, menu_digit, menu_outcome, emergency_heard_at, team_id)
+      values ('${org}', '${numero}', 'sip_trunk', 'ref-0288-org-${sufixo}', 'inbound', '+5561999990288', 'ended',
+              '${menu}', '2', 'chosen', now(), '${t2}');
+    `);
+  }
+
+  /** A contagem de cada peça da organização, numa linha `@@`. */
+  const contagem = (org: string) => `select '@@' || concat_ws(' ',
+      'org=' || (select count(*) from public.organizations where id = '${org}'),
+      'falas=' || (select count(*) from public.phone_prompts where organization_id = '${org}'),
+      'config=' || (select count(*) from public.phone_settings where organization_id = '${org}'),
+      'menus=' || (select count(*) from public.phone_menus where organization_id = '${org}'),
+      'opcoes=' || (select count(*) from public.phone_menu_options where organization_id = '${org}'),
+      'times=' || (select count(*) from public.attendance_teams where organization_id = '${org}'),
+      'numeros=' || (select count(*) from public.channel_sessions where organization_id = '${org}'),
+      'ligacoes=' || (select count(*) from public.voice_calls where organization_id = '${org}'));`;
+  const CHEIA = "org=1 falas=3 config=1 menus=1 opcoes=2 times=2 numeros=1 ligacoes=1";
+  const VAZIA = "org=0 falas=0 config=0 menus=0 opcoes=0 times=0 numeros=0 ligacoes=0";
+  const linhas = (out: string) => out.split("\n").filter((l) => l.startsWith("@@")).map((l) => l.slice(2));
+
+  /** A ordem em que os gatilhos de cascata de `organizations` disparam para estas tabelas (nome = ordem). */
+  const ORDEM = `select '@@' || string_agg(distinct_rel, ' < ' order by primeiro) from (
+      select c2.relname as distinct_rel, min(t.tgname) as primeiro
+        from pg_trigger t
+        join pg_constraint k on k.oid = t.tgconstraint
+        join pg_class c2 on c2.oid = k.conrelid
+       where t.tgrelid = 'public.organizations'::regclass and t.tgname like 'RI_ConstraintTrigger_a_%'
+         and c2.relname in ('attendance_teams', 'phone_menus', 'phone_menu_options', 'channel_sessions')
+       group by c2.relname) s;`;
+
+  /** Apaga C numa transação desfeita, depois de `preparo`; devolve [ordem?, C, D]. */
+  const apagarC = (preparo = "", papel = "") =>
+    linhas(
+      sql(`begin;
+        ${preparo}
+        ${ORDEM}
+        ${papel ? `set local role ${papel};` : ""}
+        delete from public.organizations where id = '${ORG_C}';
+        ${papel ? "reset role;" : ""}
+        ${contagem(ORG_C)}
+        ${contagem(ORG_D)}
+        rollback;`),
+    );
+
+  beforeAll(() => {
+    semear(ORG_C, "c");
+    semear(ORG_D, "d");
+  });
+
+  it("as duas nascem cheias", () => {
+    expect(linhas(sql(`${contagem(ORG_C)} ${contagem(ORG_D)}`))).toEqual([CHEIA, CHEIA]);
+  });
+
+  it("na ordem natural, apagar C apaga tudo de C e D fica intacta (como postgres e como service_role)", () => {
+    expect(apagarC().slice(1)).toEqual([VAZIA, CHEIA]);
+    expect(apagarC("", "service_role").slice(1)).toEqual([VAZIA, CHEIA]);
+  });
+
+  it("na ordem ADVERSA 1 — a cascata de attendance_teams por último — também passa", () => {
+    const [ordem, c, d] = apagarC(`do $$ declare n text; begin
+        select conname into n from pg_constraint
+         where conrelid = 'public.attendance_teams'::regclass and contype = 'f'
+           and confrelid = 'public.organizations'::regclass;
+        execute format('alter table public.attendance_teams drop constraint %I', n);
+        execute format('alter table public.attendance_teams add constraint %I foreign key (organization_id)
+                          references public.organizations(id) on delete cascade', n);
+      end $$;`);
+    expect(ordem).toMatch(/< attendance_teams$/);
+    expect([c, d]).toEqual([VAZIA, CHEIA]);
+  });
+
+  it("na ordem ADVERSA 2 — menus, opções e números por último — também passa", () => {
+    const recria = (tabela: string) => `do $$ declare n text; begin
+        select conname into n from pg_constraint
+         where conrelid = 'public.${tabela}'::regclass and contype = 'f'
+           and confrelid = 'public.organizations'::regclass;
+        execute format('alter table public.${tabela} drop constraint %I', n);
+        execute format('alter table public.${tabela} add constraint %I foreign key (organization_id)
+                          references public.organizations(id) on delete cascade', n);
+      end $$;`;
+    const [ordem, c, d] = apagarC(`${recria("phone_menu_options")} ${recria("phone_menus")} ${recria("channel_sessions")}`);
+    expect(ordem).toMatch(/^attendance_teams < /);
+    expect([c, d]).toEqual([VAZIA, CHEIA]);
+  });
+
+  it("controle: apagar SÓ o time que um menu usa é recusado (no action), e nada muda", () => {
+    expect(tenta(`delete from public.attendance_teams where id = '${id("2222", 1, "c")}';`)).toMatch(
+      // Menu (time padrão) e opção apontam para ele; qual dos dois `no action` fala primeiro é ordem de gatilho.
+      /violates foreign key constraint "phone_menu(s_organization_id_default|_options_organization_id)_team_id_fkey"/,
+    );
+    expect(linhas(sql(contagem(ORG_C)))).toEqual([CHEIA]);
+  });
+
+  it("apagar C de verdade: C some inteira, D fica inteira", () => {
+    expect(tenta(`delete from public.organizations where id = '${ORG_C}';`)).toBeNull();
+    expect(linhas(sql(`${contagem(ORG_C)} ${contagem(ORG_D)}`))).toEqual([VAZIA, CHEIA]);
   });
 });
