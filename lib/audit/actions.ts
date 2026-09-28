@@ -641,6 +641,23 @@ export const AUDIT_ACTIONS = [
   // recebeu, qual ramal e se ele foi criado agora no Asterisk ou reaproveitado.
   // `metadata` NUNCA leva a senha do ramal.
   "phone_extension.credential_issued",
+  // Telefonia, fase 2 — URA e falas (migration 0288). `metadata` NUNCA leva a
+  // chave da ElevenLabs nem o áudio: só ids, tipo e estado da fala, o destino do
+  // número e o prazo do aviso. A chave em si é auditada como
+  // `ai.credential_created` com `provider = elevenlabs`.
+  "phone.voice_changed",
+  // A prévia que FOI à ElevenLabs (gastou crédito e gravou um objeto no Storage).
+  // A reaproveitada não fez nada e não audita. `metadata`: hash, tamanho, duração.
+  "phone.prompt_previewed",
+  // O "Salvar e usar": a linha passou a apontar para a prévia.
+  "phone.prompt_saved",
+  "phone.menu_saved",
+  "phone.menu_archived",
+  "phone.number_destination_changed",
+  "phone.emergency_activated",
+  "phone.emergency_deactivated",
+  // Gravado pelo WORKER na passada de 60 s, sem ator: o aviso venceu sozinho.
+  "phone.emergency_expired",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

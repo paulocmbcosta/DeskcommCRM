@@ -9519,6 +9519,48 @@ export const DICIONARIO: Traducoes = {
     es: "Tenemos una inestabilidad en este momento y ya estamos trabajando para resolverla. Gracias por su paciencia.",
   },
   "Opção inválida.": { es: "Opción inválida." },
+  // Telefonia, fase 2 — falhas da fala e da chave de voz
+  "Cole a chave da ElevenLabs (pelo menos 8 caracteres).": { es: "Pega la clave de ElevenLabs (al menos 8 caracteres)." },
+  "Não foi possível guardar a chave agora. Tente de novo em instantes.": {
+    es: "No se pudo guardar la clave ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "Cadastre a chave da ElevenLabs em Credenciais de IA para gerar as falas.": {
+    es: "Registra la clave de ElevenLabs en Credenciales de IA para generar las locuciones.",
+  },
+  "Escolha a voz das falas na aba Voz e falas antes de gerar.": {
+    es: "Elige la voz de las locuciones en la pestaña Voz y locuciones antes de generar.",
+  },
+  "Não foi possível guardar o áudio da fala. Tente de novo em instantes.": {
+    es: "No se pudo guardar el audio de la locución. Inténtalo de nuevo en unos instantes.",
+  },
+  "Muitas prévias geradas na última hora. Espere um pouco para gerar outra — ouvir as que já estão na tela não custa nada.": {
+    es: "Demasiadas vistas previas generadas en la última hora. Espera un poco para generar otra: escuchar las que ya están en pantalla no cuesta nada.",
+  },
+  "A prévia deste texto não está mais guardada. Gere a prévia de novo e salve em seguida.": {
+    es: "La vista previa de este texto ya no está guardada. Genera la vista previa de nuevo y guarda enseguida.",
+  },
+  "O texto ou a voz mudou depois da prévia. Gere a prévia de novo antes de salvar.": {
+    es: "El texto o la voz cambió después de la vista previa. Genera la vista previa de nuevo antes de guardar.",
+  },
+  "A ElevenLabs recusou a chave. Confira a chave em Credenciais de IA.": {
+    es: "ElevenLabs rechazó la clave. Revisa la clave en Credenciales de IA.",
+  },
+  "A conta da ElevenLabs está sem crédito. As falas já geradas continuam tocando.": {
+    es: "La cuenta de ElevenLabs no tiene crédito. Las locuciones ya generadas siguen sonando.",
+  },
+  "A ElevenLabs recusou este texto. Encurte ou reescreva e tente de novo.": {
+    es: "ElevenLabs rechazó este texto. Acórtalo o reescríbelo e inténtalo de nuevo.",
+  },
+  "Essa voz não existe mais na conta da ElevenLabs. Escolha outra voz.": {
+    es: "Esa voz ya no existe en la cuenta de ElevenLabs. Elige otra voz.",
+  },
+  "A ElevenLabs pediu para esperar um pouco. Tente de novo em instantes.": {
+    es: "ElevenLabs pidió esperar un poco. Inténtalo de nuevo en unos instantes.",
+  },
+  "A ElevenLabs não respondeu. Tente de novo em instantes.": { es: "ElevenLabs no respondió. Inténtalo de nuevo en unos instantes." },
+  "A ElevenLabs devolveu um erro. Tente de novo em instantes.": {
+    es: "ElevenLabs devolvió un error. Inténtalo de nuevo en unos instantes.",
+  },
 };
 
 /**
