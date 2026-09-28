@@ -159,13 +159,17 @@ export interface VozDaOrganizacao {
   modelId: string;
 }
 
+/** A voz de uma linha de `phone_settings` — a régua única de "a organização escolheu voz?". */
+function vozDaLinha(r: { voice_id: string | null; model_id: string | null } | undefined): VozDaOrganizacao | null {
+  return r?.voice_id ? { voiceId: r.voice_id, modelId: r.model_id || MODELO_DE_VOZ_PADRAO } : null;
+}
+
 export async function vozDaOrganizacao(db: Queryable, organizationId: string): Promise<VozDaOrganizacao | null> {
   const { rows } = await db.query<{ voice_id: string | null; model_id: string | null }>(
     "select voice_id, model_id from phone_settings where organization_id = $1",
     [organizationId],
   );
-  const r = rows[0];
-  return r?.voice_id ? { voiceId: r.voice_id, modelId: r.model_id || MODELO_DE_VOZ_PADRAO } : null;
+  return vozDaLinha(rows[0]);
 }
 
 /** A coluna de `phone_settings` de cada fala geral — lista fechada: nunca texto de fora no SQL. */
@@ -364,4 +368,93 @@ export async function salvarFala(p: PedidoDeSalvar): Promise<ResultadoDoSalvar> 
 /** Remove a linha (ex.: a fala de tecla inválida que o menu deixou de ter). O objeto fica para a limpeza do worker. */
 export async function descartarFala(db: Queryable, organizationId: string, id: string): Promise<void> {
   await db.query("delete from phone_prompts where id = $1 and organization_id = $2", [id, organizationId]);
+}
+
+/** Uma conexão SÓ desta gravação: a transação e a trava vivem nela. O `pg.PoolClient` serve. */
+export interface ConexaoDaTransacao extends Queryable {
+  release(): void;
+}
+
+/** De onde sai a conexão da transação. O `pg.Pool` da rota serve. */
+export interface PoolDeTransacao {
+  connect(): Promise<ConexaoDaTransacao>;
+}
+
+export interface PedidoDaFalaGeral {
+  pool: PoolDeTransacao;
+  armazem: Pick<PortaDoArmazem, "baixar">;
+  /** A organização da SESSÃO — a da linha travada e a do caminho do Storage. */
+  organizationId: string;
+  userId: string | null;
+  tipo: FalaGeral;
+  texto: string;
+  hash: string;
+}
+
+/**
+ * O "Salvar e usar" de uma fala GERAL (`waiting`, `nobody`, `after_hours`): confere
+ * e grava a fala e aponta a coluna do tipo em `phone_settings`, numa transação só,
+ * SOB A TRAVA da linha de `phone_settings` da organização.
+ *
+ * Por que a trava: a fala atual (a coluna do tipo) e a voz são lidas ANTES de
+ * decidir entre regravar a linha de `phone_prompts` que existe ou criar uma. Sem
+ * trava, duas primeiras gravações simultâneas da mesma fala leem as duas "não há
+ * fala", criam UMA LINHA CADA, e a coluna fica com a última: a outra linha fica
+ * órfã, e a referência dela mantém o objeto do Storage vivo para sempre (a
+ * limpeza só apaga objeto que nenhuma linha referencia). Com o `select ... for
+ * update`, a segunda espera a primeira confirmar e lê a fala que ela gravou — e a
+ * regrava, ou vê que nada mudou.
+ *
+ * O upsert da linha vem ANTES da trava porque `for update` não trava linha que não
+ * existe: sem ele, a primeira fala de uma organização sem `phone_settings` ficaria
+ * sem trava nenhuma. Se a gravação é recusada (ou lança), a transação é desfeita,
+ * e com ela a linha que o upsert acabou de criar.
+ *
+ * A conferência do Storage (`baixar`) acontece com a trava segura: é o que garante
+ * que a fala gravada é a que foi conferida. A trava é de UMA linha, só da
+ * organização, e só o "Salvar e usar" das falas gerais e a troca de voz a disputam.
+ */
+export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDoSalvar> {
+  const coluna = COLUNA_DA_FALA_GERAL[p.tipo];
+  const conexao = await p.pool.connect();
+  try {
+    await conexao.query("begin");
+    await conexao.query("insert into phone_settings (organization_id) values ($1) on conflict (organization_id) do nothing", [
+      p.organizationId,
+    ]);
+    const { rows } = await conexao.query<{ voice_id: string | null; model_id: string | null; fala_atual_id: string | null }>(
+      `select voice_id, model_id, ${coluna} as fala_atual_id from phone_settings where organization_id = $1 for update`,
+      [p.organizationId],
+    );
+    const linha = rows[0];
+    const r = await salvarFala({
+      db: conexao,
+      armazem: p.armazem,
+      organizationId: p.organizationId,
+      userId: p.userId,
+      tipo: p.tipo,
+      texto: p.texto,
+      hash: p.hash,
+      falaAtualId: linha?.fala_atual_id ?? null,
+      voz: vozDaLinha(linha),
+    });
+    if (!r.ok) {
+      await conexao.query("rollback");
+      return r;
+    }
+    if (r.mudou) {
+      await conexao.query(`update phone_settings set ${coluna} = $2, updated_at = now() where organization_id = $1`, [
+        p.organizationId,
+        r.fala.id,
+      ]);
+    }
+    await conexao.query("commit");
+    return r;
+  } catch (e) {
+    // O rollback de uma conexão que caiu também falha; o erro que importa é o primeiro.
+    await conexao.query("rollback").catch(() => undefined);
+    throw e;
+  } finally {
+    conexao.release();
+  }
 }
