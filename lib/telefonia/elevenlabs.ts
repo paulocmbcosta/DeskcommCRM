@@ -18,6 +18,9 @@
  * corrida contra o `AbortController` do prazo (`comPrazo`), nunca depois dele.
  * `sintetizar` lê o corpo em streaming com um teto de bytes (2 MB): um provedor
  * que mande um áudio absurdo, ou nunca feche o corpo, não pode estourar memória.
+ * O JSON da listagem e o corpo de erro têm o mesmo tratamento, com teto de 1 MB
+ * (`lerJsonComTeto`) — sem isso, um corpo de 200 MB é lido inteiro antes de
+ * qualquer checagem de tamanho.
  *
  * Quem chama `sintetizar` é SÓ a prévia da tela (`lib/telefonia/previa.ts`,
  * desenho D15): toda ligação toca um arquivo já gravado. Nenhum módulo do caminho
@@ -38,6 +41,13 @@ const FORMATO_WAV_ULAW = 7;
  * um provedor que devolva algo absurdo (ou nunca feche o corpo), não expectativa.
  */
 const TETO_DE_BYTES_DA_SINTESE = 2 * 1024 * 1024;
+/**
+ * Teto do JSON da listagem de vozes e do corpo de erro, também lido em
+ * streaming. Uma conta real tem dezenas de vozes — 1 MB de JSON é folga
+ * generosa. Sem teto, um corpo de 200 MB era lido inteiro antes de qualquer
+ * checagem de tamanho (784 MB de memória para processar, medido na revisão).
+ */
+const TETO_DE_BYTES_DO_JSON = 1024 * 1024;
 
 export class ErroDaElevenLabs extends Error {
   constructor(
@@ -135,7 +145,10 @@ async function pedirResposta(
   // `!resp.ok` abaixo trata como falha tipada — nunca seguimos por conta própria.
   const resp = await f(url, { ...init, redirect: "error", signal: controle.signal });
   if (!resp.ok) {
-    const corpoErro = await resp.json().catch(() => null);
+    // Teto de 1 MB, em streaming: estourar o teto não pode esconder o status —
+    // `lerJsonComTeto` devolve `null` (nunca lança), e o motivo abaixo continua
+    // saindo do `resp.status`. O corpo só é descartado, nunca o status.
+    const corpoErro = await lerJsonComTeto(resp, TETO_DE_BYTES_DO_JSON);
     throw new ErroDaElevenLabs(motivoDaResposta(resp.status, corpoErro, contexto), resp.status);
   }
   return resp;
@@ -157,7 +170,11 @@ export async function listarVozes(chave: string, o: OpcoesDoCliente = {}): Promi
       controle,
       "vozes",
     );
-    const corpo = (await resp.json().catch(() => null)) as { voices?: unknown[] } | null;
+    // Teto de 1 MB, em streaming: um corpo maior vira `null` aqui (nunca lança) e
+    // cai no `!corpo` abaixo, que já é `erro_do_provedor` — sem ler 200 MB de JSON
+    // inteiro para só então descobrir que passou do tamanho (medido na revisão:
+    // 784 MB de memória para processar um corpo assim).
+    const corpo = (await lerJsonComTeto(resp, TETO_DE_BYTES_DO_JSON)) as { voices?: unknown[] } | null;
     if (!corpo || !Array.isArray(corpo.voices)) throw new ErroDaElevenLabs("erro_do_provedor", resp.status);
     return corpo.voices
       .filter(vozValida)
@@ -211,6 +228,22 @@ async function lerComTeto(resp: Response, teto: number): Promise<Uint8Array> {
     deslocamento += pedaco.length;
   }
   return bytes;
+}
+
+/**
+ * `lerComTeto` + `JSON.parse`, com QUALQUER falha virando `null` — corpo
+ * malformado, vazio, ou maior que `teto` (o mesmo `ErroDaElevenLabs` que
+ * `lerComTeto` lança nesse caso). Nunca lança: cada chamador decide o que um
+ * corpo ausente significa (listagem: `erro_do_provedor`; corpo de erro: o
+ * motivo continua saindo do `status`, nunca do tamanho do corpo).
+ */
+async function lerJsonComTeto(resp: Response, teto: number): Promise<unknown | null> {
+  try {
+    const bytes = await lerComTeto(resp, teto);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
 }
 
 export async function sintetizar(

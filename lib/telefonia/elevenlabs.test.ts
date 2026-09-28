@@ -14,6 +14,28 @@ function resposta(status: number, corpo: unknown, tipo = "application/json"): Re
   return new Response(body, { status, headers: { "Content-Type": tipo } });
 }
 
+/**
+ * Um `ReadableStream` que NUNCA fecha e conta quantos bytes foram PUXADOS —
+ * gerados sob demanda em `pull()`, não entregues de uma vez em `start()`. Prova
+ * que a implementação lê em streaming e para no teto: uma versão ingênua ("ler
+ * tudo, então conferir o tamanho") nunca terminaria de ler este fluxo (ele não
+ * fecha), e ficaria presa até o prazo — a versão certa rejeita tipado tendo
+ * puxado só um pouco mais que o teto.
+ */
+function fluxoInfinitoContando(tamanhoDoPedaco = 64 * 1024): {
+  stream: ReadableStream<Uint8Array>;
+  bytesPuxados: () => number;
+} {
+  let total = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      total += tamanhoDoPedaco;
+      controller.enqueue(new Uint8Array(tamanhoDoPedaco));
+    },
+  });
+  return { stream, bytesPuxados: () => total };
+}
+
 describe("listarVozes — também é como a chave é validada", () => {
   it("manda a chave SÓ no header, e devolve as vozes em ordem de nome", async () => {
     const f = vi.fn(async () =>
@@ -148,20 +170,18 @@ describe("sintetizar — μ-law 8 kHz", () => {
     expect(f).not.toHaveBeenCalled();
   });
 
-  it("corpo maior que 2 MB é recusado em streaming, sem ler além do teto", async () => {
-    const UM_MB = 1024 * 1024;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(UM_MB));
-        controller.enqueue(new Uint8Array(UM_MB));
-        controller.enqueue(new Uint8Array(UM_MB)); // 3 MB total > teto de 2 MB
-        controller.close();
-      },
-    });
+  it("corpo maior que 2 MB é recusado em streaming, tendo puxado só um pouco mais que o teto", async () => {
+    const TETO = 2 * 1024 * 1024;
+    const { stream, bytesPuxados } = fluxoInfinitoContando();
     const f = vi.fn(async () => new Response(stream, { status: 200, headers: { "Content-Type": "audio/basic" } }));
     await expect(
       sintetizar({ chave: CHAVE, voiceId: "v1", texto: "oi" }, { fetch: f as unknown as typeof fetch }),
     ).rejects.toMatchObject({ motivo: "erro_do_provedor" });
+    // O fluxo é INFINITO: se a implementação lesse tudo antes de conferir o
+    // tamanho, este teste nunca chegaria aqui (ficaria presa até o prazo).
+    // Passar tendo puxado só um pouco mais que o teto prova o streaming.
+    expect(bytesPuxados()).toBeGreaterThan(TETO);
+    expect(bytesPuxados()).toBeLessThan(TETO + 256 * 1024);
   });
 });
 
@@ -213,6 +233,28 @@ describe("o prazo cobre a leitura do corpo, não só os headers", () => {
       listarVozes(CHAVE, { fetch: f as unknown as typeof fetch, prazoMs: 200 }),
     ).rejects.toMatchObject({ motivo: "sem_resposta" });
     expect(Date.now() - inicio).toBeLessThan(1000);
+  });
+});
+
+describe("teto de bytes no JSON — listagem e corpo de erro, 1 MB", () => {
+  it("JSON da listagem maior que 1 MB é recusado, tendo puxado só um pouco mais que o teto", async () => {
+    const TETO = 1024 * 1024;
+    const { stream, bytesPuxados } = fluxoInfinitoContando();
+    const f = vi.fn(async () => new Response(stream, { status: 200, headers: { "Content-Type": "application/json" } }));
+    await expect(listarVozes(CHAVE, { fetch: f as unknown as typeof fetch })).rejects.toMatchObject({
+      motivo: "erro_do_provedor",
+    });
+    expect(bytesPuxados()).toBeGreaterThan(TETO);
+    expect(bytesPuxados()).toBeLessThan(TETO + 256 * 1024);
+  });
+
+  it("corpo de erro maior que 1 MB não esconde o status: o motivo continua saindo dele, o corpo só é descartado", async () => {
+    const { stream } = fluxoInfinitoContando();
+    const f = vi.fn(async () => new Response(stream, { status: 429, headers: { "Content-Type": "application/json" } }));
+    await expect(listarVozes(CHAVE, { fetch: f as unknown as typeof fetch })).rejects.toMatchObject({
+      motivo: "limite_de_uso",
+      status: 429,
+    });
   });
 });
 
