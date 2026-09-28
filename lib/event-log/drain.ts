@@ -73,7 +73,7 @@ function backoffAt(attempts: number): string {
  */
 async function avisarEventoMorto(
   admin: SupabaseClient,
-  row: EventRow,
+  row: Pick<EventRow, "id" | "organization_id" | "event_type" | "attempts">,
   motivo: string,
 ): Promise<void> {
   try {
@@ -168,16 +168,79 @@ export async function drainEventLog(
   // `updated_at` é confiável como "quando alguém tocou esta linha": o trigger
   // `trg_event_log_touch` (BEFORE UPDATE) o reescreve em toda atualização, então
   // a linha carrega o instante do CLAIM enquanto o handler não volta.
+  //
+  // ─── E A QUEDA CONTA COMO TENTATIVA ────────────────────────────────────────
+  //
+  // Devolver sem contar transformava um evento que DERRUBA o processo num laço
+  // sem fim: ele voltava a cada 10 minutos, derrubava o worker de novo — e os
+  // turnos de conversa que estavam em voo junto — e nunca chegava a `dead`,
+  // porque `attempts` só subia quando o handler VOLTAVA com erro. Medido em
+  // produção em 28/09/2026: dois `media.derive_requested` de PDF em
+  // `processing`, um deles com `attempts=0` depois de derrubar o worker nove
+  // vezes em 45 minutos, sem aviso nenhum na Central.
+  //
+  // Contar a queda é o que a `job_queue` já faz (o claim incrementa `attempts`):
+  // no pior caso, um evento envenenado derruba o processo `MAX_ATTEMPTS` vezes e
+  // morre COM aviso. O custo é que um evento inocente, em curso quando OUTRA
+  // coisa derrubou o processo, também gasta uma tentativa — e segue tendo as
+  // outras quatro, o que é o preço justo de não saber quem foi.
+  //
+  // Ele continua sendo processado NO MESMO tique quando ainda tem tentativa
+  // (caso 9 de tests/invariants/event-log-drain.test.ts): a espera é o defeito
+  // para o evento que só ficou preso.
   const limiteDePresos = new Date(Date.now() - PROCESSING_STALE_MS).toISOString();
-  const { data: reclamados } = await admin
+  // SÓ os tipos que este dreno processa. `ai_agent.dispatch_requested` também
+  // passa por `processing`, mas é do dreno do agent-engine
+  // (`lib/agent-engine/edge/crm/drain.ts`), que conta a tentativa no PRÓPRIO
+  // claim e tem reaper próprio: contar de novo aqui gastaria duas tentativas
+  // por queda num evento que não é nosso — o cabeçalho deste arquivo já diz
+  // que esses tipos "ficam intocados".
+  const { data: presos } = await admin
     .from("event_log")
-    .update({ status: "pending", updated_at: nowIso })
+    .select("id, organization_id, event_type, attempts")
     .eq("status", "processing")
     .lt("updated_at", limiteDePresos)
-    .select("id");
-  if (reclamados?.length) {
+    .in("event_type", handledTypes);
+  let devolvidos = 0;
+  for (const preso of (presos ?? []) as Pick<
+    EventRow,
+    "id" | "organization_id" | "event_type" | "attempts"
+  >[]) {
+    const attempts = preso.attempts + 1;
+    const dead = attempts >= MAX_ATTEMPTS;
+    const motivo =
+      `processamento interrompido: o processo terminou com este evento em curso ` +
+      `(${attempts}ª vez) — falta de memória ou reinício no meio do handler`;
+    // Os mesmos dois filtros da seleção: se outra instância reclamou (ou o
+    // handler voltou) entre a leitura e esta escrita, não há o que devolver.
+    const { data: mudou } = await admin
+      .from("event_log")
+      .update({
+        status: dead ? "dead" : "pending",
+        attempts,
+        last_error: motivo,
+        updated_at: nowIso,
+      })
+      .eq("id", preso.id)
+      .eq("status", "processing")
+      .lt("updated_at", limiteDePresos)
+      .select("id");
+    if (!mudou?.length) continue;
+    if (dead) {
+      await avisarEventoMorto(admin, preso, motivo);
+      summary.dead += 1;
+    } else {
+      devolvidos += 1;
+    }
+  }
+  if (devolvidos > 0) {
     logger.warn("[event-log.drain] eventos presos em processing devolvidos à fila", {
-      quantidade: reclamados.length,
+      quantidade: devolvidos,
+    });
+  }
+  if (summary.dead > 0) {
+    logger.error("[event-log.drain] eventos que derrubaram o processo descartados", {
+      quantidade: summary.dead,
     });
   }
 

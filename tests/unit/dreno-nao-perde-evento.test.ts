@@ -55,13 +55,18 @@ function dublarAdmin(
     | Record<string, unknown>
     | null
     | ((chamadas: Chamada[]) => Record<string, unknown> | null) = null,
+  /**
+   * O que está preso em `processing` há mais de 10 min — a resposta à consulta
+   * do reaper, que se distingue da seleção do dreno pelo filtro de status.
+   * Separado de `linhas` porque é outra pergunta: misturar as duas faria todo
+   * evento da seleção parecer também um órfão (e ser contado duas vezes).
+   */
+  presos: Array<Record<string, unknown>> = [],
 ) {
   const chamadas: Chamada[] = [];
 
   function cadeia(tabela: string) {
     const registro: Chamada = { tabela, op: "select", filtros: [] };
-    let ehUpdateDeReclamacao = false;
-    let ehClaim = false;
 
     const self: Record<string, unknown> = {
       select: () => {
@@ -74,8 +79,6 @@ function dublarAdmin(
         registro.op = "update";
         registro.payload = payload;
         chamadas.push(registro);
-        ehUpdateDeReclamacao = payload.status === "pending" && payload.updated_at !== undefined;
-        ehClaim = payload.status === "processing";
         return self;
       },
       eq: (c: string, v: unknown) => {
@@ -113,8 +116,16 @@ function dublarAdmin(
           return;
         }
         if (registro.op === "update") {
-          // Reclamação de órfão devolve lista vazia; claim devolve a linha.
-          resolve({ data: ehClaim ? [{ id: "e1" }] : ehUpdateDeReclamacao ? [] : [{ id: "e1" }] });
+          // Todo update "pega" a linha: o claim e a devolução do órfão só seguem
+          // quando o banco confirma que a linha mudou.
+          resolve({ data: [{ id: "e1" }] });
+          return;
+        }
+        if (
+          tabela === "event_log" &&
+          registro.filtros.some(([op, col, val]) => op === "eq" && col === "status" && val === "processing")
+        ) {
+          resolve({ data: presos, error: null });
           return;
         }
         // A Central responde pelo que ELA tem — devolver `linhas` aqui faria o
@@ -156,37 +167,80 @@ beforeEach(() => {
 });
 
 describe("drainEventLog — evento preso volta para a fila", () => {
-  it("devolve `processing` velho para `pending` ANTES de selecionar", async () => {
+  const PRESO = {
+    id: "p1",
+    organization_id: "org-1",
+    event_type: "knowledge_source.updated",
+    attempts: 0,
+  };
+
+  function devolucao(chamadas: Chamada[], id: string) {
+    return chamadas.find(
+      (c) =>
+        c.tabela === "event_log" &&
+        c.op === "update" &&
+        c.filtros.some(([op, col, val]) => op === "eq" && col === "id" && val === id) &&
+        c.filtros.some(([op, col, val]) => op === "eq" && col === "status" && val === "processing"),
+    );
+  }
+
+  it("devolve `processing` velho para `pending` ANTES de selecionar — e conta a queda", async () => {
     dispatch.mockResolvedValue([{ consumer_key: "k", status: "ok" }]);
-    const { admin, chamadas } = dublarAdmin([]);
+    const { admin, chamadas } = dublarAdmin([], null, [PRESO]);
 
     await drainEventLog(admin as never);
 
-    const reclamacao = chamadas.find(
+    const consulta = chamadas.find(
       (c) =>
-        c.op === "update" &&
-        c.payload?.status === "pending" &&
-        c.filtros.some(([tipo, col, val]) => tipo === "eq" && col === "status" && val === "processing"),
+        c.op === "select" &&
+        c.filtros.some(([op, col, val]) => op === "eq" && col === "status" && val === "processing"),
     );
-    expect(reclamacao, "nada devolve evento preso em processing").toBeDefined();
+    expect(consulta, "nada procura evento preso em processing").toBeDefined();
     // A janela existe: sem ela, a reclamação pegaria o evento que ESTÁ sendo
     // processado agora e dois workers agiriam sobre o mesmo evento.
     expect(
-      reclamacao!.filtros.some(([tipo, col]) => tipo === "lt" && col === "updated_at"),
+      consulta!.filtros.some(([tipo, col]) => tipo === "lt" && col === "updated_at"),
       "reclamou sem janela de tempo — trocaria evento parado por efeito em dobro",
     ).toBe(true);
+    // Só os tipos deste dreno: `ai_agent.dispatch_requested` tem dreno e reaper próprios.
+    expect(consulta!.filtros).toContainEqual(["in", "event_type", ["knowledge_source.updated"]]);
+
+    const devolvido = devolucao(chamadas, "p1");
+    expect(devolvido, "nada devolve evento preso em processing").toBeDefined();
+    expect(devolvido!.filtros.some(([tipo, col]) => tipo === "lt" && col === "updated_at")).toBe(true);
+    // A queda CONTA: sem isto, o evento que derruba o processo volta para
+    // sempre — foi o laço de 28/09/2026 (9 quedas em 45 min, `attempts=0`).
+    expect(devolvido!.payload).toMatchObject({ status: "pending", attempts: 1 });
+    expect(String(devolvido!.payload?.last_error)).toContain("processamento interrompido");
   });
 
   it("a reclamação acontece ANTES da seleção, senão o evento devolvido só rodaria no próximo tique", async () => {
     dispatch.mockResolvedValue([{ consumer_key: "k", status: "ok" }]);
-    const { admin, chamadas } = dublarAdmin([]);
+    const { admin, chamadas } = dublarAdmin([], null, [PRESO]);
 
     await drainEventLog(admin as never);
 
-    const iReclama = chamadas.findIndex((c) => c.op === "update" && c.payload?.status === "pending");
-    const iSeleciona = chamadas.findIndex((c) => c.op === "select");
+    const iReclama = chamadas.indexOf(devolucao(chamadas, "p1")!);
+    const iSeleciona = chamadas.findIndex(
+      (c) =>
+        c.op === "select" &&
+        c.filtros.some(([op, col, val]) => op === "eq" && col === "status" && val === "pending"),
+    );
     expect(iReclama).toBeGreaterThanOrEqual(0);
     expect(iSeleciona).toBeGreaterThan(iReclama);
+  });
+
+  it("na 5ª queda o evento morre, avisa a Central e não volta para a fila", async () => {
+    dispatch.mockResolvedValue([{ consumer_key: "k", status: "ok" }]);
+    const { admin, chamadas } = dublarAdmin([], null, [{ ...PRESO, attempts: 4 }]);
+
+    const resumo = await drainEventLog(admin as never);
+
+    expect(devolucao(chamadas, "p1")!.payload).toMatchObject({ status: "dead", attempts: 5 });
+    expect(resumo.dead).toBe(1);
+    const aviso = chamadas.find((c) => c.op === "insert" && c.tabela === "agent_inbox_items");
+    expect(aviso, "o evento que derrubou o processo morreu calado").toBeDefined();
+    expect(String(aviso!.payload?.body)).toContain("processamento interrompido");
   });
 });
 
