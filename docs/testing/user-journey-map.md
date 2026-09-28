@@ -3031,6 +3031,7 @@ ordem do toque) e `lib/telefonia/numero.test.ts` (a política de número).
 | J35.11 A conversa de telefone só aceita nota interna; uma resposta de texto é recusada (422) antes de gravar | `[P1]` | pendente de prova |
 | J35.12 Instalação com a telefonia DESLIGADA (o estado de toda VPS nova): a aba Telefone diz que está desligada e como ligar, e nenhum botão de ligar aparece em lugar nenhum | `[P0]` | pendente de prova |
 | J35.13 Remover o número: some da lista, o registro na operadora é solto, e as conversas e ligações antigas continuam no Inbox | `[P1]` | pendente de prova |
+| J35.16 Ligar a telefonia numa instalação JÁ na última versão (`telefonia` em `COMPOSE_PROFILES`, `TELEFONIA_ARI_URL`, `bash hostgator-setup-kit/update.sh`): o script sobe o Asterisk em vez de responder "Nada a atualizar" | `[P0]` | **decisão do script coberta** — `tests/shell/update-guard.test.sh` caso 14, com controles (tudo no alvo, profile desligado, stack parada) e seis sabotagens. **Defeito lido no código em 2026-09-28, não medido em VPS:** os critérios de `image_desatualizada` só olhavam app, worker e scheduler; e quem chegou à 1.48.0 pelo `update.sh` da 1.47.0 ficava sem `ASTERISK_IMAGE` e sem `TELEFONIA_ARI_PASSWORD`. **NÃO medido:** numa VPS real, nem pela tela — a prova é com `docker` dublado |
 
 **Defeitos que a prova pela tela achou, e que já estão consertados no código** (cada um está
 anotado "medido na prova pela tela" no arquivo do conserto):

@@ -57,29 +57,45 @@ CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 # (Veio da `main`; a versão por tag cai exatamente na mesma armadilha, porque a
 # comparação de tags também fica satisfeita com a imagem velha no lugar.)
 #
-# DOIS critérios, nesta ordem, porque cada um é cego onde o outro enxerga:
+# TRÊS critérios, nesta ordem, porque cada um é cego onde os outros enxergam:
 #
 #  1. O que o `.env` FIXA (`imagens_fora_do_alvo`, em _common.sh). É o critério
 #     que vale para a instalação de hoje, que nasce e permanece fixada em número
-#     de versão. Sem rede, sem registro: lê o arquivo que o compose vai ler.
-#  2. O DIGEST, local contra remoto. É o critério de canal móvel e de imagem
+#     de versão. Sem rede, sem registro: lê o arquivo que o compose vai ler. Com
+#     a telefonia ligada, inclui o Asterisk — e a chave AUSENTE dele conta.
+#  2. O contêiner do Asterisk, só com a telefonia ligada
+#     (`conteiner_da_telefonia_fora_do_alvo`). É o que faz "ligar a telefonia e
+#     rodar o update.sh" funcionar numa instalação que JÁ está na última versão:
+#     ali o `.env` já fixa o Asterisk no alvo (o `install.sh` grava a chave ligada
+#     ou não) e só o contêiner que não existe diz que falta subir.
+#  3. O DIGEST, local contra remoto. É o critério de canal móvel e de imagem
 #     republicada sem commit novo — casos em que a referência é a mesma e só o
 #     conteúdo mudou.
 #
-# Até 2026-09-19 só existia o segundo, e ele compara `$APP_IMAGE` com ELA MESMA:
-# local e remoto da mesma referência. Numa tag imutável os dois são iguais por
-# definição, então o caso que este bloco existe para cobrir — repositório novo,
-# imagem velha — respondia "Nada a atualizar" e saía com 0. Medido no deploy da
-# v1.32.0: código em `v1.32.0`, `.env` em `:1.31.1`, três contêineres na 1.31.1.
-# Quem vigia: tests/shell/update-guard.test.sh, caso 12.
+# Até 2026-09-19 só existia o do digest, e ele compara `$APP_IMAGE` com ELA
+# MESMA: local e remoto da mesma referência. Numa tag imutável os dois são
+# iguais por definição, então o caso que este bloco existe para cobrir —
+# repositório novo, imagem velha — respondia "Nada a atualizar" e saía com 0.
+# Medido no deploy da v1.32.0: código em `v1.32.0`, `.env` em `:1.31.1`, três
+# contêineres na 1.31.1. Quem vigia: tests/shell/update-guard.test.sh, caso 12.
+#
+# O 2º, e o Asterisk no 1º, vieram DEPOIS da telefonia (1.48.0): até ali os
+# critérios só olhavam app, worker e scheduler, e quem seguia a aba Telefone
+# ouvia "Nada a atualizar" sem o Asterisk jamais subir. Quem vigia: o mesmo
+# arquivo, caso 14.
 IMAGENS_FORA_DO_ALVO=""
+TELEFONIA_FORA_DO_AR=""
 image_desatualizada() {
   # 1º critério. Guardado numa global porque é com ela que a mensagem lá embaixo
   # diz QUAL imagem ficou para trás, em vez de um "imagem antiga" genérico.
   IMAGENS_FORA_DO_ALVO="$(imagens_fora_do_alvo .env "${TARGET_TAG#v}")"
   if [ -n "$IMAGENS_FORA_DO_ALVO" ]; then return 0; fi
 
-  # 2º critério.
+  # 2º critério. Antes do digest porque é local: sem rede, o 3º se cala.
+  TELEFONIA_FORA_DO_AR="$(conteiner_da_telefonia_fora_do_alvo .env "${TARGET_TAG#v}")"
+  if [ -n "$TELEFONIA_FORA_DO_AR" ]; then return 0; fi
+
+  # 3º critério.
   # O fallback vem de `IMG_APP` (_common.sh, sourceado no topo deste arquivo) e não de
   # um literal: num fork com namespace próprio, o literal apontava para a
   # imagem do UPSTREAM, e um `.env` sem APP_IMAGE comparava o digest local
@@ -126,9 +142,20 @@ if [ -z "$FORCE" ] && [ -z "$MESMA_TAG" ]; then
        bash hostgator-setup-kit/update.sh --to $TARGET_TAG --force" ;;
   esac
 fi
-if [ -n "$MESMA_TAG" ] && [ -n "$IMAGENS_FORA_DO_ALVO" ]; then
-  c_ylw "O código já está na $TARGET_TAG, mas o .env ainda manda rodar outra imagem: ${IMAGENS_FORA_DO_ALVO}."
-  c_ylw "Vou trazer as três para a ${TARGET_TAG#v}."
+if [ -n "$MESMA_TAG" ] && { [ -n "$IMAGENS_FORA_DO_ALVO" ] || [ -n "$TELEFONIA_FORA_DO_AR" ]; }; then
+  # O Asterisk é dito à parte, pelo nome da feature: "asterisk" numa lista de
+  # imagens não conta a quem lê que é a telefonia que ele acabou de ligar.
+  ATRASADAS_SEM_TELEFONIA="$(printf ' %s ' "$IMAGENS_FORA_DO_ALVO" | sed 's/ asterisk / /; s/^ *//; s/ *$//')"
+  if [ -n "$ATRASADAS_SEM_TELEFONIA" ]; then
+    c_ylw "O código já está na $TARGET_TAG, mas o .env ainda manda rodar outra imagem: ${ATRASADAS_SEM_TELEFONIA}."
+  fi
+  case " $IMAGENS_FORA_DO_ALVO " in
+    *" asterisk "*) c_ylw "A telefonia está ligada (COMPOSE_PROFILES), mas o .env não fixa o Asterisk na versão ${TARGET_TAG#v}." ;;
+  esac
+  if [ -n "$TELEFONIA_FORA_DO_AR" ]; then
+    c_ylw "A telefonia está ligada (COMPOSE_PROFILES), mas o Asterisk não está no ar na versão ${TARGET_TAG#v}."
+  fi
+  c_ylw "Vou trazer tudo para a ${TARGET_TAG#v}."
 elif [ -n "$MESMA_TAG" ]; then
   c_ylw "O código já está na $TARGET_TAG, mas o app está rodando uma imagem antiga. Vou atualizar a imagem."
 else
@@ -260,6 +287,12 @@ VERSAO_ALVO="${TARGET_TAG#v}"
 export APP_IMAGE="${IMG_APP}:${VERSAO_ALVO}"
 export WORKER_IMAGE="${IMG_WORKER}:${VERSAO_ALVO}"
 export SCHEDULER_IMAGE="${IMG_SCHEDULER}:${VERSAO_ALVO}"
+# O Asterisk também, e pelo motivo das três acima: o `enter_project` exportou o
+# ASTERISK_IMAGE ANTIGO do `.env`, e no docker compose o ambiente VENCE o `.env`
+# (medido no v5.1.4). Sem esta linha, quem tem a telefonia ligada subia o
+# Asterisk na versão anterior com o `.env` já regravado — e as outras três na
+# nova. Desligada, o valor não faz nada: o compose nem cria o serviço.
+export ASTERISK_IMAGE="${IMG_ASTERISK}:${VERSAO_ALVO}"
 gravar_imagens .env "$VERSAO_ALVO"
 
 # Os segredos da chamada de voz (spec 18), para quem instalou antes dela existir.
@@ -271,9 +304,20 @@ gravar_imagens .env "$VERSAO_ALVO"
 VOZ_CRIADA="$(completar_segredos_da_voz .env)" || VOZ_CRIADA=""
 [ -n "$VOZ_CRIADA" ] && c_ylw "  (preparei as credenciais da chamada de voz no .env — ela segue DESLIGADA)"
 # Idem para a telefonia SIP (spec 20): a senha da ARI, e nada mais. Ligar é
-# `COMPOSE_PROFILES=telefonia` + `TELEFONIA_ARI_URL=http://asterisk:8088`.
+# `COMPOSE_PROFILES=telefonia` + `TELEFONIA_ARI_URL=http://asterisk:8088` e rodar
+# este script — mesmo já na última versão: `image_desatualizada` vê o Asterisk
+# que falta, e a imagem (acima) e esta senha ficam no `.env` ANTES do `dc pull`
+# e do `dc up -d`, que é quem cria o contêiner com o profile ligado.
 TEL_CRIADA="$(completar_segredos_da_telefonia .env)" || TEL_CRIADA=""
-[ -n "$TEL_CRIADA" ] && c_ylw "  (preparei a senha da telefonia no .env — ela segue DESLIGADA)"
+if [ -n "$TEL_CRIADA" ]; then
+  # "Segue DESLIGADA" só é verdade sem o profile — é justamente com ele ligado
+  # que esta linha aparece para quem acabou de seguir a aba Telefone.
+  if telefonia_ligada .env; then
+    c_ylw "  (gerei a senha da telefonia no .env — o Asterisk sobe com ela logo abaixo)"
+  else
+    c_ylw "  (preparei a senha da telefonia no .env — ela segue DESLIGADA)"
+  fi
+fi
 
 # `dc pull` falha se alguma das três imagens ainda não existir no registro — o
 # que acontece numa instalação atualizando para a primeira versão publicada

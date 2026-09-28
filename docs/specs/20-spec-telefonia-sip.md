@@ -155,6 +155,17 @@ Navegador do atendente (JsSIP) ────────────────�
 
 - Serviço `asterisk` no `docker-compose.prod.yml`, `profiles: ["telefonia"]` (desligado por
   padrão), imagem `ghcr.io/paulocmbcosta/deskcomm-asterisk`, rede `internal`.
+- **Ligar numa instalação que já existe:** `telefonia` em `COMPOSE_PROFILES` e
+  `TELEFONIA_ARI_URL=http://asterisk:8088` no `.env`, depois `bash hostgator-setup-kit/update.sh`.
+  O script sobe o Asterisk **mesmo sem versão nova**: com o profile ligado, `image_desatualizada`
+  acusa o `.env` sem `ASTERISK_IMAGE` (ou fixado em outra versão) e o contêiner do Asterisk
+  ausente ou em outra versão — este, só com o app no ar, para não subir uma stack parada de
+  propósito. A imagem e a senha da ARI vão para o `.env` antes do `pull` e do `up -d`. Vigiado
+  por `tests/shell/update-guard.test.sh`, caso 14. **O kit que decide é o da versão instalada:**
+  até a 1.48.0 ele respondia "Nada a atualizar" e o Asterisk nunca subia — ali a saída é
+  `update.sh --force`. Para saber qual kit está no disco:
+  `grep -c conteiner_da_telefonia_fora_do_alvo hostgator-setup-kit/_common.sh` (`0` = anterior à
+  correção).
 - **Nenhuma porta SIP publicada.** Só troncos com registro, cuja sinalização entra pelo
   mapeamento de NAT do próprio registro. Tronco por IP (sem registro) fica fora desta versão.
 - **Faixa RTP publicada**: `TELEFONIA_RTP_INICIO`–`TELEFONIA_RTP_FIM`, padrão
@@ -273,6 +284,9 @@ Navegador do atendente (JsSIP) ────────────────�
 - **O fluxo do PRODUTO na recebida** — o Stasis escolhe quem toca, o atendente atende no
   navegador — segue sem prova em produção.
 - CPU por ligação na VPS (com e sem transcodificação Opus ↔ A-law).
+- Ligar a telefonia pelo `update.sh` numa VPS real (§4.3). O que está provado é a DECISÃO do
+  script, com `docker` dublado; que o `up -d` cria o Asterisk com o profile ligado é o
+  comportamento do docker compose, medido só com `docker compose config --services`.
 - Comportamento com mais de um registro da mesma conta ao mesmo tempo (dev + produção).
 
 ## 10. Living System Checklist — F1 + distribuição

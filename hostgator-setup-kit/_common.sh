@@ -582,7 +582,33 @@ pin_incompleto() {  # pin_incompleto [caminho do .env]
   printf '%s' "${faltando# }"
 }
 
-# Quais das três imagens o .env FIXA em algo que não é o alvo desta atualização?
+# ── A telefonia está LIGADA nesta instalação? ────────────────────────────────
+# É `telefonia` em COMPOSE_PROFILES, lido do ARQUIVO e com a régua do próprio
+# `docker compose` — é ele quem decide se o Asterisk existe, e uma régua
+# diferente da dele diria "desligada" com o serviço no ar, ou o contrário. Cada
+# regra abaixo foi medida contra o docker compose v5.1.4 (2026-09-28), com
+# `docker compose config --services`:
+#   - a ÚLTIMA linha vence. O `install.sh` grava `COMPOSE_PROFILES=''`, e quem
+#     ACRESCENTA uma linha no fim em vez de editar aquela liga o profile (o
+#     `load_env` também fica com a última);
+#   - aspas simples ou duplas, `export ` na frente, comentário depois de um
+#     espaço e fim de linha do Windows não mudam nada;
+#   - é uma lista separada por vírgula, com ou sem espaço depois dela, e o nome é
+#     comparado INTEIRO: `telefonia2` não liga a telefonia.
+telefonia_ligada() {  # telefonia_ligada [envfile] → sai 0 se ligada
+  local envfile="${1:-.env}" v
+  [ -f "$envfile" ] || return 1
+  v="$({ grep -E '^[[:space:]]*(export[[:space:]]+)?COMPOSE_PROFILES=' "$envfile" 2>/dev/null || true; } | tail -1)"
+  v="${v#*=}"
+  # Nome de profile não tem espaço nem aspas: tirar TODOS é mais simples, e mais
+  # difícil de errar, do que reproduzir o parser de aspas do compose.
+  v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+#.*$//' | tr -d "[:space:]\"'")"
+  case ",$v," in *,telefonia,*) return 0 ;; esac
+  return 1
+}
+
+# Quais das nossas imagens o .env FIXA em algo que não é o alvo desta atualização?
+# São três — app, worker, scheduler — e QUATRO quando a telefonia está ligada.
 #
 # Existe porque "o código está na tag" não diz nada sobre o que RODA: quem roda é
 # a imagem, e a imagem é a que o `.env` manda o compose subir. Medido em produção
@@ -602,6 +628,12 @@ pin_incompleto() {  # pin_incompleto [caminho do .env]
 # O que a versão NÃO decide, de propósito:
 #   - chave AUSENTE: vale o default do compose, que é um canal. Quem cuida dessa
 #     lacuna é `completar_pin_ausente`, com a versão que já está rodando.
+#     EXCETO a do Asterisk com a telefonia ligada, que conta. Ela só falta no
+#     `.env` de quem chegou à versão da telefonia pelo `update.sh` ANTERIOR (ele
+#     carrega este arquivo antes do checkout, e o `gravar_imagens` velho não
+#     conhece o Asterisk) — não há escolha de canal ali para respeitar, só um
+#     serviço ligado caindo em `:stable` + `always`, que a doutrina de packaging
+#     proíbe. Desligada, a chave ausente não conta: o compose nem cria o serviço.
 #   - canal móvel EXPLÍCITO (`latest`/`main`/`stable`, ou repositório sem tag, que
 #     é `:latest` implícito): é decisão de quem opera. E `latest` aqui é o topo da
 #     `main`, não a última release — fixá-la à força na versão da tag poderia ser
@@ -616,11 +648,12 @@ pin_incompleto() {  # pin_incompleto [caminho do .env]
 # Ecoa os serviços fora do alvo, separados por espaço. Vazio = a versão não acusa
 # ninguém (o que NÃO é o mesmo que "está em dia": falta o digest).
 imagens_fora_do_alvo() {  # imagens_fora_do_alvo <envfile> <versão alvo, sem o "v">
-  local envfile="${1:-.env}" alvo="${2:-}" svc chave repo img fora=""
+  local envfile="${1:-.env}" alvo="${2:-}" svc chave repo img fora="" servicos="app worker scheduler"
   [ -f "$envfile" ] || return 0
   [ -n "$alvo" ] || return 0
+  telefonia_ligada "$envfile" && servicos="$servicos asterisk"
 
-  for svc in app worker scheduler; do
+  for svc in $servicos; do
     # `case`, e não um mapa "CHAVE:svc:repo" partido por dois-pontos como em
     # `completar_pin_ausente`: o repositório pode TER dois-pontos (registro com
     # porta, num fork), e o corte devolveria metade do nome.
@@ -628,17 +661,77 @@ imagens_fora_do_alvo() {  # imagens_fora_do_alvo <envfile> <versão alvo, sem o 
       app)       chave=APP_IMAGE;       repo="$IMG_APP" ;;
       worker)    chave=WORKER_IMAGE;    repo="$IMG_WORKER" ;;
       scheduler) chave=SCHEDULER_IMAGE; repo="$IMG_SCHEDULER" ;;
+      asterisk)  chave=ASTERISK_IMAGE;  repo="$IMG_ASTERISK" ;;
     esac
     img="$(valor_do_env "$envfile" "$chave")"
-    if [ -z "$img" ]; then continue; fi                       # ausente: default do compose
-    if [ "$img" = "${repo}:${alvo}" ]; then continue; fi      # exatamente o que esta atualização gravaria
-    case "$(tag_da_imagem "$img")" in
-      latest|main|stable) continue ;;                         # canal escolhido: o digest decide
-      "") case "$img" in */*) continue ;; esac ;;             # repositório sem tag = :latest implícito
-    esac
-    fora="$fora $svc"
+    if [ -z "$img" ]; then
+      # Ausente: vale o default do compose. Conta só para o Asterisk, que só
+      # está nesta lista com a telefonia ligada (o porquê no cabeçalho acima).
+      [ "$svc" = asterisk ] && fora="$fora $svc"
+      continue
+    fi
+    referencia_fora_do_alvo "$img" "$repo" "$alvo" && fora="$fora $svc"
   done
   printf '%s' "${fora# }"
+}
+
+# A regra de julgamento de UMA referência, num lugar só. Ela nasceu dentro de
+# `imagens_fora_do_alvo` e saiu quando `conteiner_da_telefonia_fora_do_alvo`
+# passou a precisar da MESMA decisão sobre uma referência de outra origem (o
+# contêiner em vez do `.env`). Duplicá-la seria pedir divergência: um conserto no
+# canal móvel aplicado num lugar e não no outro acusa a instalação por um
+# critério e a absolve pelo outro, que é pior do que não ter critério nenhum.
+# Sai 0 = está fora do alvo (conta). Sai 1 = não conta (é o alvo, é canal, ou
+# não há o que julgar) — o que NÃO significa "em dia": falta o digest.
+referencia_fora_do_alvo() {  # referencia_fora_do_alvo <referência> <repo> <versão alvo>
+  local ref="$1" repo="$2" alvo="$3"
+  [ -n "$ref" ] || return 1                       # nada para julgar (chave ausente, contêiner parado)
+  [ "$ref" = "${repo}:${alvo}" ] && return 1      # exatamente o que esta atualização gravaria
+  case "$(tag_da_imagem "$ref")" in
+    latest|main|stable) return 1 ;;               # canal escolhido: o digest decide
+    "") case "$ref" in */*) return 1 ;; esac ;;   # repositório sem tag = :latest implícito
+  esac
+  return 0
+}
+
+# O contêiner do Asterisk, com a telefonia LIGADA: ele existe, e roda o alvo?
+#
+# É o critério que fecha o caminho que a aba Telefone ensina — acrescentar
+# `telefonia` a COMPOSE_PROFILES e rodar o `update.sh`. Numa instalação nova, ou
+# que já passou por um `update.sh` desta época, o `.env` JÁ fixa o Asterisk na
+# versão (o `install.sh` e o `gravar_imagens` gravam a chave ligada ou não): o
+# critério do `.env` o vê no alvo, o do digest vê o app em dia, e o script
+# respondia "Nada a atualizar" com o Asterisk nunca criado. É o caso mais comum,
+# e só o contêiner sabe dele.
+#
+# Prudências, na mesma linha do resto do kit:
+#   - telefonia DESLIGADA não acusa nada: o compose nem cria o serviço.
+#   - sem o contêiner do APP, não acusa nada. Stack parada de propósito não
+#     recebe um update que ninguém pediu; a ausência do Asterisk só diz algo com
+#     o resto do CRM no ar.
+#   - a referência julgada é a DO CONTÊINER, pela mesma régua do `.env`
+#     (`referencia_fora_do_alvo`): Asterisk seguindo um canal não é atraso.
+#   - `docker` fora do ar / socket sem permissão não derruba quem chama, mesmo
+#     sob `set -euo pipefail`. Sem enxergar, o critério se cala.
+#
+# Ecoa `asterisk` quando está fora do alvo; vazio quando não há o que acusar.
+conteiner_da_telefonia_fora_do_alvo() {  # conteiner_da_telefonia_fora_do_alvo <envfile> <versão alvo, sem o "v">
+  local envfile="${1:-.env}" alvo="${2:-}" proj app ast
+  [ -n "$alvo" ] || return 0
+  telefonia_ligada "$envfile" || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+  proj="$(nome_do_projeto_atual)"
+
+  # As guardas `|| x=""` valem para o chamador DIRETO. O `update.sh` chama por
+  # `$( )`, onde o errexit já não aborta a função — mas quem escrever esta
+  # chamada numa linha solta sob `set -e` perderia o script no primeiro docker
+  # fora do ar (medido: tests/shell/update-guard.test.sh, caso 14h).
+  app="$(docker inspect "${proj}-app-1" --format '{{.Config.Image}}' 2>/dev/null)" || app=""
+  [ -n "$app" ] || return 0
+  ast="$(docker inspect "${proj}-asterisk-1" --format '{{.Config.Image}}' 2>/dev/null)" || ast=""
+  if [ -z "$ast" ] || referencia_fora_do_alvo "$ast" "$IMG_ASTERISK" "$alvo"; then
+    printf 'asterisk'
+  fi
 }
 
 # Completa o pin AUSENTE no .env, com a versão que a imagem EM EXECUÇÃO declara.

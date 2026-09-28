@@ -1700,8 +1700,10 @@ esac
   envq WACALLS_API_TOKEN "$WACALLS_API_TOKEN"
   printf '# Telefonia SIP (spec 20) — DESLIGADA. Fazer e receber ligações pelos números\n'
   printf '# SIP da empresa. Para ligar: acrescente telefonia a COMPOSE_PROFILES e\n'
-  printf '# TELEFONIA_ARI_URL=http://asterisk:8088, depois ./update.sh; os números são\n'
-  printf '# cadastrados na tela (Conexões › Telefone). O áudio usa a faixa UDP abaixo.\n'
+  printf '# TELEFONIA_ARI_URL=http://asterisk:8088, depois rode, nesta pasta,\n'
+  printf '# bash hostgator-setup-kit/update.sh (sobe o Asterisk mesmo sem versão nova);\n'
+  printf '# os números são cadastrados na tela (Conexões › Telefone). O áudio usa a\n'
+  printf '# faixa UDP abaixo.\n'
   envq TELEFONIA_ARI_URL "${TELEFONIA_ARI_URL:-}"
   envq TELEFONIA_ARI_PASSWORD "$TELEFONIA_ARI_PASSWORD"
   envq TELEFONIA_RTP_INICIO "${TELEFONIA_RTP_INICIO:-20000}"
