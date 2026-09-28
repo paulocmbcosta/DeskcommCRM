@@ -11,6 +11,7 @@ import {
   descartarFala,
   falaParaSalvarSchema,
   hashDaFala,
+  reconferirFala,
   salvarFala,
   salvarFalaGeral,
   type ConexaoDaTransacao,
@@ -369,6 +370,63 @@ describe("descartarFala", () => {
     await descartarFala(banco.db, ORG, id);
     expect(banco.linhas.size).toBe(0);
     expect(armazem.objetos.has(caminhoDaFala(ORG, HASH))).toBe(true);
+  });
+});
+
+describe("reconferirFala — a decisão de novo SOB A TRAVA de quem grava, sem voltar ao Storage", () => {
+  const TEXTO_B = "Só um instante, já vamos atender.";
+  const HASH_B = hashDaFala(TEXTO_B, VOZ.voiceId, VOZ.modelId);
+  const aprovada = async (p: PedidoDeSalvar) => {
+    const c = await conferirFala(p);
+    if (!c.ok) throw new Error(`a conferência devia passar: ${c.motivo}`);
+    return c;
+  };
+
+  it("nada mudou entre a conferência e a trava: a MESMA decisão, sem ler o Storage de novo", async () => {
+    previaNoStorage(ORG, HASH);
+    const c = await aprovada(pedido());
+    armazem.falharBaixar = true;
+    const leituras = armazem.leituras;
+    expect(reconferirFala(pedido(), null, c)).toEqual(c);
+    expect(armazem.leituras).toBe(leituras);
+  });
+
+  it("outra gravação criou a fala entre as duas: a decisão sob a trava REGRAVA a linha dela (não nasce uma segunda)", async () => {
+    previaNoStorage(ORG, HASH);
+    previaNoStorage(ORG, HASH_B);
+    const c = await aprovada(pedido());
+    const outra = await salvarFala(pedido({ texto: TEXTO_B, hash: HASH_B }));
+    const lida = outra.ok ? banco.linhas.get(outra.fala.id)! : null;
+    const r = reconferirFala(pedido(), lida, c);
+    expect(r).toMatchObject({ ok: true, atual: { id: lida!.id }, nova: { hash: HASH, duracaoMs: 200 } });
+  });
+
+  it("'nada mudou' fora da trava, e sob ela a fala já é OUTRA: o hash vale como prévia nova só se for da voz atual", async () => {
+    previaNoStorage(ORG, HASH);
+    const antiga = await salvarFala(pedido());
+    const atual = antiga.ok ? banco.linhas.get(antiga.fala.id)! : null;
+    // A fala em uso tem o hash da voz ANTERIOR: fora da trava, "nada mudou" vale.
+    const c = await aprovada(pedido({ falaAtualId: atual!.id, voz: { voiceId: "voz-2", modelId: VOZ.modelId } }));
+    expect(c.nova).toBeNull();
+    // Sob a trava, outra gravação já trocou a fala: o hash antigo não é o do texto com a voz atual.
+    const trocada = { ...atual!, texto: TEXTO_B, content_hash: HASH_B };
+    expect(reconferirFala(pedido({ voz: { voiceId: "voz-2", modelId: VOZ.modelId } }), trocada, c)).toEqual({
+      ok: false,
+      motivo: "previa_desatualizada",
+    });
+  });
+
+  it("'nada mudou' com a duração do objeto: a medida da conferência é a do objeto do hash pedido", async () => {
+    previaNoStorage(ORG, HASH);
+    const salva = await salvarFala(pedido());
+    const atual = salva.ok ? banco.linhas.get(salva.fala.id)! : null;
+    const c = await aprovada(pedido({ falaAtualId: atual!.id }));
+    expect(c.nova).toBeNull();
+    // Sob a trava a linha diz outra duração (um conserto concorrente): a medida é a do objeto, 200 ms.
+    expect(reconferirFala(pedido(), { ...atual!, duracao_ms: 999 }, c)).toMatchObject({
+      ok: true,
+      nova: { hash: HASH, duracaoMs: 200 },
+    });
   });
 });
 

@@ -318,7 +318,8 @@ type ExigenciaDaFala =
   | { tipo: "nova"; atual: LinhaDaFala | null; hash: string; voiceId: string; modelId: string }
   | { tipo: "recusa"; motivo: FalhaDaFala };
 
-type PedidoDaDecisao = Pick<PedidoDeSalvar, "organizationId" | "tipo" | "texto" | "hash" | "voz">;
+/** O que a decisão lê do pedido — sem banco nem Storage. */
+export type PedidoDaDecisao = Pick<PedidoDeSalvar, "organizationId" | "tipo" | "texto" | "hash" | "voz">;
 
 function exigenciaDaFala(p: PedidoDaDecisao, lida: LinhaDaFala | null): ExigenciaDaFala {
   const texto = p.texto.trim();
@@ -394,6 +395,32 @@ export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
   const e = exigenciaDaFala(p, lida);
   if (e.tipo === "recusa") return { ok: false, motivo: e.motivo };
   return concluirFala(p.organizationId, e, await medirObjeto(p.armazem, p.organizationId, p.hash));
+}
+
+/**
+ * A decisão de novo, SOB A TRAVA de quem grava a fala numa transação própria (o
+ * menu, em menus.ts), da prévia que `conferirFala` aprovou FORA dela: com a fala
+ * atual RELIDA na transação e sem voltar ao Storage — a mesma forma de
+ * `salvarFalaGeral` (mede fora, decide dentro). Pura.
+ *
+ * Por que decidir de novo: entre a conferência e a trava, outra gravação do mesmo
+ * menu pode ter criado ou trocado a fala. Gravar com a decisão velha criaria uma
+ * segunda linha (a primeira fica órfã, e mantém o objeto vivo para sempre) ou
+ * tomaria como "nada mudou" uma fala que já é outra.
+ *
+ * A medida do objeto sai da própria aprovação, e é exata: nas duas formas dela o
+ * objeto medido é o `<org>/<hash pedido>.ulaw` (`medirObjeto`), com a duração em
+ * `nova`; sem `nova`, a duração é a da fala atual, que é o que `concluirFala`
+ * exige para não mudar nada.
+ */
+export function reconferirFala(
+  p: PedidoDaDecisao,
+  lida: LinhaDaFala | null,
+  aprovada: Extract<FalaConferida, { ok: true }>,
+): FalaConferida {
+  const duracaoMs = aprovada.nova ? aprovada.nova.duracaoMs : aprovada.atual.duracao_ms;
+  if (duracaoMs === null) return { ok: false, motivo: "previa_ausente" };
+  return decidirFala(p, lida, { ok: true, duracaoMs });
 }
 
 /** Grava o que `conferirFala` aprovou: a MESMA linha passa a apontar para o hash novo (ou nasce uma). */
