@@ -43,7 +43,8 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
 
 - **Tripla de migration:** cada versão tem a sua migration, o apêndice idempotente no `baseline.sql` e a linha no MANIFEST. A primeira é a **0288**; confira com o comando do CLAUDE.md antes de criar.
 - **Tabelas novas:**
-  - têm `organization_id uuid not null references organizations(id) on delete cascade` e a RLS `tenant_isolation_<tabela>_all` via `fn_user_org_ids()`;
+  - têm `organization_id uuid not null references organizations(id) on delete cascade` e a RLS `tenant_isolation_<tabela>_select` (`for select`) via `fn_user_org_ids()`. É a mesma forma de `attendance_teams`: a escrita passa só pela API com o cliente de serviço, e o `rbac-config-ia-canais` reprova policy ALL que só confere a organização;
+  - toda referência entre tabelas tenant-aware é uma **FK composta** `(organization_id, <coluna>)`, para o próprio banco recusar o cruzamento de organizações;
   - leitura para membros da organização;
   - escrita só pela API, com o cliente de serviço filtrando a organização resolvida da sessão.
 - **Funções novas:** `revoke ... from public, anon` (CLAUDE.md, migrations item 9).
