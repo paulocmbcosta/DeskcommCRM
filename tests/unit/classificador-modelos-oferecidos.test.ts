@@ -111,3 +111,30 @@ describe("listClassifierModels", () => {
     expect(out[0]?.display_name).toBe("gpt-5-mini");
   });
 });
+
+describe("listClassifierModels — a chave de voz do telefone", () => {
+  it("credencial da ElevenLabs (voz) não conta como provedor de modelo", async () => {
+    let pedidos: unknown = null;
+    await listClassifierModels(
+      db({
+        creds: { data: [{ provider: "elevenlabs" }, { provider: "openai" }] },
+        models: { data: [] },
+        onIn: (v) => (pedidos = v),
+      }),
+      "org1",
+      SEM_PLATAFORMA,
+    );
+    expect(pedidos).toEqual(["openai"]);
+  });
+
+  it("só com a chave de voz, não há modelo a oferecer — e o catálogo nem é consultado", async () => {
+    let consultou = false;
+    const out = await listClassifierModels(
+      db({ creds: { data: [{ provider: "elevenlabs" }] }, models: { data: [] }, onIn: () => (consultou = true) }),
+      "org1",
+      SEM_PLATAFORMA,
+    );
+    expect(out).toEqual([]);
+    expect(consultou).toBe(false);
+  });
+});

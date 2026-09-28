@@ -109,3 +109,34 @@ export const PROVEDOR_POR_ID: ReadonlyMap<string, ProvedorSuportado> = new Map(
 export function ehProvedorSuportado(id: string): boolean {
   return PROVEDOR_POR_ID.has(id);
 }
+
+/**
+ * A CHAVE DE VOZ DO TELEFONE — a ElevenLabs, que dá voz à URA
+ * (`lib/telefonia/chave-elevenlabs.ts`). Ela mora em `ai_provider_credentials`,
+ * a mesma tabela das chaves de modelo, mas NÃO é provedor de modelo de
+ * linguagem: não entra em `PROVEDORES` (que casa com o registry do motor) e não
+ * pode aparecer onde se escolhe com o que o agente pensa.
+ */
+export const PROVEDOR_DE_VOZ = "elevenlabs";
+
+/**
+ * Os `provider` que têm linha em `ai_provider_credentials` e NÃO executam
+ * modelo de linguagem. Este é o critério ÚNICO: quem lista credencial para
+ * escolher modelo filtra por `ehProvedorDeModelo`/`credenciaisDeModelo`, nunca
+ * comparando com o texto do provider.
+ *
+ * Lista de exclusão, não de inclusão, de propósito: a coluna é de vocabulário
+ * aberto desde a 0127, e um clone pode ter linha de provider que esta lista não
+ * conhece — essas continuam aparecendo como antes. Só sai o que sabemos que não
+ * é modelo.
+ */
+export const PROVEDORES_QUE_NAO_SAO_MODELO: ReadonlySet<string> = new Set([PROVEDOR_DE_VOZ]);
+
+export function ehProvedorDeModelo(provider: string): boolean {
+  return !PROVEDORES_QUE_NAO_SAO_MODELO.has(provider);
+}
+
+/** Só as credenciais de provedor de modelo, na ordem em que vieram. */
+export function credenciaisDeModelo<T extends { provider: string }>(linhas: readonly T[]): T[] {
+  return linhas.filter((l) => ehProvedorDeModelo(l.provider));
+}

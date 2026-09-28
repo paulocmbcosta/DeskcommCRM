@@ -33,10 +33,12 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => ({})) }));
-vi.mock("@/lib/telefonia/servico-de-falas", () => ({
-  opcoesDaElevenLabs: () => ({}),
-  STATUS_DA_FALHA: { chave_invalida: 422, sem_credito: 422, sem_resposta: 502, erro_do_provedor: 502 },
-}));
+// A fiação é a DE VERDADE (`validarChaveDeVoz` é a mesma régua do revalidate);
+// só a URL base é fixada, para o teste não depender do `.env.local` de quem roda.
+vi.mock("@/lib/env", async () => {
+  const real = await vi.importActual<{ env: Record<string, unknown> }>("@/lib/env");
+  return { ...real, env: { ...real.env, ELEVENLABS_API_BASE_URL: "" } };
+});
 vi.mock("@/lib/telefonia/elevenlabs", async () => {
   const real = await vi.importActual<typeof ModuloElevenLabs>("@/lib/telefonia/elevenlabs");
   return {

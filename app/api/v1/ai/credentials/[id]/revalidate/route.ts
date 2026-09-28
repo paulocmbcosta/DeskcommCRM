@@ -13,9 +13,12 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { PROVEDOR_DE_VOZ } from "@/lib/ai/pontos/provedores";
 import { validateProviderKey } from "@/lib/ai/provider-validators";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { STATUS_DA_FALHA, validarChaveDeVoz } from "@/lib/telefonia/servico-de-falas";
+import { MENSAGEM_DA_FALHA_DA_FALA } from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +74,40 @@ export async function POST(
   } catch (err) {
     console.error("[ai.credentials] decrypt failed during revalidate", err);
     return fail("decrypt_failed", t("Falha ao decifrar credential."), 500, { requestId });
+  }
+
+  // A chave de voz do telefone (ElevenLabs) não é de modelo de linguagem:
+  // `validateProviderKey` devolveria `unknown_provider` e marcaria inválida uma
+  // chave boa. Ela é conferida pela MESMA régua do cadastro — listar as vozes da
+  // conta —, e a recusa volta traduzida com o status do cadastro, nunca 500.
+  if (row.provider === PROVEDOR_DE_VOZ) {
+    const voz = await validarChaveDeVoz(apiKey);
+    const patchDeVoz = voz.ok
+      ? { validated_at: new Date().toISOString(), validation_error: null }
+      : { validated_at: null, validation_error: voz.motivo };
+    const { data: atualizada, error: erroDeVoz } = await admin
+      .from("ai_provider_credentials")
+      .update(patchDeVoz)
+      .eq("id", id)
+      .eq("organization_id", activeOrg.orgId)
+      .select(SAFE_COLUMNS)
+      .single();
+    if (erroDeVoz || !atualizada) {
+      return fail("internal_error", "Erro ao atualizar credential.", 500, { requestId });
+    }
+    await audit({
+      action: "ai.credential_revalidated",
+      actorUserId: authUser.id,
+      organizationId: activeOrg.orgId,
+      resourceType: "ai_provider_credential",
+      resourceId: id,
+      requestId,
+      metadata: { provider: row.provider, label: row.label, ok: voz.ok, error: voz.ok ? null : voz.motivo },
+    });
+    if (!voz.ok) {
+      return fail(voz.motivo, t(MENSAGEM_DA_FALHA_DA_FALA[voz.motivo]), STATUS_DA_FALHA[voz.motivo], { requestId });
+    }
+    return ok(atualizada, { requestId });
   }
 
   const result = await validateProviderKey(row.provider, apiKey);

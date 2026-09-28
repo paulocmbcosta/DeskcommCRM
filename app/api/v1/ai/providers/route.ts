@@ -28,7 +28,7 @@ import {
   type LinhaDeBinding,
 } from "@/lib/ai/pontos/resolver";
 import { PAPEIS, PONTOS_DE_IA, PONTO_POR_ID } from "@/lib/ai/pontos/registro";
-import { PROVEDORES, ehProvedorSuportado } from "@/lib/ai/pontos/provedores";
+import { PROVEDORES, credenciaisDeModelo, ehProvedorSuportado } from "@/lib/ai/pontos/provedores";
 import { validarBinding } from "@/lib/ai/pontos/validar-binding";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -194,7 +194,10 @@ export async function GET(): Promise<Response> {
     // mostrá-lo nem trocá-lo (invariante 6: toda configuração tem superfície).
     padrao: padraoDaOrganizacao,
     provedores: PROVEDORES,
-    credenciais: credsRes.data ?? [],
+    // Só chave de PROVEDOR DE MODELO: a de voz do telefone (ElevenLabs) mora na
+    // mesma tabela, e o painel lê `credenciais.length === 0` como "sem chave de
+    // IA" e filtra por provedor para oferecer a chave de cada ponto.
+    credenciais: credenciaisDeModelo(credsRes.data ?? []),
     modelos,
     podeEditar: roleAtLeast(org.role, "admin"),
   });

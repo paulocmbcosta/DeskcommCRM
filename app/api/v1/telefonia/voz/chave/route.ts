@@ -20,9 +20,8 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { logger } from "@/lib/logger";
 import { PROVEDOR_DE_VOZ, estadoDaChaveDeVoz, guardarChaveDeVoz } from "@/lib/telefonia/chave-elevenlabs";
-import { ErroDaElevenLabs, listarVozes } from "@/lib/telefonia/elevenlabs";
-import { STATUS_DA_FALHA, opcoesDaElevenLabs } from "@/lib/telefonia/servico-de-falas";
-import { MENSAGEM_DA_FALHA_DA_FALA, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
+import { STATUS_DA_FALHA, validarChaveDeVoz } from "@/lib/telefonia/servico-de-falas";
+import { MENSAGEM_DA_FALHA_DA_FALA } from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,13 +51,12 @@ export async function PUT(req: NextRequest): Promise<Response> {
     return fail("validation_failed", t("Cole a chave da ElevenLabs (pelo menos 8 caracteres)."), 422, { requestId });
   }
 
-  let vozes: number;
-  try {
-    vozes = (await listarVozes(parsed.data.chave, opcoesDaElevenLabs())).length;
-  } catch (e) {
-    const motivo: FalhaDaFala = e instanceof ErroDaElevenLabs ? e.motivo : "erro_do_provedor";
+  const validacao = await validarChaveDeVoz(parsed.data.chave);
+  if (!validacao.ok) {
+    const { motivo } = validacao;
     return fail(motivo, t(MENSAGEM_DA_FALHA_DA_FALA[motivo]), STATUS_DA_FALHA[motivo], { requestId });
   }
+  const { vozes } = validacao;
 
   const pool = getRequestPool();
   let guardada: Awaited<ReturnType<typeof guardarChaveDeVoz>>;

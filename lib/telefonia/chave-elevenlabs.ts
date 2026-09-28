@@ -15,10 +15,13 @@
  * chama passa o da sessão — nunca um valor vindo do corpo do pedido.
  */
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { PROVEDOR_DE_VOZ } from "@/lib/ai/pontos/provedores";
 import { byteaToBuffer, decryptKey, encryptKey } from "@/lib/crypto/aes_gcm";
 import { logger } from "@/lib/logger";
 
-export const PROVEDOR_DE_VOZ = "elevenlabs";
+// O texto do provider mora no vocabulário de provedores (é de lá que as listas
+// de modelo sabem excluí-lo); aqui ele só é reexportado.
+export { PROVEDOR_DE_VOZ };
 export const ROTULO_DA_CHAVE_DE_VOZ = "ElevenLabs";
 
 export interface EstadoDaChaveDeVoz {

@@ -4,12 +4,32 @@
  */
 import { env } from "@/lib/env";
 
-import type { OpcoesDoCliente } from "./elevenlabs";
+import { ErroDaElevenLabs, listarVozes, type OpcoesDoCliente } from "./elevenlabs";
 import type { FalhaDaFala } from "./vocabulario";
 
 /** A URL base só muda no e2e (a ElevenLabs falsa de tests/e2e/telefonia-ura-e-falas.spec.ts). */
 export function opcoesDaElevenLabs(): OpcoesDoCliente {
   return env.ELEVENLABS_API_BASE_URL ? { baseUrl: env.ELEVENLABS_API_BASE_URL } : {};
+}
+
+export type ValidacaoDaChaveDeVoz = { ok: true; vozes: number } | { ok: false; motivo: FalhaDaFala };
+
+/**
+ * A chave da ElevenLabs vale? Lista as vozes da conta — a chave autentica essa
+ * chamada, e ela não gasta crédito. Nunca lança.
+ *
+ * É a régua ÚNICA das duas portas que validam a chave: o cadastro
+ * (`PUT /api/v1/telefonia/voz/chave`) e o "Testar" da credencial
+ * (`POST /api/v1/ai/credentials/:id/revalidate`). Se cada uma tivesse a sua, uma
+ * chave podia ser aceita numa e marcada inválida na outra.
+ */
+export async function validarChaveDeVoz(chave: string): Promise<ValidacaoDaChaveDeVoz> {
+  try {
+    const vozes = await listarVozes(chave, opcoesDaElevenLabs());
+    return { ok: true, vozes: vozes.length };
+  } catch (e) {
+    return { ok: false, motivo: e instanceof ErroDaElevenLabs ? e.motivo : "erro_do_provedor" };
+  }
 }
 
 /**
