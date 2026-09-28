@@ -38,6 +38,14 @@ export const TAMANHO_MAXIMO_DA_FALA = 1000;
 /** O modelo de voz da ElevenLabs usado quando a organização não escolheu outro. */
 export const MODELO_DE_VOZ_PADRAO = "eleven_multilingual_v2";
 
+/**
+ * Formato de um `voice_id` da ElevenLabs: alfanumérico, `_` e `-`, até 64
+ * caracteres. Usado para filtrar a listagem de vozes (`lib/telefonia/elevenlabs.ts`)
+ * e para recusar `sintetizar` com um ID fora do formato ANTES de qualquer chamada
+ * de rede — um ID como `".."` nunca é uma voz real da conta.
+ */
+export const ID_DE_VOZ = /^[A-Za-z0-9_-]{1,64}$/;
+
 export type MotivoDoErroDaElevenLabs =
   | "chave_invalida"
   | "sem_credito"
