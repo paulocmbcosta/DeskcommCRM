@@ -220,6 +220,88 @@ describe("apiClient", () => {
   });
 
   /**
+   * UM `Retry-After` LONGO NÃO É PARA ESPERAR COM A TELA PRESA.
+   *
+   * O cliente dormia o `Retry-After` inteiro antes de repetir, em qualquer
+   * método. Com o limite de prévias do telefone (30 por hora por organização,
+   * `Retry-After` de até 3600 s), o botão "Gerar prévia" ficaria girando por até
+   * uma hora — e a repetição, no fim, seria recusada de novo. Acima de 10 s o
+   * cliente não espera nem repete: lança na hora, com o código e a mensagem do
+   * servidor (e `rate_limited` quando o corpo não traz código). Até 10 s, nada
+   * muda: é o caso do discador (t11b), em que esperar é o conserto.
+   */
+  it("t14: 429 com Retry-After acima de 10s num POST lança na hora rate_limited, sem esperar nem repetir", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        429,
+        { error: { code: "rate_limited", message: "Muitas trocas de logo seguidas." } },
+        { "Retry-After": "3600" },
+      ),
+    );
+
+    const desfecho = vi.fn();
+    void apiClient.post("/x", { a: 1 }).then(desfecho, desfecho);
+
+    // Nenhum relógio avançou: se o cliente estivesse dormindo, nada teria saído.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(desfecho).toHaveBeenCalledTimes(1);
+    const erro = desfecho.mock.calls[0]![0] as ApiError;
+    expect(erro).toBeInstanceOf(ApiError);
+    expect(erro).toMatchObject({ status: 429, code: "rate_limited", message: "Muitas trocas de logo seguidas." });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14b: o código e a mensagem próprios do servidor chegam intactos (limite de prévias do telefone)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        429,
+        { error: { code: "limite_de_previas", message: "Muitas prévias geradas na última hora." } },
+        { "Retry-After": "1200" },
+      ),
+    );
+
+    await expect(apiClient.post("/api/v1/telefonia/falas/previa", { texto: "Oi." })).rejects.toMatchObject({
+      status: 429,
+      code: "limite_de_previas",
+      message: "Muitas prévias geradas na última hora.",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14c: sem corpo de erro, o código sintetizado é rate_limited — e a leitura (GET) segue a mesma regra", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 429, headers: { "Retry-After": "11" } }));
+
+    await expect(apiClient.get("/x")).rejects.toMatchObject({ status: 429, code: "rate_limited" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14d: 503 com Retry-After acima de 10s também não prende a tela", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(503, { error: { code: "service_unavailable", message: "manutenção" } }, { "Retry-After": "120" }),
+    );
+
+    await expect(apiClient.post("/x", { a: 1 })).rejects.toMatchObject({ status: 503, code: "service_unavailable" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14e: CONTROLE — Retry-After de exatamente 10s continua esperando e repetindo", async () => {
+    // Sem este caso, "nunca repetir 429" passaria verde nos quatro de cima.
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(429, { error: { code: "rate_limited", message: "x" } }, { "Retry-After": "10" }))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { ok: true } }));
+
+    const pendente = apiClient.post<{ data: { ok: boolean } }>("/x", { a: 1 });
+
+    await vi.advanceTimersByTimeAsync(9_900);
+    expect(fetchMock, "repetiu antes do Retry-After").toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await pendente).toEqual({ data: { ok: true } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  /**
    * O ORÇAMENTO DE ESPERA DA ESCRITA (o vermelho de `followup-dossie:190`).
    *
    * Enquanto o método mutante era retentado, uma escrita tinha 10s + backoff +

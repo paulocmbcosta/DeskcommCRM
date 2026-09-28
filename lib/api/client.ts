@@ -68,6 +68,27 @@ const MUTATION_TIMEOUT_MS = 30_000;
 
 const MAX_ATTEMPTS = 3;
 const RETRYABLE_STATUSES = new Set([429, 503]);
+
+/**
+ * O MAIOR `Retry-After` QUE O CLIENTE ESPERA — acima dele, lança na hora.
+ *
+ * O cliente repete 429/503 dormindo o `Retry-After` que o servidor pediu, e isso
+ * é o conserto certo quando a espera é curta: o discador responde 503 com
+ * `Retry-After: 3` quando o socket do WhatsApp caiu por um instante (t11b).
+ *
+ * Mas um `Retry-After` LONGO é o servidor dizendo "não agora", não "daqui a
+ * pouco". O limite de prévias do telefone (30 por hora por organização) responde
+ * 429 com a espera até a janela virar — até 3600 s —, e a troca de logo, 429 com
+ * a janela inteira. Dormir isso prende o botão girando por até uma hora, com a
+ * pessoa sem saber por quê, e a repetição do fim nem é garantida de passar. Acima
+ * de 10 s o cliente não dorme nem repete: lança o erro do servidor na hora (o
+ * código dele, ou `rate_limited` num 429 sem corpo), e a tela mostra a mensagem.
+ *
+ * Vale para todo método. Uma resposta 429/503 não deixa dúvida sobre a escrita
+ * (o servidor disse que não processou), então a regra do timeout, mais abaixo,
+ * não entra aqui: o que decide é só quanto tempo a tela ficaria presa.
+ */
+const MAX_RETRY_AFTER_S = 10;
 const MUTATING_METHODS = new Set<HttpMethod>(["POST", "PATCH", "PUT", "DELETE"]);
 
 /**
@@ -295,12 +316,15 @@ async function request<T>(
         return parsed;
       }
 
-      // Retry on 429/503
+      // Retry on 429/503 — só quando a espera pedida é curta (ver `MAX_RETRY_AFTER_S`).
       if (RETRYABLE_STATUSES.has(res.status) && attempt < MAX_ATTEMPTS) {
         const retryAfter = parseRetryAfterSeconds(res.headers.get("Retry-After"));
-        const delay = retryAfter !== null ? retryAfter * 1000 : backoffMs(attempt);
-        await sleep(delay, opts.signal);
-        continue;
+        if (retryAfter === null || retryAfter <= MAX_RETRY_AFTER_S) {
+          const delay = retryAfter !== null ? retryAfter * 1000 : backoffMs(attempt);
+          await sleep(delay, opts.signal);
+          continue;
+        }
+        // Espera longa: cai no erro abaixo, na hora.
       }
 
       // Non-retry error: parse and throw
