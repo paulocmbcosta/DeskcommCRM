@@ -9571,8 +9571,11 @@ export const DICIONARIO: Traducoes = {
   "Texto inválido: a fala precisa ter de 1 a 1000 caracteres, sem caracteres invisíveis.": {
     es: "Texto inválido: la locución debe tener de 1 a 1000 caracteres, sin caracteres invisibles.",
   },
-  "A fala foi gerada na ElevenLabs, mas não foi possível guardá-la. Tente de novo em instantes.": {
-    es: "La locución se generó en ElevenLabs, pero no se pudo guardar. Inténtalo de nuevo en unos instantes.",
+  "A fala foi gerada, mas não foi guardada. Gerar de novo consome outra geração da ElevenLabs.": {
+    es: "La locución se generó, pero no se guardó. Generarla de nuevo consume otra generación de ElevenLabs.",
+  },
+  "Outra gravação desta fala está em andamento. Tente de novo em instantes.": {
+    es: "Hay otra grabación de esta locución en curso. Inténtalo de nuevo en unos instantes.",
   },
   "Fala não encontrada.": { es: "Locución no encontrada." },
   "O áudio desta fala não está disponível agora. Tente de novo em instantes.": {

@@ -10,9 +10,14 @@
  *    `storage_path` gravado na linha só vale se for IGUAL a esse; se não for, a
  *    rota responde 404 e não baixa nada (o CHECK do banco já exige a igualdade:
  *    isto é a segunda camada, não a única);
- *  - devolve `audio/basic` (μ-law 8 kHz, RFC 2046), com cache só privado e sem
- *    guardar (`no-store`): o mesmo id passa a tocar outro áudio quando a fala é
- *    salva de novo, e um cache velho faria a pessoa ouvir a fala anterior.
+ *  - devolve `audio/basic` (μ-law 8 kHz, RFC 2046) com `ETag` = o `content_hash`
+ *    da fala e `Cache-Control: private, no-cache`: o navegador guarda, mas pergunta
+ *    SEMPRE antes de usar. O mesmo id passa a tocar outro áudio quando a fala é
+ *    salva com texto novo — e aí o hash muda, e o ETag com ele. Quando o
+ *    `If-None-Match` bate, a resposta é 304 e o Storage nem é lido: ouvir de novo
+ *    não baixa de novo (até 2 MB). O mesmo hash é sempre o mesmo texto na mesma
+ *    voz e no mesmo modelo, então o áudio guardado no navegador é o que as
+ *    ligações tocam.
  * O navegador converte em WAV (`ulawParaWav`). Sem custo na ElevenLabs. A prévia
  * (ainda não salva) não passa por aqui: ela chega no corpo da própria resposta da
  * rota da prévia. Leitura não audita.
@@ -36,6 +41,17 @@ import { armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const CACHE = "private, no-cache";
+
+/** O `If-None-Match` pede este ETag? Aceita lista, a forma fraca (`W/`) e `*` (RFC 9110 §13.1.2). */
+function jaTemEsteAudio(ifNoneMatch: string | null, etag: string): boolean {
+  if (!ifNoneMatch) return false;
+  return ifNoneMatch.split(",").some((v) => {
+    const t = v.trim();
+    return t === "*" || t.replace(/^W\//, "") === etag;
+  });
+}
+
 /** O caminho da fala, só se a linha bater com `<org da sessão>/<hash>.ulaw`. `null` = não serve. */
 function caminhoConferido(organizationId: string, hash: string, gravado: string): string | null {
   let caminho: string;
@@ -47,7 +63,7 @@ function caminhoConferido(organizationId: string, hash: string, gravado: string)
   return gravado === caminho ? caminho : null;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<Response> {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<Response> {
   const requestId = randomUUID();
   const authz = await requireRole("viewer", { requestId, resource: "telefonia_falas" });
   if (!authz.ok) return authz.response;
@@ -67,6 +83,15 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       fala_id: fala.id,
     });
     return naoEncontrada();
+  }
+
+  // O hash já passou pela régua de sha256 em `caminhoConferido`: vai cru dentro das aspas.
+  const etag = `"${fala.content_hash}"`;
+  if (jaTemEsteAudio(req.headers.get("If-None-Match"), etag)) {
+    return new Response(null, {
+      status: 304,
+      headers: { ETag: etag, "Cache-Control": CACHE, "X-Request-Id": requestId },
+    });
   }
 
   let bytes: Uint8Array<ArrayBuffer> | null;
@@ -93,7 +118,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     headers: {
       "Content-Type": "audio/basic",
       "Content-Length": String(bytes.length),
-      "Cache-Control": "private, no-store",
+      "Cache-Control": CACHE,
+      ETag: etag,
       "X-Content-Type-Options": "nosniff",
       "X-Request-Id": requestId,
     },

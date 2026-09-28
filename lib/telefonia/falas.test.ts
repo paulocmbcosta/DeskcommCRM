@@ -347,75 +347,120 @@ describe("falaParaSalvarSchema — o corpo traz texto e hash, nunca caminho nem 
 
 /**
  * A conexão da transação da fala geral, em memória: `phone_settings` de uma linha,
- * o resto delegado ao `BancoDeFalas`. `passos` é a ordem do que foi pedido ao banco.
+ * o resto delegado ao `BancoDeFalas`. `passos` é a ordem do que foi pedido ao
+ * banco E ao Storage; `emUso` conta as conexões fora do pool naquele instante.
  */
 class PoolDaFalaGeral {
   settings: Record<string, unknown> | null = null;
   passos: string[] = [];
-  liberadas = 0;
+  emUso = 0;
+  /** Quantas conexões estavam fora do pool enquanto o Storage era lido. */
+  conexoesDuranteOStorage: number[] = [];
+  liberacoes: Array<Error | undefined> = [];
   /** Faz a gravação da linha de `phone_prompts` lançar (o banco caiu no meio). */
   falharNoInsert = false;
-  connect = async (): Promise<ConexaoDaTransacao> => ({
-    release: () => void this.liberadas++,
-    query: (async (sqlBruto: string, p: unknown[] = []) => {
-      const sql = sqlBruto.replace(/\s+/g, " ").trim();
-      if (["begin", "commit", "rollback"].includes(sql)) {
-        this.passos.push(sql);
-        return { rows: [], rowCount: 0 };
-      }
-      if (sql.startsWith("insert into phone_settings")) {
-        this.passos.push("upsert");
-        expect(sql).toMatch(/on conflict \(organization_id\) do nothing/);
-        this.settings ??= { organization_id: p[0], voice_id: null, model_id: "eleven_multilingual_v2" };
-        return { rows: [], rowCount: 1 };
-      }
-      if (sql.startsWith("select") && sql.includes("from phone_settings")) {
-        this.passos.push(sql.endsWith("for update") ? "trava" : "leitura_sem_trava");
-        const coluna = /, (\w+_prompt_id) as fala_atual_id/.exec(sql)![1]!;
-        const s = this.settings;
-        const rows = s && s.organization_id === p[0] ? [{ ...s, fala_atual_id: s[coluna] ?? null }] : [];
-        return { rows, rowCount: rows.length };
-      }
-      if (sql.startsWith("update phone_settings")) {
-        const coluna = /set (\w+_prompt_id) = \$2/.exec(sql)![1]!;
-        this.passos.push(`aponta:${coluna}`);
-        if (this.settings && this.settings.organization_id === p[0]) this.settings[coluna] = p[1];
-        return { rows: [], rowCount: 1 };
-      }
-      if (sql.startsWith("insert into phone_prompts") && this.falharNoInsert) throw new Error("conexão caiu");
-      this.passos.push(sql.split(" ").slice(0, 3).join(" "));
-      return banco.db.query(sqlBruto, p);
-    }) as unknown as Queryable["query"],
-  });
+  /** A trava está com outra transação há mais que o `lock_timeout`: o Postgres responde 55P03. */
+  travaOcupada = false;
+  /** O próprio rollback falha (a conexão morreu). */
+  falharRollback = false;
+
+  armazemContado = {
+    baixar: async (caminho: string) => {
+      this.passos.push("storage");
+      this.conexoesDuranteOStorage.push(this.emUso);
+      return armazem.baixar(caminho);
+    },
+  };
+
+  connect = async (): Promise<ConexaoDaTransacao> => {
+    this.emUso++;
+    return {
+      release: (erro?: Error) => {
+        this.emUso--;
+        this.liberacoes.push(erro);
+      },
+      query: (async (sqlBruto: string, p: unknown[] = []) => {
+        const sql = sqlBruto.replace(/\s+/g, " ").trim();
+        if (sql === "rollback" && this.falharRollback) throw new Error("Connection terminated");
+        if (["begin", "commit", "rollback"].includes(sql)) {
+          this.passos.push(sql);
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.startsWith("set local lock_timeout")) {
+          this.passos.push(`lock_timeout:${/'([^']+)'/.exec(sql)![1]}`);
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.startsWith("insert into phone_settings")) {
+          this.passos.push("upsert");
+          expect(sql).toMatch(/on conflict \(organization_id\) do nothing/);
+          this.settings ??= { organization_id: p[0], voice_id: null, model_id: "eleven_multilingual_v2" };
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.startsWith("select") && sql.includes("from phone_settings")) {
+          this.passos.push(sql.endsWith("for update") ? "trava" : "leitura_sem_trava");
+          if (this.travaOcupada) {
+            throw Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" });
+          }
+          const coluna = /, (\w+_prompt_id) as fala_atual_id/.exec(sql)![1]!;
+          const s = this.settings;
+          const rows = s && s.organization_id === p[0] ? [{ ...s, fala_atual_id: s[coluna] ?? null }] : [];
+          return { rows, rowCount: rows.length };
+        }
+        if (sql.startsWith("update phone_settings")) {
+          const coluna = /set (\w+_prompt_id) = \$2/.exec(sql)![1]!;
+          this.passos.push(`aponta:${coluna}`);
+          if (this.settings && this.settings.organization_id === p[0]) this.settings[coluna] = p[1];
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.startsWith("insert into phone_prompts") && this.falharNoInsert) throw new Error("conexão caiu");
+        this.passos.push(sql.split(" ").slice(0, 3).join(" "));
+        return banco.db.query(sqlBruto, p);
+      }) as unknown as Queryable["query"],
+    };
+  };
 }
 
-describe("salvarFalaGeral — a fala geral grava sob a trava da linha de phone_settings", () => {
+describe("salvarFalaGeral — o Storage fora da transação, a gravação sob a trava de phone_settings", () => {
   const pedidoGeral = (pool: PoolDaFalaGeral, tipo: "waiting" | "nobody" | "after_hours" = "waiting") => ({
     pool,
-    armazem,
+    armazem: pool.armazemContado,
     organizationId: ORG,
     userId: "user-1",
     tipo,
     texto: TEXTO,
     hash: HASH,
   });
+  const comVoz = (pool: PoolDaFalaGeral, extra: Record<string, unknown> = {}) => {
+    pool.settings = { organization_id: ORG, voice_id: VOZ.voiceId, model_id: VOZ.modelId, ...extra };
+  };
 
-  it("garante a linha, TRAVA com for update antes de tocar em phone_prompts, aponta a coluna do tipo e confirma", async () => {
+  it("confere o Storage ANTES de abrir a transação, sem conexão nenhuma na mão; depois trava com prazo, grava, aponta e confirma", async () => {
     const pool = new PoolDaFalaGeral();
-    pool.settings = { organization_id: ORG, voice_id: VOZ.voiceId, model_id: VOZ.modelId, after_hours_prompt_id: null };
+    comVoz(pool, { after_hours_prompt_id: null });
     previaNoStorage(ORG, HASH);
 
     const r = await salvarFalaGeral(pedidoGeral(pool, "after_hours"));
 
     expect(r).toMatchObject({ ok: true, mudou: true, fala: { tipo: "after_hours", hash: HASH } });
-    expect(pool.passos).toEqual(["begin", "upsert", "trava", "insert into phone_prompts", "aponta:after_hours_prompt_id", "commit"]);
-    expect(pool.settings.after_hours_prompt_id).toBe(r.ok ? r.fala.id : "—");
-    expect(pool.liberadas).toBe(1);
+    expect(pool.passos).toEqual([
+      "storage",
+      "begin",
+      "lock_timeout:4s",
+      "upsert",
+      "trava",
+      "insert into phone_prompts",
+      "aponta:after_hours_prompt_id",
+      "commit",
+    ]);
+    // Um Storage lento não segura trava nem conexão do pool: nenhuma estava fora dele.
+    expect(pool.conexoesDuranteOStorage).toEqual([0]);
+    expect(pool.settings!.after_hours_prompt_id).toBe(r.ok ? r.fala.id : "—");
+    expect(pool.liberacoes).toEqual([undefined]);
   });
 
   it("a voz e a fala atual são as da linha TRAVADA: a mesma fala de novo não escreve nada", async () => {
     const pool = new PoolDaFalaGeral();
-    pool.settings = { organization_id: ORG, voice_id: VOZ.voiceId, model_id: VOZ.modelId, waiting_prompt_id: null };
+    comVoz(pool, { waiting_prompt_id: null });
     previaNoStorage(ORG, HASH);
     const primeira = await salvarFalaGeral(pedidoGeral(pool));
     pool.passos = [];
@@ -424,19 +469,20 @@ describe("salvarFalaGeral — a fala geral grava sob a trava da linha de phone_s
 
     expect(segunda).toMatchObject({ ok: true, mudou: false, fala: { id: primeira.ok ? primeira.fala.id : "—" } });
     expect(banco.linhas.size).toBe(1);
+    expect(pool.passos[0]).toBe("storage");
     expect(pool.passos.filter((x) => x.startsWith("aponta") || x.startsWith("insert") || x.startsWith("update"))).toEqual([]);
     expect(pool.passos.at(-1)).toBe("commit");
   });
 
   it("recusa (prévia ausente): desfaz a transação — a linha que o upsert criou some junto — e nada é apontado", async () => {
     const pool = new PoolDaFalaGeral();
-    pool.settings = { organization_id: ORG, voice_id: VOZ.voiceId, model_id: VOZ.modelId };
+    comVoz(pool);
 
     const r = await salvarFalaGeral(pedidoGeral(pool));
 
     expect(r).toEqual({ ok: false, motivo: "previa_ausente" });
-    expect(pool.passos).toEqual(["begin", "upsert", "trava", "rollback"]);
-    expect(pool.liberadas).toBe(1);
+    expect(pool.passos).toEqual(["storage", "begin", "lock_timeout:4s", "upsert", "trava", "rollback"]);
+    expect(pool.liberacoes).toEqual([undefined]);
   });
 
   it("sem a linha de phone_settings (voz nunca escolhida): sem_voz, e o upsert é desfeito", async () => {
@@ -447,15 +493,52 @@ describe("salvarFalaGeral — a fala geral grava sob a trava da linha de phone_s
     expect(pool.passos.at(-1)).toBe("rollback");
   });
 
+  it("texto inválido ou hash fora do formato: recusa sem tocar no Storage nem abrir transação", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+    expect(await salvarFalaGeral({ ...pedidoGeral(pool), texto: "  " })).toEqual({ ok: false, motivo: "texto_recusado" });
+    expect(pool.passos).toEqual([]);
+    // Hash fora de sha256 nunca é o de texto nenhum: nem se lê o Storage (o caminho nem se monta).
+    expect(await salvarFalaGeral({ ...pedidoGeral(pool), hash: "../x" })).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(pool.passos).not.toContain("storage");
+  });
+
+  it("a trava está com outra gravação há mais que o prazo (55P03): gravacao_em_andamento, desfeito e a conexão devolvida", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+    previaNoStorage(ORG, HASH);
+    pool.travaOcupada = true;
+
+    const r = await salvarFalaGeral(pedidoGeral(pool));
+
+    expect(r).toEqual({ ok: false, motivo: "gravacao_em_andamento" });
+    expect(pool.passos.at(-1)).toBe("rollback");
+    expect(banco.escritas).toBe(0);
+    expect(pool.liberacoes).toEqual([undefined]);
+  });
+
   it("o banco caiu no meio: desfaz, devolve a conexão ao pool e deixa o erro subir", async () => {
     const pool = new PoolDaFalaGeral();
-    pool.settings = { organization_id: ORG, voice_id: VOZ.voiceId, model_id: VOZ.modelId };
+    comVoz(pool);
     pool.falharNoInsert = true;
     previaNoStorage(ORG, HASH);
 
     await expect(salvarFalaGeral(pedidoGeral(pool))).rejects.toThrow("conexão caiu");
     expect(pool.passos.at(-1)).toBe("rollback");
     expect(pool.passos).not.toContain("commit");
-    expect(pool.liberadas).toBe(1);
+    expect(pool.liberacoes).toEqual([undefined]);
+  });
+
+  it("o rollback também falhou (conexão morta): ela é DESCARTADA com release(erro), não devolvida ao pool; sobe o erro original", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+    pool.falharNoInsert = true;
+    pool.falharRollback = true;
+    previaNoStorage(ORG, HASH);
+
+    await expect(salvarFalaGeral(pedidoGeral(pool))).rejects.toThrow("conexão caiu");
+    expect(pool.liberacoes).toHaveLength(1);
+    expect(pool.liberacoes[0]).toBeInstanceOf(Error);
+    expect(pool.liberacoes[0]!.message).toMatch(/Connection terminated/);
   });
 });

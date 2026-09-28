@@ -52,9 +52,14 @@ export async function validarChaveDeVoz(chave: string): Promise<ValidacaoDaChave
  * hora): ela é limite NOSSO, e limite nosso responde 429 com `Retry-After`, como
  * manda a doutrina da API. A rota da prévia põe o `Retry-After`, e o contrato do
  * `apiClient` (lib/api/client.ts) é não esperar nem repetir quando ele passa de
- * 10 s — lançar `rate_limited` na hora, em vez de travar a tela por até 1 h.
+ * 10 s — lançar o erro na hora (com o código `limite_de_previas`), em vez de
+ * travar a tela por até 1 h.
+ *
+ * `gravacao_em_andamento` é 409: outra gravação da mesma fala segurou a trava de
+ * `phone_settings` por mais que o `lock_timeout` (`salvarFalaGeral`, em falas.ts).
+ * O `apiClient` não repete 409, e nada foi pago: tentar de novo resolve.
  */
-export const STATUS_DA_FALHA: Record<FalhaDaFala, 422 | 429 | 502> = {
+export const STATUS_DA_FALHA: Record<FalhaDaFala, 409 | 422 | 429 | 502> = {
   sem_chave: 422,
   sem_voz: 422,
   chave_invalida: 422,
@@ -65,6 +70,8 @@ export const STATUS_DA_FALHA: Record<FalhaDaFala, 422 | 429 | 502> = {
   limite_de_previas: 429,
   previa_ausente: 422,
   previa_desatualizada: 422,
+  // Conflito com outra gravação da mesma fala (a trava venceu o prazo): tentar de novo resolve.
+  gravacao_em_andamento: 409,
   armazenamento: 502,
   sem_resposta: 502,
   erro_do_provedor: 502,

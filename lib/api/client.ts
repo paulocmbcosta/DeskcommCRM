@@ -78,9 +78,10 @@ const RETRYABLE_STATUSES = new Set([429, 503]);
  *
  * Mas um `Retry-After` LONGO é o servidor dizendo "não agora", não "daqui a
  * pouco". O limite de prévias do telefone (30 por hora por organização) responde
- * 429 com a espera até a janela virar — até 3600 s —, e a troca de logo, 429 com
- * a janela inteira. Dormir isso prende o botão girando por até uma hora, com a
- * pessoa sem saber por quê, e a repetição do fim nem é garantida de passar. Acima
+ * 429 com a espera até a janela virar — até 3600 s. Dormir isso prende o botão
+ * girando por até uma hora, com a pessoa sem saber por quê, e a repetição do fim
+ * nem é garantida de passar. (Quem chama por `fetch` direto, como o envio do logo
+ * em `CampoDeLogo.tsx`, nunca passou por esta repetição e não muda.) Acima
  * de 10 s o cliente não dorme nem repete: lança o erro do servidor na hora (o
  * código dele, ou `rate_limited` num 429 sem corpo), e a tela mostra a mensagem.
  *

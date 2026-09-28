@@ -4,18 +4,26 @@
  * o corpo traz texto e hash (nunca caminho nem organização); a gravação sob a
  * trava (`salvarFalaGeral`) recebe a organização da SESSÃO; a fala salva é
  * auditada e a mesma fala de novo não; o texto recusado pela nossa régua não culpa
- * a ElevenLabs; e a rota nem CARREGA o cliente da ElevenLabs.
+ * a ElevenLabs; o status de cada falha é o do `STATUS_DA_FALHA` DE VERDADE; e a
+ * rota nunca CHAMA a ElevenLabs.
+ *
+ * "Nunca chama", e não "nem carrega": a rota importa `STATUS_DA_FALHA` e o armazém
+ * de `servico-de-falas.ts`, que importa o cliente da ElevenLabs para a prévia e
+ * para a voz. O que o D15 proíbe é a CHAMADA — então as duas chamadas de rede do
+ * cliente viram armadilhas, e o `fetch` global é contado.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+import type * as ModuloElevenLabs from "@/lib/telefonia/elevenlabs";
 import type * as ModuloFalas from "@/lib/telefonia/falas";
+import type * as ModuloServico from "@/lib/telefonia/servico-de-falas";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const USUARIO = "11111111-1111-4111-8111-111111111111";
 const HASH = "b".repeat(64);
 const POOL = vi.hoisted(() => ({ marca: "pool-da-rota" }));
-const estado = vi.hoisted(() => ({ resultado: null as unknown }));
+const estado = vi.hoisted(() => ({ resultado: null as unknown, chamadasAElevenLabs: [] as string[] }));
 
 vi.mock("@/lib/auth/require-role", () => ({
   requireRole: vi.fn(async () => ({
@@ -27,12 +35,19 @@ vi.mock("@/lib/auth/require-role", () => ({
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => POOL) }));
-// Salvar não pode nem CARREGAR o cliente da ElevenLabs: só a rota da prévia o usa.
-vi.mock("@/lib/telefonia/elevenlabs", () => {
-  throw new Error("o Salvar e usar carregou o cliente da ElevenLabs");
+// Salvar nunca CHAMA a ElevenLabs: as duas chamadas de rede do cliente viram armadilhas.
+vi.mock("@/lib/telefonia/elevenlabs", async () => {
+  const real = await vi.importActual<typeof ModuloElevenLabs>("@/lib/telefonia/elevenlabs");
+  const armadilha = (nome: string) =>
+    vi.fn(async () => {
+      estado.chamadasAElevenLabs.push(nome);
+      throw new Error(`o Salvar e usar chamou a ElevenLabs (${nome})`);
+    });
+  return { ...real, listarVozes: armadilha("listarVozes"), sintetizar: armadilha("sintetizar") };
 });
-vi.mock("@/lib/telefonia/servico-de-falas", () => ({
-  STATUS_DA_FALHA: { previa_ausente: 422, previa_desatualizada: 422, sem_voz: 422, armazenamento: 502, texto_recusado: 422 },
+// O `STATUS_DA_FALHA` é o DE VERDADE: o teste mede o código, não uma cópia dele.
+vi.mock("@/lib/telefonia/servico-de-falas", async () => ({
+  ...(await vi.importActual<typeof ModuloServico>("@/lib/telefonia/servico-de-falas")),
   armazemDaInstalacao: vi.fn(() => ({ marca: "armazem" })),
 }));
 vi.mock("@/lib/telefonia/falas", async () => ({
@@ -65,12 +80,24 @@ const chamar = (tipo: string, corpo: unknown = { texto: "Aguarde.", hash: HASH }
   );
 const erroDe = async (r: Response) => ((await r.json()) as { error: { code: string; message: string } }).error;
 
+const fetchContado = vi.fn(async () => new Response(null, { status: 599 }));
+
 beforeEach(() => {
   estado.resultado = { ok: true, fala: FALA, mudou: true };
+  estado.chamadasAElevenLabs = [];
+  fetchContado.mockClear();
+  vi.stubGlobal("fetch", fetchContado);
   vi.mocked(audit).mockClear();
   vi.mocked(salvarFalaGeral).mockClear();
   vi.mocked(requireRole).mockClear();
   vi.mocked(requireSupportWrite).mockClear();
+});
+
+afterEach(() => {
+  // Em todo caso desta rota: nenhuma chamada ao cliente da ElevenLabs, nenhuma ida à rede.
+  expect(estado.chamadasAElevenLabs).toEqual([]);
+  expect(fetchContado).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
 });
 
 describe("PUT /api/v1/telefonia/falas/gerais/[tipo]", () => {
@@ -131,6 +158,16 @@ describe("PUT /api/v1/telefonia/falas/gerais/[tipo]", () => {
   it("o Storage falhou ao conferir: 502 armazenamento", async () => {
     estado.resultado = { ok: false, motivo: "armazenamento" };
     expect((await chamar("waiting")).status).toBe(502);
+  });
+
+  it("outra gravação segurou a trava além do prazo: 409 gravacao_em_andamento, que manda tentar de novo", async () => {
+    estado.resultado = { ok: false, motivo: "gravacao_em_andamento" };
+    const r = await chamar("waiting");
+    expect(r.status).toBe(409);
+    const e = await erroDe(r);
+    expect(e.code).toBe("gravacao_em_andamento");
+    expect(e.message).toMatch(/Outra gravação desta fala está em andamento/);
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it("texto recusado pela NOSSA régua (vazio, longo, NUL): mensagem própria, nunca 'a ElevenLabs recusou'", async () => {

@@ -54,8 +54,10 @@ import { requireRole } from "@/lib/auth/require-role";
 
 import { GET } from "./route";
 
-const ouvir = (id: string) =>
-  GET(new NextRequest(`https://crm.exemplo.com.br/api/v1/telefonia/falas/${id}/audio`), { params: Promise.resolve({ id }) });
+const ouvir = (id: string, headers: Record<string, string> = {}) =>
+  GET(new NextRequest(`https://crm.exemplo.com.br/api/v1/telefonia/falas/${id}/audio`, { headers }), {
+    params: Promise.resolve({ id }),
+  });
 
 const linha = (extra: Record<string, unknown> = {}) => ({
   id: ID,
@@ -83,18 +85,43 @@ beforeEach(() => {
 });
 
 describe("GET /api/v1/telefonia/falas/[id]/audio", () => {
-  it("qualquer membro: os bytes μ-law do objeto <org da sessão>/<hash>.ulaw, com audio/basic e cache privado", async () => {
+  it("qualquer membro: os bytes μ-law do objeto <org da sessão>/<hash>.ulaw, com audio/basic, cache privado e ETag do hash", async () => {
     const r = await ouvir(ID);
     expect(vi.mocked(requireRole).mock.calls[0]![0]).toBe("viewer");
     expect(r.status).toBe(200);
     expect(r.headers.get("Content-Type")).toBe("audio/basic");
-    expect(r.headers.get("Cache-Control")).toMatch(/^private/);
-    expect(r.headers.get("Cache-Control")).not.toMatch(/public/);
+    // Privado e SEMPRE revalidado pelo ETag: o mesmo id toca outro áudio quando a fala é salva de novo.
+    expect(r.headers.get("Cache-Control")).toBe("private, no-cache");
+    expect(r.headers.get("ETag")).toBe(`"${HASH}"`);
     expect(r.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(r.headers.get("X-Request-Id")).toBeTruthy();
     expect(new Uint8Array(await r.arrayBuffer())).toEqual(new Uint8Array([0xff, 0x7f, 0x00]));
     expect(estado.baixados).toEqual([`${ORG}/${HASH}.ulaw`]);
     expect(estado.consultas[0]).toEqual([ID, ORG]);
+  });
+
+  it("If-None-Match com o hash da fala → 304 sem corpo e SEM baixar do Storage (ouvir de novo não baixa de novo)", async () => {
+    for (const valor of [`"${HASH}"`, `W/"${HASH}"`, `"outro", "${HASH}"`, "*"]) {
+      const r = await ouvir(ID, { "If-None-Match": valor });
+      expect(r.status, valor).toBe(304);
+      expect(r.headers.get("ETag")).toBe(`"${HASH}"`);
+      expect(r.headers.get("Cache-Control")).toBe("private, no-cache");
+      expect(r.headers.get("X-Request-Id")).toBeTruthy();
+      expect((await r.arrayBuffer()).byteLength).toBe(0);
+    }
+    expect(estado.baixados).toEqual([]);
+  });
+
+  it("If-None-Match de OUTRO áudio (a fala foi salva de novo com texto novo) → 200 com os bytes atuais", async () => {
+    const r = await ouvir(ID, { "If-None-Match": `"${"d".repeat(64)}"` });
+    expect(r.status).toBe(200);
+    expect(new Uint8Array(await r.arrayBuffer())).toEqual(new Uint8Array([0xff, 0x7f, 0x00]));
+    expect(estado.baixados).toEqual([`${ORG}/${HASH}.ulaw`]);
+  });
+
+  it("CONTROLE — o 304 não fura a organização: If-None-Match certo sobre a fala de OUTRA organização continua 404", async () => {
+    estado.fala = linha({ organization_id: OUTRA, storage_path: `${OUTRA}/${HASH}.ulaw` });
+    expect((await ouvir(ID, { "If-None-Match": `"${HASH}"` })).status).toBe(404);
   });
 
   it("id que não é UUID (inclusive tentativa de caminho) → 404 sem ler nada", async () => {

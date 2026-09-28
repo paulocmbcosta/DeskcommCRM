@@ -235,7 +235,7 @@ describe("apiClient", () => {
     fetchMock.mockResolvedValue(
       jsonResponse(
         429,
-        { error: { code: "rate_limited", message: "Muitas trocas de logo seguidas." } },
+        { error: { code: "rate_limited", message: "Muitas tentativas seguidas." } },
         { "Retry-After": "3600" },
       ),
     );
@@ -248,7 +248,7 @@ describe("apiClient", () => {
     expect(desfecho).toHaveBeenCalledTimes(1);
     const erro = desfecho.mock.calls[0]![0] as ApiError;
     expect(erro).toBeInstanceOf(ApiError);
-    expect(erro).toMatchObject({ status: 429, code: "rate_limited", message: "Muitas trocas de logo seguidas." });
+    expect(erro).toMatchObject({ status: 429, code: "rate_limited", message: "Muitas tentativas seguidas." });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

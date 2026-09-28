@@ -70,6 +70,8 @@ export type FalhaDaFala =
   | "previa_ausente"
   /** O hash não é o do texto com a voz atual: o texto (ou a voz) mudou depois da prévia. */
   | "previa_desatualizada"
+  /** Outra gravação da mesma fala segurou a trava por mais que o prazo (`lock_timeout`, 55P03). */
+  | "gravacao_em_andamento"
   | MotivoDoErroDaElevenLabs;
 
 /** O que a tela diz de cada falha. Em português; a tela passa por `t()`. */
@@ -81,6 +83,7 @@ export const MENSAGEM_DA_FALHA_DA_FALA: Record<FalhaDaFala, string> = {
     "Muitas prévias geradas na última hora. Espere um pouco para gerar outra — ouvir as que já estão na tela não custa nada.",
   previa_ausente: "A prévia deste texto não está mais guardada. Gere a prévia de novo e salve em seguida.",
   previa_desatualizada: "O texto ou a voz mudou depois da prévia. Gere a prévia de novo antes de salvar.",
+  gravacao_em_andamento: "Outra gravação desta fala está em andamento. Tente de novo em instantes.",
   chave_invalida: "A ElevenLabs recusou a chave. Confira a chave em Credenciais de IA.",
   sem_credito: "A conta da ElevenLabs está sem crédito. As falas já geradas continuam tocando.",
   texto_recusado: "A ElevenLabs recusou este texto. Encurte ou reescreva e tente de novo.",

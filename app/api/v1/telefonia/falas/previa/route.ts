@@ -28,7 +28,8 @@
  * Auditoria (`phone.prompt_previewed`): toda síntese PAGA — a que ficou guardada e
  * a que a ElevenLabs cobrou mas o Storage não guardou (`paga: true`, com
  * `guardada: false` no metadata, e a tela avisa que a fala foi gerada mas não
- * guardada). A reaproveitada não fez nada e não audita. Nunca o texto nem o áudio.
+ * guardada, e que gerar de novo consome outra geração). A reaproveitada não fez
+ * nada e não audita. Nunca o texto nem o áudio.
  *
  * O áudio vai em base64 no JSON: 1000 caracteres de fala cabem em poucas centenas
  * de KB, e uma ida só entrega o hash e o som.
@@ -126,7 +127,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       });
       return fail(
         r.motivo,
-        t("A fala foi gerada na ElevenLabs, mas não foi possível guardá-la. Tente de novo em instantes."),
+        t("A fala foi gerada, mas não foi guardada. Gerar de novo consome outra geração da ElevenLabs."),
         STATUS_DA_FALHA[r.motivo],
         { requestId, headers, details: { paga: true } },
       );

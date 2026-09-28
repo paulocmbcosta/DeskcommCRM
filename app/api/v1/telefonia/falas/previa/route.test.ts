@@ -130,7 +130,9 @@ describe("POST /api/v1/telefonia/falas/previa", () => {
     const e = await erroDe(r);
     expect(e.code).toBe("armazenamento");
     expect(e.message).toMatch(/foi gerada/);
-    expect(e.message).toMatch(/não foi possível guardá-la/);
+    expect(e.message).toMatch(/não foi guardada/);
+    // O que o comentário da rota promete: a pessoa fica sabendo que gerar de novo CUSTA de novo.
+    expect(e.message).toMatch(/Gerar de novo consome outra geração da ElevenLabs/);
     expect(e.details).toEqual({ paga: true });
     const entrada = vi.mocked(audit).mock.calls[0]![0];
     expect(entrada).toMatchObject({

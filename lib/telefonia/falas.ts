@@ -271,22 +271,32 @@ async function gravar(db: Queryable, d: DadosDaLinha, idExistente: string | null
   return rows[0]!;
 }
 
+/** O objeto `<org>/<hash>.ulaw` medido no Storage: a duração, ou por que não serve. */
+export type MedidaDoObjeto = { ok: true; duracaoMs: number } | { ok: false; motivo: FalhaDaFala };
+
 /**
- * A duração do objeto em `caminho`, ou por que não há: `previa_ausente` (não existe,
+ * Mede no Storage o objeto do hash pedido: a duração, `previa_ausente` (não existe,
  * ou está vazio) ou `armazenamento` (o Storage falhou — a pessoa não precisa gerar
  * de novo, e a causa vai para o log).
+ *
+ * O objeto medido é SEMPRE `<org da sessão>/<hash pedido>.ulaw`: no "nada mudou" a
+ * fala atual tem esse mesmo hash, e na fala nova o caminho é o do hash. Por isso a
+ * medida pode vir ANTES de ler a fala atual — e, na fala geral, antes de abrir a
+ * transação. Hash fora de sha256 não é o de texto nenhum: nem se monta caminho.
  */
-async function duracaoDoObjeto(
-  p: PedidoDeSalvar,
-  caminho: string,
-): Promise<{ ok: true; duracaoMs: number } | { ok: false; motivo: FalhaDaFala }> {
+async function medirObjeto(
+  armazem: Pick<PortaDoArmazem, "baixar">,
+  organizationId: string,
+  hash: string,
+): Promise<MedidaDoObjeto> {
+  if (!FORMATO_DO_HASH.test(hash)) return { ok: false, motivo: "previa_desatualizada" };
   let bytes: Uint8Array | null;
   try {
-    bytes = await p.armazem.baixar(caminho);
+    bytes = await armazem.baixar(caminhoDaFala(organizationId, hash));
   } catch (e) {
     logger.error("[telefonia] salvar fala: o Storage falhou ao conferir o áudio", {
       etapa: "conferir_storage",
-      organization_id: p.organizationId,
+      organization_id: organizationId,
       causa: e instanceof Error ? e.message.slice(0, 300) : "desconhecida",
     });
     return { ok: false, motivo: "armazenamento" };
@@ -296,13 +306,18 @@ async function duracaoDoObjeto(
 }
 
 /**
- * A prévia pedida pode virar a fala? NÃO grava nada — o menu confere as duas falas
- * (a dele e a de tecla inválida) antes de gravar a primeira.
+ * A DECISÃO do "Salvar e usar", pura: com a fala atual (já lida) e o objeto (já
+ * medido), o que a prévia pedida passa a ser — ou por que não. Não lê banco nem
+ * Storage, então pode rodar com a trava segura sem esperar rede nenhuma. As
+ * falhas saem na mesma ordem de sempre: `sem_voz` e `previa_desatualizada` vêm
+ * antes do que o Storage disse.
  */
-export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
-  if (!textoDaFalaValido(p.texto)) return { ok: false, motivo: "texto_recusado" };
+function decidirFala(
+  p: Pick<PedidoDeSalvar, "organizationId" | "tipo" | "texto" | "hash" | "voz">,
+  lida: LinhaDaFala | null,
+  objeto: MedidaDoObjeto,
+): FalaConferida {
   const texto = p.texto.trim();
-  const lida = p.falaAtualId ? await falaPorId(p.db, p.organizationId, p.falaAtualId) : null;
   // Uma fala de OUTRO tipo não é "a atual" desta: nem vale como "nada mudou", nem
   // é regravada (a coluna `kind` não muda no UPDATE) — nasce uma linha do tipo pedido.
   const atual = lida && lida.tipo === p.tipo ? lida : null;
@@ -311,8 +326,6 @@ export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
     // aponta para objeto sumido faz a ligação pular a fala, e o "Salvar" diria
     // que está tudo certo. A voz e o modelo são os DA FALA, não os atuais da
     // organização: é o áudio em uso que se confere (e se conserta).
-    const caminhoAtual = caminhoDaFala(p.organizationId, atual.content_hash);
-    const objeto = await duracaoDoObjeto(p, caminhoAtual);
     if (!objeto.ok) return objeto;
     if (objeto.duracaoMs === atual.duracao_ms) return { ok: true, atual, nova: null };
     // O objeto foi regravado por uma prévia nova do mesmo texto: outra síntese,
@@ -320,16 +333,35 @@ export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
     return {
       ok: true,
       atual,
-      nova: { hash: atual.content_hash, caminho: caminhoAtual, duracaoMs: objeto.duracaoMs, voiceId: atual.voice_id, modelId: atual.model_id },
+      nova: {
+        hash: atual.content_hash,
+        caminho: caminhoDaFala(p.organizationId, atual.content_hash),
+        duracaoMs: objeto.duracaoMs,
+        voiceId: atual.voice_id,
+        modelId: atual.model_id,
+      },
     };
   }
   if (!p.voz) return { ok: false, motivo: "sem_voz" };
   const { voiceId, modelId } = p.voz;
   if (p.hash !== hashDaFala(texto, voiceId, modelId)) return { ok: false, motivo: "previa_desatualizada" };
-  const caminho = caminhoDaFala(p.organizationId, p.hash);
-  const objeto = await duracaoDoObjeto(p, caminho);
   if (!objeto.ok) return objeto;
-  return { ok: true, atual, nova: { hash: p.hash, caminho, duracaoMs: objeto.duracaoMs, voiceId, modelId } };
+  return {
+    ok: true,
+    atual,
+    nova: { hash: p.hash, caminho: caminhoDaFala(p.organizationId, p.hash), duracaoMs: objeto.duracaoMs, voiceId, modelId },
+  };
+}
+
+/**
+ * A prévia pedida pode virar a fala? NÃO grava nada — o menu confere as duas falas
+ * (a dele e a de tecla inválida) antes de gravar a primeira.
+ */
+export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
+  if (!textoDaFalaValido(p.texto)) return { ok: false, motivo: "texto_recusado" };
+  const objeto = await medirObjeto(p.armazem, p.organizationId, p.hash);
+  const lida = p.falaAtualId ? await falaPorId(p.db, p.organizationId, p.falaAtualId) : null;
+  return decidirFala(p, lida, objeto);
 }
 
 /** Grava o que `conferirFala` aprovou: a MESMA linha passa a apontar para o hash novo (ou nasce uma). */
@@ -372,7 +404,8 @@ export async function descartarFala(db: Queryable, organizationId: string, id: s
 
 /** Uma conexão SÓ desta gravação: a transação e a trava vivem nela. O `pg.PoolClient` serve. */
 export interface ConexaoDaTransacao extends Queryable {
-  release(): void;
+  /** Com um erro, a conexão é DESCARTADA em vez de voltar ao pool (a semântica do `pg`). */
+  release(erro?: Error): void;
 }
 
 /** De onde sai a conexão da transação. O `pg.Pool` da rota serve. */
@@ -391,6 +424,14 @@ export interface PedidoDaFalaGeral {
   hash: string;
 }
 
+/** O `lock_timeout` da gravação da fala geral: quem espera a trava mais que isto desiste. */
+const PRAZO_DA_TRAVA = "4s";
+
+/** 55P03 (`lock_not_available`): o `lock_timeout` venceu esperando a trava. */
+function ehPrazoDaTrava(e: unknown): boolean {
+  return (e as { code?: unknown } | null)?.code === "55P03";
+}
+
 /**
  * O "Salvar e usar" de uma fala GERAL (`waiting`, `nobody`, `after_hours`): confere
  * e grava a fala e aponta a coluna do tipo em `phone_settings`, numa transação só,
@@ -405,20 +446,33 @@ export interface PedidoDaFalaGeral {
  * update`, a segunda espera a primeira confirmar e lê a fala que ela gravou — e a
  * regrava, ou vê que nada mudou.
  *
- * O upsert da linha vem ANTES da trava porque `for update` não trava linha que não
- * existe: sem ele, a primeira fala de uma organização sem `phone_settings` ficaria
- * sem trava nenhuma. Se a gravação é recusada (ou lança), a transação é desfeita,
- * e com ela a linha que o upsert acabou de criar.
- *
- * A conferência do Storage (`baixar`) acontece com a trava segura: é o que garante
- * que a fala gravada é a que foi conferida. A trava é de UMA linha, só da
- * organização, e só o "Salvar e usar" das falas gerais e a troca de voz a disputam.
+ * A ordem, e por quê:
+ *  1. O Storage é conferido ANTES do `begin`, sem conexão do pool na mão. O
+ *     supabase-js não tem prazo, e um Storage lento com a trava segura prenderia a
+ *     linha da organização e uma das conexões que as rotas da IA e do MCP também
+ *     usam. Conferir fora não reabre a corrida: salvar nunca escreve nem apaga
+ *     objeto, e o objeto medido é sempre `<org>/<hash>.ulaw` (`medirObjeto`).
+ *  2. `begin` e `set local lock_timeout`: quem espera a trava mais que
+ *     `PRAZO_DA_TRAVA` desiste com `gravacao_em_andamento` (409) em vez de ficar
+ *     preso — o papel da conexão direta não tem `lock_timeout` de papel.
+ *  3. O upsert da linha vem ANTES da trava porque `for update` não trava linha que
+ *     não existe: sem ele, a primeira fala de uma organização sem `phone_settings`
+ *     ficaria sem trava nenhuma.
+ *  4. Com a trava: a fala atual, a decisão PURA (`decidirFala`) e a gravação. Nada
+ *     aqui espera rede. Recusa (ou erro) desfaz tudo, inclusive a linha do upsert.
+ * Se até o rollback falhar, a conexão é DESCARTADA (`release(erro)`), e não
+ * devolvida ao pool para a próxima rota herdar uma transação quebrada.
  */
 export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDoSalvar> {
+  if (!textoDaFalaValido(p.texto)) return { ok: false, motivo: "texto_recusado" };
+  const objeto = await medirObjeto(p.armazem, p.organizationId, p.hash);
+
   const coluna = COLUNA_DA_FALA_GERAL[p.tipo];
   const conexao = await p.pool.connect();
+  let descartar: Error | undefined;
   try {
     await conexao.query("begin");
+    await conexao.query(`set local lock_timeout = '${PRAZO_DA_TRAVA}'`);
     await conexao.query("insert into phone_settings (organization_id) values ($1) on conflict (organization_id) do nothing", [
       p.organizationId,
     ]);
@@ -427,7 +481,7 @@ export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDo
       [p.organizationId],
     );
     const linha = rows[0];
-    const r = await salvarFala({
+    const pedido: PedidoDeSalvar = {
       db: conexao,
       armazem: p.armazem,
       organizationId: p.organizationId,
@@ -437,11 +491,14 @@ export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDo
       hash: p.hash,
       falaAtualId: linha?.fala_atual_id ?? null,
       voz: vozDaLinha(linha),
-    });
-    if (!r.ok) {
+    };
+    const lida = pedido.falaAtualId ? await falaPorId(conexao, p.organizationId, pedido.falaAtualId) : null;
+    const c = decidirFala(pedido, lida, objeto);
+    if (!c.ok) {
       await conexao.query("rollback");
-      return r;
+      return c;
     }
+    const r = await gravarFalaConferida(pedido, c);
     if (r.mudou) {
       await conexao.query(`update phone_settings set ${coluna} = $2, updated_at = now() where organization_id = $1`, [
         p.organizationId,
@@ -449,12 +506,17 @@ export async function salvarFalaGeral(p: PedidoDaFalaGeral): Promise<ResultadoDo
       ]);
     }
     await conexao.query("commit");
-    return r;
+    return { ok: true, ...r };
   } catch (e) {
-    // O rollback de uma conexão que caiu também falha; o erro que importa é o primeiro.
-    await conexao.query("rollback").catch(() => undefined);
+    try {
+      await conexao.query("rollback");
+    } catch (falha) {
+      // A conexão morreu: devolvê-la ao pool entregaria a próxima rota a um socket quebrado.
+      descartar = falha instanceof Error ? falha : new Error("rollback falhou");
+    }
+    if (ehPrazoDaTrava(e)) return { ok: false, motivo: "gravacao_em_andamento" };
     throw e;
   } finally {
-    conexao.release();
+    conexao.release(descartar);
   }
 }
