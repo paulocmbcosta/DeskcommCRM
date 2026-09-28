@@ -8,6 +8,18 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.49.1] — 2026-09-28
+
+### Corrigido
+
+- **O assistente não cai mais quando um cliente manda um PDF, e passa a ler o arquivo** Todo PDF recebido pelo WhatsApp derrubava o processo do assistente de IA por falta de memória —
+  inclusive arquivos de poucos KB — e as conversas que ele estava respondendo naquele momento
+  paravam junto. O arquivo voltava para a fila a cada 10 minutos e derrubava o assistente de novo,
+  sem aviso na Central. Agora a leitura do PDF roda separada, com limite próprio de memória e de
+  tempo: o texto do documento chega ao agente, e um arquivo que não dá para ler vira um aviso na
+  Central em vez de uma queda. Qualquer tarefa automática que volte a derrubar o assistente para de
+  ser tentada na 5ª queda e abre um aviso dizendo o que aconteceu.
+
 ## [1.49.0] — 2026-09-28
 
 ### Adicionado
@@ -5701,7 +5713,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.49.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.49.1...HEAD
+[1.49.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.49.0...v1.49.1
 [1.49.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.48.0...v1.49.0
 [1.48.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.47.0...v1.48.0
 [1.47.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.46.0...v1.47.0
