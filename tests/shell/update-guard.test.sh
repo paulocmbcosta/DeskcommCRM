@@ -32,6 +32,17 @@
 #        comparando só o número ....... 12d×2
 #        canal móvel contando ......... 12e×2 12g×1
 #        sem o 2º critério (digest) ... 12f×2
+#   8. Ligar a telefonia (`telefonia` em COMPOSE_PROFILES) numa instalação JÁ na
+#      última versão faz o update.sh subir o Asterisk, em vez de "Nada a
+#      atualizar" (caso 14). Controles: tudo no alvo (14b), profile desligado
+#      (14c), stack parada (14e). Sete sabotagens, medidas em 2026-09-28:
+#        .env ignora o Asterisk ............... 14a×9
+#        sem o critério do contêiner .......... 14d×5 14f×2
+#        telefonia sempre "ligada" ............ 14c×4 14i×5 (+ 12a×1 12e×2 12g×7)
+#        sem o export do ASTERISK_IMAGE ....... 14g×1
+#        sem a prudência da stack parada ...... 14e×2 14h×1
+#        sem a guarda do docker inspect ....... 14h×1
+#        "segue DESLIGADA" com ela ligada ..... 14a×1
 set -uo pipefail
 
 # O namespace das imagens publicadas, lido da FONTE (hostgator-setup-kit/_common.sh)
@@ -111,6 +122,36 @@ case " $* " in
       iguais)     printf 'Name: %s\nDigest: sha256:%s\n' "$4" "$(printf '%s' "$4" | cksum | cut -d' ' -f1)" ;;
       diferentes) printf 'Name: %s\nDigest: sha256:republicada\n' "$4" ;;
     esac ;;
+  # `docker inspect <contêiner> --format '{{.Config.Image}}'`: a referência com
+  # que o contêiner FOI CRIADO — o que de fato roda, que é a única pergunta que
+  # nem o `.env` nem o digest respondem. Calado por padrão, e esse silêncio é
+  # deliberado: é o estado "stack parada" que os casos 1 a 12 sempre viram, e é
+  # o que faz o caso 14e ser uma prova e não uma formalidade.
+  #
+  # O formato é `<svc>=<referência>`, separado por espaço, porque os serviços
+  # precisam divergir. O `svc` sai do nome do contêiner (`<projeto>-<svc>-1`)
+  # para que o dublê responda por serviço sem precisar saber o nome do projeto,
+  # que o teste não fixa.
+  *"Config.Image"*)
+    # Docker fora do ar / sem permissão no socket: o comando SAI != 0. É um
+    # estado real numa VPS, e o update.sh roda sob `set -euo pipefail`.
+    [ -n "${DUBLE_INSPECT_QUEBRADO:-}" ] && exit 1
+    duble_n="${2%-1}"
+    for duble_par in ${DUBLE_EM_EXECUCAO:-}; do
+      case "$duble_par" in "${duble_n##*-}="*) printf '%s\n' "${duble_par#*=}" ;; esac
+    done ;;
+  # O `up -d` PLENO do update.sh (sem nomear serviço): é ele que cria o Asterisk
+  # quando `telefonia` está em COMPOSE_PROFILES. O dublê anota o que o compose de
+  # verdade LERIA naquele instante — o ambiente herdado, que VENCE o `.env`
+  # (medido no docker compose v5.1.4), e o `.env` em disco. É assim que o caso 14
+  # prova a ORDEM: imagem e senha gravadas antes de subir, e não depois.
+  *" up -d ")
+    {
+      printf 'UP env ASTERISK_IMAGE=%s\n' "${ASTERISK_IMAGE:-}"
+      printf 'UP env COMPOSE_PROFILES=%s\n' "${COMPOSE_PROFILES:-}"
+      printf 'UP .env %s\n' "$(grep -E '^ASTERISK_IMAGE=' .env 2>/dev/null | tail -1)"
+      printf 'UP .env senha=%s\n' "$(grep -cE '^TELEFONIA_ARI_PASSWORD=.+' .env 2>/dev/null)"
+    } >> "$DOCKER_LOG" ;;
 esac
 exit 0
 STUB
@@ -578,6 +619,10 @@ check "termina com sucesso" test "$RC" -eq 0
 check "as três imagens do .env foram para a versão do código" tres_em 1.2.0
 check "diz QUAL imagem estava para trás, em vez de um 'imagem antiga' genérico" \
   grep -q "app worker scheduler" "$OUTFILE"
+# Controle do 14a: sem `telefonia` em COMPOSE_PROFILES, a senha gerada vem com
+# o aviso de que a telefonia segue desligada — que aqui é verdade.
+check "sem o profile, a senha da telefonia sai com o aviso 'segue DESLIGADA'" \
+  grep -q "senha da telefonia no .env — ela segue DESLIGADA" "$OUTFILE"
 
 echo "   12b. CONTROLE: com as três na versão certa, o MESMO dublê diz 'nada a atualizar'"
 # Sem este controle o 12a não prova nada: bastaria o dublê de digest estar mudo
@@ -647,6 +692,187 @@ fora_caso "canal móvel explícito (:stable) → a versão não decide" 1.2.0 ""
   "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:stable" "${NS}/deskcomm-scheduler:stable"
 fora_caso "repositório SEM tag é :latest implícito → canal, a versão não decide" 1.2.0 "" \
   "${NS}/deskcommcrm" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+
+echo "── 14. Ligar a telefonia numa instalação JÁ na última versão: o update.sh sobe o Asterisk"
+# O caminho que a aba Telefone, o `.env` e o `install.sh` ensinam: acrescentar
+# `telefonia` a COMPOSE_PROFILES, preencher TELEFONIA_ARI_URL e rodar o
+# update.sh. Numa instalação que já está na última versão, o script saía cedo
+# com "Nada a atualizar" — os dois critérios de `image_desatualizada` só
+# olhavam app, worker e scheduler — e o Asterisk nunca subia.
+#
+# DOIS estados de partida, e cada um tem o seu critério:
+#   - `.env` SEM `ASTERISK_IMAGE`: quem chegou à versão com telefonia pelo
+#     `update.sh` da versão ANTERIOR (ele carrega o `_common.sh` antes do
+#     checkout e roda o `gravar_imagens` velho). Com o profile ligado, o compose
+#     cairia em `:stable` + `always` — canal móvel, contra a doutrina — e sem
+#     TELEFONIA_ARI_PASSWORD o entrypoint do Asterisk sai. É o critério do .env.
+#   - `.env` COMPLETO, contêiner AUSENTE: toda instalação nova (o `install.sh`
+#     já grava as duas chaves) e toda que passou por um update.sh novo. O `.env`
+#     está no alvo e o digest também; só o contêiner sabe que o Asterisk não
+#     existe. É o critério do contêiner — e é o caso MAIS comum.
+em_execucao() {  # em_execucao <app> <worker> <scheduler> [asterisk] — referências INTEIRAS; vazio = contêiner ausente
+  local l=""
+  [ -n "$1" ] && l="$l app=$1"
+  [ -n "$2" ] && l="$l worker=$2"
+  [ -n "$3" ] && l="$l scheduler=$3"
+  [ -n "${4:-}" ] && l="$l asterisk=$4"
+  export DUBLE_EM_EXECUCAO="${l# }"
+}
+env_da_telefonia() {  # env_da_telefonia <COMPOSE_PROFILES> <ASTERISK_IMAGE, vazio = ausente> <senha? 1|vazio>
+  env_das_tres "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+  printf 'COMPOSE_PROFILES=%s\nTELEFONIA_ARI_URL=http://asterisk:8088\n' "$1" >> .env
+  [ -n "$2" ] && printf 'ASTERISK_IMAGE=%s\nASTERISK_PULL_POLICY=missing\n' "$2" >> .env
+  [ -n "$3" ] && printf 'TELEFONIA_ARI_PASSWORD=senha-de-teste\n' >> .env
+  return 0
+}
+AST_ALVO="${NS}/deskcomm-asterisk:1.2.0"
+TRES_NO_ALVO=("${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0")
+falou_da_telefonia() { grep -q "telefonia está ligada" "$OUTFILE"; }
+nao_acusou_as_tres() { ! grep -q "outra imagem" "$OUTFILE"; }
+subiu_com() { grep -qxF "UP $1" "$DOCKER_LOG"; }   # subiu_com <linha que o dublê anotou no `up -d`>
+# Em TODO este bloco o registro responde digest local == remoto, e app, worker e
+# scheduler estão no alvo, no `.env` e no ar. É o que cala os critérios antigos:
+# se o update rodar, foi por causa da telefonia.
+export DUBLE_DIGESTS=iguais
+
+echo "   14a. profile ligado + .env SEM ASTERISK_IMAGE (e sem senha) → roda, e grava as duas antes de subir"
+# O contêiner do Asterisk existe em `:stable` — o que o default do compose cria
+# se alguém tentou um `up -d` à mão. Canal não é julgado pela versão, então o
+# critério do contêiner fica CALADO aqui: quem tem de acusar é o do .env.
+env_da_telefonia "telefonia" "" ""
+em_execucao "${TRES_NO_ALVO[@]}" "${NS}/deskcomm-asterisk:stable"
+: > "$DOCKER_LOG"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "foi adiante: rodou o backup" test -f "$BACKUP_MARK"
+check "termina com sucesso" test "$RC" -eq 0
+check "diz que é a TELEFONIA, não um 'imagem antiga' genérico" falou_da_telefonia
+check "e não acusa as três que estão em dia" nao_acusou_as_tres
+check "o .env passa a fixar o Asterisk na versão do código" grep -q "^ASTERISK_IMAGE=${AST_ALVO}$" .env
+check "  com pull_policy de tag imutável" grep -q '^ASTERISK_PULL_POLICY=missing$' .env
+check "a senha da ARI foi gerada" grep -qE '^TELEFONIA_ARI_PASSWORD=.+' .env
+check "  e a tela NÃO diz que a telefonia 'segue DESLIGADA' (ela acabou de ser ligada)" \
+  test -z "$(grep 'segue DESLIGADA' "$OUTFILE" | grep -i telefonia || true)"
+check "ANTES do up -d o .env já fixava o Asterisk no alvo" subiu_com ".env ASTERISK_IMAGE=${AST_ALVO}"
+check "ANTES do up -d a senha já estava no .env" subiu_com ".env senha=1"
+check "o up -d subiu com o profile ligado no ambiente" subiu_com "env COMPOSE_PROFILES=telefonia"
+
+echo "   14b. CONTROLE: profile ligado, .env e contêiner do Asterisk no alvo → 'Nada a atualizar'"
+# Sem este controle o 14a e o 14d não provam nada: o dublê responde VAZIO a
+# `docker inspect` por padrão, e um critério que tratasse o vazio como
+# "Asterisk ausente" ficaria verde nos dois COM o defeito de volta — e acusaria
+# para sempre toda instalação com a telefonia ligada e em dia.
+env_da_telefonia "telefonia" "$AST_ALVO" 1
+em_execucao "${TRES_NO_ALVO[@]}" "$AST_ALVO"
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "sai com 0" test "$RC" -eq 0
+check "e não rodou backup nenhum" test ! -f "$BACKUP_MARK"
+
+echo "   14c. profile DESLIGADO + .env sem ASTERISK_IMAGE → 'Nada a atualizar' (nada muda para quem não usa)"
+env_da_telefonia "" "" ""
+em_execucao "${TRES_NO_ALVO[@]}"
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "não rodou backup" test ! -f "$BACKUP_MARK"
+check "e não escreveu ASTERISK_IMAGE no .env" test -z "$(grep '^ASTERISK_IMAGE=' .env || true)"
+# Outro profile ligado não é a telefonia.
+env_da_telefonia "voz" "" ""
+run_update
+check "com COMPOSE_PROFILES=voz também: 'Nada a atualizar'" nada_a_atualizar
+
+echo "   14d. profile ligado + .env completo + contêiner do Asterisk AUSENTE → roda (o caso mais comum)"
+env_da_telefonia "telefonia" "$AST_ALVO" 1
+em_execucao "${TRES_NO_ALVO[@]}"
+: > "$DOCKER_LOG"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "foi adiante: rodou o backup" test -f "$BACKUP_MARK"
+check "termina com sucesso" test "$RC" -eq 0
+check "diz que é a TELEFONIA" falou_da_telefonia
+check "o up -d subiu com o profile ligado no ambiente" subiu_com "env COMPOSE_PROFILES=telefonia"
+check "  e com o Asterisk do alvo" subiu_com "env ASTERISK_IMAGE=${AST_ALVO}"
+
+echo "   14e. profile ligado com a stack PARADA (nenhum contêiner) → 'Nada a atualizar'"
+# Quem parou a stack de propósito não recebe um update que ninguém pediu: sem o
+# app no ar, a ausência do Asterisk não diz nada.
+env_da_telefonia "telefonia" "$AST_ALVO" 1
+em_execucao "" "" ""
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "não rodou backup" test ! -f "$BACKUP_MARK"
+
+echo "   14f. profile ligado + .env no alvo + Asterisk RODANDO a versão anterior → roda"
+env_da_telefonia "telefonia" "$AST_ALVO" 1
+em_execucao "${TRES_NO_ALVO[@]}" "${NS}/deskcomm-asterisk:1.1.0"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "diz que é a TELEFONIA" falou_da_telefonia
+
+echo "   14g. o up -d recebe o Asterisk NOVO, não o que o load_env exportou do .env antigo"
+# O `enter_project` exporta cada chave do `.env` para o ambiente, e o ambiente
+# VENCE o `.env` no docker compose (medido). `gravar_imagens` regrava o arquivo,
+# mas o processo segue com o valor lido no começo: sem o `export` explícito, o
+# Asterisk de quem tinha `:1.1.0` subia de novo na 1.1.0, e as outras três na
+# nova. É a mesma razão das três linhas `export` que já existiam.
+env_da_telefonia "telefonia" "${NS}/deskcomm-asterisk:1.1.0" 1
+em_execucao "${TRES_NO_ALVO[@]}" "${NS}/deskcomm-asterisk:1.1.0"
+: > "$DOCKER_LOG"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "o .env foi para o alvo" grep -q "^ASTERISK_IMAGE=${AST_ALVO}$" .env
+check "e o AMBIENTE do up -d também (senão o compose sobe a 1.1.0)" subiu_com "env ASTERISK_IMAGE=${AST_ALVO}"
+
+echo "   14h. a guarda de erro do critério do contêiner, medida na FUNÇÃO"
+# Chamada DIRETA, num subshell com o `set -euo pipefail` do kit, FORA de `if` e
+# de `$( )` — nas duas formas o errexit não vale e a prova passaria com a guarda
+# arrancada (medido no caso 13 do PR #34, e registrado na memória do projeto).
+command -v conteiner_da_telefonia_fora_do_alvo >/dev/null \
+  || { echo "  ✗ conteiner_da_telefonia_fora_do_alvo não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+env_da_telefonia "telefonia" "$AST_ALVO" 1
+( set -euo pipefail
+  export DUBLE_INSPECT_QUEBRADO=1
+  conteiner_da_telefonia_fora_do_alvo .env 1.2.0 >/dev/null ) >/dev/null 2>&1
+GUARDA_RC=$?
+check "docker que sai != 0 não mata a função" test "$GUARDA_RC" -eq 0
+ACUSOU="$(DUBLE_INSPECT_QUEBRADO=1 conteiner_da_telefonia_fora_do_alvo .env 1.2.0)"
+check "e, sem poder enxergar, ela não acusa nada" test -z "$ACUSOU"
+# O silêncio acima só vale se a MESMA chamada, com o docker respondendo, acusa —
+# senão a função podia estar calada por qualquer outro motivo.
+em_execucao "${TRES_NO_ALVO[@]}" "${NS}/deskcomm-asterisk:1.1.0"
+ACUSOU="$(conteiner_da_telefonia_fora_do_alvo .env 1.2.0)"
+check "controle: com o docker respondendo, a mesma chamada acusa o Asterisk" test "$ACUSOU" = "asterisk"
+
+echo "   14i. 'telefonia está ligada?' com a régua do docker compose"
+# Cada linha abaixo foi medida contra o docker compose v5.1.4 (`docker compose
+# config --services` com o profile no .env): o que ele liga, esta função liga.
+# Sem a função carregada, todo caso "→ desligada" passaria por vacuidade.
+command -v telefonia_ligada >/dev/null \
+  || { echo "  ✗ telefonia_ligada não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+ligada_caso() {  # ligada_caso <descrição> <conteúdo do .env> <sim|nao>
+  local r
+  printf '%b' "$2" > .env.perfis
+  if telefonia_ligada .env.perfis; then r=sim; else r=nao; fi
+  check "$1" test "$r" = "$3"
+}
+ligada_caso "COMPOSE_PROFILES=telefonia → ligada" 'COMPOSE_PROFILES=telefonia\n' sim
+ligada_caso "entre aspas simples, como o install.sh grava → ligada" "COMPOSE_PROFILES='telefonia'\n" sim
+ligada_caso "lista entre aspas duplas → ligada" 'COMPOSE_PROFILES="voz,telefonia"\n' sim
+ligada_caso "espaço depois da vírgula → ligada" 'COMPOSE_PROFILES=voz, telefonia\n' sim
+ligada_caso "linha ACRESCENTADA no fim, depois da vazia do install → ligada (a última vence)" \
+  "COMPOSE_PROFILES=''\nX=1\nCOMPOSE_PROFILES=telefonia\n" sim
+ligada_caso "o contrário: a última está vazia → desligada" 'COMPOSE_PROFILES=telefonia\nCOMPOSE_PROFILES=\n' nao
+ligada_caso "comentário no fim da linha → ligada" 'COMPOSE_PROFILES=telefonia # liguei\n' sim
+ligada_caso "prefixo export → ligada" 'export COMPOSE_PROFILES=telefonia\n' sim
+ligada_caso "fim de linha do Windows (CRLF) → ligada" 'COMPOSE_PROFILES=telefonia\r\n' sim
+ligada_caso "telefonia2 não é telefonia → desligada" 'COMPOSE_PROFILES=telefonia2\n' nao
+ligada_caso "linha comentada → desligada" '# COMPOSE_PROFILES=telefonia\n' nao
+ligada_caso "vazia → desligada" "COMPOSE_PROFILES=''\n" nao
+ligada_caso "chave ausente → desligada" 'X=1\n' nao
+rm -f .env.perfis
+
+unset DUBLE_EM_EXECUCAO
+unset DUBLE_DIGESTS
 
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi
 exit $((FAILS > 0))
