@@ -90,6 +90,16 @@ export const MENSAGEM_DA_FALHA_DA_FALA: Record<FalhaDaFala, string> = {
   erro_do_provedor: "A ElevenLabs devolveu um erro. Tente de novo em instantes.",
 };
 
+/**
+ * O texto recusado pela NOSSA régua (`textoDaFalaValido`, em falas.ts: vazio, mais
+ * de 1000 caracteres ou com o caractere NUL), antes de qualquer chamada. Não é
+ * `texto_recusado`: aquela mensagem diz que a ElevenLabs recusou, e aqui ninguém
+ * foi a ela. As rotas da prévia e do "Salvar e usar" usam esta, com
+ * `validation_failed`.
+ */
+export const MENSAGEM_DO_TEXTO_INVALIDO =
+  "Texto inválido: a fala precisa ter de 1 a 1000 caracteres, sem caracteres invisíveis.";
+
 export function ehFalhaDaFala(valor: string | null | undefined): valor is FalhaDaFala {
   return typeof valor === "string" && Object.hasOwn(MENSAGEM_DA_FALHA_DA_FALA, valor);
 }

@@ -5,6 +5,7 @@
  * (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts).
  */
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { env } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -90,4 +91,38 @@ export async function contextoDeFala(
 ): Promise<{ chave: string | null; voz: VozDaOrganizacao | null }> {
   const [chave, voz] = await Promise.all([chaveDeVoz(db, organizationId), vozDaOrganizacao(db, organizationId)]);
   return { chave, voz };
+}
+
+/** Prévias que vão à ElevenLabs, por organização e por hora (desenho §4, passo 1). Reaproveitar não conta. */
+export const LIMITE_DE_PREVIAS_POR_HORA = 30;
+const JANELA_DAS_PREVIAS_S = 3600;
+
+export interface CotaDePrevia {
+  permitida: boolean;
+  limite: number;
+  restantes: number;
+  /** Segundos até a janela virar (1 a 3600) — o `Retry-After` da recusa. */
+  reabreEmS: number;
+}
+
+/**
+ * Gasta uma unidade da cota de prévias da organização, no limitador que o CRM já
+ * usa (`checkRateLimit`: Upstash, com contador em memória quando o Redis não
+ * responde). Janela FIXA de uma hora (INCR + EXPIRE, alinhada ao relógio) — é o
+ * que o limitador implementa, não uma janela deslizante. A organização vem da
+ * SESSÃO, pela rota: nenhum corpo escolhe de quem é a cota.
+ *
+ * A recusa volta 429 com `Retry-After` (`STATUS_DA_FALHA.limite_de_previas`). O
+ * `Retry-After` passa de 10 s quase sempre, e é isso que faz o `apiClient` do
+ * navegador lançar na hora em vez de dormir e repetir (lib/api/client.ts).
+ */
+export async function consumirCotaDePrevia(organizationId: string, agora: Date = new Date()): Promise<CotaDePrevia> {
+  const r = await checkRateLimit(`telefonia-previa:${organizationId}`, LIMITE_DE_PREVIAS_POR_HORA, JANELA_DAS_PREVIAS_S);
+  const segundos = Math.floor(agora.getTime() / 1000);
+  return {
+    permitida: r.allowed,
+    limite: r.limit,
+    restantes: Math.max(0, r.limit - r.count),
+    reabreEmS: JANELA_DAS_PREVIAS_S - (segundos % JANELA_DAS_PREVIAS_S),
+  };
 }

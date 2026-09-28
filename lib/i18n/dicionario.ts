@@ -9567,6 +9567,20 @@ export const DICIONARIO: Traducoes = {
   "A ElevenLabs devolveu um erro. Tente de novo em instantes.": {
     es: "ElevenLabs devolvió un error. Inténtalo de nuevo en unos instantes.",
   },
+  // Telefonia, fase 2 — rotas da prévia, das falas gerais e do áudio da fala
+  "Texto inválido: a fala precisa ter de 1 a 1000 caracteres, sem caracteres invisíveis.": {
+    es: "Texto inválido: la locución debe tener de 1 a 1000 caracteres, sin caracteres invisibles.",
+  },
+  "A fala foi gerada na ElevenLabs, mas não foi possível guardá-la. Tente de novo em instantes.": {
+    es: "La locución se generó en ElevenLabs, pero no se pudo guardar. Inténtalo de nuevo en unos instantes.",
+  },
+  "Fala não encontrada.": { es: "Locución no encontrada." },
+  "O áudio desta fala não está disponível agora. Tente de novo em instantes.": {
+    es: "El audio de esta locución no está disponible ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "O áudio desta fala não foi encontrado. Gere a prévia de novo e salve.": {
+    es: "No se encontró el audio de esta locución. Genera la vista previa de nuevo y guarda.",
+  },
 };
 
 /**
