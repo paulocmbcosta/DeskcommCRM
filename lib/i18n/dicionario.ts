@@ -9584,6 +9584,30 @@ export const DICIONARIO: Traducoes = {
   "O áudio desta fala não foi encontrado. Gere a prévia de novo e salve.": {
     es: "No se encontró el audio de esta locución. Genera la vista previa de nuevo y guarda.",
   },
+  // Telefonia, fase 2 — rotas dos menus de voz
+  "Cada tecla só pode levar a um time.": { es: "Cada tecla solo puede llevar a un equipo." },
+  "Algum time escolhido não existe nesta organização ou está arquivado.": {
+    es: "Algún equipo elegido no existe en esta organización o está archivado.",
+  },
+  "Menu não encontrado.": { es: "Menú no encontrado." },
+  "Este menu atende um número. Troque o destino do número antes de arquivar.": {
+    es: "Este menú atiende un número. Cambia el destino del número antes de archivar.",
+  },
+  "Outra gravação deste menu está em andamento. Tente de novo em instantes.": {
+    es: "Hay otra grabación de este menú en curso. Inténtalo de nuevo en unos instantes.",
+  },
+  "O áudio da fala do menu não foi encontrado. Gere a prévia de novo e salve.": {
+    es: "No se encontró el audio de la locución del menú. Genera la vista previa de nuevo y guarda.",
+  },
+  "O áudio da fala de opção inválida não foi encontrado. Gere a prévia de novo e salve.": {
+    es: "No se encontró el audio de la locución de opción inválida. Genera la vista previa de nuevo y guarda.",
+  },
+  "Não foi possível conferir o áudio da fala do menu agora. Tente de novo em instantes; se continuar, gere a prévia de novo.": {
+    es: "No se pudo verificar el audio de la locución del menú ahora. Inténtalo de nuevo en unos instantes; si continúa, genera la vista previa de nuevo.",
+  },
+  "Não foi possível conferir o áudio da fala de opção inválida agora. Tente de novo em instantes; se continuar, gere a prévia de novo.": {
+    es: "No se pudo verificar el audio de la locución de opción inválida ahora. Inténtalo de nuevo en unos instantes; si continúa, genera la vista previa de nuevo.",
+  },
 };
 
 /**

@@ -1,0 +1,422 @@
+/**
+ * OS MENUS DE VOZ NO BANCO DE VERDADE — o SQL de lib/telefonia/menus.ts contra o
+ * schema do baseline (migration 0288), com conexões reais.
+ *
+ * O teste de unidade (menus.test.ts) usa um banco em memória que só reconhece o
+ * formato das consultas. Aqui se prova o que só o Postgres sabe:
+ *  1. menu, opções e as duas falas saem numa transação só, e a leitura devolve o
+ *     que a tela precisa (nomes dos times, falas, pronto);
+ *  2. TUDO OU NADA: quando o banco recusa o time de outra organização pela FK
+ *     composta no meio da transação, a fala já gravada é desfeita junto — e a
+ *     recusa vira `time_invalido`, não um 500;
+ *  3. duas edições simultâneas do mesmo menu que dão a ele a fala de tecla
+ *     inválida saem com UMA linha dessa fala — a trava da linha do menu
+ *     (`for update`) e a decisão de novo sob ela; o CONTROLE, sem a trava, mostra
+ *     a linha órfã que o teste diz prender;
+ *  4. a trava segurada além do `lock_timeout` desiste com `gravacao_em_andamento`;
+ *  5. o "últimos 7 dias" soma só ligações ENCERRADAS: quem desligou no menu conta
+ *     (e faz o menu "confundir"), a ligação em curso não, um `chosen` sem tecla
+ *     conta como escolha mas em tecla nenhuma, a de 8 dias atrás não — e a
+ *     consulta alcança o índice `idx_voice_calls_menu_recentes`;
+ *  6. menu que atende um número não é arquivado; arquivado some da lista, não
+ *     serve a número e não é editado.
+ */
+import pg from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import { caminhoDaFala, hashDaFala, type ConexaoDaTransacao } from "@/lib/telefonia/falas";
+import {
+  CONSULTA_DA_SEMANA,
+  arquivarMenu,
+  menusDaOrg,
+  salvarMenuDaOrg,
+  situacaoDoMenuParaNumero,
+  type EntradaDoMenu,
+  type PedidoDeSalvarMenu,
+} from "@/lib/telefonia/menus";
+import { menuConfunde } from "@/lib/telefonia/ultimos-sete-dias";
+
+import { sql } from "./gov-helpers";
+
+if (!process.env.TEST_DB_CONTAINER) {
+  throw new Error("TEST_DB_CONTAINER not set — rode via `pnpm test:db` (scripts/test-db.sh)");
+}
+
+const pool = new pg.Pool({
+  connectionString: `postgresql://postgres:postgres@127.0.0.1:${process.env.TEST_DB_PORT ?? 54329}/postgres`,
+  max: 4,
+});
+
+const ORG_A = "c0de0288-8888-4000-8000-00000000000a";
+const ORG_B = "c0de0288-8888-4000-8000-00000000000b";
+const TIME_A1 = "c0de0288-8888-4000-8000-0000000000a1";
+const TIME_A2 = "c0de0288-8888-4000-8000-0000000000a2";
+const TIME_B1 = "c0de0288-8888-4000-8000-0000000000b1";
+const NUMERO_A = "c0de0288-8888-4000-8000-0000000000c1";
+const NUMERO_B = "c0de0288-8888-4000-8000-0000000000c2";
+const VOZ = "voz-menus";
+const MODELO = "eleven_multilingual_v2";
+const TEXTO_MENU = "Para Suporte, digite 1. Para Financeiro, digite 2.";
+const HASH_MENU = hashDaFala(TEXTO_MENU, VOZ, MODELO);
+const TEXTO_INVALIDA = "Opção inválida.";
+const HASH_INVALIDA = hashDaFala(TEXTO_INVALIDA, VOZ, MODELO);
+const TRAVA_DO_MENU = /from phone_menus\s+where id = \$1 and organization_id = \$2 and archived_at is null\s+(for update)?\s*$/i;
+
+/** O Storage em memória: as prévias de A estão guardadas; nada de B. */
+const armazem = {
+  baixar: async (caminho: string) =>
+    [caminhoDaFala(ORG_A, HASH_MENU), caminhoDaFala(ORG_A, HASH_INVALIDA)].includes(caminho) ? new Uint8Array(1600) : null,
+};
+
+const entrada = (e: Partial<EntradaDoMenu> = {}): EntradaDoMenu => ({
+  nome: "Principal",
+  opcoes: [
+    { tecla: "1", time_id: TIME_A1 },
+    { tecla: "2", time_id: TIME_A2 },
+  ],
+  time_padrao_id: TIME_A1,
+  fala: { texto: TEXTO_MENU, hash: HASH_MENU },
+  fala_invalida: null,
+  ...e,
+});
+const pedido = (e: Partial<EntradaDoMenu> = {}, id: string | null = null, p: PedidoDeSalvarMenu["pool"] = pool): PedidoDeSalvarMenu => ({
+  pool: p,
+  armazem,
+  organizationId: ORG_A,
+  userId: null,
+  id,
+  entrada: entrada(e),
+});
+const criar = async (e: Partial<EntradaDoMenu> = {}) => {
+  const r = await salvarMenuDaOrg(pedido(e));
+  if (!r.ok) throw new Error(`criar o menu devia passar: ${JSON.stringify(r)}`);
+  return r;
+};
+const falasDe = async (org: string, kind?: string) =>
+  (
+    await pool.query<{ id: string; kind: string }>(
+      "select id, kind from phone_prompts where organization_id = $1 and ($2::text is null or kind = $2) order by created_at",
+      [org, kind ?? null],
+    )
+  ).rows;
+const contar = async (tabela: string, org: string) =>
+  Number((await pool.query<{ n: string }>(`select count(*) as n from ${tabela} where organization_id = $1`, [org])).rows[0]!.n);
+
+/**
+ * O pool de verdade com o ponto de encontro logo DEPOIS da leitura da linha do menu
+ * na transação. `tirarTrava` é a gravação sem o conserto: a mesma leitura, sem
+ * `for update`. Mesma técnica de telefonia-fala-geral-concorrente.test.ts: sem o
+ * encontro, a primeira transação podia terminar antes de a segunda começar, e o
+ * teste passaria mesmo sem trava.
+ */
+function poolComEncontro({ tirarTrava = false, prazoMs = 500 } = {}) {
+  let chegaram = 0;
+  let dentro = 0;
+  let maxDentro = 0;
+  let liberar: () => void = () => undefined;
+  const todosChegaram = new Promise<void>((r) => (liberar = r));
+  const encontro = async () => {
+    chegaram++;
+    maxDentro = Math.max(maxDentro, ++dentro);
+    if (chegaram >= 2) liberar();
+    await Promise.race([todosChegaram, new Promise((r) => setTimeout(r, prazoMs))]);
+    dentro--;
+  };
+  const embrulhado: PedidoDeSalvarMenu["pool"] = {
+    query: pool.query.bind(pool) as PedidoDeSalvarMenu["pool"]["query"],
+    connect: async (): Promise<ConexaoDaTransacao> => {
+      const c = await pool.connect();
+      return {
+        release: (erro?: Error) => c.release(erro),
+        query: (async (texto: string, valores?: unknown[]) => {
+          const comando = tirarTrava ? texto.replace(/\s+for update\s*$/i, "") : texto;
+          const r = await c.query(comando, valores);
+          if (TRAVA_DO_MENU.test(texto)) await encontro();
+          return r;
+        }) as ConexaoDaTransacao["query"],
+      };
+    },
+  };
+  return {
+    pool: embrulhado,
+    get chegadas() {
+      return chegaram;
+    },
+    get simultaneas() {
+      return maxDentro;
+    },
+  };
+}
+
+beforeAll(() => {
+  sql(`
+    insert into public.organizations (id, slug, legal_name, display_name) values
+      ('${ORG_A}', 'menus-no-banco-a', 'Menus A', 'Menus A'), ('${ORG_B}', 'menus-no-banco-b', 'Menus B', 'Menus B')
+      on conflict (id) do nothing;
+    insert into public.attendance_teams (id, organization_id, name, slug) values
+      ('${TIME_A1}', '${ORG_A}', 'Suporte', 'suporte-menus'), ('${TIME_A2}', '${ORG_A}', 'Financeiro', 'financeiro-menus'),
+      ('${TIME_B1}', '${ORG_B}', 'Suporte B', 'suporte-menus')
+      on conflict (id) do nothing;
+    insert into public.channel_sessions
+      (id, organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number,
+       sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted)
+    values
+      ('${NUMERO_A}', '${ORG_A}', 'sip_trunk', '\\x00', 'STARTING', 'Recepção', '+556130008801',
+       'voip.menus-a.com.br', 5060, 'udp', 'u-menus-a', '\\x00'),
+      ('${NUMERO_B}', '${ORG_B}', 'sip_trunk', '\\x00', 'STARTING', 'Recepção B', '+556130008802',
+       'voip.menus-b.com.br', 5060, 'udp', 'u-menus-b', '\\x00')
+      on conflict (id) do nothing;
+  `);
+});
+
+beforeEach(() => {
+  sql(`
+    update public.channel_sessions set sip_menu_id = null where id in ('${NUMERO_A}', '${NUMERO_B}');
+    delete from public.voice_calls where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from public.phone_menus where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from public.phone_prompts where organization_id in ('${ORG_A}', '${ORG_B}');
+    delete from public.phone_settings where organization_id in ('${ORG_A}', '${ORG_B}');
+    insert into public.phone_settings (organization_id, voice_id, model_id) values
+      ('${ORG_A}', '${VOZ}', '${MODELO}'), ('${ORG_B}', '${VOZ}', '${MODELO}');
+  `);
+});
+
+afterAll(() => pool.end());
+
+describe("salvarMenuDaOrg no Postgres real", () => {
+  it("menu novo: falas, menu e opções numa transação; a leitura devolve nomes dos times, as falas e pronto", async () => {
+    const r = await criar({ fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } });
+    const [menu] = await menusDaOrg(pool, ORG_A);
+    expect(menu).toMatchObject({
+      id: r.id,
+      nome: "Principal",
+      time_padrao_id: TIME_A1,
+      time_padrao_nome: "Suporte",
+      opcoes: [
+        { tecla: "1", time_id: TIME_A1, time_nome: "Suporte" },
+        { tecla: "2", time_id: TIME_A2, time_nome: "Financeiro" },
+      ],
+      fala: { id: r.fala.fala.id, tipo: "menu", hash: HASH_MENU, status: "ready", duracao_ms: 200 },
+      fala_invalida: { id: r.falaInvalida!.fala.id, tipo: "invalid", hash: HASH_INVALIDA },
+      pronto: true,
+      numeros: [],
+      ultimos_7_dias: { total: 0 },
+    });
+    expect(menu!.fala!.atualizada_em).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(await situacaoDoMenuParaNumero(pool, ORG_A, r.id)).toBe("pronto");
+    // B não enxerga o menu de A.
+    expect(await menusDaOrg(pool, ORG_B)).toEqual([]);
+    expect(await situacaoDoMenuParaNumero(pool, ORG_B, r.id)).toBe("inexistente");
+  });
+
+  it("tudo ou nada: o banco recusa o time de OUTRA organização (FK composta) no meio da transação — time_invalido, e a fala some junto", async () => {
+    // A conferência de fora (`timesValidos`) é enganada de propósito, para a recusa vir do BANCO.
+    const mentiroso: PedidoDeSalvarMenu["pool"] = {
+      query: (async (texto: string, valores?: unknown[]) =>
+        /from attendance_teams/.test(texto)
+          ? { rows: [{ n: new Set(valores![1] as string[]).size }], rowCount: 1 }
+          : pool.query(texto, valores)) as PedidoDeSalvarMenu["pool"]["query"],
+      connect: () => pool.connect(),
+    };
+    for (const e of [{ opcoes: [{ tecla: "1", time_id: TIME_B1 }] }, { time_padrao_id: TIME_B1 }]) {
+      const r = await salvarMenuDaOrg(pedido(e, null, mentiroso));
+      expect(r, JSON.stringify(e)).toEqual({ ok: false, motivo: "time_invalido" });
+    }
+    expect(await contar("phone_prompts", ORG_A)).toBe(0);
+    expect(await contar("phone_menus", ORG_A)).toBe(0);
+    expect(await contar("phone_menu_options", ORG_A)).toBe(0);
+  });
+
+  it("a mesma tecla duas vezes, se escapasse do código, é recusada pela chave (menu_id, digit) do banco — tecla_repetida", async () => {
+    const r = await salvarMenuDaOrg({
+      ...pedido(),
+      // `salvarMenuDaOrg` confere a tecla antes; o pedido cru prova que a chave do banco também recusa.
+      entrada: { ...entrada(), opcoes: [{ tecla: "1", time_id: TIME_A1 }] },
+    });
+    expect(r.ok).toBe(true);
+    const erro = await pool
+      .query("insert into phone_menu_options (organization_id, menu_id, digit, team_id) values ($1, $2, '1', $3)", [
+        ORG_A,
+        r.ok ? r.id : null,
+        TIME_A2,
+      ])
+      .then(() => null, (e: { code?: string; constraint?: string }) => [e.code, e.constraint]);
+    expect(erro).toEqual(["23505", "phone_menu_options_pkey"]);
+  });
+
+  it("duas edições simultâneas dão ao menu a fala de tecla inválida: UMA linha, e o menu aponta para ela", async () => {
+    const { id } = await criar();
+    const e = poolComEncontro();
+    const comInvalida = { fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } };
+
+    const [a, b] = await Promise.all([
+      salvarMenuDaOrg(pedido(comInvalida, id, e.pool)),
+      salvarMenuDaOrg(pedido(comInvalida, id, e.pool)),
+    ]);
+
+    expect(a.ok && b.ok, JSON.stringify([a, b])).toBe(true);
+    const invalidas = await falasDe(ORG_A, "invalid");
+    expect(invalidas).toHaveLength(1);
+    const { rows } = await pool.query<{ invalid_prompt_id: string }>("select invalid_prompt_id from phone_menus where id = $1", [id]);
+    expect(rows[0]!.invalid_prompt_id).toBe(invalidas[0]!.id);
+    // Uma escreveu; a outra, que esperou a trava, viu que nada mudou.
+    expect([a.ok && a.falaInvalida?.mudou, b.ok && b.falaInvalida?.mudou].sort()).toEqual([false, true]);
+    expect(e.chegadas).toBe(2);
+    expect(e.simultaneas).toBe(1);
+  });
+
+  it("CONTROLE — sem a trava, o mesmo encontro deixa a linha órfã (o teste enxerga o defeito que diz prender)", async () => {
+    const { id } = await criar();
+    const e = poolComEncontro({ tirarTrava: true });
+    const comInvalida = { fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } };
+
+    await Promise.all([salvarMenuDaOrg(pedido(comInvalida, id, e.pool)), salvarMenuDaOrg(pedido(comInvalida, id, e.pool))]);
+
+    expect(e.simultaneas).toBe(2);
+    expect(await falasDe(ORG_A, "invalid")).toHaveLength(2);
+  });
+
+  it("a linha do menu travada por outra transação além de 4 s: gravacao_em_andamento, sem ficar presa nem gravar", async () => {
+    const { id } = await criar();
+    const dono = await pool.connect();
+    try {
+      await dono.query("begin");
+      await dono.query("select 1 from phone_menus where id = $1 for update", [id]);
+
+      const inicio = Date.now();
+      const r = await salvarMenuDaOrg(pedido({ nome: "Outro nome", fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } }, id));
+      const esperou = Date.now() - inicio;
+
+      expect(r).toEqual({ ok: false, motivo: "gravacao_em_andamento" });
+      expect(esperou).toBeGreaterThanOrEqual(3_500);
+      expect(esperou).toBeLessThan(8_000);
+    } finally {
+      await dono.query("rollback");
+      dono.release();
+    }
+    expect(await falasDe(ORG_A, "invalid")).toHaveLength(0);
+    expect((await menusDaOrg(pool, ORG_A))[0]!.nome).toBe("Principal");
+    // A conexão voltou ao pool sã: a edição seguinte, sem ninguém na trava, passa.
+    expect(await salvarMenuDaOrg(pedido({ nome: "Outro nome" }, id))).toMatchObject({ ok: true });
+  });
+
+  it("editar tirando a fala de opção inválida: a linha dela sai, e só ela", async () => {
+    const r = await criar({ fala_invalida: { texto: TEXTO_INVALIDA, hash: HASH_INVALIDA } });
+    const editado = await salvarMenuDaOrg(pedido({ fala_invalida: null, opcoes: [{ tecla: "9", time_id: TIME_A2 }] }, r.id));
+    expect(editado).toMatchObject({ ok: true, falaInvalidaDescartada: r.falaInvalida!.fala.id });
+    expect((await falasDe(ORG_A)).map((f) => f.kind)).toEqual(["menu"]);
+    const [menu] = await menusDaOrg(pool, ORG_A);
+    expect(menu).toMatchObject({ fala_invalida: null, opcoes: [{ tecla: "9", time_id: TIME_A2 }] });
+  });
+});
+
+describe("o 'últimos 7 dias' do menu — só ligações ENCERRADAS", () => {
+  const ligacao = (org: string, numero: string, menu: string, status: string, outcome: string | null, digito: string | null, dias = 0) =>
+    `insert into public.voice_calls
+       (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status,
+        menu_id, menu_outcome, menu_digit, started_at)
+     values ('${org}', '${numero}', 'sip_trunk', 'menus-' || gen_random_uuid(), 'inbound', '+5561999998888', '${status}',
+             '${menu}', ${outcome ? `'${outcome}'` : "null"}, ${digito ? `'${digito}'` : "null"}, now() - interval '${dias} days');`;
+
+  it("soma escolhas por tecla, sem escolha, tecla errada e quem desligou; ignora a ligação em curso e a antiga", async () => {
+    const { id } = await criar();
+    const { id: outro } = await criar({ nome: "Outro" });
+    sql(
+      [
+        ligacao(ORG_A, NUMERO_A, id, "ended", "chosen", "1"),
+        ligacao(ORG_A, NUMERO_A, id, "ended", "chosen", "1"),
+        ligacao(ORG_A, NUMERO_A, id, "ended", "chosen", "1"),
+        ligacao(ORG_A, NUMERO_A, id, "ended", "chosen", "2"),
+        // `chosen` sem tecla: conta como escolha (total), mas em tecla nenhuma.
+        ligacao(ORG_A, NUMERO_A, id, "ended", "chosen", null),
+        ligacao(ORG_A, NUMERO_A, id, "ended", "default_no_input", null),
+        ligacao(ORG_A, NUMERO_A, id, "ended", "default_invalid", null),
+        // Desligou dentro do menu: encerrada, sem desfecho.
+        ligacao(ORG_A, NUMERO_A, id, "ended", null, null),
+        ligacao(ORG_A, NUMERO_A, id, "ended", null, null),
+        // Em curso: ainda pode escolher. NÃO conta — nem como "desligou".
+        ligacao(ORG_A, NUMERO_A, id, "connected", null, null),
+        ligacao(ORG_A, NUMERO_A, id, "ringing", null, null),
+        ligacao(ORG_A, NUMERO_A, id, "starting", null, null),
+        // Encerrada há 8 dias: fora da janela.
+        ligacao(ORG_A, NUMERO_A, id, "ended", "default_no_input", null, 8),
+        // A de outro menu da mesma organização não se mistura.
+        ligacao(ORG_A, NUMERO_A, outro, "ended", "default_invalid", null),
+      ].join("\n"),
+    );
+
+    const menus = await menusDaOrg(pool, ORG_A);
+    const u = menus.find((m) => m.id === id)!.ultimos_7_dias;
+    expect(u).toEqual({ total: 9, por_tecla: { "1": 3, "2": 1 }, sem_escolha: 1, tecla_errada: 1, desligou_no_menu: 2 });
+    // 4 de 9 sem escolher (sem tecla, tecla errada, desligou): o menu confunde.
+    expect(menuConfunde(u)).toBe(true);
+    expect(menus.find((m) => m.id === outro)!.ultimos_7_dias).toMatchObject({ total: 1, tecla_errada: 1 });
+
+    // CONTROLE — a mesma janela SEM o filtro de encerradas veria as 3 em curso como "desligou no menu".
+    const { rows } = await pool.query<{ n: number }>(
+      `select count(*)::int as n from voice_calls
+        where organization_id = $1 and menu_id = $2 and menu_outcome is null and started_at >= now() - interval '7 days'`,
+      [ORG_A, id],
+    );
+    expect(rows[0]!.n).toBe(5);
+  });
+
+  it("a organização é a da consulta: a ligação de B, no menu de B, não aparece para A", async () => {
+    const { id } = await criar();
+    sql(`
+      insert into public.attendance_teams (id, organization_id, name, slug) values
+        ('c0de0288-8888-4000-8000-0000000000b2', '${ORG_B}', 'Padrão B', 'padrao-menus-b') on conflict (id) do nothing;
+      insert into public.phone_menus (id, organization_id, name, default_team_id) values
+        ('c0de0288-8888-4000-8000-0000000000d2', '${ORG_B}', 'Menu B', 'c0de0288-8888-4000-8000-0000000000b2');
+    `);
+    sql(ligacao(ORG_B, NUMERO_B, "c0de0288-8888-4000-8000-0000000000d2", "ended", null, null));
+    const { rows } = await pool.query(CONSULTA_DA_SEMANA, [ORG_A, [id, "c0de0288-8888-4000-8000-0000000000d2"]]);
+    expect(rows).toEqual([]);
+  });
+
+  it("com o histórico de uma organização de verdade, a consulta usa o índice parcial idx_voice_calls_menu_recentes", async () => {
+    const { id } = await criar();
+    // A forma real: milhares de ligações da organização, quase todas sem menu (fase 1,
+    // número que vai direto a um time) — e poucas passando por ESTE menu.
+    sql(`
+      insert into public.voice_calls
+        (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, started_at)
+      select '${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'massa-' || g, 'inbound', '+5561999997777', 'ended',
+             now() - (g % 60) * interval '1 day'
+        from generate_series(1, 5000) as g;
+      ${Array.from({ length: 5 }, () => ligacao(ORG_A, NUMERO_A, id, "ended", "chosen", "1")).join("\n")}
+      analyze public.voice_calls;
+    `);
+    const plano = (await pool.query<{ "QUERY PLAN": string }>(`explain ${CONSULTA_DA_SEMANA}`, [ORG_A, [id]])).rows
+      .map((r) => r["QUERY PLAN"])
+      .join("\n");
+    expect(plano).toMatch(/idx_voice_calls_menu_recentes/);
+    expect((await menusDaOrg(pool, ORG_A))[0]!.ultimos_7_dias.total).toBe(5);
+  });
+});
+
+describe("arquivarMenu e o destino do número", () => {
+  it("menu que atende um número não é arquivado; solto do número, é; arquivado some, não serve a número e não é editado", async () => {
+    const { id } = await criar();
+    sql(`update public.channel_sessions set sip_team_id = null, sip_menu_id = '${id}' where id = '${NUMERO_A}';`);
+    expect((await menusDaOrg(pool, ORG_A))[0]!.numeros).toEqual(["Recepção"]);
+
+    expect(await arquivarMenu(pool, ORG_A, id)).toBe("menu_em_uso");
+    expect(await arquivarMenu(pool, ORG_B, id)).toBe("nao_encontrado");
+    expect(await menusDaOrg(pool, ORG_A)).toHaveLength(1);
+
+    sql(`update public.channel_sessions set sip_menu_id = null where id = '${NUMERO_A}';`);
+    expect(await arquivarMenu(pool, ORG_A, id)).toBe("ok");
+    expect(await arquivarMenu(pool, ORG_A, id)).toBe("nao_encontrado");
+    expect(await menusDaOrg(pool, ORG_A)).toEqual([]);
+    expect(await situacaoDoMenuParaNumero(pool, ORG_A, id)).toBe("inexistente");
+    expect(await salvarMenuDaOrg(pedido({ nome: "Ressuscitado" }, id))).toEqual({ ok: false, motivo: "nao_encontrado" });
+  });
+
+  it("menu com a fala que não está pronta: pendente para número", async () => {
+    const { id, fala } = await criar();
+    sql(`update public.phone_prompts set status = 'failed', error = 'erro_do_provedor' where id = '${fala.fala.id}';`);
+    expect(await situacaoDoMenuParaNumero(pool, ORG_A, id)).toBe("pendente");
+    expect((await menusDaOrg(pool, ORG_A))[0]!.pronto).toBe(false);
+  });
+});
