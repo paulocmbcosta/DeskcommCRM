@@ -9524,6 +9524,12 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível guardar a chave agora. Tente de novo em instantes.": {
     es: "No se pudo guardar la clave ahora. Inténtalo de nuevo en unos instantes.",
   },
+  "Não foi possível ler a chave agora. Tente de novo em instantes.": {
+    es: "No se pudo leer la clave ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "A chave foi guardada, mas não foi possível mostrar o estado agora. Recarregue a página.": {
+    es: "La clave se guardó, pero no se pudo mostrar el estado ahora. Recarga la página.",
+  },
   "Cadastre a chave da ElevenLabs em Credenciais de IA para gerar as falas.": {
     es: "Registra la clave de ElevenLabs en Credenciales de IA para generar las locuciones.",
   },

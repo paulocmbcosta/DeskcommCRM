@@ -9,7 +9,16 @@ vi.mock("@/lib/crypto/aes_gcm", () => ({
     tag: Buffer.alloc(16, 2),
     last4: p.slice(-4),
   }),
-  decryptKey: ({ ciphertext }: { ciphertext: Buffer }) => ciphertext.toString().replace(/^cifrado:/, ""),
+  // Como o `decipher.final()` de verdade, lança quando a etiqueta não confere (o
+  // texto marcado `corrompido:`) — e a mensagem leva um pedaço do que era decifrado,
+  // para provar que ela nunca chega ao log.
+  decryptKey: ({ ciphertext }: { ciphertext: Buffer }) => {
+    const texto = ciphertext.toString();
+    if (texto.startsWith("corrompido:")) {
+      throw new Error(`Unsupported state or unable to authenticate data ${texto}`);
+    }
+    return texto.replace(/^cifrado:/, "");
+  },
   byteaToBuffer: (v: unknown) => (Buffer.isBuffer(v) ? v : Buffer.from(String(v))),
 }));
 
@@ -49,30 +58,45 @@ describe("a chave da ElevenLabs da organização", () => {
     expect(consultas[0]!.sql).toMatch(/on conflict \(organization_id, provider, label\) do update/);
   });
 
-  it("estado: cadastrada com os 4 últimos, ou ausente", async () => {
-    expect(
-      await estadoDaChaveDeVoz(bancoFalso([{ last4: "1234", validada_em: new Date("2026-09-28T13:00:00Z") }]).db, "org-1"),
-    ).toEqual({ cadastrada: true, last4: "1234", validada_em: "2026-09-28T13:00:00.000Z" });
+  it("estado: cadastrada com os 4 últimos, ou ausente — lendo a MESMA linha que o upsert escreve", async () => {
+    const { db, consultas } = bancoFalso([{ last4: "1234", validada_em: new Date("2026-09-28T13:00:00Z") }]);
+    expect(await estadoDaChaveDeVoz(db, "org-1")).toEqual({
+      cadastrada: true,
+      last4: "1234",
+      validada_em: "2026-09-28T13:00:00.000Z",
+    });
+    expect(consultas[0]!.params).toEqual(["org-1", PROVEDOR_DE_VOZ, ROTULO_DA_CHAVE_DE_VOZ]);
+    expect(consultas[0]!.sql).toMatch(/label = \$3/);
     expect(await estadoDaChaveDeVoz(bancoFalso([]).db, "org-1")).toEqual({ cadastrada: false, last4: null, validada_em: null });
   });
 
-  it("decifra só a da própria organização; sem linha, null", async () => {
+  it("decifra só a da própria organização, pelo mesmo provider e rótulo do upsert; sem linha, null", async () => {
     const { db, consultas } = bancoFalso([{ c: Buffer.from("cifrado:sk_x"), iv: Buffer.alloc(12), tag: Buffer.alloc(16) }]);
     expect(await chaveDeVoz(db, "org-1")).toBe("sk_x");
-    expect(consultas[0]!.params).toEqual(["org-1", PROVEDOR_DE_VOZ]);
+    expect(consultas[0]!.params).toEqual(["org-1", PROVEDOR_DE_VOZ, ROTULO_DA_CHAVE_DE_VOZ]);
+    expect(consultas[0]!.sql).toMatch(/label = \$3/);
     expect(await chaveDeVoz(bancoFalso([]).db, "org-1")).toBeNull();
   });
 
-  it("decifragem que falha vira null, e o log leva só a classe do erro — nunca a mensagem", async () => {
+  it("DECIFRAGEM que falha (etiqueta não confere) vira null, e o log leva só a classe — nunca a mensagem", async () => {
     logs.warn.length = 0;
     const segredo = "sk_fragmento_do_segredo_9999";
+    const { db } = bancoFalso([{ c: Buffer.from(`corrompido:${segredo}`), iv: Buffer.alloc(12), tag: Buffer.alloc(16) }]);
+    expect(await chaveDeVoz(db, "org-1")).toBeNull();
+    expect(logs.warn).toHaveLength(1);
+    expect(logs.warn[0]!.ctx).toEqual({ organization_id: "org-1", classe: "Error" });
+    expect(JSON.stringify(logs.warn)).not.toContain(segredo);
+  });
+
+  it("consulta que falha também vira null, com o log só da classe", async () => {
+    logs.warn.length = 0;
+    const segredo = "sk_fragmento_do_segredo_8888";
     const db: Queryable = {
       query: (async () => {
         throw new TypeError(`falhou perto de ${segredo}`);
       }) as unknown as Queryable["query"],
     };
     expect(await chaveDeVoz(db, "org-1")).toBeNull();
-    expect(logs.warn).toHaveLength(1);
     expect(logs.warn[0]!.ctx).toEqual({ organization_id: "org-1", classe: "TypeError" });
     expect(JSON.stringify(logs.warn)).not.toContain(segredo);
   });

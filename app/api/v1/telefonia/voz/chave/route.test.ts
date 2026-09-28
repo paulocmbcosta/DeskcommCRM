@@ -59,6 +59,7 @@ vi.mock("@/lib/telefonia/chave-elevenlabs", () => ({
   estadoDaChaveDeVoz: vi.fn(async () => ({ cadastrada: true, last4: "1234", validada_em: "2026-09-28T13:00:00.000Z" })),
 }));
 
+import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { logger } from "@/lib/logger";
@@ -83,6 +84,7 @@ beforeEach(() => {
   vi.mocked(estadoDaChaveDeVoz).mockClear();
   vi.mocked(listarVozes).mockClear();
   vi.mocked(requireRole).mockClear();
+  vi.mocked(getRequestPool).mockClear();
   for (const f of Object.values(vi.mocked(logger))) f.mockClear();
   estado.falhaDaElevenLabs = null;
   estado.usarClienteDeVerdade = false;
@@ -184,6 +186,37 @@ describe("PUT /api/v1/telefonia/voz/chave", () => {
     expect(tudoQueFoiLogado()).not.toContain(CHAVE);
   });
 
+  // O corpo desta rota É a chave, e o SDK do Sentry anexa o corpo ao evento de
+  // erro. Nenhuma exceção pode escapar do handler depois de ler o corpo: tudo o
+  // que falha vira `fail()` no formato da API, com o log levando só a classe.
+  it("sem banco (getRequestPool lança) → 500 no formato da API, nada gravado nem auditado", async () => {
+    vi.mocked(getRequestPool).mockImplementationOnce(() => {
+      throw new Error(`SUPABASE_DB_URL ausente ${CHAVE}`);
+    });
+    const r = await PUT(pedido({ chave: CHAVE }));
+    expect(r.status).toBe(500);
+    const corpo = (await r.json()) as { error: { code: string } };
+    expect(corpo.error.code).toBe("internal_error");
+    expect(JSON.stringify(corpo)).not.toContain(CHAVE);
+    expect(guardarChaveDeVoz).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    expect(vi.mocked(logger).error).toHaveBeenCalledTimes(1);
+    expect(tudoQueFoiLogado()).not.toContain(CHAVE);
+  });
+
+  it("guardou mas a leitura do estado falhou → 500 honesto (a chave FOI guardada), auditado uma vez", async () => {
+    vi.mocked(estadoDaChaveDeVoz).mockRejectedValueOnce(new Error(`leitura caiu ${CHAVE}`));
+    const r = await PUT(pedido({ chave: CHAVE }));
+    expect(r.status).toBe(500);
+    const corpo = (await r.json()) as { error: { code: string; message: string } };
+    expect(corpo.error.code).toBe("internal_error");
+    expect(corpo.error.message).toMatch(/foi guardada/);
+    expect(JSON.stringify(corpo)).not.toContain(CHAVE);
+    expect(guardarChaveDeVoz).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(tudoQueFoiLogado()).not.toContain(CHAVE);
+  });
+
   it("corpo inválido → 422, sem ir à ElevenLabs nem gravar", async () => {
     const r = await PUT(pedido({ chave: "curta" }));
     expect(r.status).toBe(422);
@@ -198,5 +231,16 @@ describe("GET /api/v1/telefonia/voz/chave", () => {
     expect(vi.mocked(requireRole).mock.calls[0]![0]).toBe("manager");
     expect(await r.json()).toMatchObject({ data: { cadastrada: true, last4: "1234" } });
     expect(vi.mocked(estadoDaChaveDeVoz).mock.calls[0]![1]).toBe(ORG_DA_SESSAO);
+  });
+
+  it("sem banco → 500 no formato da API, com o log levando só a classe", async () => {
+    vi.mocked(getRequestPool).mockImplementationOnce(() => {
+      throw new TypeError("SUPABASE_DB_URL ausente");
+    });
+    const r = await GET();
+    expect(r.status).toBe(500);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("internal_error");
+    expect(vi.mocked(logger).error.mock.calls[0]![1]).toMatchObject({ classe: "TypeError" });
+    expect(tudoQueFoiLogado()).not.toContain("SUPABASE_DB_URL ausente");
   });
 });

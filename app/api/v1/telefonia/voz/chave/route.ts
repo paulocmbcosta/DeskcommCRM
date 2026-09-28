@@ -28,11 +28,30 @@ export const runtime = "nodejs";
 
 const chaveSchema = z.object({ chave: z.string().trim().min(8).max(256) }).strict();
 
+/**
+ * O log de toda falha desta rota: a etapa e a CLASSE do erro — nunca a mensagem
+ * nem o objeto, que podem carregar o que estava sendo gravado.
+ */
+function registrarFalha(etapa: "estado" | "guardar" | "estado_depois_de_guardar", e: unknown, orgId: string, requestId: string) {
+  logger.error("[telefonia] chave da ElevenLabs: falha", {
+    etapa,
+    organization_id: orgId,
+    request_id: requestId,
+    classe: e instanceof Error ? e.name : "desconhecida",
+  });
+}
+
 export async function GET(): Promise<Response> {
   const requestId = randomUUID();
   const authz = await requireRole("manager", { requestId, resource: "telefonia_voz" });
   if (!authz.ok) return authz.response;
-  return ok(await estadoDaChaveDeVoz(getRequestPool(), authz.org.orgId), { requestId });
+  const t = (texto: string) => traduzir(texto, authz.user.idioma);
+  try {
+    return ok(await estadoDaChaveDeVoz(getRequestPool(), authz.org.orgId), { requestId });
+  } catch (e) {
+    registrarFalha("estado", e, authz.org.orgId, requestId);
+    return fail("internal_error", t("Não foi possível ler a chave agora. Tente de novo em instantes."), 500, { requestId });
+  }
 }
 
 export async function PUT(req: NextRequest): Promise<Response> {
@@ -58,22 +77,21 @@ export async function PUT(req: NextRequest): Promise<Response> {
   }
   const { vozes } = validacao;
 
-  const pool = getRequestPool();
+  // Daqui em diante NENHUMA exceção escapa do handler: o corpo desta rota é a
+  // chave, e o SDK de telemetria anexa o corpo ao evento de erro. O filtro de
+  // `lib/sentry/scrub.ts` redige `chave`; isto aqui é a segunda camada.
+  let pool: ReturnType<typeof getRequestPool>;
   let guardada: Awaited<ReturnType<typeof guardarChaveDeVoz>>;
   try {
+    pool = getRequestPool();
+    // Cifra (AI_CRED_AES_KEY) ou banco.
     guardada = await guardarChaveDeVoz(pool, {
       organizationId: authz.org.orgId,
       userId: authz.user.id,
       chave: parsed.data.chave,
     });
   } catch (e) {
-    // Cifra (AI_CRED_AES_KEY) ou banco. O log leva só a classe do erro — nunca a
-    // mensagem nem o objeto, que podem carregar o que estava sendo gravado.
-    logger.error("[telefonia] chave da ElevenLabs não foi guardada", {
-      organization_id: authz.org.orgId,
-      request_id: requestId,
-      classe: e instanceof Error ? e.name : "desconhecida",
-    });
+    registrarFalha("guardar", e, authz.org.orgId, requestId);
     return fail("internal_error", t("Não foi possível guardar a chave agora. Tente de novo em instantes."), 500, {
       requestId,
     });
@@ -88,5 +106,17 @@ export async function PUT(req: NextRequest): Promise<Response> {
     metadata: { provider: PROVEDOR_DE_VOZ, last4: guardada.last4, substituiu: guardada.substituiu, vozes },
     requestId,
   });
-  return ok(await estadoDaChaveDeVoz(pool, authz.org.orgId), { requestId });
+
+  try {
+    return ok(await estadoDaChaveDeVoz(pool, authz.org.orgId), { requestId });
+  } catch (e) {
+    // A chave FOI guardada (e auditada): a mensagem não pode dizer o contrário.
+    registrarFalha("estado_depois_de_guardar", e, authz.org.orgId, requestId);
+    return fail(
+      "internal_error",
+      t("A chave foi guardada, mas não foi possível mostrar o estado agora. Recarregue a página."),
+      500,
+      { requestId },
+    );
+  }
 }

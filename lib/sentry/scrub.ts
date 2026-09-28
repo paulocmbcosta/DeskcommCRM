@@ -134,8 +134,13 @@ function scrubHeaders(headers: unknown): void {
  * cobertos pelo mesmo padrão.
  *
  * A CHAVE fica e o VALOR sai: sem a chave não se sabe o que foi redigido.
+ *
+ * `chave`/`clave` entraram em 2026-09-28 com o cadastro da chave da ElevenLabs
+ * (`PUT /api/v1/telefonia/voz/chave`, corpo `{ chave }`): o padrão só conhecia
+ * os nomes em inglês de chave (`api_key`), e o campo em português passava
+ * inteiro. Nome de campo de segredo em português ou espanhol entra AQUI.
  */
-const SENSITIVE_FIELD = /pass(word)?|senha|secret|token|api[-_]?key|credential|authorization/i;
+const SENSITIVE_FIELD = /pass(word)?|senha|secret|token|api[-_]?key|chave|clave|credential|authorization/i;
 const REDIGIDO = "[redigido]";
 
 function redigirValor(valor: unknown, profundidade = 0): unknown {

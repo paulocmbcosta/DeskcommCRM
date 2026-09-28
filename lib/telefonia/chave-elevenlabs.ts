@@ -3,8 +3,10 @@
  *
  * Uma por organização, em `ai_provider_credentials` com `provider = 'elevenlabs'`
  * e rótulo fixo — o UNIQUE `(organization_id, provider, label)` é o que faz
- * "trocar a chave" substituir em vez de somar. Cifrada com AI_CRED_AES_KEY como
- * toda chave de IA; a tela só vê os 4 últimos dígitos.
+ * "trocar a chave" substituir em vez de somar. Leitura e escrita filtram pelo
+ * MESMO trio, para apontarem sempre à mesma linha: por esse UNIQUE, há no
+ * máximo uma. Cifrada com AI_CRED_AES_KEY como toda chave de IA; a tela só vê
+ * os 4 últimos dígitos.
  *
  * NÃO entra em `PROVEDORES` (lib/ai/pontos/provedores.ts): aquela lista é de
  * quem executa modelo de linguagem e casa com o registry do motor. A ElevenLabs
@@ -34,9 +36,9 @@ export async function estadoDaChaveDeVoz(db: Queryable, organizationId: string):
   const { rows } = await db.query<{ last4: string; validada_em: Date | string | null }>(
     `select api_key_last4 as last4, validated_at as validada_em
        from ai_provider_credentials
-      where organization_id = $1 and provider = $2 and is_active = true
-      order by created_at desc limit 1`,
-    [organizationId, PROVEDOR_DE_VOZ],
+      where organization_id = $1 and provider = $2 and label = $3 and is_active = true
+      limit 1`,
+    [organizationId, PROVEDOR_DE_VOZ, ROTULO_DA_CHAVE_DE_VOZ],
   );
   const r = rows[0];
   if (!r) return { cadastrada: false, last4: null, validada_em: null };
@@ -85,9 +87,9 @@ export async function chaveDeVoz(db: Queryable, organizationId: string): Promise
     const { rows } = await db.query<{ c: unknown; iv: unknown; tag: unknown }>(
       `select api_key_encrypted as c, api_key_iv as iv, api_key_tag as tag
          from ai_provider_credentials
-        where organization_id = $1 and provider = $2 and is_active = true
-        order by created_at desc limit 1`,
-      [organizationId, PROVEDOR_DE_VOZ],
+        where organization_id = $1 and provider = $2 and label = $3 and is_active = true
+        limit 1`,
+      [organizationId, PROVEDOR_DE_VOZ, ROTULO_DA_CHAVE_DE_VOZ],
     );
     const r = rows[0];
     if (!r) return null;
