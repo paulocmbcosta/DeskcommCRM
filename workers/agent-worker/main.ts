@@ -68,6 +68,7 @@ if (!sentryDsn) {
   console.info("[telemetria] worker: Erros sendo enviados ao Sentry configurado em SENTRY_DSN.");
 }
 
+import { existsSync } from "node:fs";
 import http from "node:http";
 import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -87,6 +88,7 @@ import { runCronLoop } from "@/lib/agent-engine/cron/scheduler";
 import { createPool } from "@/lib/agent-engine/db/pool";
 import { runDrainLoop } from "@/lib/agent-engine/edge/crm/drain";
 import { runEventLogDrainLoop } from "@/lib/event-log/drain-loop";
+import { isolarExtracaoDePdf } from "@/lib/ai/rag/extractors/pdf";
 import { crmEdgeConfigFromEnv } from "@/lib/agent-engine/edge/crm/mcp-client";
 import { enforceHolds, sessionHealthMetrics } from "@/lib/agent-engine/edge/crm/session-watchdog";
 import { runVoiceCallsBridgeLoop } from "@/lib/wacalls/events-bridge";
@@ -605,8 +607,31 @@ export async function startWorker(
 }
 
 export async function main(): Promise<void> {
-  const env = loadEnv();
   const log = createLogger();
+  // ANTES de qualquer laço: o laço do event_log roda a derivação de mídia e a
+  // indexação de conhecimento, e as duas leem PDF. Sob `tsx`, o pdf.js custa
+  // ~180 MB de heap num processo com teto de 259 MB — o primeiro PDF derrubava
+  // o worker inteiro, com os turnos em voo junto (28/09/2026, 9 quedas em 45
+  // min). Isolado, ele roda num processo filho com teto próprio. Medição
+  // completa no cabeçalho de `lib/ai/rag/extractors/pdf.ts`.
+  //
+  // Antes até do `loadEnv`: é configuração do PROCESSO, não da instalação, e
+  // é esta ordem que deixa `tests/unit/pdf-isolado-nao-derruba-o-worker.test.ts`
+  // ver o worker DE VERDADE ligá-la, sem banco e sem `.env`.
+  const pdf = isolarExtracaoDePdf();
+  if (existsSync(pdf.script)) {
+    log.info("extração de PDF isolada em processo filho", {
+      teto_de_memoria_mb: pdf.tetoDeMemoriaMb,
+      tempo_maximo_ms: pdf.tempoMaximoMs,
+    });
+  } else {
+    // Não cai para dentro do processo: esse é o caminho que derrubava o worker.
+    // Sem o arquivo, cada PDF falha com a causa escrita — e o resto segue.
+    log.error("extração de PDF isolada SEM o script do filho — PDFs vão falhar até corrigir a imagem", {
+      script: pdf.script,
+    });
+  }
+  const env = loadEnv();
   const handlers = new Map<JobKind, JobHandler>();
   const turnDeps: FollowupTurnDeps = {
     crmCfg: crmEdgeConfigFromEnv({

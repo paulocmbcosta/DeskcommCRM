@@ -27,16 +27,31 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe("extractPdfText", () => {
+/**
+ * O pdf.js roda em dois lugares — dentro do processo (app, testes) e num processo
+ * filho (o worker, ver o cabeçalho de `lib/ai/rag/extractors/pdf.ts`). O laço é um
+ * só, mas o caminho até ele não: por isso a MESMA régua mede os dois. Um filho que
+ * devolvesse o texto por outra receita ficaria vermelho aqui, e não em produção.
+ */
+async function carregar(isolado: boolean) {
+  const modulo = await import("@/lib/ai/rag/extractors/pdf");
+  if (isolado) modulo.isolarExtracaoDePdf();
+  return modulo;
+}
+
+describe.each([
+  ["dentro do processo", false],
+  ["em processo filho", true],
+] as const)("extractPdfText — %s", (_rotulo, isolado) => {
   it("extrai texto de um PDF real", async () => {
-    const { extractPdfText } = await import("@/lib/ai/rag/extractors/pdf");
+    const { extractPdfText } = await carregar(isolado);
     expect(await extractPdfText(fixture("sample-text.pdf"))).toBe("DeskcommCRM RAG fixture");
   });
 
   it("preserva a acentuação do português", async () => {
     // Acentuação é o primeiro lugar onde uma troca de engine estraga texto sem
     // quebrar teste nenhum — o PDF codifica em WinAnsi e alguém tem de decodificar.
-    const { extractPdfText } = await import("@/lib/ai/rag/extractors/pdf");
+    const { extractPdfText } = await carregar(isolado);
     expect(await extractPdfText(fixture("sample-acentos.pdf"))).toBe(
       "Ação de vendas: café, órgão, três.",
     );
@@ -45,7 +60,7 @@ describe("extractPdfText", () => {
   it("preserva quebra de linha dentro da página e separa páginas por linha em branco", async () => {
     // O chunker do RAG corta por estrutura; se a extração achatar tudo numa linha só,
     // o texto continua "certo" e a recuperação piora em silêncio.
-    const { extractPdfText } = await import("@/lib/ai/rag/extractors/pdf");
+    const { extractPdfText } = await carregar(isolado);
     expect(await extractPdfText(fixture("sample-multipagina.pdf"))).toBe(
       "Pagina um linha um\nPagina um linha dois\n\nPagina dois linha um\nPagina dois linha dois",
     );
@@ -56,7 +71,7 @@ describe("extractPdfText", () => {
     // página e zero itens de texto. É o único caminho em que a engine trabalha até o
     // fim e mesmo assim não há o que ingerir — sem esta fixture, a guarda de texto
     // vazio não é exercitada por teste nenhum.
-    const { extractPdfText, PdfExtractError } = await import("@/lib/ai/rag/extractors/pdf");
+    const { extractPdfText, PdfExtractError } = await carregar(isolado);
     await expect(extractPdfText(fixture("sample-sem-texto.pdf"))).rejects.toBeInstanceOf(
       PdfExtractError,
     );
@@ -64,7 +79,7 @@ describe("extractPdfText", () => {
   });
 
   it("lança PdfExtractError quando o buffer não é PDF", async () => {
-    const { extractPdfText, PdfExtractError } = await import("@/lib/ai/rag/extractors/pdf");
+    const { extractPdfText, PdfExtractError } = await carregar(isolado);
     await expect(extractPdfText(Buffer.from("isto não é um pdf"))).rejects.toBeInstanceOf(
       PdfExtractError,
     );
@@ -73,12 +88,20 @@ describe("extractPdfText", () => {
   it("lança PdfExtractError quando o PDF tem cabeçalho válido mas corpo corrompido", async () => {
     // Pior que o buffer aleatório: começa com %PDF-, então passa por qualquer
     // checagem de assinatura e só morre dentro da engine.
-    const { extractPdfText, PdfExtractError } = await import("@/lib/ai/rag/extractors/pdf");
+    const { extractPdfText, PdfExtractError } = await carregar(isolado);
     await expect(extractPdfText(fixture("sample-corrompido.pdf"))).rejects.toBeInstanceOf(
       PdfExtractError,
     );
+    // E a CAUSA viaja na mensagem: é a mensagem que `event_log.last_error` e o
+    // aviso da Central guardam. Em produção, 12 PDFs morreram com a frase
+    // genérica e nada ao lado — nem do filho, que só devolve texto, ela vinha.
+    await expect(extractPdfText(fixture("sample-corrompido.pdf"))).rejects.toThrow(
+      /Invalid PDF structure/,
+    );
   });
+});
 
+describe("extractPdfText — dentro do processo", () => {
   it("diz o que fazer quando o binário nativo do canvas falta", async () => {
     // O pdfjs 6 estoura no import sem @napi-rs/canvas. Sem esta tradução o
     // self-hoster vê "DOMMatrix is not defined" e não tem como ligar isso a uma

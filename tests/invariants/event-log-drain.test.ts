@@ -30,7 +30,7 @@ function sqlLiteral(v: unknown): string {
   return sqlString(String(v));
 }
 
-type FilterOp = "eq" | "lte" | "lt" | "in" | "or";
+type FilterOp = "eq" | "neq" | "lte" | "lt" | "in" | "or";
 interface Filter {
   op: FilterOp;
   col?: string;
@@ -39,7 +39,8 @@ interface Filter {
 }
 
 class FakeQuery implements PromiseLike<{ data: unknown; error: { message: string } | null }> {
-  private mode: "select" | "update" | null = null;
+  private mode: "select" | "update" | "insert" | null = null;
+  private single = false;
   private selectCols = "*";
   private selectAfterUpdate = false;
   private updateData: Record<string, unknown> | null = null;
@@ -64,6 +65,29 @@ class FakeQuery implements PromiseLike<{ data: unknown; error: { message: string
   update(data: Record<string, unknown>): this {
     this.mode = "update";
     this.updateData = data;
+    return this;
+  }
+
+  /**
+   * `insert`, `neq` e `maybeSingle` entraram com o reaper que conta a queda:
+   * o evento que morre por ela abre o aviso `event_dead`, e o aviso é escrito
+   * por `avisarEventoMorto` (`drain.ts`) com esses três métodos. Sem eles o
+   * dublê lançava dentro do `try` do aviso, o aviso falhava CALADO, e o teste
+   * que quer ver o aviso não teria como vê-lo.
+   */
+  insert(data: Record<string, unknown>): this {
+    this.mode = "insert";
+    this.updateData = data;
+    return this;
+  }
+
+  neq(col: string, val: unknown): this {
+    this.filters.push({ op: "neq", col, val });
+    return this;
+  }
+
+  maybeSingle(): this {
+    this.single = true;
     return this;
   }
 
@@ -114,6 +138,7 @@ class FakeQuery implements PromiseLike<{ data: unknown; error: { message: string
     if (!this.filters.length) return "";
     const clauses = this.filters.map((f) => {
       if (f.op === "eq") return `${f.col} = ${sqlLiteral(f.val)}`;
+      if (f.op === "neq") return `${f.col} <> ${sqlLiteral(f.val)}`;
       if (f.op === "lte") return `${f.col} <= ${sqlLiteral(f.val)}`;
       if (f.op === "lt") return `${f.col} < ${sqlLiteral(f.val)}`;
       if (f.op === "in") return `${f.col} in (${(f.val as unknown[]).map(sqlLiteral).join(",")})`;
@@ -147,6 +172,11 @@ class FakeQuery implements PromiseLike<{ data: unknown; error: { message: string
       if (this.selectAfterUpdate) q += ` returning ${this.selectCols}`;
       return q;
     }
+    if (this.mode === "insert") {
+      const cols = Object.keys(this.updateData!);
+      const vals = cols.map((c) => sqlLiteral(this.updateData![c]));
+      return `insert into public.${this.table} (${cols.join(", ")}) values (${vals.join(", ")})`;
+    }
     throw new Error("fakeAdminClient: no mode set (.select()/.update() not called)");
   }
 
@@ -165,7 +195,8 @@ class FakeQuery implements PromiseLike<{ data: unknown; error: { message: string
             ? `with w as (${inner}) select coalesce(json_agg(w), '[]') from w;`
             : `select coalesce(json_agg(t), '[]') from (${inner}) t;`;
         const out = sql(wrapped);
-        return { data: JSON.parse(out), error: null };
+        const linhas = JSON.parse(out) as unknown[];
+        return { data: this.single ? (linhas[0] ?? null) : linhas, error: null };
       }
       sql(`${this.toSql()};`);
       return { data: null, error: null };
@@ -259,6 +290,42 @@ registerHandler({
     return { consumer_key: "test-drain-retry-no-backoff", status: "retry" };
   },
 });
+
+// Handler do evento que DERRUBA o processo. Não dá para matar o processo do
+// teste, então a queda é encenada por fora (a linha volta a `processing` com
+// `updated_at` velho, que é o rastro que o worker morto deixa). O handler pede
+// `retry` longe para não encerrar o evento por conta própria: assim, quem conta
+// tentativa é SÓ o reaper — que é o que se quer medir.
+const chamadasDoVeneno: string[] = [];
+registerHandler({
+  key: "test-drain-veneno",
+  events: ["test.drain_veneno"],
+  async handle(row: EventRow): Promise<HandlerResult> {
+    chamadasDoVeneno.push(row.id);
+    return {
+      consumer_key: "test-drain-veneno",
+      status: "retry",
+      retry_at: new Date(Date.now() + 3600_000).toISOString(),
+    };
+  },
+});
+
+/**
+ * O rastro de um worker que morreu com o evento em curso: `processing`, com o
+ * `updated_at` do claim, e VENCIDO — o claim só pega evento cujo
+ * `next_attempt_at` já passou, então é assim que ele fica quando o processo cai.
+ */
+function encenarQueda(id: string): void {
+  // Trigger desligado pela mesma razão do caso 9: ele reescreveria `updated_at`.
+  sql(`
+    alter table public.event_log disable trigger trg_event_log_touch;
+    update public.event_log
+       set status = 'processing', updated_at = now() - interval '30 minutes',
+           next_attempt_at = null
+     where id = '${id}';
+    alter table public.event_log enable trigger trg_event_log_touch;
+  `);
+}
 
 describe("drainEventLog — cron driver genérico do event_log (migration 0037)", () => {
   let idOk: string;
@@ -395,6 +462,10 @@ describe("drainEventLog — cron driver genérico do event_log (migration 0037)"
     // Voltou para a fila E foi processado no MESMO tique: reclamar depois da
     // seleção faria o evento esperar o próximo, e a espera é o defeito.
     expect(row.status, "o órfão não voltou para a fila").toBe("done");
+    // E a queda ficou CONTADA e ESCRITA — sem isto, o evento que derruba o
+    // processo nunca chega a `dead` (ver o caso 11).
+    expect(row.attempts, "a queda não contou como tentativa").toBe(1);
+    expect(row.last_error).toContain("processamento interrompido");
   });
 
   it("caso 10 — CONTROLE: `processing` RECENTE não é reclamado", async () => {
@@ -412,5 +483,60 @@ describe("drainEventLog — cron driver genérico do event_log (migration 0037)"
     await drainEventLog(fakeAdminClient(), { limit: 50 });
 
     expect(rowState(emCurso).status, "reclamou um evento que estava em curso").toBe("processing");
+  });
+
+  /**
+   * O defeito medido em produção em 28/09/2026: um `media.derive_requested` de
+   * PDF derrubava o worker (heap esgotado) a cada vez que era processado. O
+   * reaper o devolvia sem contar, e ele derrubou o worker 9 vezes em 45 minutos
+   * com `attempts=0` — nunca chegaria a `dead`, e a Central nunca soube.
+   */
+  it("caso 11 — o evento que derruba o processo morre na 5ª queda, COM aviso, sem 6ª rodada", async () => {
+    // O aviso é deduplicado por organização: fecha os que os casos acima
+    // abriram, senão o desta queda seria calado por um deles.
+    sql(`update public.agent_inbox_items set status = 'resolved'
+          where organization_id = '${GOV_ORG}' and kind = 'event_dead';`);
+    const veneno = lastLine(
+      sql(
+        `select public.emit_event('test.drain_veneno', 'test', null, '{}'::jsonb, '{}'::jsonb, '${GOV_ORG}');`,
+      ),
+    );
+
+    for (let queda = 1; queda <= 5; queda++) {
+      encenarQueda(veneno);
+      await drainEventLog(fakeAdminClient(), { limit: 50 });
+      const row = rowState(veneno);
+      expect(row.attempts, `queda ${queda}: a tentativa não foi contada`).toBe(queda);
+      expect(row.status, `queda ${queda}`).toBe(queda < 5 ? "pending" : "dead");
+    }
+
+    // Da 1ª à 4ª queda ele volta e roda no mesmo tique (caso 9); na 5ª, não:
+    // uma 6ª rodada seria derrubar o processo mais uma vez.
+    expect(chamadasDoVeneno.filter((id) => id === veneno)).toHaveLength(4);
+    expect(rowState(veneno).last_error).toContain("(5ª vez)");
+
+    const avisos = JSON.parse(
+      sql(`select coalesce(json_agg(t), '[]') from (
+             select body from public.agent_inbox_items
+              where organization_id = '${GOV_ORG}' and kind = 'event_dead' and status = 'open'
+           ) t;`),
+    ) as { body: string }[];
+    expect(avisos, "o evento morreu calado — sem aviso na Central").toHaveLength(1);
+    expect(avisos[0]!.body).toContain("test.drain_veneno");
+    expect(avisos[0]!.body).toContain("processamento interrompido");
+  });
+
+  it("caso 12 — o reaper não toca em `processing` de tipo que não é deste dreno", async () => {
+    // `ai_agent.dispatch_requested` passa por `processing` no dreno do
+    // agent-engine, que conta a tentativa no próprio claim e tem reaper
+    // próprio. Contar aqui também gastaria duas tentativas por queda.
+    const alheio = emitDrainCase("ok", "test.de_outro_dreno");
+    encenarQueda(alheio);
+
+    await drainEventLog(fakeAdminClient(), { limit: 50 });
+
+    const row = rowState(alheio);
+    expect(row.status, "reclamou evento de outro dreno").toBe("processing");
+    expect(row.attempts).toBe(0);
   });
 });

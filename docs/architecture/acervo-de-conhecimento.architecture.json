@@ -177,6 +177,14 @@
       "type": "table",
       "label": "last_index_status",
       "sublabel": "indexando | sem_credencial | success | failed — a tela deixa de mentir"
+    },
+    {
+      "id": "pdfFilho",
+      "lane": "motor",
+      "col": 5,
+      "type": "worker",
+      "label": "pdf-processo-filho.mjs",
+      "sublabel": "no worker, o pdf.js roda em node puro, com teto de 128 MB e 30 s — sob tsx, o primeiro PDF derrubava o processo"
     }
   ],
   "edges": [
@@ -205,7 +213,9 @@
     { "id": "e23", "from": "busca", "to": "resposta", "label": "os trechos entram no turno" },
     { "id": "e24", "from": "resposta", "to": "telemetria", "label": "registra acertos e melhor nota" },
     { "id": "e25", "from": "chunks", "to": "trechos", "label": "a pessoa audita o que ele leu" },
-    { "id": "e26", "from": "fonte", "to": "escolha", "label": "o acervo alimenta o seletor" }
+    { "id": "e26", "from": "fonte", "to": "escolha", "label": "o acervo alimenta o seletor" },
+    { "id": "e27", "from": "extrair", "to": "pdfFilho", "label": "PDF: lido fora do processo do worker" },
+    { "id": "e28", "from": "pdfFilho", "to": "indexador", "label": "devolve o texto — ou PdfExtractError, nunca a queda" }
   ],
   "cards": [
     {
