@@ -15,6 +15,7 @@ import {
   motivoDoServidorInvalido,
   normalizarServidor,
   portaSipValida,
+  prefixoDeDiscagemValido,
   servidorSipValido,
   usuarioSipValido,
 } from "./conta-sip";
@@ -97,5 +98,17 @@ describe("usuário e porta", () => {
     expect(portaSipValida(65536)).toBe(false);
     expect(portaSipValida(5060.5)).toBe(false);
     expect(portaSipValida(Number.NaN)).toBe(false);
+  });
+});
+
+describe("prefixo de discagem: só dígitos, de 1 a 4", () => {
+  it.each(["0", "015", "0021", "9"])("aceita %j", (p) => {
+    expect(prefixoDeDiscagemValido(p)).toBe(true);
+  });
+
+  // Tudo o que mudaria o destino PJSIP (`PJSIP/<prefixo><número>@tronco-<id>`)
+  // ou não é prefixo de ninguém.
+  it.each(["", "01234", "0a", "+55", "0@10.0.0.5", "0/1", "0,1", "0&x", " 0", "0\n", "０"])("recusa %j", (p) => {
+    expect(prefixoDeDiscagemValido(p)).toBe(false);
   });
 });

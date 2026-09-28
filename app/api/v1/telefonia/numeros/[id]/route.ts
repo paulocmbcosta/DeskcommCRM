@@ -1,6 +1,7 @@
 /**
  * PATCH  /api/v1/telefonia/numeros/[id] — edita o número (admin). Sem `senha`
- *        no corpo, vale a que está guardada.
+ *        no corpo, vale a que está guardada; sem `prefixo`, vale o guardado
+ *        (`""`/`null` apaga). Mudar só o prefixo não pede a senha: não é conta.
  * DELETE /api/v1/telefonia/numeros/[id] — remove (arquiva) o número (admin).
  *
  * Spec 20 §7. Remover arquiva: conversas e ligações apontam para a linha e o
@@ -58,6 +59,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       servidor: parsed.data.servidor,
       usuario: parsed.data.usuario,
       time_id: parsed.data.time_id,
+      // `undefined` = o formulário não mandou o campo, e o guardado ficou.
+      ...(parsed.data.prefixo !== undefined ? { prefixo: parsed.data.prefixo } : {}),
       trocou_senha: Boolean(parsed.data.senha),
     },
     requestId,

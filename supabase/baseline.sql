@@ -29305,6 +29305,32 @@ comment on column public.voice_calls.ringing_user_id is
 
 notify pgrst, 'reload schema';
 
+-- ---- telefonia SIP: prefixo de discagem por número (migration 0287) ----
+-- Racional (e a medida da Totus que o motivou) no cabeçalho de
+-- supabase/migrations/20260928200000_0287_telefonia_prefixo_de_discagem.sql.
+-- A régua é PREFIXO_DE_DISCAGEM (lib/channels/telefonia/conta-sip.ts); o
+-- invariante tests/invariants/telefonia-prefixo-de-discagem.test.ts confere que
+-- o CHECK vivo cita a mesma expressão e que este bloco se cura sozinho.
+alter table public.channel_sessions
+  add column if not exists sip_dial_prefix text;
+
+-- Antes do CHECK: valor fora da régua (só com o CHECK derrubado à mão) vira NULL.
+update public.channel_sessions
+   set sip_dial_prefix = null
+ where sip_dial_prefix is not null
+   and sip_dial_prefix !~ '^[0-9]{1,4}$';
+
+alter table public.channel_sessions
+  drop constraint if exists channel_sessions_sip_dial_prefix_check;
+alter table public.channel_sessions
+  add constraint channel_sessions_sip_dial_prefix_check
+  check (sip_dial_prefix is null or sip_dial_prefix ~ '^[0-9]{1,4}$');
+
+comment on column public.channel_sessions.sip_dial_prefix is
+  'Prefixo de discagem do número SIP: dígitos (1 a 4) que o worker põe ANTES do DDD na ligação de saída — ex.: 0, ou 0 + código da operadora (015). NULL = DDD + número. Por número porque cada operadora tem a sua regra (medido na Totus: sem o 0, 404). Lido por lib/channels/telefonia/repositorio.ts; colado no destino por enderecoDeSaida (pjsip.ts), que confere a régua de novo.';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

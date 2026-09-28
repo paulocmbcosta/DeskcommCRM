@@ -80,6 +80,11 @@ function bancoFalso(guardada: typeof GUARDADA | null = GUARDADA) {
 const entrada = (over: Partial<EntradaDoNumero> = {}): EntradaDoNumero =>
   numeroSchema.parse({ ...base, ...over });
 
+/** Posições dos parâmetros do UPDATE de `atualizarNumero` ($11, $12, $13). */
+const SENHA = 10;
+const MUDA_PREFIXO = 11;
+const PREFIXO = 12;
+
 describe("atualizarNumero — a senha é da conta", () => {
   it.each([
     ["servidor", { servidor: "sip.outro-lugar.example.com" }],
@@ -114,7 +119,7 @@ describe("atualizarNumero — a senha é da conta", () => {
     expect(r).toEqual({ ok: true });
     expect(updates()).toHaveLength(1);
     // A senha vai como NULL: o `case when` do UPDATE mantém a cifrada.
-    expect(updates()[0]!.params.at(-1)).toBeNull();
+    expect(updates()[0]!.params[SENHA]).toBeNull();
   });
 
   it("servidor guardado com outra caixa (gravado pela REST) não conta como troca", async () => {
@@ -142,6 +147,70 @@ describe("atualizarNumero — a senha é da conta", () => {
     const r = await atualizarNumero(db, ORG, NUMERO, entrada({ servidor: "sip.outro-lugar.example.com" }));
 
     expect(r).toEqual({ ok: false, motivo: "nao_encontrado" });
+    expect(updates()).toHaveLength(0);
+  });
+});
+
+describe("prefixo de discagem — por número, opcional, e não é conta", () => {
+  it.each([
+    ["0", "0"],
+    ["015", "015"],
+    [" 0 ", "0"],
+    ["", null],
+    [null, null],
+  ] as const)("o schema aceita %j e guarda %j", (prefixo, guardado) => {
+    const r = numeroSchema.safeParse({ ...base, prefixo });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.prefixo).toBe(guardado);
+  });
+
+  it("ausente é 'manter o guardado', não 'apagar'", () => {
+    const r = numeroSchema.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.prefixo).toBeUndefined();
+  });
+
+  it.each(["01234", "0a", "0@10.0.0.5", "0,1", "+55"])("o schema recusa %j, com a explicação no campo", (prefixo) => {
+    const r = numeroSchema.safeParse({ ...base, prefixo });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.flatten().fieldErrors.prefixo?.[0]).toMatch(/1 a 4 dígitos/);
+  });
+
+  it("mudar SÓ o prefixo, sem senha, grava — e a senha guardada fica", async () => {
+    const { db, updates } = bancoFalso();
+
+    const r = await atualizarNumero(db, ORG, NUMERO, entrada({ prefixo: "0" }));
+
+    expect(r).toEqual({ ok: true });
+    expect(updates()).toHaveLength(1);
+    const p = updates()[0]!.params;
+    expect([p[MUDA_PREFIXO], p[PREFIXO], p[SENHA]]).toEqual([true, "0", null]);
+    expect(updates()[0]!.sql).toMatch(/sip_dial_prefix = case when \$12::boolean then \$13::text else sip_dial_prefix end/);
+  });
+
+  it("apagar o prefixo (campo vazio) grava null", async () => {
+    const { db, updates } = bancoFalso();
+
+    await atualizarNumero(db, ORG, NUMERO, entrada({ prefixo: "" }));
+
+    const p = updates()[0]!.params;
+    expect([p[MUDA_PREFIXO], p[PREFIXO]]).toEqual([true, null]);
+  });
+
+  it("formulário sem o campo (aba antiga) mantém o prefixo guardado", async () => {
+    const { db, updates } = bancoFalso();
+
+    await atualizarNumero(db, ORG, NUMERO, entrada({ nome: "Outro nome" }));
+
+    expect(updates()[0]!.params[MUDA_PREFIXO]).toBe(false);
+  });
+
+  it("o prefixo não abre exceção na regra da senha: trocar o servidor sem senha segue recusado", async () => {
+    const { db, updates } = bancoFalso();
+
+    const r = await atualizarNumero(db, ORG, NUMERO, entrada({ prefixo: "0", servidor: "sip.outro-lugar.example.com" }));
+
+    expect(r).toEqual({ ok: false, motivo: "senha_obrigatoria_na_troca" });
     expect(updates()).toHaveLength(0);
   });
 });

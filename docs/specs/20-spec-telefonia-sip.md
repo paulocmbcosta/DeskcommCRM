@@ -27,7 +27,8 @@ Tronco de teste da Totus (`voip.totussistema.com.br`), Asterisk 20.11.1 em cont�
 |---|---|
 | Servidor da operadora | FreeSWITCH. SIP em UDP e TCP 5060 (e 5080). **Sem TLS** (5061 recusa) |
 | Registro com usuário/senha | `Registered` na primeira tentativa, expiração 300 s |
-| Ligação de saída | `407` → reenvio autenticado → `200 OK` |
+| Ligação de saída | `407` → reenvio autenticado → `200 OK` — **mas para o número da PRÓPRIA conta**, dentro da rede da operadora. Não provou a grafia de discagem para fora (linha abaixo) |
+| Grafia da discagem de saída (medido depois, em produção, 2026-09-28, para um celular) | `61995140098` (DDD + número, o que o CRM mandava) → `404 Not Found`, `Reason: Q.850;cause=16`, em 0,2 s. `5561995140098` → `480`. `061995140098` (0 + DDD + número) → `183`, tocou, `200 OK`. `995140098` (local) → `183`, tocou. Na Totus a saída precisa do `0`; cada operadora tem a sua regra — daí o prefixo de discagem POR NÚMERO (§6, migration 0287) |
 | Codec negociado | **G.711 A-law (PCMA)** e `telephone-event/8000`. A operadora não ofereceu µ-law nem Opus |
 | Áudio operadora → nós | Chegou limpo. A transcrição do anúncio da operadora saiu palavra por palavra |
 | NAT | Funciona SEM publicar a porta SIP: o `qualify` a cada 25 s mantém o mapeamento do NAT, e a operadora ajusta o RTP para o endereço de onde os pacotes vêm |
@@ -147,9 +148,37 @@ Navegador do atendente (JsSIP) ────────────────�
    `{ id, destino: "c-<id>", contact_id }`.
 2. O navegador disca `c-<id>` pelo JsSIP. O endpoint do ramal entra no Stasis com esse
    ramal, e o worker confere dono, idade e estado.
-3. O worker cria a perna da operadora (`PJSIP/<numero>@tronco-<id>`, bina = número do
-   tronco), põe as duas pernas numa ponte ANTES de discar (o atendente ouve o chamar e os
-   anúncios da operadora) e disca.
+3. O worker cria a perna da operadora (`PJSIP/<prefixo><numero>@tronco-<id>`, bina = número
+   do tronco; `<prefixo>` é o `sip_dial_prefix` DESTE tronco, vazio por padrão, e
+   `<numero>` é DDD + número já julgado pela política do §6), põe as duas pernas numa ponte
+   ANTES de discar (o atendente ouve o chamar e os anúncios da operadora) e disca. O destino
+   sai de `enderecoDeSaida` (`pjsip.ts`), que recusa prefixo fora da régua: a ligação acaba
+   como `tronco_configuracao_invalida` sem discar.
+4. **Fim sem ninguém atender** (`lib/telefonia/fim-da-saida.ts`). Medido num Asterisk
+   20.11.1 local, com uma operadora falsa respondendo `100` + `404` com
+   `Reason: Q.850;cause=16` (o que a Totus fez): a ARI entrega `ChannelHangupRequest` SEM
+   causa, `StasisEnd` (sem causa) e `ChannelDestroyed` com cause 16 "Normal Clearing", e
+   nenhum `Dial` com status final. A causa sozinha não separa "a operadora recusou" de "acabou
+   normal"; o que separa é a perna nunca ter tocado (nenhum `Dial` RINGING/PROGRESS). Regra:
+   cause 17 → `ocupado_17`; nunca tocou, ou causa de recusa (1, 3, 20, 21, 22, 27, 28, 34, 38,
+   41, 42, 47, 58, 88, 102, 111, 127) → desfecho `recusada_pela_rede`, motivo
+   `nao_completada_<causa>`; tocou e acabou → `sem_resposta_<causa>`. O motivo vai para
+   `voice_calls.end_reason`, e a tela do atendente o lê (§7). Até a 1.48.0 o `StasisEnd`, que
+   chega primeiro e não tem causa, era lido como se tivesse: a recusa da Totus virou
+   `sem_resposta` com motivo `rede_undefined`, e a tela não mostrou nada. Medido de ponta a
+   ponta com o `ControladorDeChamadas` de verdade contra esse Asterisk (ARI real, banco em
+   memória, um ramal SIP falso discando `c-<id>`): o controlador da 1.48.0 reproduz o log de
+   produção inteiro (`sem_resposta`, `rede_undefined` e o `Playback failed` do item 5); o
+   novo grava `recusada_pela_rede` / `nao_completada_16`, sem o aviso; e com prefixo `0` no
+   tronco a operadora recebe `INVITE sip:061995140098@…`.
+5. **O chamar local** (`tone:ring;tonezone=br`, tabela `[br]` do `indications.conf`) toca no
+   ramal da ponte até a operadora mandar áudio próprio (PROGRESS) ou atender. Medido no mesmo
+   Asterisk local: a URI e a tabela funcionam, dentro e fora da ponte — a gravação do outro lado
+   do canal tem 425 Hz por 1 s e 4 s de silêncio. O aviso `Playback failed for
+   tone:ring;tonezone=br` do log de produção aparece SÓ quando o canal é derrubado com o tom
+   ainda tocando (parado pela ARI, o mesmo tom termina `done`) — era o que acontecia na recusa
+   em 0,2 s. O controlador para o tom antes de derrubar os canais. **Não medido:** o chamar
+   num ramal de navegador de verdade (WebRTC, Opus, DTLS) — o local usou canal `Local`.
 
 ### 4.3 Rede e empacotamento
 
@@ -220,7 +249,15 @@ Navegador do atendente (JsSIP) ────────────────�
   onde se recebe, mas não para discar), serviços de 3 e 4 dígitos (`190`, `192`, `193`,
   `100`, `102`…) e números com menos de 10 dígitos.
 - A regra é conferida duas vezes: na rota que cria o pedido e, de novo, no controlador, antes
-  de discar.
+  de discar — sempre sobre o número SEM prefixo.
+- **Prefixo de discagem, por número SIP** (`channel_sessions.sip_dial_prefix`, migration
+  0287): dígitos (1 a 4) que vão ANTES do DDD na saída — `0`, ou `0` + código da operadora
+  (`015`). Vazio = DDD + número. Vem do banco, nunca do que o atendente digitou (um `0`
+  digitado é tirado antes de julgar e não soma com o do tronco). A régua
+  (`PREFIXO_DE_DISCAGEM`, `conta-sip.ts`) é a mesma no Zod da rota, no CHECK do banco e em
+  `enderecoDeSaida` — a coluna é gravável pela REST, e o valor vai cru para o destino PJSIP.
+  Fica fora de `problemaDoTronco` de propósito: não é empurrado ao Asterisk, e um prefixo
+  ruim não pode derrubar o registro que traz as recebidas.
 - Limite de ligações de saída simultâneas por organização (padrão 5) e uma por atendente,
   conferidos na rota (`lib/channels/telefonia/saida.ts`). Pedido que o navegador nunca
   discou expira em 60 s e não prende o atendente.
@@ -229,7 +266,9 @@ Navegador do atendente (JsSIP) ────────────────�
 
 - **Conexões › Telefone** (aba nova em `ConexoesShell`): lista de números com status ao vivo
   (Conectando / Conectado / Falhou + motivo), botão "Adicionar número" (servidor, porta,
-  transporte, usuário, senha, número, time que recebe), editar e remover. O botão "Testar"
+  transporte, usuário, senha, número, prefixo de discagem opcional, time que recebe), editar e
+  remover. O prefixo aparece no cartão do número quando existe; mudar só ele não pede a senha
+  (não é a conta). O botão "Testar"
   previsto aqui não existe ainda: o teste é o próprio estado do registro, que aparece em
   segundos. A senha só é escrita, nunca lida — e editar sem digitá-la só vale enquanto a CONTA
   é a mesma: trocar servidor, porta, transporte ou usuário exige a senha de novo (422
@@ -241,7 +280,12 @@ Navegador do atendente (JsSIP) ────────────────�
   fazer.
 - **Ramal**: `TelefoniaProvider` no layout do app. Registra o JsSIP quando a organização tem
   número conectado e o usuário é agent ou acima. Mostra o banner de chamada recebida e o
-  painel de chamada ativa, com as peças visuais de `components/voice/`.
+  painel de chamada ativa, com as peças visuais de `components/voice/`. Quando a ligação que
+  o atendente FEZ acaba sem ninguém atender, o painel dá lugar a um aviso no mesmo canto
+  (`avisoDoFimDaSaida`): "A operadora não completou a ligação. Confira o número e o prefixo
+  de discagem do número SIP.", "O número chamado está ocupado.", "Ninguém atendeu." ou o
+  número da empresa indisponível/mal configurado. O navegador lê o motivo em
+  `GET /telefonia/chamadas/[id]` logo depois do fim — o worker derruba o ramal antes de gravar.
 - **Botão Ligar** no cabeçalho da conversa (qualquer meio, se o contato tem telefone) e na
   ficha do contato. **Discador** para número avulso.
 - **Conversa `phone`** no inbox: ícone de telefone, compositor só em nota interna (a nota é
@@ -403,8 +447,13 @@ existe ainda**, é dívida declarada — não ausência de defeito.
   negócio; o humano liga de volta. **Não existe ainda:** fechar o aviso com o retorno e medir o
   tempo até ele.
 - **Autorização da saída (antifraude).** Recusa na rota volta como 422 com o motivo na tela; no
-  controlador, como `end_reason` (`pedido_expirado`, `numero_<motivo>`, `tronco_indisponivel`)
-  e log `saída recusada`. **Não existe ainda:** nada agrega recusas — sinal de ramal
+  controlador, como `end_reason` (`pedido_expirado`, `numero_<motivo>`, `tronco_indisponivel`,
+  `tronco_configuracao_invalida`) e log `saída recusada`.
+- **Saída que a operadora não completa.** Volta ao atendente na hora, como aviso no canto da
+  tela, e à conversa como "Ligação não completada" (`recusada_pela_rede`); o motivo
+  (`nao_completada_<causa>`) fica em `end_reason`. Quem corrige é o admin, pelo prefixo de
+  discagem do número. **Não existe ainda:** nada agrega essas recusas por número — um prefixo
+  errado aparece como aviso a cada ligação, não como alerta do número. **Não existe ainda:** nada agrega recusas — sinal de ramal
   comprometido ou de política apertada demais fica no log, que ninguém lê.
 - **Asterisk ou worker reiniciado.** A queda do WebSocket dispara a sincronização completa e o
   re-registro (provado na J35); o ramal com credencial recusada pede outra em 1 s;

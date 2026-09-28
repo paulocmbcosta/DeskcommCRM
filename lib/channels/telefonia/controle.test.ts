@@ -21,6 +21,7 @@ const tronco: TroncoDoBanco = {
   usuario: "6136861503",
   senha: "x",
   teamId: TIME,
+  prefixo: null,
 };
 
 function canal(id: string, name: string, extra: Partial<CanalAri> = {}): CanalAri {
@@ -93,7 +94,8 @@ class BancoFalso implements PortaBanco {
   eventos: Array<[string, ...unknown[]]> = [];
   private seq = 0;
 
-  troncoPorId = async (id: string) => (id === TRONCO ? tronco : null);
+  troncoAtual: TroncoDoBanco = tronco;
+  troncoPorId = async (id: string) => (id === TRONCO ? this.troncoAtual : null);
   disponiveisNoTime = async () => this.disponiveis;
   acharOuCriarContato = async () => "contato-1";
   acharOuCriarConversa = async () => "conversa-1";
@@ -346,8 +348,10 @@ describe("feita", () => {
   it("ninguém atendeu do outro lado: sem resposta, sem aviso de perdida", async () => {
     const id = await pedido();
     const perna = ari.chamadas.find((c) => c[0] === "discar")![1] as string;
+    await ctl.tratar({ type: "Dial", peer: canal(perna, "PJSIP/tronco-x-00000002"), dialstatus: "RINGING" });
     await destruir(perna, 19);
     expect(banco.tem("registro")).toEqual([["registro", id, "sem_resposta"]]);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", id, "sem_resposta_19"]]);
     expect(banco.tem("perdida")).toEqual([]);
   });
 
@@ -411,6 +415,149 @@ describe("feita", () => {
       args: ["saida"],
     });
     expect(ari.chamadas).toEqual([["desligar", "ramal-b", "congestion"]]);
+  });
+});
+
+describe("feita — prefixo de discagem do tronco", () => {
+  const ID = "00000000-0000-4000-8000-000000000002";
+  async function discarPara(peerPhone: string) {
+    banco.ligacoes.set(ID, {
+      id: ID,
+      organization_id: ORG,
+      channel_session_id: TRONCO,
+      contact_id: "contato-1",
+      conversation_id: "conversa-1",
+      direction: "outbound",
+      peer_phone: peerPhone,
+      status: "starting",
+      owner_user_id: ANA,
+      created_by: ANA,
+      team_id: null,
+      started_at: new Date().toISOString(),
+      answered_at: null,
+      provider: "sip_trunk",
+      sip_call_ref: `pedido-${ID}`,
+    });
+    await ctl.tratar({
+      type: "StasisStart",
+      channel: canal("ramal-p", `PJSIP/ramal-${ANA}-0000000c`, {
+        dialplan: { context: "de-ramal", exten: `c-${ID}`, priority: 1 },
+      }),
+      args: ["saida"],
+    });
+  }
+  const criados = () => ari.chamadas.filter((c) => c[0] === "criarCanal").map((c) => c[1]);
+
+  it("sem prefixo: DDD + número, como antes", async () => {
+    await discarPara("+5561995140098");
+    expect(criados()).toEqual([`PJSIP/61995140098@tronco-${TRONCO}`]);
+  });
+
+  it("prefixo 0 (o da Totus): o 0 vai na frente do DDD", async () => {
+    banco.troncoAtual = { ...tronco, prefixo: "0" };
+    await discarPara("+5561995140098");
+    expect(criados()).toEqual([`PJSIP/061995140098@tronco-${TRONCO}`]);
+  });
+
+  it("prefixo de operadora (015) também", async () => {
+    banco.troncoAtual = { ...tronco, prefixo: "015" };
+    await discarPara("+5561995140098");
+    expect(criados()).toEqual([`PJSIP/01561995140098@tronco-${TRONCO}`]);
+  });
+
+  it("o 0 que o atendente digitou não soma com o do tronco: a política julga o número SEM prefixo", async () => {
+    banco.troncoAtual = { ...tronco, prefixo: "0" };
+    await discarPara("0 61 99514-0098");
+    expect(criados()).toEqual([`PJSIP/061995140098@tronco-${TRONCO}`]);
+  });
+
+  it.each(["0@10.0.0.5", "0/x", "0,1", "01234", "0a", " 0"])(
+    "prefixo %j gravado direto no banco não vira destino: não disca e encerra a ligação",
+    async (prefixo) => {
+      banco.troncoAtual = { ...tronco, prefixo };
+      await discarPara("+5561995140098");
+      expect(criados()).toEqual([]);
+      expect(ari.chamadas).toEqual([["desligar", "ramal-p", "congestion"]]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", ID, "tronco_configuracao_invalida"]]);
+    },
+  );
+});
+
+describe("feita — a operadora recusa antes de tocar (sequência medida no Asterisk 20.11.1)", () => {
+  async function pedirEDiscar() {
+    const id = "00000000-0000-4000-8000-000000000003";
+    banco.ligacoes.set(id, {
+      id,
+      organization_id: ORG,
+      channel_session_id: TRONCO,
+      contact_id: "contato-1",
+      conversation_id: "conversa-1",
+      direction: "outbound",
+      peer_phone: "+5561995140098",
+      status: "starting",
+      owner_user_id: ANA,
+      created_by: ANA,
+      team_id: null,
+      started_at: new Date().toISOString(),
+      answered_at: null,
+      provider: "sip_trunk",
+      sip_call_ref: `pedido-${id}`,
+    });
+    await ctl.tratar({
+      type: "StasisStart",
+      channel: canal("ramal-r", `PJSIP/ramal-${ANA}-0000000d`, {
+        dialplan: { context: "de-ramal", exten: `c-${id}`, priority: 1 },
+      }),
+      args: ["saida"],
+    });
+    const perna = ari.chamadas.find((c) => c[0] === "discar")![1] as string;
+    return { id, perna, canalDaPerna: canal(perna, `PJSIP/tronco-${TRONCO}-00000000`, { state: "Down" }) };
+  }
+
+  it("404 + Reason Q.850 cause=16 em 0,2 s: não completada, com a causa no motivo — não 'sem resposta' nem 'rede_undefined'", async () => {
+    const { id, canalDaPerna } = await pedirEDiscar();
+    // Exatamente o que a ARI entregou (operadora falsa respondendo 100 + 404).
+    await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "" });
+    await ctl.tratar({ type: "ChannelHangupRequest", channel: canalDaPerna });
+    await ctl.tratar({ type: "StasisEnd", channel: canalDaPerna });
+    await ctl.tratar({ type: "ChannelDestroyed", channel: canalDaPerna, cause: 16, cause_txt: "Normal Clearing" });
+
+    expect(banco.tem("encerrada")).toEqual([["encerrada", id, "nao_completada_16"]]);
+    expect(banco.tem("registro")).toEqual([["registro", id, "recusada_pela_rede"]]);
+    expect(banco.tem("fim")).toEqual([["fim", id, "recusada_pela_rede", "nao_completada_16"]]);
+    expect(banco.tem("perdida")).toEqual([]);
+  });
+
+  it("o chamar para ANTES de o ramal cair — senão o Asterisk registra 'Playback failed'", async () => {
+    const { canalDaPerna } = await pedirEDiscar();
+    await ctl.tratar({ type: "StasisEnd", channel: canalDaPerna });
+    const nomes = ari.chamadas.map((c) => `${c[0]}:${String(c[1])}`);
+    expect(nomes).toContain("pararReproducao:tom-1");
+    expect(nomes.indexOf("pararReproducao:tom-1")).toBeLessThan(nomes.indexOf("desligar:ramal-r"));
+  });
+
+  it("tocou (RINGING) e a rede desistiu com 480 → cause 19: sem resposta", async () => {
+    const { id, canalDaPerna } = await pedirEDiscar();
+    await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "RINGING" });
+    await ctl.tratar({ type: "ChannelHangupRequest", channel: canalDaPerna, cause: 19 });
+    await ctl.tratar({ type: "StasisEnd", channel: canalDaPerna });
+    expect(banco.tem("encerrada")).toEqual([["encerrada", id, "sem_resposta_19"]]);
+    expect(banco.tem("registro")).toEqual([["registro", id, "sem_resposta"]]);
+  });
+
+  it("486 sem tocar → cause 17: ocupado (desfecho sem resposta)", async () => {
+    const { id, canalDaPerna } = await pedirEDiscar();
+    await ctl.tratar({ type: "ChannelHangupRequest", channel: canalDaPerna, cause: 17 });
+    await ctl.tratar({ type: "StasisEnd", channel: canalDaPerna });
+    expect(banco.tem("encerrada")).toEqual([["encerrada", id, "ocupado_17"]]);
+    expect(banco.tem("registro")).toEqual([["registro", id, "sem_resposta"]]);
+  });
+
+  it("o atendente desiste antes de a rede responder: nada de causa da rede no motivo", async () => {
+    const { id } = await pedirEDiscar();
+    await ctl.tratar({ type: "StasisEnd", channel: canal("ramal-r", `PJSIP/ramal-${ANA}-0000000d`) });
+    expect(banco.tem("encerrada")).toEqual([["encerrada", id, "atendente_desligou"]]);
+    expect(banco.tem("registro")).toEqual([["registro", id, "sem_resposta"]]);
   });
 });
 
