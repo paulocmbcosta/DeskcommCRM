@@ -14,8 +14,19 @@
  *     dono identificável, e ligar para eles do CRM não é o caso de uso;
  *   - serviço curto (190, 192, 100…) e qualquer coisa sem DDD.
  *
- * A grafia que a operadora recebe é DDD + número, sem 55 e sem 0: foi o que a
- * operadora da Totus completou na prova de conceito (spec 20 §1).
+ * O que esta função devolve em `discar` é DDD + número, sem 55 e sem 0 — e é
+ * ISSO que ela julga. O que a operadora recebe é esse número precedido do
+ * prefixo de discagem DO NÚMERO SIP usado (`channel_sessions.sip_dial_prefix`,
+ * migration 0287), que o worker cola na frente ao montar o destino
+ * (`enderecoDeSaida`, em `lib/channels/telefonia/pjsip.ts`). O prefixo vem do
+ * banco, nunca do que o atendente digitou: um `0` digitado aqui é tirado antes
+ * de julgar, e não soma com o do tronco.
+ *
+ * Esta linha dizia que DDD + número "foi o que a operadora da Totus completou na
+ * prova de conceito". Não foi: a prova discou o número da PRÓPRIA conta, dentro
+ * da rede da operadora. Medido em produção em 2026-09-28, para um celular:
+ * `61995140098` → 404; `5561995140098` → 480; `061995140098` → completou. Na
+ * Totus o prefixo é `0`; cada operadora tem o seu (spec 20 §6).
  */
 
 /** DDDs brasileiros em uso (Anatel). Fora desta lista não é número geográfico. */
@@ -44,7 +55,7 @@ export type NumeroParaLigar =
       ok: true;
       /** `+55` + DDD + número — como `contacts.phone_number` guarda. */
       e164: string;
-      /** DDD + número, só dígitos — o que vai para a operadora. */
+      /** DDD + número, só dígitos. A operadora recebe isto com o prefixo do número SIP na frente. */
       discar: string;
     }
   | { ok: false; motivo: MotivoDeRecusa };

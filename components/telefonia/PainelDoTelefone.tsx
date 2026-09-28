@@ -3,6 +3,10 @@
  * O que o atendente VÊ do telefone (spec 20 §7): o aviso de ligação chegando
  * (sobre qualquer tela, como a voz do WhatsApp) e o painel da ligação em curso
  * — fixo no canto, não modal, para ele continuar usando o CRM enquanto fala.
+ *
+ * E, no mesmo canto, POR QUE a ligação que ele fez acabou sem ninguém atender
+ * (`ultimoEncerramento.aviso`): a operadora recusando em 0,2 s parecia, para
+ * quem discou, um painel que some sem explicação.
  */
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -10,7 +14,7 @@ import { useEffect, useState } from "react";
 import { useTelefonia } from "@/components/telefonia/TelefoniaContext";
 import { Button } from "@/components/ui/button";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
-import { DotsNine, Microphone, MicrophoneSlash, Phone, PhoneX } from "@/lib/ui/icons";
+import { DotsNine, Microphone, MicrophoneSlash, Phone, PhoneX, X } from "@/lib/ui/icons";
 import { useT } from "@/hooks/i18n/useT";
 
 function duracao(desde: number | null, agora: number): string {
@@ -53,9 +57,22 @@ function useToque(ativo: boolean) {
 
 const TECLAS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
 
+/** Quanto tempo o aviso do fim da saída fica na tela sem ninguém fechar. */
+const AVISO_NA_TELA_MS = 20_000;
+
 export function PainelDoTelefone() {
-  const { ligacao, atender, desligar, alternarMudo, teclar } = useTelefonia();
+  const { ligacao, ultimoEncerramento, atender, desligar, alternarMudo, teclar } = useTelefonia();
   const t = useT();
+  // O aviso é de UM encerramento: guardar qual foi fechado faz o próximo
+  // aparecer sem efeito para "resetar".
+  const [avisoFechadoEm, setAvisoFechadoEm] = useState<number | null>(null);
+  const aviso = ultimoEncerramento?.aviso && ultimoEncerramento.em !== avisoFechadoEm ? ultimoEncerramento : null;
+  useEffect(() => {
+    if (!aviso) return;
+    const em = aviso.em;
+    const relogio = setTimeout(() => setAvisoFechadoEm(em), AVISO_NA_TELA_MS);
+    return () => clearTimeout(relogio);
+  }, [aviso]);
   const [agora, setAgora] = useState(() => Date.now());
   // O teclado é da LIGAÇÃO: guardar o id de quem o abriu faz a próxima ligação
   // começar com ele fechado sem precisar de efeito para "resetar".
@@ -73,7 +90,28 @@ export function PainelDoTelefone() {
     return () => clearInterval(i);
   }, [ligacao?.fase]);
 
-  if (!ligacao) return null;
+  if (!ligacao) {
+    if (!aviso?.aviso) return null;
+    return (
+      <div
+        role="status"
+        data-telefonia="aviso-do-fim"
+        className="fixed bottom-4 right-4 z-50 flex w-[min(320px,calc(100%-2rem))] items-start gap-3 rounded-xl border border-destructive/30 bg-popover p-3 shadow-2xl animate-in fade-in slide-in-from-bottom-4"
+      >
+        <PhoneX size={18} weight="bold" className="mt-0.5 shrink-0 text-destructive" aria-hidden />
+        <p className="min-w-0 flex-1 text-sm">{t(aviso.aviso)}</p>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="-mr-1 -mt-1 h-7 w-7 shrink-0"
+          aria-label={t("Fechar aviso")}
+          onClick={() => setAvisoFechadoEm(aviso.em)}
+        >
+          <X size={14} aria-hidden />
+        </Button>
+      </div>
+    );
+  }
   const quem = ligacao.nome || phoneForDisplay(ligacao.numero) || t("Número não identificado");
   const inicial = (quem.trim().charAt(0) || "?").toUpperCase();
 

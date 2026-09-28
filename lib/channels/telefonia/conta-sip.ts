@@ -108,3 +108,25 @@ export function usuarioSipValido(usuario: string): boolean {
 export function portaSipValida(porta: number): boolean {
   return Number.isInteger(porta) && porta >= 1 && porta <= 65535;
 }
+
+/**
+ * O prefixo de discagem do número: o que vai ANTES do DDD na ligação de saída.
+ *
+ * Cada operadora tem a sua regra, e a mesma ligação muda de destino com ela —
+ * medido em 2026-09-28 na Totus (FreeSWITCH), para o mesmo celular:
+ * `61995140098` → `404 Not Found`; `5561995140098` → `480`; `061995140098` →
+ * tocou e atendeu. Há operadora que pede `0` + código da operadora (`015…`), e
+ * há a que aceita o DDD puro — daí um campo POR NÚMERO, vazio = DDD + número.
+ *
+ * Só dígitos, de 1 a 4: o valor é colado na frente do número dentro do destino
+ * PJSIP (`PJSIP/<prefixo><número>@tronco-<id>`), e qualquer outro caractere
+ * (`@`, `/`, `&`, vírgula) mudaria para ONDE o Asterisk disca. A MESMA regra é o
+ * CHECK `channel_sessions_sip_dial_prefix_check` (migration 0287) — o invariante
+ * `tests/invariants/telefonia-prefixo-de-discagem.test.ts` confere que o banco
+ * cita exatamente esta expressão.
+ */
+export const PREFIXO_DE_DISCAGEM = /^[0-9]{1,4}$/;
+
+export function prefixoDeDiscagemValido(prefixo: string): boolean {
+  return PREFIXO_DE_DISCAGEM.test(prefixo);
+}

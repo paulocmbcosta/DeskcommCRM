@@ -20,6 +20,7 @@ import type { UA as JsSipUA } from "jssip";
 import type { RTCSession } from "jssip/lib/RTCSession";
 
 import { apiClient } from "@/lib/api/client";
+import { avisoDoFimDaSaida } from "@/lib/telefonia/fim-da-saida";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { usePermission } from "@/hooks/auth/AuthProvider";
 
@@ -57,6 +58,14 @@ export interface EstadoDaLigacao {
 export interface Encerramento {
   motivo: string;
   em: number;
+  /** A ligação de SAÍDA que acabou (para ler o desfecho do banco); `null` na recebida. */
+  saidaId: string | null;
+  /**
+   * O que o atendente precisa ler sobre a saída que não completou — texto em
+   * português, chave do dicionário. Chega DEPOIS do fim: o worker derruba o
+   * ramal antes de gravar o motivo, então o navegador lê o banco em seguida.
+   */
+  aviso: string | null;
 }
 
 interface ContextoDoTelefone {
@@ -119,6 +128,8 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
   const uaRef = useRef<UA | null>(null);
   const sessaoRef = useRef<Sessao | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** Id da ligação de saída em curso — para ler, no fim, por que ela acabou. */
+  const saidaRef = useRef<string | null>(null);
   const [tentativa, setTentativa] = useState(0);
 
   // 1. A credencial do ramal. Pedida de novo quando o registro é recusado
@@ -157,9 +168,45 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
   const limparSessao = useCallback((motivo: string) => {
     sessaoRef.current = null;
     setLigacao(null);
-    setUltimoEncerramento({ motivo, em: Date.now() });
+    const saidaId = saidaRef.current;
+    saidaRef.current = null;
+    setUltimoEncerramento({ motivo, em: Date.now(), saidaId, aviso: null });
     if (audioRef.current) audioRef.current.srcObject = null;
   }, []);
+
+  // A saída que acabou sem ninguém atender: POR QUE acabou está no banco, não
+  // no SIP — o Asterisk atende o ramal na hora e o derruba com um BYE comum,
+  // seja a operadora recusando (404 em 0,2 s), seja o número ocupado. O worker
+  // grava o motivo logo DEPOIS de derrubar o ramal, então a leitura insiste por
+  // alguns segundos até a ligação constar como encerrada.
+  const saidaEncerrada = ultimoEncerramento?.saidaId ?? null;
+  const encerradaEm = ultimoEncerramento?.em ?? null;
+  useEffect(() => {
+    if (!saidaEncerrada || encerradaEm === null) return;
+    let vivo = true;
+    let tentativas = 0;
+    let relogio: ReturnType<typeof setTimeout> | null = null;
+    const ler = async () => {
+      tentativas += 1;
+      try {
+        const d = (await apiClient.get<{ data: DetalheDaLigacao }>(`/api/v1/telefonia/chamadas/${saidaEncerrada}`)).data;
+        if (!vivo) return;
+        if (d.status === "ended") {
+          const aviso = avisoDoFimDaSaida(d);
+          if (aviso) setUltimoEncerramento((u) => (u && u.em === encerradaEm ? { ...u, aviso } : u));
+          return;
+        }
+      } catch {
+        /* tenta de novo abaixo */
+      }
+      if (vivo && tentativas < 8) relogio = setTimeout(() => void ler(), 600);
+    };
+    void ler();
+    return () => {
+      vivo = false;
+      if (relogio) clearTimeout(relogio);
+    };
+  }, [saidaEncerrada, encerradaEm]);
 
   const ligarAudio = useCallback((s: Sessao) => {
     const conectar = () => {
@@ -325,6 +372,9 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
         showApiError(e);
         return;
       }
+      saidaRef.current = pedido.id;
+      // Uma ligação nova tira da tela o aviso da anterior.
+      setUltimoEncerramento(null);
       setLigacao({
         id: pedido.id,
         direcao: "saida",

@@ -11,6 +11,10 @@
  * registro de verdade na operadora, que o worker lê do Asterisk. Enquanto algum
  * número está conectando, a lista se atualiza a cada 3 s — é o retorno que
  * quem acabou de digitar a senha está esperando.
+ *
+ * O prefixo de discagem é do NÚMERO (migration 0287): cada operadora pede o
+ * seu antes do DDD — a Totus recusa `61…` e completa `061…`. Vazio = DDD +
+ * número, como antes. Mudar só o prefixo não pede a senha: não é a conta.
  */
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,6 +31,7 @@ import { useT } from "@/hooks/i18n/useT";
 import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 import { apiClient } from "@/lib/api/client";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
+import { prefixoDeDiscagemValido } from "@/lib/channels/telefonia/conta-sip";
 import { PencilSimple, Phone, Plus, Trash } from "@/lib/ui/icons";
 
 interface NumeroSip {
@@ -37,6 +42,7 @@ interface NumeroSip {
   porta: number;
   transporte: "udp" | "tcp";
   usuario: string;
+  prefixo: string | null;
   time_id: string | null;
   time_nome: string | null;
   status: string;
@@ -51,6 +57,7 @@ interface Formulario {
   transporte: "udp" | "tcp";
   usuario: string;
   senha: string;
+  prefixo: string;
   time_id: string;
 }
 
@@ -62,6 +69,7 @@ const VAZIO: Formulario = {
   transporte: "udp",
   usuario: "",
   senha: "",
+  prefixo: "",
   time_id: "",
 };
 
@@ -121,6 +129,7 @@ export function CanalTelefoneClient() {
       transporte: n.transporte,
       usuario: n.usuario,
       senha: "",
+      prefixo: n.prefixo ?? "",
       time_id: n.time_id ?? "",
     });
     setEditando(n.id);
@@ -136,6 +145,8 @@ export function CanalTelefoneClient() {
       transporte: form.transporte,
       usuario: form.usuario,
       ...(form.senha ? { senha: form.senha } : {}),
+      // Vazio apaga o prefixo (a rota grava nulo).
+      prefixo: form.prefixo.trim(),
       time_id: form.time_id || null,
     };
     try {
@@ -184,8 +195,15 @@ export function CanalTelefoneClient() {
 
   const numeros = dados?.numeros ?? [];
   const formularioAberto = editando !== null;
+  const prefixoDigitado = form.prefixo.trim();
+  const prefixoOk = prefixoDigitado === "" || prefixoDeDiscagemValido(prefixoDigitado);
   const podeSalvar =
-    form.nome.trim() && form.numero.trim() && form.servidor.trim() && form.usuario.trim() && (editando !== "novo" || form.senha);
+    form.nome.trim() &&
+    form.numero.trim() &&
+    form.servidor.trim() &&
+    form.usuario.trim() &&
+    prefixoOk &&
+    (editando !== "novo" || form.senha);
 
   return (
     <div className="space-y-4">
@@ -216,6 +234,12 @@ export function CanalTelefoneClient() {
             <p className="truncate text-xs text-muted-foreground">
               {phoneForDisplay(n.numero ?? "")} · {n.usuario}@{n.servidor}
               {n.porta !== 5060 ? `:${n.porta}` : ""} · {n.transporte.toUpperCase()}
+              {n.prefixo ? (
+                <span data-telefonia-prefixo>
+                  {" · "}
+                  {t("Prefixo de discagem:")} {n.prefixo}
+                </span>
+              ) : null}
             </p>
             <p className="truncate text-xs text-muted-foreground">
               {n.time_nome ? `${t("Recebe:")} ${n.time_nome}` : t("Nenhum time recebe as ligações deste número")}
@@ -301,6 +325,28 @@ export function CanalTelefoneClient() {
                 onChange={campo("senha")}
                 placeholder={editando === "novo" ? "" : t("Deixe em branco para manter a atual")}
               />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="tel-prefixo">{t("Prefixo de discagem (opcional)")}</Label>
+              <Input
+                id="tel-prefixo"
+                inputMode="numeric"
+                maxLength={4}
+                autoComplete="off"
+                value={form.prefixo}
+                onChange={campo("prefixo")}
+                placeholder={t("Ex.: 0")}
+                aria-invalid={!prefixoOk}
+                aria-describedby="tel-prefixo-ajuda"
+                className="sm:max-w-[10rem]"
+              />
+              <p id="tel-prefixo-ajuda" className={`text-xs ${prefixoOk ? "text-muted-foreground" : "text-destructive"}`}>
+                {prefixoOk
+                  ? t(
+                      "Algumas operadoras pedem um 0 (ou 0 + código da operadora) antes do DDD. Na dúvida, pergunte à operadora. Ex.: 0",
+                    )
+                  : t("Só números, de 1 a 4 dígitos.")}
+              </p>
             </div>
             <div className="space-y-1.5 sm:col-span-2">
               <Label htmlFor="tel-time">{t("Time que recebe as ligações")}</Label>

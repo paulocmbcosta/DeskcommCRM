@@ -14,7 +14,7 @@ import { z } from "zod";
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { numeroParaLigar } from "@/lib/telefonia/numero";
 
-import { motivoDoServidorInvalido, normalizarServidor, usuarioSipValido } from "./conta-sip";
+import { motivoDoServidorInvalido, normalizarServidor, prefixoDeDiscagemValido, usuarioSipValido } from "./conta-sip";
 import { PROVIDER } from "./repositorio";
 
 export const numeroSchema = z
@@ -42,6 +42,20 @@ export const numeroSchema = z
     usuario: z.string().trim().refine(usuarioSipValido, "usuário inválido"),
     senha: z.string().min(1).max(128).optional(),
     time_id: z.string().uuid().nullable().default(null),
+    // O que vai antes do DDD na saída (`0`, `015`…). Vazio ou `null` = sem
+    // prefixo. AUSENTE (`undefined`) = manter o guardado: uma aba aberta antes
+    // da atualização manda o formulário sem este campo, e apagar o prefixo em
+    // silêncio faria toda ligação dela voltar a ser recusada pela operadora.
+    // Não é identidade da conta: mudar só o prefixo não pede a senha.
+    prefixo: z
+      .string()
+      .trim()
+      .nullable()
+      .optional()
+      .refine((p) => p == null || p === "" || prefixoDeDiscagemValido(p), {
+        message: "O prefixo de discagem tem de 1 a 4 dígitos, só números (ex.: 0 ou 015).",
+      })
+      .transform((p) => (p === undefined ? undefined : p ? p : null)),
   })
   .strict();
 
@@ -55,6 +69,8 @@ export interface NumeroPublico {
   porta: number;
   transporte: "udp" | "tcp";
   usuario: string;
+  /** Prefixo de discagem da saída; `null` = DDD + número. */
+  prefixo: string | null;
   time_id: string | null;
   time_nome: string | null;
   status: string;
@@ -66,7 +82,7 @@ export async function numerosDaOrg(db: Queryable, organizationId: string): Promi
   const { rows } = await db.query<NumeroPublico>(
     `select c.id, c.display_name as nome, c.phone_number as numero, c.sip_server as servidor,
             coalesce(c.sip_port, 5060) as porta, coalesce(c.sip_transport, 'udp') as transporte,
-            c.sip_username as usuario, c.sip_team_id as time_id, t.name as time_nome,
+            c.sip_username as usuario, c.sip_dial_prefix as prefixo, c.sip_team_id as time_id, t.name as time_nome,
             c.status, c.status_reason, c.created_at
        from channel_sessions c
        left join attendance_teams t on t.id = c.sip_team_id and t.organization_id = c.organization_id
@@ -128,11 +144,24 @@ export async function criarNumero(
     const { rows } = await db.query<{ id: string }>(
       `insert into channel_sessions
          (organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number,
-          sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted, sip_team_id)
+          sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted, sip_team_id,
+          sip_dial_prefix)
        values ($1, $2, decode('00', 'hex'), 'STARTING', $3, $4, $5, $6, $7, $8,
-               public.fn_encrypt_oauth($9), $10)
+               public.fn_encrypt_oauth($9), $10, $11)
        returning id`,
-      [organizationId, PROVIDER, e.nome, numero, e.servidor, e.porta, e.transporte, e.usuario, e.senha, e.time_id],
+      [
+        organizationId,
+        PROVIDER,
+        e.nome,
+        numero,
+        e.servidor,
+        e.porta,
+        e.transporte,
+        e.usuario,
+        e.senha,
+        e.time_id,
+        e.prefixo ?? null,
+      ],
     );
     return { ok: true, id: rows[0]!.id };
   } catch (err) {
@@ -191,19 +220,34 @@ export async function atualizarNumero(
     // A última cláusula repete a regra de `trocouAConta` DENTRO do comando: sem
     // ela, duas edições simultâneas (uma trocando o servidor com a senha nova,
     // outra salvando o formulário antigo sem senha) terminavam com a senha nova
-    // apontada para o servidor antigo.
+    // apontada para o servidor antigo. O prefixo fica fora dela: não é conta.
     const { rowCount } = await db.query(
       `update channel_sessions
           set display_name = $4, phone_number = $5, sip_server = $6, sip_port = $7,
               sip_transport = $8, sip_username = $9, sip_team_id = $10,
               sip_password_encrypted = case when $11::text is null then sip_password_encrypted
                                             else public.fn_encrypt_oauth($11) end,
+              sip_dial_prefix = case when $12::boolean then $13::text else sip_dial_prefix end,
               status = 'STARTING', status_reason = null, updated_at = now()
         where id = $1 and organization_id = $2 and provider = $3 and archived_at is null
           and ($11::text is not null
                or (lower(sip_server) = $6 and coalesce(sip_port, 5060) = $7
                    and coalesce(sip_transport, 'udp') = $8 and sip_username = $9))`,
-      [id, organizationId, PROVIDER, e.nome, numero, e.servidor, e.porta, e.transporte, e.usuario, e.time_id, e.senha ?? null],
+      [
+        id,
+        organizationId,
+        PROVIDER,
+        e.nome,
+        numero,
+        e.servidor,
+        e.porta,
+        e.transporte,
+        e.usuario,
+        e.time_id,
+        e.senha ?? null,
+        e.prefixo !== undefined,
+        e.prefixo ?? null,
+      ],
     );
     return (rowCount ?? 0) > 0 ? { ok: true } : { ok: false, motivo: "nao_encontrado" };
   } catch (err) {

@@ -61,7 +61,12 @@ export async function POST(req: NextRequest): Promise<Response> {
     organizationId: authz.org.orgId,
     resourceType: "channel_session",
     resourceId: r.id,
-    metadata: { servidor: parsed.data.servidor, usuario: parsed.data.usuario, time_id: parsed.data.time_id },
+    metadata: {
+      servidor: parsed.data.servidor,
+      usuario: parsed.data.usuario,
+      time_id: parsed.data.time_id,
+      prefixo: parsed.data.prefixo ?? null,
+    },
     requestId,
   });
 

@@ -30,6 +30,12 @@ export interface TroncoDoBanco extends TroncoSip {
   numero: string | null;
   nome: string | null;
   teamId: string | null;
+  /**
+   * O que vai antes do DDD na ligação de saída (`sip_dial_prefix`, migration
+   * 0287) — `null` = DDD + número. Lido cru: quem o cola no destino confere a
+   * régua (`enderecoDeSaida`, em `pjsip.ts`).
+   */
+  prefixo: string | null;
 }
 
 interface LinhaDoTronco {
@@ -43,6 +49,7 @@ interface LinhaDoTronco {
   sip_username: string;
   senha: string | null;
   sip_team_id: string | null;
+  sip_dial_prefix?: string | null;
 }
 
 function paraTronco(r: LinhaDoTronco): TroncoDoBanco | null {
@@ -60,12 +67,13 @@ function paraTronco(r: LinhaDoTronco): TroncoDoBanco | null {
     usuario: r.sip_username,
     senha: r.senha,
     teamId: r.sip_team_id,
+    prefixo: r.sip_dial_prefix ?? null,
   };
 }
 
 const SELECT_TRONCO = `
   select id, organization_id, phone_number, display_name, sip_server, sip_port,
-         sip_transport, sip_username, sip_team_id,
+         sip_transport, sip_username, sip_team_id, sip_dial_prefix,
          case when sip_password_encrypted is null then null
               else public.fn_decrypt_oauth(sip_password_encrypted) end as senha
     from channel_sessions

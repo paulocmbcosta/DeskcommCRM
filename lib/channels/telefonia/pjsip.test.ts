@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { objetosDoTronco, problemaDoTronco, type ObjetoPjsip, type TroncoSip } from "./pjsip";
+import { enderecoDeSaida, objetosDoTronco, problemaDoTronco, type ObjetoPjsip, type TroncoSip } from "./pjsip";
 
 const tronco: TroncoSip = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -69,5 +69,31 @@ describe("problemaDoTronco — a régua antes de virar campo PJSIP", () => {
     [{ porta: 70000 }, "porta_invalida"],
   ] as const)("recusa %j → %s", (mudanca, motivo) => {
     expect(problemaDoTronco({ ...tronco, ...mudanca })).toBe(motivo);
+  });
+});
+
+describe("o destino da ligação de saída: prefixo do tronco + DDD + número", () => {
+  const id = tronco.id;
+
+  it("sem prefixo: como sempre foi", () => {
+    expect(enderecoDeSaida({ id, prefixo: null }, "61995140098")).toEqual({
+      ok: true,
+      endpoint: `PJSIP/61995140098@tronco-${id}`,
+    });
+  });
+
+  it("com o 0 da operadora: 0 + DDD + número (o que a Totus completou)", () => {
+    expect(enderecoDeSaida({ id, prefixo: "0" }, "61995140098")).toEqual({
+      ok: true,
+      endpoint: `PJSIP/061995140098@tronco-${id}`,
+    });
+  });
+
+  it.each(["0@10.0.0.5", "0&PJSIP/x", "01234", "0,1", "x"])("prefixo %j fora da régua não vira destino", (prefixo) => {
+    expect(enderecoDeSaida({ id, prefixo }, "61995140098")).toEqual({ ok: false, problema: "prefixo_invalido" });
+  });
+
+  it.each(["", "0061995140098", "61995140098@x", "123"])("número %j fora da grafia DDD + número não vira destino", (n) => {
+    expect(enderecoDeSaida({ id, prefixo: null }, n)).toEqual({ ok: false, problema: "numero_invalido" });
   });
 });

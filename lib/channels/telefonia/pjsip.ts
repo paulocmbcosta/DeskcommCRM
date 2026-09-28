@@ -8,7 +8,7 @@
  * `ramal-<user_id>`.
  */
 import type { CampoPjsip } from "./ari";
-import { portaSipValida, servidorSipValido, usuarioSipValido } from "./conta-sip";
+import { portaSipValida, prefixoDeDiscagemValido, servidorSipValido, usuarioSipValido } from "./conta-sip";
 
 export type TransporteSip = "udp" | "tcp";
 
@@ -157,6 +157,33 @@ export function problemaDoTronco(t: Pick<TroncoSip, "servidor" | "usuario" | "po
   if (!usuarioSipValido(t.usuario)) return "usuario_invalido";
   if (!portaSipValida(t.porta)) return "porta_invalida";
   return null;
+}
+
+/**
+ * O destino da perna da operadora na ligação de saída:
+ * `PJSIP/<prefixo><número>@tronco-<id>`.
+ *
+ * O número chega aqui já julgado pela política antifraude
+ * (`lib/telefonia/numero.ts`), SEM prefixo — o que o atendente digitou nunca
+ * decide o prefixo. O prefixo vem do banco (`channel_sessions.sip_dial_prefix`),
+ * e é conferido de novo aqui pela mesma régua do CHECK e do Zod
+ * (`prefixoDeDiscagemValido`): a coluna também é gravável fora da rota, e este
+ * texto vai cru para o Asterisk, onde um `@` ou um `&` mudaria para onde se disca.
+ * Prefixo fora da régua não vira destino nenhum.
+ *
+ * Não entra em `problemaDoTronco` de propósito: o prefixo não faz parte do que a
+ * sincronização empurra (nem do hash que decide reenviar), e um prefixo ruim não
+ * pode derrubar o REGISTRO — é ele que faz a ligação recebida chegar.
+ */
+export function enderecoDeSaida(
+  tronco: { id: string; prefixo: string | null },
+  discar: string,
+): { ok: true; endpoint: string } | { ok: false; problema: "prefixo_invalido" | "numero_invalido" } {
+  const prefixo = tronco.prefixo ?? "";
+  if (prefixo !== "" && !prefixoDeDiscagemValido(prefixo)) return { ok: false, problema: "prefixo_invalido" };
+  // A mesma defesa para o número: só dígitos, DDD + número, como `numeroParaLigar` devolve.
+  if (!/^[0-9]{10,11}$/.test(discar)) return { ok: false, problema: "numero_invalido" };
+  return { ok: true, endpoint: `PJSIP/${prefixo}${discar}@${idDoTronco(tronco.id)}` };
 }
 
 export interface RamalSip {

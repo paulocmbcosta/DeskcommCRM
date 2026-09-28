@@ -112,7 +112,7 @@
       "lane": "worker",
       "col": 3,
       "type": "backend",
-      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: toca UM ramal por vez e faz a ponte; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s) e disca; `recuperar()` após reinício do worker"
+      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: toca UM ramal por vez e faz a ponte; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s), monta o destino com o prefixo DO TRONCO (`enderecoDeSaida`) e disca; a perna que acaba sem atender vira motivo pela regra de `fim-da-saida.ts`, e o chamar local para antes de o ramal cair; `recuperar()` após reinício do worker"
     },
     {
       "id": "distribuicao",
@@ -161,7 +161,7 @@
       "lane": "api",
       "col": 5,
       "type": "backend",
-      "label": "`lib/telefonia/numero.ts` — E.164 brasileiro com DDD; bloqueia internacional, 0300/0500/0800/0900/400x, serviço curto e sem DDD. Conferida na rota E de novo no controlador"
+      "label": "`lib/telefonia/numero.ts` — E.164 brasileiro com DDD; bloqueia internacional, 0300/0500/0800/0900/400x, serviço curto e sem DDD. Conferida na rota E de novo no controlador, sempre sobre o número SEM prefixo (o prefixo vem do banco, não do atendente)"
     },
     {
       "id": "rota_estado",
@@ -189,7 +189,7 @@
       "lane": "tela",
       "col": 1,
       "type": "frontend",
-      "label": "Conexões › Telefone (`CanalTelefoneClient` em `ConexoesShell`) — adicionar, editar, remover; time que recebe; estado ao vivo (Conectando / Conectado / Falhou + motivo), relido a cada 3 s enquanto conecta. Telefonia desligada: diz como ligar"
+      "label": "Conexões › Telefone (`CanalTelefoneClient` em `ConexoesShell`) — adicionar, editar, remover; time que recebe; prefixo de discagem opcional por número (mostrado no cartão; mudar só ele não pede a senha); estado ao vivo (Conectando / Conectado / Falhou + motivo), relido a cada 3 s enquanto conecta. Telefonia desligada: diz como ligar"
     },
     {
       "id": "ramal_nav",
@@ -203,7 +203,7 @@
       "lane": "tela",
       "col": 3,
       "type": "frontend",
-      "label": "`BotaoDoTelefone` (discador no cabeçalho) + `PainelDoTelefone` (banner da recebida e painel da ligação ativa)"
+      "label": "`BotaoDoTelefone` (discador no cabeçalho) + `PainelDoTelefone` (banner da recebida, painel da ligação ativa e, quando a saída acaba sem atender, o aviso do porquê — operadora não completou / ocupado / ninguém atendeu)"
     },
     {
       "id": "botao_ligar",
@@ -245,7 +245,7 @@
       "lane": "banco",
       "col": 1,
       "type": "database",
-      "label": "`channel_sessions` — provider `sip_trunk`, `sip_server/port/transport/username`, `sip_password_encrypted`, `sip_team_id`; `status`/`status_reason` espelham o registro na operadora (migration 0286)"
+      "label": "`channel_sessions` — provider `sip_trunk`, `sip_server/port/transport/username`, `sip_password_encrypted`, `sip_team_id`, `sip_dial_prefix` (prefixo de discagem da saída, CHECK `^[0-9]{1,4}$`, migration 0287); `status`/`status_reason` espelham o registro na operadora (migration 0286)"
     },
     {
       "id": "t_disponibilidade",
@@ -322,7 +322,14 @@
       "lane": "api",
       "col": 10,
       "type": "backend",
-      "label": "`conta-sip.ts` — a régua da conta SIP, pura e única: servidor público (sem loopback, faixas privadas, link-local, nome sem domínio, IP não canônico), usuário sem caractere de URI; usada pelo Zod da rota E pelo worker (`problemaDoTronco`)"
+      "label": "`conta-sip.ts` — a régua da conta SIP, pura e única: servidor público (sem loopback, faixas privadas, link-local, nome sem domínio, IP não canônico), usuário sem caractere de URI, prefixo de discagem só dígitos (`PREFIXO_DE_DISCAGEM`, a mesma expressão do CHECK da 0287); usada pelo Zod da rota E pelo worker (`problemaDoTronco`, `enderecoDeSaida`)"
+    },
+    {
+      "id": "fim_da_saida",
+      "lane": "api",
+      "col": 11,
+      "type": "backend",
+      "label": "`lib/telefonia/fim-da-saida.ts` — puro, usado pelo worker E pelo navegador: a perna que acabou sem atender vira `nao_completada_<causa>` (nunca tocou, ou causa de recusa), `ocupado_17` ou `sem_resposta_<causa>`; e o mesmo motivo vira o aviso que o atendente lê. Medido num Asterisk 20.11.1: a recusa com 404 + `Reason` cause 16 chega sem causa no StasisEnd e sem RINGING"
     }
   ],
   "edges": [
@@ -407,7 +414,11 @@
     { "from": "rota_ramal", "to": "t_audit", "label": "`phone_extension.credential_issued`" },
     { "from": "rota_numeros", "to": "conta_sip", "label": "servidor e usuário pela régua (Zod)" },
     { "from": "t_sessions", "to": "conta_sip", "label": "a linha também é gravável pela REST, fora do Zod" },
-    { "from": "conta_sip", "to": "sincronizador", "label": "`problemaDoTronco`: fora da régua não vai para o Asterisk" }
+    { "from": "conta_sip", "to": "sincronizador", "label": "`problemaDoTronco`: fora da régua não vai para o Asterisk" },
+    { "from": "controle", "to": "fim_da_saida", "label": "perna acabou sem atender: desfecho + motivo (`end_reason`)" },
+    { "from": "fim_da_saida", "to": "ramal_nav", "label": "`avisoDoFimDaSaida`: o motivo lido do banco vira aviso na tela" },
+    { "from": "conta_sip", "to": "controle", "label": "`enderecoDeSaida`: prefixo fora da régua não vira destino (`tronco_configuracao_invalida`)" },
+    { "from": "t_sessions", "to": "controle", "label": "`sip_dial_prefix` do tronco usado, lido junto com ele" }
   ],
   "cards": [
     {

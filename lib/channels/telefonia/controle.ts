@@ -27,10 +27,11 @@ import {
   type CandidatoAoToque,
   type EstadoDoToque,
 } from "@/lib/telefonia/distribuicao";
+import { RECUSA_DA_SAIDA, fimDaSaidaNaoAtendida } from "@/lib/telefonia/fim-da-saida";
 import { binaParaE164, numeroParaLigar } from "@/lib/telefonia/numero";
 
 import type { CanalAri } from "./ari";
-import { donoDoEndpoint, endpointDoCanal, idDoRamal, idDoTronco } from "./pjsip";
+import { donoDoEndpoint, endpointDoCanal, enderecoDeSaida, idDoRamal } from "./pjsip";
 import type { DesfechoDaLigacao, LigacaoDoBanco, NovaLigacao, TroncoDoBanco } from "./repositorio";
 
 // ─── portas ────────────────────────────────────────────────────────────────
@@ -126,6 +127,8 @@ interface Feita {
   ponte: string;
   tom: string | null;
   atendida: boolean;
+  /** Chegou `Dial` RINGING (180) ou PROGRESS (183): a rede completou até o telefone. */
+  tocou: boolean;
   causaDaRede: number | null;
   fim: boolean;
 }
@@ -147,9 +150,6 @@ const ATENDER_E_SEGURAR_APOS_MS = 45_000;
 const PRAZO_DA_SAIDA_S = 60;
 /** A API cria a voice_calls e o navegador disca logo em seguida — mais que isto é reuso. */
 const VALIDADE_DO_PEDIDO_DE_SAIDA_MS = 60_000;
-
-/** Causas Q.850 que querem dizer "a rede recusou", não "ninguém atendeu". */
-const CAUSAS_DE_RECUSA = new Set([1, 3, 20, 21, 22, 27, 28, 34, 38, 41, 42, 47, 58, 88, 102, 111, 127]);
 
 const ponteDe = (vcId: string) => `p-${vcId}`;
 
@@ -446,8 +446,15 @@ export class ControladorDeChamadas {
     }
     const tronco = await this.banco.troncoPorId(vc.channel_session_id);
     if (!tronco || tronco.organizationId !== vc.organization_id) {
-      await this.banco.encerrarLigacao(vc.id, "tronco_indisponivel");
+      await this.banco.encerrarLigacao(vc.id, RECUSA_DA_SAIDA.troncoIndisponivel);
       return recusar("tronco indisponível", { voice_call: vc.id });
+    }
+    // O prefixo de discagem é DO TRONCO (vem do banco, nunca do que o atendente
+    // digitou) e entra na frente do número que a política acabou de julgar.
+    const destino = enderecoDeSaida(tronco, numero.discar);
+    if (!destino.ok) {
+      await this.banco.encerrarLigacao(vc.id, RECUSA_DA_SAIDA.troncoConfiguracaoInvalida);
+      return recusar("tronco com configuração inválida", { voice_call: vc.id, problema: destino.problema });
     }
 
     const l: Feita = {
@@ -460,6 +467,7 @@ export class ControladorDeChamadas {
       ponte: ponteDe(vc.id),
       tom: null,
       atendida: false,
+      tocou: false,
       causaDaRede: null,
       fim: false,
     };
@@ -469,7 +477,7 @@ export class ControladorDeChamadas {
     await this.ari.criarPonte(l.ponte);
     await this.ari.porNaPonte(l.ponte, canal.id);
     const perna = await this.ari.criarCanal({
-      endpoint: `PJSIP/${numero.discar}@${idDoTronco(tronco.id)}`,
+      endpoint: destino.endpoint,
       appArgs: `perna,${vc.id}`,
       ...(tronco.numero ? { callerId: tronco.numero.replace(/^\+55/, "") } : {}),
     });
@@ -498,6 +506,7 @@ export class ControladorDeChamadas {
     // do canal chegar sem causa própria (StasisEnd não traz).
     const causaDoDial: Record<string, number> = { BUSY: 17, NOANSWER: 19, CHANUNAVAIL: 34, CONGESTION: 34 };
     if (causaDoDial[s] !== undefined) this.causas.set(ev.peer.id, causaDoDial[s]!);
+    if (s === "RINGING" || s === "PROGRESS") l.tocou = true;
     if (s === "PROGRESS") return this.pararTom(l);
     if (s === "ANSWER") {
       await this.pararTom(l);
@@ -510,6 +519,12 @@ export class ControladorDeChamadas {
   private async encerrarFeita(l: Feita, motivo: string) {
     if (l.fim) return;
     l.fim = true;
+    // O tom ANTES dos canais: desligar o ramal com o chamar ainda tocando faz o
+    // Asterisk registrar "Playback failed for tone:ring;tonezone=br" — medido
+    // num Asterisk 20.11.1 local, só nesse caso; parado pela ARI, o mesmo tom
+    // termina "done". Era o aviso do log de produção na saída recusada em 0,2 s,
+    // em que nem PROGRESS nem ANSWER chegaram para pará-lo.
+    await this.pararTom(l);
     for (const c of [l.ramal, l.perna]) {
       if (!c) continue;
       this.porCanal.delete(c);
@@ -517,12 +532,14 @@ export class ControladorDeChamadas {
     }
     await this.ari.destruirPonte(l.ponte).catch(() => undefined);
     this.porId.delete(l.vcId);
-    const desfecho: DesfechoDaLigacao = l.atendida
-      ? "atendida"
-      : l.causaDaRede !== null && CAUSAS_DE_RECUSA.has(l.causaDaRede)
-        ? "recusada_pela_rede"
-        : "sem_resposta";
-    await this.finalizar(l.vcId, desfecho, motivo);
+    let desfecho: DesfechoDaLigacao = l.atendida ? "atendida" : "sem_resposta";
+    let motivoFinal = motivo;
+    // A perna da operadora acabou antes de alguém atender (e não foi o atendente
+    // que desistiu): o motivo diz o que a rede fez, e a tela do atendente o lê.
+    if (!l.atendida && l.causaDaRede !== null) {
+      ({ desfecho, motivo: motivoFinal } = fimDaSaidaNaoAtendida({ causa: l.causaDaRede, tocou: l.tocou }));
+    }
+    await this.finalizar(l.vcId, desfecho, motivoFinal);
   }
 
   // ─── fim de canal ────────────────────────────────────────────────────────
@@ -552,8 +569,10 @@ export class ControladorDeChamadas {
 
     if (l.tipo === "feita") {
       if (ev.channel.id === l.perna) {
+        // `causa`, não `ev.cause`: o fim da perna chega primeiro pelo StasisEnd,
+        // que não traz causa — era o `rede_undefined` do log de produção.
         l.causaDaRede = causa;
-        return this.encerrarFeita(l, l.atendida ? "cliente_desligou" : `rede_${ev.cause}`);
+        return this.encerrarFeita(l, "cliente_desligou");
       }
       return this.encerrarFeita(l, "atendente_desligou");
     }
