@@ -57,29 +57,47 @@ CURRENT_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
 # (Veio da `main`; a versão por tag cai exatamente na mesma armadilha, porque a
 # comparação de tags também fica satisfeita com a imagem velha no lugar.)
 #
-# DOIS critérios, nesta ordem, porque cada um é cego onde o outro enxerga:
+# TRÊS critérios, nesta ordem, porque cada um é cego onde os outros enxergam —
+# e a ordem é a das três perguntas que o estado da máquina responde:
 #
 #  1. O que o `.env` FIXA (`imagens_fora_do_alvo`, em _common.sh). É o critério
 #     que vale para a instalação de hoje, que nasce e permanece fixada em número
 #     de versão. Sem rede, sem registro: lê o arquivo que o compose vai ler.
-#  2. O DIGEST, local contra remoto. É o critério de canal móvel e de imagem
+#  2. O que os CONTÊINERES rodam (`conteineres_fora_do_alvo`, em _common.sh).
+#     O `.env` diz a intenção; este diz o fato. Também local, também sem rede.
+#  3. O DIGEST, local contra remoto. É o critério de canal móvel e de imagem
 #     republicada sem commit novo — casos em que a referência é a mesma e só o
-#     conteúdo mudou.
+#     conteúdo mudou. É o único que depende do registro responder, e por isso
+#     é o último.
 #
-# Até 2026-09-19 só existia o segundo, e ele compara `$APP_IMAGE` com ELA MESMA:
-# local e remoto da mesma referência. Numa tag imutável os dois são iguais por
-# definição, então o caso que este bloco existe para cobrir — repositório novo,
-# imagem velha — respondia "Nada a atualizar" e saía com 0. Medido no deploy da
-# v1.32.0: código em `v1.32.0`, `.env` em `:1.31.1`, três contêineres na 1.31.1.
-# Quem vigia: tests/shell/update-guard.test.sh, caso 12.
+# Até 2026-09-19 só existia o do digest, e ele compara `$APP_IMAGE` com ELA
+# MESMA: local e remoto da mesma referência. Numa tag imutável os dois são
+# iguais por definição, então o caso que este bloco existe para cobrir —
+# repositório novo, imagem velha — respondia "Nada a atualizar" e saía com 0.
+# Medido no deploy da v1.32.0: código em `v1.32.0`, `.env` em `:1.31.1`, três
+# contêineres na 1.31.1. Quem vigia: update-guard.test.sh, caso 12.
+#
+# O critério do contêiner veio depois, para o que sobrava mesmo com os outros
+# dois: o `.env` é regravado ANTES do `docker pull` e do `up -d`, então uma
+# interrupção entre o fim do pull e o `up -d` deixa `.env` e imagem no alvo com
+# os contêineres na anterior — os dois primeiros critérios calados, o CRM na
+# versão passada. Quem vigia: update-guard.test.sh, caso 13.
 IMAGENS_FORA_DO_ALVO=""
+CONTEINERES_ATRASADOS=""
 image_desatualizada() {
   # 1º critério. Guardado numa global porque é com ela que a mensagem lá embaixo
   # diz QUAL imagem ficou para trás, em vez de um "imagem antiga" genérico.
   IMAGENS_FORA_DO_ALVO="$(imagens_fora_do_alvo .env "${TARGET_TAG#v}")"
   if [ -n "$IMAGENS_FORA_DO_ALVO" ]; then return 0; fi
 
-  # 2º critério.
+  # 2º critério. Vem antes do digest de propósito: é local e instantâneo,
+  # enquanto o digest depende do registro responder. Numa VPS sem rede — estado
+  # comum depois de uma atualização interrompida — o 3º se cala por não
+  # conseguir consultar, e sem este seria ele a decidir sozinho.
+  CONTEINERES_ATRASADOS="$(conteineres_fora_do_alvo "${TARGET_TAG#v}")"
+  if [ -n "$CONTEINERES_ATRASADOS" ]; then return 0; fi
+
+  # 3º critério.
   # O fallback vem de `IMG_APP` (_common.sh, sourceado no topo deste arquivo) e não de
   # um literal: num fork com namespace próprio, o literal apontava para a
   # imagem do UPSTREAM, e um `.env` sem APP_IMAGE comparava o digest local
@@ -129,6 +147,12 @@ fi
 if [ -n "$MESMA_TAG" ] && [ -n "$IMAGENS_FORA_DO_ALVO" ]; then
   c_ylw "O código já está na $TARGET_TAG, mas o .env ainda manda rodar outra imagem: ${IMAGENS_FORA_DO_ALVO}."
   c_ylw "Vou trazer as três para a ${TARGET_TAG#v}."
+elif [ -n "$MESMA_TAG" ] && [ -n "$CONTEINERES_ATRASADOS" ]; then
+  # O `.env` está certo e a imagem nova pode até estar no disco: o que ficou
+  # para trás é o processo no ar. Quase sempre uma atualização interrompida
+  # entre o `docker pull` e o `up -d`.
+  c_ylw "O código e o .env já estão na $TARGET_TAG, mas ainda há serviço rodando: ${CONTEINERES_ATRASADOS}."
+  c_ylw "Vou subir a ${TARGET_TAG#v} para valer."
 elif [ -n "$MESMA_TAG" ]; then
   c_ylw "O código já está na $TARGET_TAG, mas o app está rodando uma imagem antiga. Vou atualizar a imagem."
 else

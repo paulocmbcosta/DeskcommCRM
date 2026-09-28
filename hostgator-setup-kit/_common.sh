@@ -627,13 +627,73 @@ imagens_fora_do_alvo() {  # imagens_fora_do_alvo <envfile> <versão alvo, sem o 
       scheduler) chave=SCHEDULER_IMAGE; repo="$IMG_SCHEDULER" ;;
     esac
     img="$(valor_do_env "$envfile" "$chave")"
-    if [ -z "$img" ]; then continue; fi                       # ausente: default do compose
-    if [ "$img" = "${repo}:${alvo}" ]; then continue; fi      # exatamente o que esta atualização gravaria
-    case "$(tag_da_imagem "$img")" in
-      latest|main|stable) continue ;;                         # canal escolhido: o digest decide
-      "") case "$img" in */*) continue ;; esac ;;             # repositório sem tag = :latest implícito
+    referencia_fora_do_alvo "$img" "$repo" "$alvo" && fora="$fora $svc"
+  done
+  printf '%s' "${fora# }"
+}
+
+# A regra de julgamento de UMA referência, num lugar só. Ela nasceu dentro de
+# `imagens_fora_do_alvo` e saiu quando `conteineres_fora_do_alvo` passou a
+# precisar da MESMA decisão sobre uma referência de outra origem. Duplicá-la
+# seria pedir divergência: um conserto no canal móvel (ou uma tag nova de canal)
+# aplicado num lugar e não no outro acusa a instalação por um critério e a
+# absolve pelo outro, que é pior do que não ter critério nenhum.
+# Sai 0 = está fora do alvo (conta). Sai 1 = não conta (é o alvo, é canal, ou
+# não há o que julgar) — o que NÃO significa "em dia": falta o digest.
+referencia_fora_do_alvo() {  # referencia_fora_do_alvo <referência> <repo> <versão alvo>
+  local ref="$1" repo="$2" alvo="$3"
+  [ -n "$ref" ] || return 1                       # nada para julgar (chave ausente, contêiner parado)
+  [ "$ref" = "${repo}:${alvo}" ] && return 1      # exatamente o que esta atualização gravaria
+  case "$(tag_da_imagem "$ref")" in
+    latest|main|stable) return 1 ;;               # canal escolhido: o digest decide
+    "") case "$ref" in */*) return 1 ;; esac ;;   # repositório sem tag = :latest implícito
+  esac
+  return 0
+}
+
+# O que os contêineres estão RODANDO, comparado com o que esta atualização
+# gravaria. É um dos critérios de `image_desatualizada` (lá está a ordem em que
+# ela os consulta), e o único que olha para o processo no ar em vez de para um
+# arquivo ou para o registro.
+#
+# A lacuna que ele fecha: o `update.sh` regrava o `.env` ANTES do `docker pull` e
+# do `up -d`. Interrompido entre o fim do pull e o `up -d` (queda de SSH, OOM,
+# Ctrl-C), o estado que fica é código na tag nova, `.env` na versão nova, imagem
+# nova no disco — e os contêineres ainda na anterior. Aí o critério do `.env` o
+# vê no alvo, e o do digest vê local == remoto, porque a imagem nova É a que ele
+# compara. Os dois calados, com o CRM rodando a versão passada.
+#
+# Prudências que não são detalhe:
+#   - contêiner INEXISTENTE não acusa nada. Stack parada de propósito não pode
+#     receber um update que ninguém pediu.
+#   - a referência julgada é a DO CONTÊINER, nunca a do `.env`. Uma instalação
+#     sem as chaves no `.env` nasce do default do compose, que é `:stable`:
+#     julgar pelo `.env` (vazio) não veria o canal e acusaria para sempre, em
+#     toda instalação de avaliação.
+#   - `docker` fora do ar / socket sem permissão não derruba quem chama, mesmo
+#     sob `set -euo pipefail`. Sem enxergar, este critério se cala — quem decide
+#     passa a ser o digest, como antes dele existir.
+#
+# Ecoa os serviços atrasados, separados por espaço.
+conteineres_fora_do_alvo() {  # conteineres_fora_do_alvo <versão alvo, sem o "v">
+  local alvo="${1:-}" svc repo img fora="" proj
+  [ -n "$alvo" ] || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+  proj="$(nome_do_projeto_atual)"
+
+  for svc in app worker scheduler; do
+    case "$svc" in
+      app)       repo="$IMG_APP" ;;
+      worker)    repo="$IMG_WORKER" ;;
+      scheduler) repo="$IMG_SCHEDULER" ;;
     esac
-    fora="$fora $svc"
+    # A guarda vale para o chamador DIRETO. Pelo caminho de hoje ela não é o que
+    # salva o `update.sh`: ele chama esta função dentro de `$( )`, e medido neste
+    # bash o errexit não aborta função chamada em command substitution — o corpo
+    # roda até o fim. Sem a guarda, quem escrever `conteineres_fora_do_alvo …`
+    # numa linha solta sob `set -e` perde o script no primeiro docker fora do ar.
+    img="$(docker inspect "${proj}-${svc}-1" --format '{{.Config.Image}}' 2>/dev/null)" || img=""
+    referencia_fora_do_alvo "$img" "$repo" "$alvo" && fora="$fora $svc"
   done
   printf '%s' "${fora# }"
 }

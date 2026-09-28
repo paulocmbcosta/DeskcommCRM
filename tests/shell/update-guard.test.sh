@@ -111,6 +111,24 @@ case " $* " in
       iguais)     printf 'Name: %s\nDigest: sha256:%s\n' "$4" "$(printf '%s' "$4" | cksum | cut -d' ' -f1)" ;;
       diferentes) printf 'Name: %s\nDigest: sha256:republicada\n' "$4" ;;
     esac ;;
+  # `docker inspect <contêiner> --format '{{.Config.Image}}'`: a referência com
+  # que o contêiner FOI CRIADO — o que de fato roda, que é a única pergunta que
+  # nem o `.env` nem o digest respondem. Calado por padrão, e esse silêncio é
+  # deliberado: é o estado "stack parada" que os casos 1 a 12 sempre viram, e é
+  # o que faz o caso 13c ser uma prova e não uma formalidade.
+  #
+  # O formato é `<svc>=<referência>`, separado por espaço, porque os três
+  # serviços precisam divergir (13e). O `svc` sai do nome do contêiner
+  # (`<projeto>-<svc>-1`) para que o dublê responda por serviço sem precisar
+  # saber o nome do projeto, que o teste não fixa.
+  *"Config.Image"*)
+    # Docker fora do ar / sem permissão no socket: o comando SAI != 0. É um
+    # estado real numa VPS, e o update.sh roda sob `set -euo pipefail`.
+    [ -n "${DUBLE_INSPECT_QUEBRADO:-}" ] && exit 1
+    duble_n="${2%-1}"
+    for duble_par in ${DUBLE_EM_EXECUCAO:-}; do
+      case "$duble_par" in "${duble_n##*-}="*) printf '%s\n' "${duble_par#*=}" ;; esac
+    done ;;
 esac
 exit 0
 STUB
@@ -647,6 +665,116 @@ fora_caso "canal móvel explícito (:stable) → a versão não decide" 1.2.0 ""
   "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:stable" "${NS}/deskcomm-scheduler:stable"
 fora_caso "repositório SEM tag é :latest implícito → canal, a versão não decide" 1.2.0 "" \
   "${NS}/deskcommcrm" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+
+echo "── 13. O que de fato RODA: .env no alvo, digest em dia, contêiner na anterior"
+# A terceira cegueira da mesma família do caso 12, e a que sobra depois dele.
+# A ordem do update.sh é: checkout da tag → baseline → `gravar_imagens .env` →
+# `dc pull` → `dc up -d`. O `.env` é regravado ANTES do pull e do up. Uma
+# interrupção entre o fim do pull e o `up -d` (queda de SSH, OOM, Ctrl-C) deixa
+# código na tag nova, `.env` na versão nova, imagem nova no disco — e os TRÊS
+# CONTÊINERES na versão anterior. Aí o 1º critério vê o `.env` no alvo, o 2º vê
+# digest local == remoto, e o script responde "Nada a atualizar" com o CRM
+# rodando a versão passada. Nenhuma das duas sondas olha para o que EXECUTA, e
+# o comentário de abertura da própria função já dizia "quem roda é a imagem".
+em_execucao() {  # em_execucao <app> <worker> <scheduler> — referências INTEIRAS; vazio = contêiner ausente
+  local l=""
+  [ -n "$1" ] && l="$l app=$1"
+  [ -n "$2" ] && l="$l worker=$2"
+  [ -n "$3" ] && l="$l scheduler=$3"
+  export DUBLE_EM_EXECUCAO="${l# }"
+}
+# O `.env` fica no ALVO o bloco inteiro: é o que cala o 1º critério. E o
+# registro responde digest local == remoto, que é o que cala o 2º. Sem as duas
+# coisas, o bloco não estaria medindo o que diz medir.
+export DUBLE_DIGESTS=iguais
+env_das_tres "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+
+echo "   13a. o update interrompido antes do 'up -d': os três contêineres na anterior"
+em_execucao "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+check "fixture: o .env JÁ está no alvo (o 1º critério está calado)" tres_em 1.2.0
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "foi adiante: rodou o backup" test -f "$BACKUP_MARK"
+check "termina com sucesso" test "$RC" -eq 0
+check "diz QUAIS serviços ficaram para trás, não um 'imagem antiga' genérico" \
+  grep -q "app worker scheduler" "$OUTFILE"
+
+echo "   13b. CONTROLE: com os três contêineres já no alvo, o MESMO dublê diz 'nada a atualizar'"
+# Sem este controle o 13a não prova nada. O dublê responde VAZIO por padrão a
+# `docker inspect`, e um critério que tratasse o vazio como "atrasado" deixaria
+# o 13a verde COM o defeito de volta — e ainda quebraria todos os casos acima.
+em_execucao "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "sai com 0" test "$RC" -eq 0
+check "e não rodou backup nenhum" test ! -f "$BACKUP_MARK"
+
+echo "   13c. stack parada (nenhum contêiner) NÃO acusa nada"
+# `docker inspect` de contêiner inexistente devolve vazio. Quem parou a stack de
+# propósito não pode receber um update que ninguém pediu.
+em_execucao "" "" ""
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "não rodou backup" test ! -f "$BACKUP_MARK"
+
+echo "   13d. quem segue um CANAL de propósito continua decidido pelo digest"
+# O contêiner de uma instalação sem as chaves no `.env` nasce do default do
+# compose, que é `:stable`. Comparar essa referência com `<repo>:1.2.0` acusaria
+# para sempre — em TODA instalação de avaliação. Canal é escolha, não atraso.
+em_execucao "${NS}/deskcommcrm:stable" "${NS}/deskcomm-worker:stable" "${NS}/deskcomm-scheduler:stable"
+run_update
+check "com o digest em dia, responde 'Nada a atualizar'" nada_a_atualizar
+check "não rodou backup" test ! -f "$BACKUP_MARK"
+
+echo "   13e. só UM contêiner para trás já basta, e a mensagem nomeia só ele"
+em_execucao "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.2.0"
+run_update
+check "NÃO responde 'Nada a atualizar'" nao_disse_nada_a_atualizar
+check "foi adiante: rodou o backup" test -f "$BACKUP_MARK"
+check "nomeia só quem estava para trás" grep -q "rodando: worker\." "$OUTFILE"
+
+echo "   13f. docker fora do ar não derruba o script"
+# O update.sh roda sob `set -euo pipefail`: um `docker inspect` que sai != 0 sem
+# guarda mata a execução inteira — e o dono fica sem atualização E sem mensagem.
+em_execucao "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+export DUBLE_INSPECT_QUEBRADO=1
+run_update
+check "não morre com erro de shell" test "$RC" -eq 0
+check "e, sem poder enxergar, não inventa atraso" nada_a_atualizar
+
+echo "   13g. a guarda de erro, medida na FUNÇÃO e não pelo script inteiro"
+# O 13f acima é verdadeiro mas não prova a guarda: `image_desatualizada` é
+# chamada dentro de um `if`, e sob `set -e` o errexit não vale dentro de
+# condição — o script sobreviveria mesmo sem o `|| img=""`. Medido: sabotar a
+# guarda deixa o 13f VERDE. Quem a exercita é esta prova, que roda a função no
+# mesmo `set -euo pipefail` do update.sh e FORA de condição, como qualquer
+# chamador futuro faria.
+command -v conteineres_fora_do_alvo >/dev/null \
+  || { echo "  ✗ conteineres_fora_do_alvo não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+# Duas condições, as duas aprendidas errando, e as duas necessárias para que
+# esta prova meça a guarda em vez de passar por vacuidade:
+#
+#  - a chamada é DIRETA, não `r="$(conteineres_fora_do_alvo …)"`. Medido neste
+#    bash: dentro de um command substitution o errexit não aborta a função —
+#    ela roda até o fim e devolve a saída. A primeira versão desta prova
+#    chamava por `$( )` e ficava VERDE com a guarda arrancada.
+#  - o subshell roda FORA de qualquer `if`, com o status capturado numa
+#    variável. Um `( set -euo pipefail; … )` dentro de condição — que é o que
+#    `check` faz com o comando que recebe — também não reativa o errexit.
+#
+# É por `$( )` que o update.sh chama hoje, então o script não morreria nem sem
+# a guarda. Ela existe para o chamador direto, que é o que esta prova exerce.
+( set -euo pipefail
+  export DUBLE_INSPECT_QUEBRADO=1
+  conteineres_fora_do_alvo 1.2.0 >/dev/null ) >/dev/null 2>&1
+GUARDA_RC=$?
+check "docker que sai != 0 não mata a função" test "$GUARDA_RC" -eq 0
+ACUSOU="$(DUBLE_INSPECT_QUEBRADO=1 conteineres_fora_do_alvo 1.2.0)"
+check "e, sem poder enxergar, ela não acusa ninguém" test -z "$ACUSOU"
+
+unset DUBLE_INSPECT_QUEBRADO
+unset DUBLE_EM_EXECUCAO
+unset DUBLE_DIGESTS
 
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi
 exit $((FAILS > 0))
