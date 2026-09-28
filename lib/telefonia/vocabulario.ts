@@ -167,7 +167,7 @@ export interface MenuPublico {
   fala_invalida: FalaPublica | null;
   /** A fala do menu (e a de tecla inválida, se houver) está pronta: pode ser ligado a um número. */
   pronto: boolean;
-  /** Nomes dos números que tocam este menu. */
+  /** Os números que tocam este menu, com o rótulo pronto: "Recepção · (61) 3686-1503", ou só um dos dois. */
   numeros: string[];
   ultimos_7_dias: UltimosSeteDias;
 }

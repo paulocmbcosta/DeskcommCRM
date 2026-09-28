@@ -453,7 +453,7 @@ describe("salvarMenuDaOrg — conferir fora da transação, gravar tudo junto so
     banco.numeros.push({ org: ORG, menu_id: id, nome: "Recepção", numero: "+556136861503", arquivado: false });
     const r = await salvar({ opcoes: [{ tecla: "9", time_id: TIME_B }, { tecla: "3", time_id: TIME_A }] }, id);
     expect(r.ok && r.menu.opcoes.map((o) => o.tecla)).toEqual(["3", "9"]);
-    expect(r.ok && r.menu.numeros).toEqual(["Recepção"]);
+    expect(r.ok && r.menu.numeros).toEqual(["Recepção · (61) 3686-1503"]);
   });
 
   it("editar: trava a linha do menu ANTES de ler as falas, regrava a MESMA linha da fala e troca as opções", async () => {
@@ -613,9 +613,13 @@ describe("menusDaOrg", () => {
 
   it("cada menu recebe a SUA semana, somada; pronto só com as falas prontas; a data sai em ISO", async () => {
     const base = { nome: "M", time_padrao_id: TIME_A, time_padrao_nome: "Suporte", opcoes: [], fala_invalida: null, numeros: [] };
+    const numeros = [
+      { nome: "Recepção", numero: "+556136861503" },
+      { nome: null, numero: "+556136861504" },
+    ];
     const { db, consultas } = dbCom([
       [
-        { ...base, id: "m1", fala: FALA_PRONTA },
+        { ...base, id: "m1", fala: FALA_PRONTA, numeros },
         { ...base, id: "m2", fala: null },
         { ...base, id: "m3", fala: FALA_PRONTA, fala_invalida: { ...FALA_PRONTA, id: "f2", status: "failed" } },
       ],
@@ -635,6 +639,9 @@ describe("menusDaOrg", () => {
     expect(menus[1]!.ultimos_7_dias.sem_escolha).toBe(1);
     expect(menus[2]!.ultimos_7_dias.total).toBe(0);
     expect(menus[0]!.fala!.atualizada_em).toBe("2026-09-28T13:00:00.500Z");
+    // A lista traz o RÓTULO pronto de cada número: a tela não recalcula.
+    expect(menus[0]!.numeros).toEqual(["Recepção · (61) 3686-1503", "(61) 3686-1504"]);
+    expect(menus[1]!.numeros).toEqual([]);
     // As duas consultas são da organização da sessão; a da semana só vê ligações ENCERRADAS.
     expect(consultas.map((c) => c.params[0])).toEqual([ORG, ORG]);
     expect(consultas[1]!.params[1]).toEqual(["m1", "m2", "m3"]);
@@ -743,8 +750,8 @@ describe("arquivarMenu — em transação: trava, confere o uso num comando SEPA
 });
 
 describe("rotuloDoNumero e mensagemDoMenuEmUso", () => {
-  it("o rótulo mostra o nome e o número quando há os dois; só um, quando falta o outro ou o nome É o número", () => {
-    expect(rotuloDoNumero({ nome: "Recepção", numero: "+556136861503" })).toBe("Recepção ((61) 3686-1503)");
+  it("o rótulo mostra o nome e o número, separados por ·, quando há os dois; só um, quando falta o outro ou o nome É o número", () => {
+    expect(rotuloDoNumero({ nome: "Recepção", numero: "+556136861503" })).toBe("Recepção · (61) 3686-1503");
     expect(rotuloDoNumero({ nome: null, numero: "+5561999990000" })).toBe("(61) 99999-0000");
     expect(rotuloDoNumero({ nome: "Recepção", numero: null })).toBe("Recepção");
     expect(rotuloDoNumero({ nome: "+556136861503", numero: "+556136861503" })).toBe("(61) 3686-1503");
@@ -753,7 +760,7 @@ describe("rotuloDoNumero e mensagemDoMenuEmUso", () => {
 
   it("nomeia o número (ou os números) que usam o menu, no singular e no plural", () => {
     expect(mensagemDoMenuEmUso([{ nome: "Recepção", numero: "+556136861503" }])).toBe(
-      "Este menu está em uso por: Recepção ((61) 3686-1503). Troque o destino do número antes de arquivar.",
+      "Este menu está em uso por: Recepção · (61) 3686-1503. Troque o destino do número antes de arquivar.",
     );
     expect(
       mensagemDoMenuEmUso([
@@ -761,7 +768,7 @@ describe("rotuloDoNumero e mensagemDoMenuEmUso", () => {
         { nome: null, numero: "+556136861504" },
       ]),
     ).toBe(
-      "Este menu está em uso por: Recepção ((61) 3686-1503), (61) 3686-1504. Troque o destino dos números antes de arquivar.",
+      "Este menu está em uso por: Recepção · (61) 3686-1503, (61) 3686-1504. Troque o destino dos números antes de arquivar.",
     );
   });
 

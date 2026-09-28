@@ -427,7 +427,7 @@ describe("arquivarMenu e o destino do número", () => {
   it("menu que atende um número não é arquivado; solto do número, é; arquivado some, não serve a número e não é editado", async () => {
     const { id } = await criar();
     sql(`update public.channel_sessions set sip_team_id = null, sip_menu_id = '${id}' where id = '${NUMERO_A}';`);
-    expect((await menusDaOrg(pool, ORG_A))[0]!.numeros).toEqual(["Recepção"]);
+    expect((await menusDaOrg(pool, ORG_A))[0]!.numeros).toEqual(["Recepção · (61) 3000-8801"]);
 
     expect(await arquivarMenu(pool, ORG_A, id)).toEqual({
       ok: false,

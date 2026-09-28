@@ -199,7 +199,7 @@ describe("DELETE /api/v1/telefonia/menus/[id]", () => {
     const { error } = (await r.json()) as { error: { code: string; message: string; details: unknown } };
     expect(error).toEqual({
       code: "menu_em_uso",
-      message: "Este menu está em uso por: Recepção ((61) 3686-1503). Troque o destino do número antes de arquivar.",
+      message: "Este menu está em uso por: Recepção · (61) 3686-1503. Troque o destino do número antes de arquivar.",
       details: { numeros },
     });
     expect(audit).not.toHaveBeenCalled();
@@ -221,7 +221,7 @@ describe("DELETE /api/v1/telefonia/menus/[id]", () => {
     };
     const { error } = (await (await apagar(MENU)).json()) as { error: { message: string } };
     expect(error.message).toBe(
-      "Este menú está en uso por: Recepción ((61) 3686-1503), Ventas. Cambia el destino de los números antes de archivar.",
+      "Este menú está en uso por: Recepción · (61) 3686-1503, Ventas. Cambia el destino de los números antes de archivar.",
     );
   });
 

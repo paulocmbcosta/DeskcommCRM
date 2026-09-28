@@ -119,15 +119,15 @@ export interface NumeroDoMenu {
 }
 
 /**
- * Como a tela e a recusa mostram um número: "Recepção ((61) 3686-1503)" com os
- * dois; só o nome, ou só o número, quando falta o outro — ou quando o nome É o
- * número.
+ * Como a tela e a recusa mostram um número: "Recepção · (61) 3686-1503" com os
+ * dois (o número já traz parênteses; outro par em volta ficaria dobrado); só o
+ * nome, ou só o número, quando falta o outro — ou quando o nome É o número.
  */
 export function rotuloDoNumero(n: NumeroDoMenu): string {
   const nome = n.nome?.trim() || null;
   const bruto = n.numero?.trim() || null;
   const numero = bruto ? (numeroParaFalar(bruto) ?? bruto) : null;
-  if (nome && numero) return nome.replace(/\D/g, "") === bruto!.replace(/\D/g, "") ? numero : `${nome} (${numero})`;
+  if (nome && numero) return nome.replace(/\D/g, "") === bruto!.replace(/\D/g, "") ? numero : `${nome} · ${numero}`;
   return nome ?? numero ?? "";
 }
 
@@ -373,7 +373,7 @@ async function descreverMenu(
     fala,
     fala_invalida: falaInvalida,
     pronto: fala.status === "ready" && (!falaInvalida || falaInvalida.status === "ready"),
-    numeros: numeros.map((n) => n.nome ?? n.numero ?? ""),
+    numeros: numeros.map(rotuloDoNumero),
   };
 }
 
@@ -467,7 +467,8 @@ interface LinhaDoMenu {
   opcoes: OpcaoDoMenuPublica[];
   fala: FalaPublica | null;
   fala_invalida: FalaPublica | null;
-  numeros: string[];
+  /** Nome e número de cada um; a lista devolve o rótulo pronto (`rotuloDoNumero`). */
+  numeros: NumeroDoMenu[];
 }
 
 /**
@@ -500,7 +501,8 @@ export async function menusDaOrg(db: Queryable, organizationId: string): Promise
                        where o.menu_id = m.id and o.organization_id = m.organization_id), '[]'::jsonb) as opcoes,
             ${falaJson("p")} as fala,
             ${falaJson("i")} as fala_invalida,
-            coalesce((select jsonb_agg(coalesce(c.display_name, c.phone_number) order by c.created_at)
+            coalesce((select jsonb_agg(jsonb_build_object('nome', c.display_name, 'numero', c.phone_number)
+                                       order by c.created_at)
                         from channel_sessions c
                        where c.organization_id = m.organization_id and c.sip_menu_id = m.id
                          and c.archived_at is null), '[]'::jsonb) as numeros
@@ -524,6 +526,7 @@ export async function menusDaOrg(db: Queryable, organizationId: string): Promise
       ...r,
       fala,
       fala_invalida: falaInvalida,
+      numeros: r.numeros.map(rotuloDoNumero),
       pronto: fala?.status === "ready" && (!falaInvalida || falaInvalida.status === "ready"),
       ultimos_7_dias: somarUltimosSeteDias(semana.filter((s) => s.menu_id === r.id)),
     };
