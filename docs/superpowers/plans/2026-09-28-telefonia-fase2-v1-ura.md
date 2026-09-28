@@ -4,11 +4,11 @@
 
 **Goal:** A organização monta pela tela, com voz da ElevenLabs, um menu de voz (URA) que leva a ligação recebida ao time certo, as falas de aguarde / ninguém atendeu / fora do horário e um aviso de instabilidade por time — e o worker toca tudo isso nas ligações reais do tronco SIP.
 
-**Architecture:** A API gera cada fala na ElevenLabs (`ulaw_8000`), guarda o áudio no bucket privado `phone-prompts` (`<org>/<hash>.ulaw`) e grava a linha em `phone_prompts`. O worker copia as falas prontas para o volume `telefonia-falas` (escrita no `worker`, só leitura no `asterisk`) e, na aplicação Stasis `crm`, toca-as pela ARI. A decisão da URA é uma regra pura (`lib/telefonia/ura.ts`); o controlador só executa ações. Schema na migration 0288 (tripla: migration + apêndice idempotente no `baseline.sql` + MANIFEST), RLS `tenant_isolation_<tabela>_all`, escrita só pela API com a organização resolvida da sessão.
+**Architecture:** A ElevenLabs só é chamada quando alguém gera uma **prévia** na tela (D15): a rota da prévia calcula o hash (texto + voz + modelo), reaproveita o objeto `<org>/<hash>.ulaw` do bucket privado `phone-prompts` se ele já existir e, senão, sintetiza uma vez (`ulaw_8000`; 30 prévias por hora por organização) e grava o objeto — sem tocar em `phone_prompts`. O "Salvar e usar" só confere que a prévia existe na pasta da organização da sessão e aponta a linha de `phone_prompts` para o hash, sem chamar a ElevenLabs. O worker copia as falas prontas para o volume `telefonia-falas` (escrita no `worker`, só leitura no `asterisk`), apaga do Storage o que nenhuma linha usa depois de 24 h e, na aplicação Stasis `crm`, toca as falas pela ARI. Um teste-guarda reprova qualquer módulo de `lib/channels/telefonia/` ou de `workers/` que alcance o cliente da ElevenLabs. A decisão da URA é uma regra pura (`lib/telefonia/ura.ts`); o controlador só executa ações. Schema na migration 0288 (tripla: migration + apêndice idempotente no `baseline.sql` + MANIFEST), RLS `tenant_isolation_<tabela>_all`, escrita só pela API com a organização resolvida da sessão.
 
 **Tech Stack:** Next.js 16 Route Handlers, `pg` (Pool), Zod 4, Supabase Storage (service role), Asterisk ARI (HTTP + WebSocket), React 19 + TanStack Query, Vitest (jsdom/node), Playwright, Postgres 15 (`pnpm test:db`), Docker Compose.
 
-**Desenho aprovado:** [`docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`](../specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md). Este plano cobre só a **versão 1**: §2, §3.1, §4, §5.1, §5.2, §5.5 (parte da v1), §6 itens 1–4, 6 (menu, fora do horário, emergência) e 8, §7 e §10 no que tocam a v1, e o `allow_transfer=no` dos ramais (§5.3, "Rede de proteção"). Transferência (v2) e ramais (v3) ficam fora — exceto a coluna `phone_menus.accepts_extension`, que nasce na 0288 sem uso.
+**Desenho aprovado:** [`docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`](../specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md). Este plano cobre só a **versão 1**: D15 (a ElevenLabs só na prévia), §2, §3.1, §4 (inteira: prévia, ouvir, "Salvar e usar", limpeza), §5.1, §5.2, §5.5 (parte da v1), §6 itens 1–4, 6 (menu, fora do horário, emergência) e 8, §7 e §10 no que tocam a v1, e o `allow_transfer=no` dos ramais (§5.3, "Rede de proteção"). Transferência (v2) e ramais (v3) ficam fora — exceto a coluna `phone_menus.accepts_extension`, que nasce na 0288 sem uso.
 
 ---
 
@@ -20,9 +20,10 @@
 4. **i18n (gate `tests/unit/i18n-espanhol-cobre-a-tela.test.ts`):** todo texto de tela em `app/` e `components/` passa por `t("...")`, e toda chave literal de `t()` precisa de entrada em `DICIONARIO` (`lib/i18n/dicionario.ts`) com `es`. As entradas novas vão logo antes do `};` que fecha `DICIONARIO` (a linha acima do comentário `/**\n * Traduz, ou devolve o próprio texto.`). **Chave repetida é erro TS1117**: as tasks já trazem só as chaves que NÃO existem (conferido em 2026-09-28); se o typecheck acusar duplicata, apague a linha nova. Chaves de uma palavra só aparecem sem aspas no arquivo (`Editar: { es: "Editar" }`).
 5. **`lint:channels`:** fora de `lib/channels/`, nunca escreva o identificador do provider do tronco (o que começa com `sip_` e termina com `trunk`) nem em comentário. `lib/telefonia/`, `app/` e `components/` falam de "telefone"/"número", não do provider.
 6. **`lint:role-rank`:** rota em `app/api` nunca compara `ROLE_RANK`; só `requireRole()`.
-7. **Falha da ElevenLabs volta como 422 ou 502 — nunca 429/503.** O `apiClient` do navegador repete 429/503 sozinho, e cada repetição de síntese gasta crédito da conta do cliente.
+7. **Falha da ElevenLabs volta como 422 ou 502 — nunca 429/503.** O `apiClient` do navegador repete 429/503 sozinho, e cada repetição de síntese gasta crédito da conta do cliente. O limite de prévias (30 por hora por organização) também volta **422** (`limite_de_previas`), com `Retry-After` e `X-RateLimit-*`: num 429 o `apiClient` dormiria o `Retry-After` inteiro (até uma hora) antes de repetir.
 8. **Commits:** mensagem em português, e o corpo termina com a linha `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Cada task diz o `git add` exato.
 9. **`test:unit` completo** (só na Task 25): o protocolo do CLAUDE.md — log redirecionado, exit code como autoridade, rodapé e `grep FAIL` comparados.
+10. **A ElevenLabs só na prévia (D15).** Fora das rotas da chave, da voz e da prévia, só `lib/telefonia/previa.ts` e `lib/telefonia/servico-de-falas.ts` importam `lib/telefonia/elevenlabs.ts`. Nada de `lib/channels/telefonia/` nem de `workers/` pode alcançá-lo, nem por um módulo no meio: `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` (Task 2) reprova. Por isso `lib/telefonia/falas.ts` e `lib/telefonia/menus.ts` não o importam — `lib/channels/telefonia/numeros.ts` importa `menus.ts`, que importa `falas.ts`.
 
 ---
 
@@ -34,41 +35,45 @@
 |---|---|
 | `lib/telefonia/vocabulario.ts` | Vocabulário client-safe: tipos de fala, estados, desfechos do menu (espelhos dos CHECKs), bucket, teto de texto, DTOs (`FalaPublica`, `MenuPublico`, `AvisoDoTimePublico`) e mensagens de falha |
 | `lib/telefonia/ulaw.ts` (+ `.test.ts`) | G.711 μ-law puro: decodificar/codificar, `ulawParaWav`, `lerWav`, duração = bytes/8 |
-| `lib/telefonia/texto-do-menu.ts` (+ `.test.ts`) | `montarTextoDoMenu(opcoes)` e textos sugeridos das falas |
+| `lib/telefonia/texto-do-menu.ts` (+ `.test.ts`) | `montarTextoDoMenu(opcoes)`, textos sugeridos das falas e `textoSugeridoForaDoHorario` (com o WhatsApp da organização) |
 | `lib/telefonia/elevenlabs.ts` (+ `.test.ts`) | Cliente puro (fetch injetável): `listarVozes`, `sintetizar`, tradução de erro |
+| `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` | Teste-guarda (D15): nada de `lib/channels/telefonia/` nem de `workers/` alcança `lib/telefonia/elevenlabs.ts`, nem por um módulo no meio |
 | `lib/telefonia/ura.ts` (+ `.test.ts`) | Máquina da URA: estado + evento → ação |
 | `lib/telefonia/vencimento-da-emergencia.ts` (+ `.test.ts`) | Durações do aviso, `expiraEm`, `avisoVigente` |
 | `lib/telefonia/ultimos-sete-dias.ts` (+ `.test.ts`) | Soma das escolhas do menu e o alerta "menu que confunde" |
 | `lib/telefonia/chave-elevenlabs.ts` (+ `.test.ts`) | Chave da ElevenLabs em `ai_provider_credentials` (guardar, estado, decifrar) |
-| `lib/telefonia/armazem.ts` | Porta do Storage (`phone-prompts`) e a implementação com o cliente de serviço |
-| `lib/telefonia/falas.ts` (+ `.test.ts`) | Gerar/regravar/descartar fala; voz da organização; falas gerais |
-| `lib/telefonia/servico-de-falas.ts` | Fiação da instalação para as rotas: sintetizador, armazém, contexto (chave + voz), status HTTP da falha |
+| `lib/telefonia/armazem.ts` | Porta do Storage (`phone-prompts`: enviar, baixar, apagar, listar pastas e objetos) e a implementação com o cliente de serviço |
+| `lib/telefonia/falas.ts` (+ `.test.ts`) | O "Salvar e usar" sem ElevenLabs (`conferirFala`, `gravarFalaConferida`, `salvarFala`), `descartarFala`, `falaParaSalvarSchema`; voz da organização; falas gerais |
+| `lib/telefonia/previa.ts` (+ `.test.ts`) | `gerarPrevia`: reaproveita o objeto pelo hash ou sintetiza UMA vez — a única chamada de síntese à ElevenLabs |
+| `lib/telefonia/servico-de-falas.ts` (+ `.test.ts`) | Fiação da instalação para as rotas: sintetizador, armazém, contexto (chave + voz), status HTTP da falha e a cota de prévias (`consumirCotaDePrevia`, 30 por hora por organização) |
 | `lib/telefonia/menus.ts` (+ `.test.ts`) | Zod do menu, leitura com estatística, gravação em transação, arquivamento, "menu pronto para número" |
 | `lib/telefonia/emergencias.ts` | Zod e SQL do aviso de instabilidade por time |
 | `app/api/v1/telefonia/voz/chave/route.ts` (+ `.test.ts`) | GET estado (manager) / PUT chave (admin, valida listando vozes) |
 | `app/api/v1/telefonia/voz/route.ts` | GET voz + falas gerais / PUT voz (admin) |
 | `app/api/v1/telefonia/voz/vozes/route.ts` | GET vozes da conta (admin) |
-| `app/api/v1/telefonia/falas/gerais/[tipo]/route.ts` (+ `.test.ts`) | PUT gerar fala geral (admin) |
-| `app/api/v1/telefonia/falas/[id]/audio/route.ts` | GET bytes μ-law da fala (membro) |
+| `app/api/v1/telefonia/falas/previa/route.ts` (+ `.test.ts`) | POST gera a prévia (manager+; 30 por hora por organização; recusa com 422 `limite_de_previas`) |
+| `app/api/v1/telefonia/falas/gerais/[tipo]/route.ts` (+ `.test.ts`) | PUT "Salvar e usar" da fala geral: texto + hash da prévia, sem ElevenLabs (admin) |
+| `app/api/v1/telefonia/falas/[id]/audio/route.ts` | GET bytes μ-law da fala SALVA (membro) |
 | `app/api/v1/telefonia/menus/_salvar.ts` | Miolo comum de POST/PATCH do menu |
 | `app/api/v1/telefonia/menus/route.ts` (+ `.test.ts`) | GET lista / POST cria (admin) |
 | `app/api/v1/telefonia/menus/[id]/route.ts` | PATCH / DELETE arquiva (admin) |
 | `app/api/v1/telefonia/emergencias/route.ts` | GET avisos dos times (membro) |
-| `app/api/v1/telefonia/emergencias/[teamId]/route.ts` (+ `.test.ts`) | PUT liga / DELETE desliga (manager) |
-| `app/api/v1/telefonia/emergencias/[teamId]/fala/route.ts` | POST gera a fala do aviso para ouvir (manager) |
-| `lib/channels/telefonia/falas-no-disco.ts` (+ `.test.ts`) | Storage → volume: passada de 60 s, `garantir` antes de tocar, escrita atômica, órfãos |
+| `app/api/v1/telefonia/emergencias/[teamId]/route.ts` (+ `.test.ts`) | PUT liga com o texto e o hash da prévia / DELETE desliga (manager) |
+| `lib/channels/telefonia/falas-no-disco.ts` (+ `.test.ts`) | Storage → volume: passada de 60 s, `garantir` antes de tocar, escrita atômica, órfãos; e a limpeza do Storage (prévia não salva e áudio sem uso, 24 h) |
 | `supabase/migrations/20260928230000_0288_telefonia_ura_e_falas.sql` | Migration 0288 |
 | `tests/invariants/telefonia-ura-e-falas.test.ts` | RLS entre 2 organizações, grants, CHECKs, bucket, reaplicação do apêndice |
 | `tests/invariants/telefonia-repositorio-da-ura.test.ts` | SQL do worker contra Postgres real |
 | `tests/unit/telefonia-falas-no-volume.test.ts` | O volume `telefonia-falas` no compose (worker rw, asterisk ro, mesmo caminho do código) |
 | `components/connections/telefone/api.ts` | Hooks de leitura das abas do telefone |
 | `components/connections/telefone/TelefoniaDesligada.tsx` | Cartão "telefonia desligada" (extraído de `CanalTelefoneClient`) |
-| `components/connections/telefone/EstadoDaFala.tsx` | Selo pronta / falhou / gerando / voz anterior |
+| `components/connections/telefone/EstadoDaFala.tsx` | Selo em uso / em uso com a voz anterior / prévia não salva / gerando / falhou |
 | `components/connections/telefone/VozEFalas.tsx` | Aba Voz e falas |
 | `components/connections/telefone/MenusDoTelefone.tsx` | Aba Menus (lista, editor, últimos 7 dias) |
-| `components/telefonia/OuvirFala.tsx` | Busca o μ-law, converte em WAV, `<audio>` |
+| `components/telefonia/OuvirFala.tsx` | Busca o μ-law da fala salva, converte em WAV, `<audio>` |
+| `components/telefonia/usePreviaDaFala.ts` | A prévia na tela (gerar, ouvir, `falaParaSalvar`) — usada pelas falas gerais, pelo menu e pelo aviso |
+| `components/telefonia/OuvirPrevia.tsx` | Toca a prévia que está na memória da aba e avisa que ela foi ouvida |
 | `components/telefonia/useAvisosDeInstabilidade.ts` | Consulta (polling 60 s) e mutações do aviso |
-| `components/telefonia/AvisoDeInstabilidadeDoTime.tsx` | Cartão do aviso em Configurações › Times |
+| `components/telefonia/AvisoDeInstabilidadeDoTime.tsx` (+ `.test.tsx`) | Cartão do aviso em Configurações › Times; "Ligar" com texto novo só depois de gerar a prévia e ouvir |
 | `components/telefonia/FaixaDoAvisoDeInstabilidade.tsx` (+ `.test.tsx`) | Faixa em todo o CRM |
 | `components/telefonia/CartaoDaLigacao.test.tsx` | Cartão da ligação com menu, aviso e fora do horário |
 | `components/connections/CanalTelefoneClient.destino.test.tsx` | Número apontando para menu |
@@ -112,9 +117,17 @@
 - **Fora do horário sem fala gerada segue a fase 1** (fila de 2 min → perdida com "Ligar de volta"). Desligar em silêncio, sem explicação e sem aviso, seria um beco sem saída para quem ainda não cadastrou a chave da ElevenLabs. Ver "Pontos para o orquestrador decidir".
 - **`default_invalid` = houve ao menos uma tecla errada no menu**; `default_no_input` = nenhuma tecla.
 - **A chave da ElevenLabs não entra em `PROVEDORES`** (`lib/ai/pontos/provedores.ts`): aquela lista é de quem executa modelo de linguagem e casa com o registry do motor (`tests/unit/provedores-x-registry.test.ts`). Ela mora em `ai_provider_credentials` com `provider = 'elevenlabs'` (coluna de vocabulário aberto desde a 0127) e tem rota própria.
+- **A prévia devolve o áudio em base64 no JSON** (`POST /api/v1/telefonia/falas/previa`): uma ida só entrega o hash e o som, pelo `apiClient` de sempre e com o erro já traduzido pela rota. 1000 caracteres de fala cabem em poucas centenas de KB.
+- **O limite de 30 prévias por hora conta só a prévia que vai à ElevenLabs.** Reaproveitar do Storage não custa nada e não gasta cota. O limitador é o `checkRateLimit` que o CRM já usa (`lib/ai/dispatcher/rate-limit.ts`, o mesmo de `app/api/v1/marca/logo/route.ts`), e ele é de janela **fixa** (`INCR` + `EXPIRE`), não deslizante.
+- **`FalaPublica` leva o `hash`.** Quando o texto não mudou, a tela devolve o hash da fala em uso ("Salvar menu" sem mexer na fala, "Ligar" o aviso já gravado). O servidor só aceita o hash do texto com a voz atual, ou o da própria fala em uso, e o caminho do Storage é sempre montado com a organização da sessão.
+- **A limpeza do Storage usa a API do Storage (service role), não SQL em `storage.objects`.** Num Supabase próprio a conexão do app pode ser uma role com grants só em `public` (`url_do_schema`, `hostgator-setup-kit/_common.sh`); a service role alcança o Storage em toda instalação. Uma regra só cobre os dois casos do §4 (prévia não salva e áudio antigo): sai o objeto que nenhuma linha referencia e foi gravado há mais de 24 h, conferido de novo logo antes de apagar.
+- **"Ouvir" é obrigatório só no aviso de instabilidade** (§6.3). Nas falas gerais e no menu, salvar exige a prévia do texto que está no campo (ou a fala em uso, se o texto não mudou), não o play.
+- **Nenhuma linha `failed` nasce na v1.** A falha da ElevenLabs acontece na prévia, que não escreve linha; `status`/`error` de `phone_prompts` ficam no schema como o §3.1 pede, e a tela ainda sabe mostrá-los.
 
 ---
 ## Task 0: Passo zero A — o Asterisk toca o nosso `.ulaw` (medição local)
+
+> **Executada pelo ORQUESTRADOR na VPS de produção em 2026-09-28; ver resultado registrado nesta task.**
 
 **Quem:** subagente implementador (ou o orquestrador). **Nada é commitado**: o que sai daqui é a evidência (em `.superpowers/`, que o `.gitignore` já ignora) e a decisão "ramo A" ou "ramo B", reportada ao orquestrador antes da Task 12.
 
@@ -485,14 +498,32 @@ export type MotivoDoErroDaElevenLabs =
   | "sem_resposta"
   | "erro_do_provedor";
 
-/** Por que uma fala não foi gerada. Gravado em `phone_prompts.error` quando `status = failed`. */
-export type FalhaDaFala = "sem_chave" | "sem_voz" | "armazenamento" | MotivoDoErroDaElevenLabs;
+/**
+ * Por que uma prévia não saiu, ou por que o "Salvar e usar" recusou a prévia. A
+ * rota devolve o código; a v1 não grava linha `failed` (a falha fica na prévia,
+ * que não escreve linha), mas `phone_prompts.error` segue aceitando o código.
+ */
+export type FalhaDaFala =
+  | "sem_chave"
+  | "sem_voz"
+  | "armazenamento"
+  /** A organização passou de 30 prévias na hora (desenho §4). */
+  | "limite_de_previas"
+  /** O objeto `<org>/<hash>.ulaw` não está no Storage da organização. */
+  | "previa_ausente"
+  /** O hash não é o do texto com a voz atual: o texto (ou a voz) mudou depois da prévia. */
+  | "previa_desatualizada"
+  | MotivoDoErroDaElevenLabs;
 
 /** O que a tela diz de cada falha. Em português; a tela passa por `t()`. */
 export const MENSAGEM_DA_FALHA_DA_FALA: Record<FalhaDaFala, string> = {
   sem_chave: "Cadastre a chave da ElevenLabs em Credenciais de IA para gerar as falas.",
   sem_voz: "Escolha a voz das falas na aba Voz e falas antes de gerar.",
   armazenamento: "Não foi possível guardar o áudio da fala. Tente de novo em instantes.",
+  limite_de_previas:
+    "Muitas prévias geradas na última hora. Espere um pouco para gerar outra — ouvir as que já estão na tela não custa nada.",
+  previa_ausente: "A prévia deste texto não está mais guardada. Gere a prévia de novo e salve em seguida.",
+  previa_desatualizada: "O texto ou a voz mudou depois da prévia. Gere a prévia de novo antes de salvar.",
   chave_invalida: "A ElevenLabs recusou a chave. Confira a chave em Credenciais de IA.",
   sem_credito: "A conta da ElevenLabs está sem crédito. As falas já geradas continuam tocando.",
   texto_recusado: "A ElevenLabs recusou este texto. Encurte ou reescreva e tente de novo.",
@@ -506,12 +537,17 @@ export function ehFalhaDaFala(valor: string | null | undefined): valor is FalhaD
   return typeof valor === "string" && Object.hasOwn(MENSAGEM_DA_FALHA_DA_FALA, valor);
 }
 
-/** Uma fala como a tela a vê. Nunca leva o caminho do Storage nem o hash. */
+/**
+ * Uma fala como a tela a vê. Nunca leva o caminho do Storage. Leva o `hash`: é o
+ * que a tela devolve no "Salvar" quando o texto não mudou (a fala em uso segue).
+ */
 export interface FalaPublica {
   id: string;
   tipo: TipoDeFala;
   texto: string;
   voice_id: string;
+  /** sha256(modelo, voz, texto) — o mesmo da prévia que a gerou. */
+  hash: string;
   status: EstadoDaFala;
   /** O código de `FalhaDaFala` quando `status = failed`. */
   erro: string | null;
@@ -519,9 +555,21 @@ export interface FalaPublica {
   atualizada_em: string;
 }
 
-export interface FalhaNaResposta {
-  motivo: FalhaDaFala;
-  mensagem: string;
+/** A resposta da rota da prévia (`POST /api/v1/telefonia/falas/previa`). */
+export interface PreviaNaResposta {
+  /** O que o "Salvar e usar" devolve à API — nunca um caminho. */
+  hash: string;
+  duracao_ms: number;
+  /** `true` = o áudio já estava no Storage: a ElevenLabs não foi chamada. */
+  reaproveitada: boolean;
+  /** O μ-law 8 kHz em base64; a tela converte em WAV para ouvir. */
+  audio_base64: string;
+}
+
+/** O corpo que salva uma fala (fala geral, menu, aviso): o texto e o hash da prévia dele. */
+export interface FalaParaSalvar {
+  texto: string;
+  hash: string;
 }
 
 export interface OpcaoDoMenuPublica {
@@ -781,7 +829,13 @@ Crie `lib/telefonia/texto-do-menu.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
 
-import { FRASE_DA_OPCAO, TEXTO_SUGERIDO, montarTextoDoMenu } from "./texto-do-menu";
+import {
+  FRASE_DA_OPCAO,
+  TEXTO_SUGERIDO,
+  montarTextoDoMenu,
+  numeroParaFalar,
+  textoSugeridoForaDoHorario,
+} from "./texto-do-menu";
 
 describe("montarTextoDoMenu", () => {
   it("monta a fala a partir das opções, na ordem das teclas", () => {
@@ -824,6 +878,24 @@ describe("montarTextoDoMenu", () => {
     for (const texto of Object.values(TEXTO_SUGERIDO)) expect(texto.trim().length).toBeGreaterThan(5);
   });
 });
+
+describe("o 'fora do horário' sugerido com o WhatsApp da organização (desenho §4)", () => {
+  it("numeroParaFalar: do Brasil do jeito que se fala; de outro país com +; o que não é telefone vira null", () => {
+    expect(numeroParaFalar("+5561999990000")).toBe("(61) 99999-0000");
+    expect(numeroParaFalar("556136861503")).toBe("(61) 3686-1503");
+    expect(numeroParaFalar("+14155550100")).toBe("+14155550100");
+    expect(numeroParaFalar(null)).toBeNull();
+    expect(numeroParaFalar("abc")).toBeNull();
+  });
+
+  it("com número, o texto sugerido o cita; sem número, é o texto de sempre; a frase passa pela tradução antes do número", () => {
+    expect(textoSugeridoForaDoHorario("+5561999990000")).toBe(
+      "Nosso atendimento está fechado agora. Se preferir, mande uma mensagem no nosso WhatsApp, (61) 99999-0000. Obrigado pela ligação.",
+    );
+    expect(textoSugeridoForaDoHorario(null)).toBe(TEXTO_SUGERIDO.after_hours);
+    expect(textoSugeridoForaDoHorario("+5561999990000", (s) => s.replace("Nosso", "O nosso"))).toMatch(/^O nosso atendimento/);
+  });
+});
 ```
 
 - [ ] **Step 7: Rodar e ver falhar**
@@ -838,8 +910,9 @@ Crie `lib/telefonia/texto-do-menu.ts`:
 ```ts
 /**
  * O texto que a URA fala, montado a partir das opções do menu, e os textos
- * sugeridos das falas (desenho da fase 2, §6.2). Puro e client-safe: a tela monta
- * a prévia enquanto a pessoa escolhe as opções, e ela edita antes de gerar a voz.
+ * sugeridos das falas (desenho da fase 2, §4 e §6.2). Puro e client-safe: a tela
+ * monta o texto enquanto a pessoa escolhe as opções, e ela edita antes de gerar a
+ * prévia da voz.
  */
 import type { FalaGeral } from "./vocabulario";
 
@@ -870,12 +943,44 @@ export const TEXTO_SUGERIDO: Record<FalaGeral | "emergency" | "invalid", string>
   emergency: "Estamos com uma instabilidade no momento e já estamos trabalhando para resolver. Obrigado pela paciência.",
   invalid: "Opção inválida.",
 };
+
+/** O "fora do horário" quando a organização tem um WhatsApp conectado (desenho §4). `{numero}` é trocado. */
+export const TEXTO_SUGERIDO_FORA_DO_HORARIO_COM_WHATSAPP =
+  "Nosso atendimento está fechado agora. Se preferir, mande uma mensagem no nosso WhatsApp, {numero}. Obrigado pela ligação.";
+
+/**
+ * O número como a voz o diz: do Brasil, "(61) 99999-0000" ou "(61) 3686-1503"; de
+ * outro país, "+" e os dígitos. `null` quando não parece telefone.
+ */
+export function numeroParaFalar(bruto: string | null | undefined): string | null {
+  const d = (bruto ?? "").replace(/\D/g, "");
+  if (d.startsWith("55") && (d.length === 12 || d.length === 13)) {
+    const local = d.slice(4);
+    return `(${d.slice(2, 4)}) ${local.slice(0, -4)}-${local.slice(-4)}`;
+  }
+  return d.length >= 8 ? `+${d}` : null;
+}
+
+/**
+ * O texto sugerido de "fora do horário". Com um WhatsApp conectado, cita o número
+ * (a tela o acha em `useChannelSessions`); sem, é o texto de sempre. Continua
+ * editável. `traduzir` é o `t()` da tela: a frase passa por ele ANTES de o número
+ * entrar, para a chave do dicionário ser a frase com `{numero}`.
+ */
+export function textoSugeridoForaDoHorario(
+  numeroDoWhatsApp: string | null | undefined,
+  traduzir: (texto: string) => string = (texto) => texto,
+): string {
+  const numero = numeroParaFalar(numeroDoWhatsApp);
+  if (!numero) return traduzir(TEXTO_SUGERIDO.after_hours);
+  return traduzir(TEXTO_SUGERIDO_FORA_DO_HORARIO_COM_WHATSAPP).replaceAll("{numero}", numero);
+}
 ```
 
 - [ ] **Step 9: Rodar e ver passar**
 
 Run: `pnpm exec vitest run lib/telefonia/texto-do-menu.test.ts lib/telefonia/ulaw.test.ts`
-Expected: PASS (13 testes).
+Expected: PASS (15 testes).
 
 - [ ] **Step 10: Commit**
 
@@ -884,8 +989,9 @@ git add lib/telefonia/vocabulario.ts lib/telefonia/ulaw.ts lib/telefonia/ulaw.te
 git commit -m "feat(telefonia): vocabulário da URA, μ-law e texto do menu
 
 Regras puras e client-safe da fase 2 (versão 1): o vocabulário que espelha os
-CHECKs da 0288, a conversão μ-law → WAV para ouvir a fala no navegador e a fala
-do menu montada a partir das opções.
+CHECKs da 0288, a conversão μ-law → WAV para ouvir a fala no navegador, a fala
+do menu montada a partir das opções e o texto sugerido de fora do horário com o
+WhatsApp da organização.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -896,6 +1002,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `lib/telefonia/elevenlabs.ts`, `lib/telefonia/elevenlabs.test.ts`
+- Create: `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` (o teste-guarda do D15)
 - Modify: `lib/env.ts:213` (logo depois de `CLASSIFICADOR_COMERCIAL_BASE_URL`)
 - Modify: `.env.example:176` (logo depois da linha `CLASSIFICADOR_COMERCIAL_BASE_URL=`)
 
@@ -1050,6 +1157,11 @@ Crie `lib/telefonia/elevenlabs.ts`:
  *
  * Toda falha vira `ErroDaElevenLabs` com um motivo do vocabulário — a tela traduz
  * o motivo, e o texto cru do provedor nunca chega a ela.
+ *
+ * Quem chama `sintetizar` é SÓ a prévia da tela (`lib/telefonia/previa.ts`,
+ * desenho D15): toda ligação toca um arquivo já gravado. Nenhum módulo do caminho
+ * da ligação (`lib/channels/telefonia/`, `workers/`) importa este arquivo, nem por
+ * um módulo no meio — `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` reprova.
  */
 import { lerWav } from "./ulaw";
 import { MODELO_DE_VOZ_PADRAO, type MotivoDoErroDaElevenLabs } from "./vocabulario";
@@ -1204,15 +1316,226 @@ ELEVENLABS_API_BASE_URL=
 Run: `pnpm exec vitest run tests/unit/env-example-sync.test.ts && pnpm typecheck`
 Expected: PASS e `tsc` sem erro.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: O teste-guarda — a ligação nunca chama a ElevenLabs (D15)**
+
+O desenho (§4) pede um teste que reprove o CI se qualquer módulo do caminho da ligação importar o cliente da ElevenLabs. Ele nasce junto com o cliente, antes de existir qualquer código que o use. O padrão é o das varreduras do repo (`tests/unit/admin-client-exige-filtro-de-tenant.test.ts`, `tests/unit/cron-audita-so-quando-ha-efeito.test.ts`): `arquivosDeCodigo` de `tests/unit/helpers/varrer-codigo.ts` e o parser do `typescript`, com controle positivo antes de concluir qualquer ausência.
+
+Crie `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`:
+
+```ts
+/**
+ * A LIGAÇÃO NUNCA CHAMA A ELEVENLABS (desenho da fase 2, D15 e §4).
+ *
+ * A ElevenLabs é chamada SÓ quando alguém gera uma PRÉVIA na tela; toda ligação
+ * toca um arquivo já gravado, e mil ligações custam zero. A regra se sustenta por
+ * ESTRUTURA: nenhum módulo do caminho da ligação — `lib/channels/telefonia/`
+ * (controlador, repositório, falas no disco, números) e `workers/` — alcança o
+ * cliente da ElevenLabs (`lib/telefonia/elevenlabs.ts`), nem direto nem por um
+ * módulo no meio. Se alcançasse, bastaria uma linha para uma fala faltante virar
+ * síntese paga no meio de uma ligação, repetida a cada ligação.
+ *
+ * TRANSITIVO de propósito: um import direto é fácil de ver na revisão; o que
+ * escapa é o worker importar um módulo que importa outro que importa o cliente. A
+ * varredura segue `import`, `export … from`, `import()` e `require()` com caminho
+ * `@/` ou relativo, e conta também `import type` — o caminho da ligação não tem
+ * motivo nem para conhecer os tipos do cliente.
+ *
+ * Os controles, porque varredura quebrada devolve "nada encontrado" e isso é
+ * indistinguível de "está tudo certo" (tests/unit/helpers/varrer-codigo.ts):
+ *  1. o alvo existe — renomear o cliente não pode deixar este teste verde e cego;
+ *  2. a varredura viu o caminho da ligação e resolveu `@/` e `./`;
+ *  3. o detector acha uma cadeia de VERDADE (o teste do cliente importa o cliente)
+ *     e uma cadeia transitiva num grafo montado à mão.
+ * A prova de que ele morde é a sabotagem descrita no plano da fase 2 (Task 2,
+ * Steps 9 e 10; de novo na Task 25): um import do cliente num arquivo do caminho
+ * da ligação deixa este teste vermelho, com a cadeia na mensagem.
+ */
+import { existsSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+
+import ts from "typescript";
+import { describe, expect, it } from "vitest";
+
+import { RAIZ_DO_REPO, arquivosDeCodigo, caminhoRelativo } from "./helpers/varrer-codigo";
+
+const ALVO = path.join(RAIZ_DO_REPO, "lib/telefonia/elevenlabs.ts");
+const CAMINHO_DA_LIGACAO = ["lib/channels/telefonia", "workers"] as const;
+
+/** Os especificadores que um arquivo importa: estático, reexport, `import x = require()`, `import()` e `require()`. */
+function especificadores(arquivo: string, fonte: string): string[] {
+  const sf = ts.createSourceFile(
+    arquivo,
+    fonte,
+    ts.ScriptTarget.Latest,
+    false,
+    arquivo.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const achados: string[] = [];
+  const visitar = (no: ts.Node): void => {
+    if ((ts.isImportDeclaration(no) || ts.isExportDeclaration(no)) && no.moduleSpecifier && ts.isStringLiteral(no.moduleSpecifier)) {
+      achados.push(no.moduleSpecifier.text);
+    } else if (
+      ts.isImportEqualsDeclaration(no) &&
+      ts.isExternalModuleReference(no.moduleReference) &&
+      ts.isStringLiteral(no.moduleReference.expression)
+    ) {
+      achados.push(no.moduleReference.expression.text);
+    } else if (ts.isCallExpression(no) && no.arguments.length > 0 && ts.isStringLiteralLike(no.arguments[0]!)) {
+      const chamado = no.expression;
+      if (chamado.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(chamado) && chamado.text === "require")) {
+        achados.push((no.arguments[0] as ts.StringLiteralLike).text);
+      }
+    }
+    ts.forEachChild(no, visitar);
+  };
+  visitar(sf);
+  return achados;
+}
+
+/** `@/x` e `./x` → o arquivo do repo; pacote de fora → `null`. */
+function resolver(de: string, especificador: string): string | null {
+  let base: string;
+  if (especificador.startsWith("@/")) base = path.join(RAIZ_DO_REPO, especificador.slice(2));
+  else if (especificador.startsWith(".")) base = path.resolve(path.dirname(de), especificador);
+  else return null;
+  for (const c of [base, `${base}.ts`, `${base}.tsx`, path.join(base, "index.ts"), path.join(base, "index.tsx")]) {
+    if (existsSync(c) && statSync(c).isFile()) return c;
+  }
+  return null;
+}
+
+const lidos = new Map<string, string[]>();
+/** Os arquivos do repo que `arquivo` importa. Só `.ts`/`.tsx` são lidos: um `.json` ou `.css` não importa ninguém. */
+function importsDoRepo(arquivo: string): string[] {
+  const guardado = lidos.get(arquivo);
+  if (guardado) return guardado;
+  const achados = /\.tsx?$/.test(arquivo)
+    ? especificadores(arquivo, readFileSync(arquivo, "utf8"))
+        .map((e) => resolver(arquivo, e))
+        .filter((c): c is string => c !== null)
+    : [];
+  lidos.set(arquivo, achados);
+  return achados;
+}
+
+/**
+ * A cadeia mais curta de uma das `entradas` até o `alvo`, ou `null`. Busca em
+ * largura com vários pontos de partida; `importsDe` é injetável para o controle
+ * com um grafo montado à mão.
+ */
+function cadeiaAte(alvo: string, entradas: readonly string[], importsDe: (arquivo: string) => string[]): string[] | null {
+  const veioDe = new Map<string, string | null>();
+  const fila: string[] = [];
+  for (const e of entradas) {
+    if (!veioDe.has(e)) {
+      veioDe.set(e, null);
+      fila.push(e);
+    }
+  }
+  for (let i = 0; i < fila.length; i++) {
+    const atual = fila[i]!;
+    if (atual === alvo) {
+      const cadeia: string[] = [];
+      for (let c: string | null = atual; c !== null; c = veioDe.get(c) ?? null) cadeia.unshift(c);
+      return cadeia;
+    }
+    for (const proximo of importsDe(atual)) {
+      if (!veioDe.has(proximo)) {
+        veioDe.set(proximo, atual);
+        fila.push(proximo);
+      }
+    }
+  }
+  return null;
+}
+
+const entradas = arquivosDeCodigo(CAMINHO_DA_LIGACAO);
+
+describe("a ligação nunca chama a ElevenLabs (desenho da fase 2, D15)", () => {
+  it("controle: o cliente da ElevenLabs existe onde este teste o procura", () => {
+    expect(existsSync(ALVO), `${caminhoRelativo(ALVO)} sumiu — atualize ALVO, ou este teste fica verde e cego`).toBe(true);
+  });
+
+  it("controle: a varredura vê o caminho da ligação e resolve `@/` e `./`", () => {
+    const relativos = entradas.map(caminhoRelativo);
+    expect(relativos).toContain("lib/channels/telefonia/laco.ts");
+    expect(relativos).toContain("workers/agent-worker/main.ts");
+    expect(importsDoRepo(path.join(RAIZ_DO_REPO, "workers/agent-worker/main.ts")).map(caminhoRelativo)).toContain(
+      "lib/channels/telefonia/laco.ts",
+    );
+    expect(importsDoRepo(path.join(RAIZ_DO_REPO, "lib/channels/telefonia/laco.ts")).map(caminhoRelativo)).toContain(
+      "lib/channels/telefonia/controle.ts",
+    );
+  });
+
+  it("controle: o detector acha uma cadeia de verdade e uma transitiva", () => {
+    const testeDoCliente = path.join(RAIZ_DO_REPO, "lib/telefonia/elevenlabs.test.ts");
+    expect(cadeiaAte(ALVO, [testeDoCliente], importsDoRepo)?.map(caminhoRelativo)).toEqual([
+      "lib/telefonia/elevenlabs.test.ts",
+      "lib/telefonia/elevenlabs.ts",
+    ]);
+    const grafo: Record<string, string[]> = { "/a.ts": ["/b.ts"], "/b.ts": ["/c.ts"], "/c.ts": [ALVO] };
+    expect(cadeiaAte(ALVO, ["/a.ts"], (f) => grafo[f] ?? [])).toEqual(["/a.ts", "/b.ts", "/c.ts", ALVO]);
+    expect(cadeiaAte(ALVO, ["/a.ts"], (f) => (f === "/c.ts" ? [] : (grafo[f] ?? [])))).toBeNull();
+  });
+
+  it(
+    "nenhum arquivo de lib/channels/telefonia/ ou de workers/ alcança o cliente da ElevenLabs",
+    () => {
+      const cadeia = cadeiaAte(ALVO, entradas, importsDoRepo);
+      expect(
+        cadeia,
+        cadeia
+          ? `a ligação alcança a ElevenLabs por: ${cadeia.map(caminhoRelativo).join(" → ")}. ` +
+              "Só a prévia da tela sintetiza (desenho D15): tire o import, ou mova para o caminho da ligação só o que não depende do cliente."
+          : "",
+      ).toBeNull();
+    },
+    60_000,
+  );
+});
+```
+
+- [ ] **Step 8: Rodar e ver passar (com os três controles)**
+
+Run: `pnpm exec vitest run tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`
+Expected: PASS (4 testes). Hoje nada do caminho da ligação importa o cliente — é exatamente o que o teste afirma; a prova de que ele não passa por cegueira são os três controles e os dois passos seguintes.
+
+- [ ] **Step 9: Sabotar — import direto e import transitivo — e ver o teste reprovar**
 
 ```bash
-git add lib/telefonia/elevenlabs.ts lib/telefonia/elevenlabs.test.ts lib/env.ts .env.example
+printf '\nimport "@/lib/telefonia/elevenlabs";\n' >> lib/channels/telefonia/laco.ts
+pnpm exec vitest run tests/unit/ligacao-nunca-chama-elevenlabs.test.ts; echo "exit=$?"
+git checkout -- lib/channels/telefonia/laco.ts
+
+printf '\nimport "./elevenlabs";\n' >> lib/telefonia/numero.ts
+pnpm exec vitest run tests/unit/ligacao-nunca-chama-elevenlabs.test.ts; echo "exit=$?"
+git checkout -- lib/telefonia/numero.ts
+```
+
+Expected: as duas rodadas com `exit=1` e FAIL no último caso, com a cadeia na mensagem:
+- direta: `a ligação alcança a ElevenLabs por: lib/channels/telefonia/laco.ts → lib/telefonia/elevenlabs.ts`;
+- transitiva (`lib/telefonia/numero.ts` fica FORA das pastas varridas, mas `controle.ts`, `numeros.ts` e `saida.ts` o importam): a cadeia começa num arquivo de `lib/channels/telefonia/` e termina em `lib/telefonia/numero.ts → lib/telefonia/elevenlabs.ts`.
+
+Se alguma das duas rodadas der `exit=0`, o teste está cego: pare e conserte o teste antes de seguir.
+
+- [ ] **Step 10: Reverter e ver passar de novo**
+
+Run: `git status --short lib/channels/telefonia/laco.ts lib/telefonia/numero.ts; pnpm exec vitest run tests/unit/ligacao-nunca-chama-elevenlabs.test.ts; echo "exit=$?"`
+Expected: o `git status` sem saída (os dois arquivos da fase 1 voltaram ao que eram) e `exit=0`.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add lib/telefonia/elevenlabs.ts lib/telefonia/elevenlabs.test.ts lib/env.ts .env.example \
+  tests/unit/ligacao-nunca-chama-elevenlabs.test.ts
 git commit -m "feat(telefonia): cliente da ElevenLabs para as falas da URA
 
 Listar vozes (valida a chave) e sintetizar em ulaw_8000, com a chave só no
 header e toda falha traduzida para um motivo que a tela explica. A URL base é
-configurável só para o receptor falso do e2e.
+configurável só para o receptor falso do e2e. O teste-guarda nasce junto: nada
+de lib/channels/telefonia/ nem de workers/ alcança o cliente, nem por um módulo
+no meio — a ligação nunca chama a ElevenLabs.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1972,8 +2295,9 @@ Crie `supabase/migrations/20260928230000_0288_telefonia_ura_e_falas.sql`:
 --    ninguém atendeu, fora do horário, aviso de instabilidade). O áudio mora no
 --    bucket privado `phone-prompts`, em `<org>/<sha256(modelo, voz, texto)>.ulaw`;
 --    a linha diz qual texto, qual voz e se está pronta (`ready`) ou falhou
---    (`failed` + o motivo em `error`). O CHECK do caminho amarra o arquivo à
---    organização e ao hash: o worker escreve esse caminho no disco, e um valor
+--    (`failed` + o motivo em `error`; a v1 só grava `ready`: a linha nasce no
+--    "Salvar e usar" de uma prévia que já está no Storage, desenho D15).
+--    O CHECK do caminho amarra o arquivo à organização e ao hash: o worker escreve esse caminho no disco, e um valor
 --    gravado por fora (REST, psql) não aponta para fora da pasta da organização.
 -- 2. `phone_settings` — uma linha por organização: a voz da ElevenLabs e as três
 --    falas gerais (aguarde, ninguém atendeu, fora do horário).
@@ -2198,9 +2522,9 @@ on conflict (id) do update
 
 -- 10. Comentários ----------------------------------------------------------------
 comment on table public.phone_prompts is
-  'Uma fala do telefone (URA, aguarde, ninguém atendeu, fora do horário, aviso de instabilidade). Áudio μ-law 8 kHz no bucket privado phone-prompts; gerado pela API na ElevenLabs e copiado pelo worker para o volume telefonia-falas, que o Asterisk lê. Escrita só pela API/worker (GRANT só de SELECT).';
+  'Uma fala do telefone (URA, aguarde, ninguém atendeu, fora do horário, aviso de instabilidade). Áudio μ-law 8 kHz no bucket privado phone-prompts: gerado pela ElevenLabs SÓ na prévia da tela, passa a valer no "Salvar e usar" (a linha aponta para o hash) e é copiado pelo worker para o volume telefonia-falas, que o Asterisk lê. Escrita só pela API/worker (GRANT só de SELECT).';
 comment on column public.phone_prompts.storage_path is
-  '<organization_id>/<content_hash>.ulaw no bucket phone-prompts — amarrado por CHECK, porque o worker escreve este caminho no disco. NULL quando a geração falhou.';
+  '<organization_id>/<content_hash>.ulaw no bucket phone-prompts — amarrado por CHECK, porque o worker escreve este caminho no disco. NULL só numa linha failed.';
 comment on table public.phone_menus is
   'Menu de voz (URA) da organização: serve a vários números (channel_sessions.sip_menu_id). Tecla → time em phone_menu_options; quem não escolhe vai ao default_team_id. accepts_extension é da versão 3 (ramais).';
 comment on column public.channel_sessions.sip_menu_id is
@@ -2622,9 +2946,10 @@ export function opcoesDaElevenLabs(): OpcoesDoCliente {
 }
 
 /**
- * 422 (a pessoa pode consertar) ou 502 (o provedor/Storage falhou) — NUNCA 429
- * ou 503: o `apiClient` do navegador repete esses sozinho, e cada repetição de
- * síntese gasta crédito da conta do cliente.
+ * 422 (a pessoa pode consertar, ou esperar) ou 502 (o provedor/Storage falhou) —
+ * NUNCA 429 ou 503: o `apiClient` do navegador repete esses sozinho (com
+ * `Retry-After`, dorme o prazo inteiro antes), e cada repetição de síntese gasta
+ * crédito da conta do cliente. Vale também para o limite de prévias.
  */
 export const STATUS_DA_FALHA: Record<FalhaDaFala, 422 | 502> = {
   sem_chave: 422,
@@ -2634,6 +2959,9 @@ export const STATUS_DA_FALHA: Record<FalhaDaFala, 422 | 502> = {
   texto_recusado: 422,
   voz_inexistente: 422,
   limite_de_uso: 422,
+  limite_de_previas: 422,
+  previa_ausente: 422,
+  previa_desatualizada: 422,
   armazenamento: 502,
   sem_resposta: 502,
   erro_do_provedor: 502,
@@ -2650,6 +2978,10 @@ Em `lib/audit/actions.ts`, logo depois da linha `  "phone_extension.credential_i
   // número e o prazo do aviso. A chave em si é auditada como
   // `ai.credential_created` com `provider = elevenlabs`.
   "phone.voice_changed",
+  // A prévia que FOI à ElevenLabs (gastou crédito e gravou um objeto no Storage).
+  // A reaproveitada não fez nada e não audita. `metadata`: hash, tamanho, duração.
+  "phone.prompt_previewed",
+  // O "Salvar e usar": a linha passou a apontar para a prévia.
   "phone.prompt_saved",
   "phone.menu_saved",
   "phone.menu_archived",
@@ -2869,6 +3201,15 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
   "Não foi possível guardar o áudio da fala. Tente de novo em instantes.": {
     es: "No se pudo guardar el audio de la locución. Inténtalo de nuevo en unos instantes.",
   },
+  "Muitas prévias geradas na última hora. Espere um pouco para gerar outra — ouvir as que já estão na tela não custa nada.": {
+    es: "Demasiadas vistas previas generadas en la última hora. Espera un poco para generar otra: escuchar las que ya están en pantalla no cuesta nada.",
+  },
+  "A prévia deste texto não está mais guardada. Gere a prévia de novo e salve em seguida.": {
+    es: "La vista previa de este texto ya no está guardada. Genera la vista previa de nuevo y guarda enseguida.",
+  },
+  "O texto ou a voz mudou depois da prévia. Gere a prévia de novo antes de salvar.": {
+    es: "El texto o la voz cambió después de la vista previa. Genera la vista previa de nuevo antes de guardar.",
+  },
   "A ElevenLabs recusou a chave. Confira a chave em Credenciais de IA.": {
     es: "ElevenLabs rechazó la clave. Revisa la clave en Credenciales de IA.",
   },
@@ -2904,19 +3245,23 @@ git commit -m "feat(telefonia): chave da ElevenLabs por organização, validada 
 
 Uma por organização em ai_provider_credentials (provider elevenlabs), cifrada
 com AI_CRED_AES_KEY; a rota valida listando as vozes da conta e nunca devolve a
-chave. Ações de auditoria da fase 2 registradas no vocabulário.
+chave. Ações de auditoria da fase 2 registradas no vocabulário, inclusive a da
+prévia que vai à ElevenLabs.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 6: As falas — armazém e geração (regravar, reaproveitar, descartar)
+## Task 6: As falas — armazém, prévia e "Salvar e usar" (a ElevenLabs só na prévia)
 
 **Files:**
 - Create: `lib/telefonia/armazem.ts`
 - Create: `lib/telefonia/falas.ts`, `lib/telefonia/falas.test.ts`
-- Modify: `lib/telefonia/servico-de-falas.ts` (versão final, arquivo inteiro)
+- Create: `lib/telefonia/previa.ts`, `lib/telefonia/previa.test.ts`
+- Modify: `lib/telefonia/servico-de-falas.ts` (arquivo inteiro; a Task 7 acrescenta a cota de prévias no fim)
+
+**A regra do dono (D15 e §4 do desenho):** a ElevenLabs só é chamada em `gerarPrevia` — quando alguém pede uma prévia na tela. `salvarFala` (o "Salvar e usar") NUNCA a chama: confere que o objeto `<org da sessão>/<hash>.ulaw` existe e aponta a linha de `phone_prompts` para ele. Nenhuma função desta task apaga o Storage: a prévia não salva e o áudio sem uso saem na limpeza do worker, 24 h depois de gravados (Task 12). E `falas.ts` não importa o cliente da ElevenLabs, de propósito: `lib/telefonia/menus.ts` importa `falas.ts`, e `lib/channels/telefonia/numeros.ts` importa `menus.ts` — o teste-guarda da Task 2 reprovaria a cadeia.
 
 - [ ] **Step 1: A porta do Storage**
 
@@ -2927,18 +3272,43 @@ Crie `lib/telefonia/armazem.ts`:
  * O STORAGE DAS FALAS — a porta e a implementação com o cliente de serviço.
  *
  * O bucket `phone-prompts` é PRIVADO: só o cliente de serviço (API e worker) lê e
- * escreve. A tela nunca recebe URL do Storage — ouve pela rota
- * `/api/v1/telefonia/falas/[id]/audio`, que confere a organização antes.
+ * escreve. A tela nunca recebe URL do Storage: ouve a fala salva pela rota
+ * `/api/v1/telefonia/falas/[id]/audio` (que confere a organização antes) e a
+ * PRÉVIA pelo próprio corpo da resposta da rota da prévia.
+ *
+ * Todo caminho é `<org>/<hash>.ulaw`, montado no servidor com a organização da
+ * SESSÃO (`caminhoDaFala`, em falas.ts) — nunca recebido do navegador.
+ *
+ * `listarPastas`/`listarObjetos` existem para a limpeza do worker (Task 12 do
+ * plano da fase 2): a pasta do topo é a organização, e a data de criação decide a
+ * janela de 24 h. Pela API do Storage, e não por SQL em `storage.objects`: num
+ * Supabase próprio a conexão do app (`SUPABASE_DB_URL`) pode ser uma role com
+ * grants só em `public` (ver `url_do_schema` em hostgator-setup-kit/_common.sh),
+ * e a service role alcança o Storage em toda instalação.
  */
 import type { createAdminClient } from "@/lib/supabase/admin";
 
 import { BUCKET_DAS_FALAS } from "./vocabulario";
 
+export interface ObjetoDoArmazem {
+  /** `<org>/<arquivo>` — o mesmo formato de `phone_prompts.storage_path`. */
+  caminho: string;
+  criadoEm: Date;
+}
+
 export interface PortaDoArmazem {
   enviar(caminho: string, bytes: Uint8Array): Promise<void>;
   baixar(caminho: string): Promise<Uint8Array<ArrayBuffer> | null>;
+  /** Lança se o Storage recusar: quem limpa precisa saber que não limpou. */
   apagar(caminhos: string[]): Promise<void>;
+  /** As pastas do topo do bucket — uma por organização. */
+  listarPastas(): Promise<string[]>;
+  /** Os arquivos de uma pasta, com a data de criação. Pastas dentro dela ficam de fora. */
+  listarObjetos(pasta: string): Promise<ObjetoDoArmazem[]>;
 }
+
+/** Tamanho da página do `list` do Storage (o padrão dele é 100). */
+const PAGINA = 1000;
 
 export function armazemDoSupabase(admin: ReturnType<typeof createAdminClient>): PortaDoArmazem {
   const bucket = () => admin.storage.from(BUCKET_DAS_FALAS);
@@ -2954,34 +3324,68 @@ export function armazemDoSupabase(admin: ReturnType<typeof createAdminClient>): 
     },
     async apagar(caminhos) {
       if (caminhos.length === 0) return;
-      await bucket().remove(caminhos);
+      const { error } = await bucket().remove(caminhos);
+      if (error) throw new Error(`armazem_remocao: ${error.message}`);
+    },
+    async listarPastas() {
+      const { data, error } = await bucket().list("", { limit: PAGINA });
+      if (error || !data) throw new Error(`armazem_lista: ${error?.message ?? "sem resposta"}`);
+      // No `list` do Storage, pasta é a entrada sem `id`.
+      return data.filter((o) => o.id === null).map((o) => o.name);
+    },
+    async listarObjetos(pasta) {
+      const objetos: ObjetoDoArmazem[] = [];
+      for (let offset = 0; ; offset += PAGINA) {
+        const { data, error } = await bucket().list(pasta, {
+          limit: PAGINA,
+          offset,
+          sortBy: { column: "created_at", order: "asc" },
+        });
+        if (error || !data) throw new Error(`armazem_lista: ${error?.message ?? "sem resposta"}`);
+        for (const o of data) {
+          if (o.id !== null && o.created_at) objetos.push({ caminho: `${pasta}/${o.name}`, criadoEm: new Date(o.created_at) });
+        }
+        if (data.length < PAGINA) return objetos;
+      }
     },
   };
 }
 ```
 
-- [ ] **Step 2: Teste da geração (falha: o módulo não existe)**
+- [ ] **Step 2: Teste do "Salvar e usar" (falha: o módulo não existe)**
 
 Crie `lib/telefonia/falas.test.ts`:
 
 ```ts
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
 import type { PortaDoArmazem } from "./armazem";
-import { ErroDaElevenLabs } from "./elevenlabs";
-import { caminhoDaFala, descartarFala, gerarFala, hashDaFala, type LinhaDaFala, type PedidoDeFala } from "./falas";
+import {
+  caminhoDaFala,
+  conferirFala,
+  descartarFala,
+  falaParaSalvarSchema,
+  hashDaFala,
+  salvarFala,
+  type LinhaDaFala,
+  type PedidoDeSalvar,
+} from "./falas";
 
 const ORG = "00000000-0000-4000-8000-00000000000a";
+const OUTRA = "00000000-0000-4000-8000-00000000000b";
 const VOZ = { voiceId: "voz-1", modelId: "eleven_multilingual_v2" };
+const TEXTO = "Aguarde, por favor.";
+const HASH = hashDaFala(TEXTO, VOZ.voiceId, VOZ.modelId);
 
 type Linha = LinhaDaFala & { organization_id: string; model_id: string };
 
-/** O banco em memória: só as cinco consultas que `falas.ts` faz. */
+/** O banco em memória: só as quatro consultas que `falas.ts` faz. `escritas` conta INSERT/UPDATE/DELETE. */
 class BancoDeFalas {
   linhas = new Map<string, Linha>();
+  escritas = 0;
   private seq = 0;
   db: Queryable = {
     query: (async (sqlBruto: string, p: unknown[] = []) => {
@@ -2992,6 +3396,7 @@ class BancoDeFalas {
         return { rows, rowCount: rows.length };
       }
       if (sql.startsWith("insert into phone_prompts")) {
+        this.escritas++;
         const l: Linha = {
           id: `fala-${++this.seq}`,
           organization_id: p[0] as string,
@@ -3010,6 +3415,7 @@ class BancoDeFalas {
         return { rows: [l], rowCount: 1 };
       }
       if (sql.startsWith("update phone_prompts")) {
+        this.escritas++;
         const l = this.linhas.get(p[0] as string);
         if (!l || l.organization_id !== p[1]) return { rows: [], rowCount: 0 };
         Object.assign(l, {
@@ -3018,132 +3424,134 @@ class BancoDeFalas {
         });
         return { rows: [l], rowCount: 1 };
       }
-      if (sql.startsWith("select 1 from phone_prompts where storage_path = $1")) {
-        const achou = [...this.linhas.values()].some((l) => l.storage_path === p[0]);
-        return { rows: achou ? [{ um: 1 }] : [], rowCount: achou ? 1 : 0 };
-      }
       if (sql.startsWith("delete from phone_prompts")) {
+        this.escritas++;
         const l = this.linhas.get(p[0] as string);
         if (!l || l.organization_id !== p[1]) return { rows: [], rowCount: 0 };
         this.linhas.delete(l.id);
-        return { rows: [{ storage_path: l.storage_path }], rowCount: 1 };
+        return { rows: [], rowCount: 1 };
       }
       throw new Error(`consulta inesperada: ${sql}`);
     }) as unknown as Queryable["query"],
   };
 }
 
-class ArmazemFalso implements PortaDoArmazem {
+/** O Storage em memória. `baixar` é tudo o que o "Salvar e usar" usa. */
+class ArmazemFalso implements Pick<PortaDoArmazem, "baixar"> {
   objetos = new Map<string, Uint8Array>();
-  apagados: string[] = [];
-  falharEnvio = false;
-  enviar = async (caminho: string, bytes: Uint8Array) => {
-    if (this.falharEnvio) throw new Error("storage fora");
-    this.objetos.set(caminho, bytes);
-  };
   baixar = async (caminho: string) => {
     const b = this.objetos.get(caminho);
     return b ? new Uint8Array(b) : null;
-  };
-  apagar = async (caminhos: string[]) => {
-    this.apagados.push(...caminhos);
-    for (const c of caminhos) this.objetos.delete(c);
   };
 }
 
 let banco: BancoDeFalas;
 let armazem: ArmazemFalso;
-let sintetizar: ReturnType<typeof vi.fn>;
 
-const pedido = (p: Partial<PedidoDeFala> = {}): PedidoDeFala => ({
+const pedido = (p: Partial<PedidoDeSalvar> = {}): PedidoDeSalvar => ({
   db: banco.db,
   armazem,
-  sintetizar: sintetizar as unknown as PedidoDeFala["sintetizar"],
   organizationId: ORG,
   userId: "user-1",
   tipo: "waiting",
-  texto: "Aguarde, por favor.",
+  texto: TEXTO,
+  hash: HASH,
   falaAtualId: null,
-  chave: "sk_x",
   voz: VOZ,
   ...p,
 });
 
+/** A prévia que a rota da prévia teria gravado: 1600 bytes de μ-law = 200 ms. */
+function previaNoStorage(org: string, hash: string) {
+  armazem.objetos.set(caminhoDaFala(org, hash), new Uint8Array(1600));
+}
+
 beforeEach(() => {
   banco = new BancoDeFalas();
   armazem = new ArmazemFalso();
-  sintetizar = vi.fn(async () => new Uint8Array(1600));
 });
 
-describe("gerarFala", () => {
-  it("sem voz ou sem chave: nada é gerado nem gravado", async () => {
-    expect(await gerarFala(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz", fala: null });
-    expect(await gerarFala(pedido({ chave: null }))).toEqual({ ok: false, motivo: "sem_chave", fala: null });
-    expect(sintetizar).not.toHaveBeenCalled();
-    expect(banco.linhas.size).toBe(0);
+describe("salvarFala — o 'Salvar e usar' (nunca chama a ElevenLabs)", () => {
+  it("prévia no Storage e hash do texto com a voz atual: grava pronta, no caminho da organização, com a duração do objeto", async () => {
+    previaNoStorage(ORG, HASH);
+    const r = await salvarFala(pedido());
+    expect(r).toMatchObject({ ok: true, mudou: true, fala: { status: "ready", duracao_ms: 200, texto: TEXTO, hash: HASH } });
+    expect([...banco.linhas.values()][0]!.storage_path).toBe(`${ORG}/${HASH}.ulaw`);
   });
 
-  it("fala nova: sintetiza, sobe em <org>/<hash>.ulaw e grava pronta com a duração (bytes/8)", async () => {
-    const r = await gerarFala(pedido());
-    const hash = hashDaFala("Aguarde, por favor.", VOZ.voiceId, VOZ.modelId);
-    expect(r).toMatchObject({ ok: true, gerada: true, fala: { status: "ready", duracao_ms: 200, texto: "Aguarde, por favor." } });
-    expect([...armazem.objetos.keys()]).toEqual([caminhoDaFala(ORG, hash)]);
-    expect(sintetizar).toHaveBeenCalledWith({ chave: "sk_x", voiceId: "voz-1", modelId: "eleven_multilingual_v2", texto: "Aguarde, por favor." });
+  it("a mesma prévia de novo sobre a fala atual: nada muda e nada é escrito", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const escritas = banco.escritas;
+    const segunda = await salvarFala(pedido({ falaAtualId: primeira.ok ? primeira.fala.id : null }));
+    expect(segunda).toMatchObject({ ok: true, mudou: false });
+    expect(banco.escritas).toBe(escritas);
   });
 
-  it("mesmo texto, mesma voz, já pronta: não sintetiza de novo (a ElevenLabs cobra por caractere)", async () => {
-    const primeira = await gerarFala(pedido());
-    sintetizar.mockClear();
-    const segunda = await gerarFala(pedido({ falaAtualId: primeira.fala!.id }));
-    expect(segunda).toMatchObject({ ok: true, gerada: false, fala: { id: primeira.fala!.id } });
-    expect(sintetizar).not.toHaveBeenCalled();
+  it("texto novo sobre a fala atual: regrava a MESMA linha com o hash novo — e não apaga o objeto antigo (é da limpeza do worker)", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const novo = "Só um instante.";
+    const hashNovo = hashDaFala(novo, VOZ.voiceId, VOZ.modelId);
+    previaNoStorage(ORG, hashNovo);
+    const segunda = await salvarFala(pedido({ texto: novo, hash: hashNovo, falaAtualId: primeira.ok ? primeira.fala.id : null }));
+    expect(primeira.ok && segunda.ok && segunda.fala.id === primeira.fala.id).toBe(true);
+    expect(banco.linhas.size).toBe(1);
+    expect([...banco.linhas.values()][0]!.storage_path).toBe(`${ORG}/${hashNovo}.ulaw`);
+    expect(armazem.objetos.has(caminhoDaFala(ORG, HASH))).toBe(true);
   });
 
-  it("texto novo: regrava a MESMA linha com arquivo novo e apaga o antigo", async () => {
-    const primeira = await gerarFala(pedido());
-    const antigo = banco.linhas.get(primeira.fala!.id)!.storage_path!;
-    const segunda = await gerarFala(pedido({ falaAtualId: primeira.fala!.id, texto: "Só um instante." }));
-    expect(segunda.fala!.id).toBe(primeira.fala!.id);
-    expect(banco.linhas.get(primeira.fala!.id)!.storage_path).not.toBe(antigo);
-    expect(armazem.apagados).toEqual([antigo]);
+  it("hash que não é o do texto com a voz atual (texto editado depois da prévia, ou voz trocada): previa_desatualizada, nada gravado", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await salvarFala(pedido({ texto: "Outro texto." }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(await salvarFala(pedido({ voz: { voiceId: "voz-2", modelId: VOZ.modelId } }))).toEqual({
+      ok: false,
+      motivo: "previa_desatualizada",
+    });
+    expect(banco.escritas).toBe(0);
   });
 
-  it("o arquivo antigo que outra fala ainda usa NÃO é apagado", async () => {
-    const a = await gerarFala(pedido());
-    await gerarFala(pedido({ tipo: "nobody" }));
-    await gerarFala(pedido({ falaAtualId: a.fala!.id, texto: "Outro texto." }));
-    expect(armazem.apagados).toEqual([]);
+  it("hash certo, mas o objeto só existe na pasta de OUTRA organização: previa_ausente — o caminho é sempre o da sessão", async () => {
+    previaNoStorage(OUTRA, HASH);
+    expect(await salvarFala(pedido())).toEqual({ ok: false, motivo: "previa_ausente" });
+    expect(banco.escritas).toBe(0);
   });
 
-  it("a ElevenLabs falha numa fala que JÁ tinha áudio: o áudio antigo continua valendo, nada muda", async () => {
-    const primeira = await gerarFala(pedido());
-    sintetizar.mockRejectedValueOnce(new ErroDaElevenLabs("sem_credito", 401));
-    const r = await gerarFala(pedido({ falaAtualId: primeira.fala!.id, texto: "Texto novo." }));
-    expect(r).toMatchObject({ ok: false, motivo: "sem_credito", fala: { id: primeira.fala!.id, status: "ready", texto: "Aguarde, por favor." } });
-    expect(armazem.apagados).toEqual([]);
+  it("sem voz escolhida e hash novo: sem_voz", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await salvarFala(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz" });
   });
 
-  it("a ElevenLabs falha numa fala sem áudio: a linha fica 'failed' com o motivo, sem arquivo", async () => {
-    sintetizar.mockRejectedValueOnce(new ErroDaElevenLabs("texto_recusado", 422));
-    const r = await gerarFala(pedido());
-    expect(r).toMatchObject({ ok: false, motivo: "texto_recusado", fala: { status: "failed", erro: "texto_recusado" } });
-    expect(banco.linhas.get(r.fala!.id)!.storage_path).toBeNull();
-  });
-
-  it("Storage fora do ar: motivo 'armazenamento', e nenhuma linha fica pronta", async () => {
-    armazem.falharEnvio = true;
-    const r = await gerarFala(pedido());
-    expect(r).toMatchObject({ ok: false, motivo: "armazenamento", fala: { status: "failed" } });
+  it("conferirFala não escreve nada: só diz o que salvarFala gravaria", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await conferirFala(pedido())).toMatchObject({
+      ok: true,
+      atual: null,
+      nova: { hash: HASH, caminho: `${ORG}/${HASH}.ulaw`, duracaoMs: 200 },
+    });
+    expect(banco.escritas).toBe(0);
   });
 });
 
 describe("descartarFala", () => {
-  it("apaga a linha e o arquivo que ninguém mais usa", async () => {
-    const r = await gerarFala(pedido());
-    const caminho = banco.linhas.get(r.fala!.id)!.storage_path!;
-    await descartarFala(banco.db, armazem, ORG, r.fala!.id);
+  it("apaga só a linha da organização e não toca o Storage", async () => {
+    previaNoStorage(ORG, HASH);
+    const r = await salvarFala(pedido());
+    const id = r.ok ? r.fala.id : "";
+    await descartarFala(banco.db, OUTRA, id);
+    expect(banco.linhas.size).toBe(1);
+    await descartarFala(banco.db, ORG, id);
     expect(banco.linhas.size).toBe(0);
-    expect(armazem.apagados).toEqual([caminho]);
+    expect(armazem.objetos.has(caminhoDaFala(ORG, HASH))).toBe(true);
+  });
+});
+
+describe("falaParaSalvarSchema — o corpo traz texto e hash, nunca caminho", () => {
+  it("aceita texto e sha256; recusa hash fora da régua, texto vazio e campo a mais", () => {
+    expect(falaParaSalvarSchema.safeParse({ texto: " Oi. ", hash: HASH })).toMatchObject({ success: true, data: { texto: "Oi.", hash: HASH } });
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: "../../etc/passwd" }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "  ", hash: HASH }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: HASH, caminho: `${OUTRA}/${HASH}.ulaw` }).success).toBe(false);
   });
 });
 ```
@@ -3153,37 +3561,47 @@ describe("descartarFala", () => {
 Run: `pnpm exec vitest run lib/telefonia/falas.test.ts`
 Expected: FAIL — `Failed to resolve import "./falas"`.
 
-- [ ] **Step 4: Implementar**
+- [ ] **Step 4: Implementar o "Salvar e usar"**
 
 Crie `lib/telefonia/falas.ts`:
 
 ```ts
 /**
- * AS FALAS DO TELEFONE — gerar, regravar e descartar (desenho da fase 2, §3.1 e §4).
+ * AS FALAS DO TELEFONE — salvar a prévia, ler e descartar (desenho da fase 2,
+ * §3.1, §4 e D15).
  *
  * Uma fala = uma linha de `phone_prompts` + um arquivo μ-law no bucket privado
  * `phone-prompts`, em `<org>/<hash>.ulaw`, com hash = sha256(modelo, voz, texto).
  *
- *  - Mesmo texto, mesma voz, mesmo modelo, já pronta → nada a fazer e nada a
- *    pagar (a ElevenLabs cobra por caractere).
- *  - Texto (ou voz) novo → gera, sobe o arquivo novo, regrava a MESMA linha e
- *    apaga o arquivo antigo se nenhuma outra fala o usa.
- *  - A ElevenLabs (ou o Storage) falhou → se a fala já tinha áudio, ELE CONTINUA
- *    TOCANDO e nada muda — a chave sem crédito só impede editar; se não tinha, a
- *    linha fica `failed` com o motivo, e a tela o mostra.
+ * O áudio nasce na PRÉVIA (`gerarPrevia`, em previa.ts — a única que chama a
+ * ElevenLabs). Aqui mora o "Salvar e usar" (`salvarFala`), que NUNCA a chama:
+ *  - a fala atual já é esta prévia (mesmo hash e mesmo texto) → nada muda;
+ *  - senão, o hash tem de ser o do texto com a voz ATUAL da organização
+ *    (`previa_desatualizada` se não for: texto editado depois da prévia, ou voz
+ *    trocada) e o objeto tem de existir em `<org da SESSÃO>/<hash>.ulaw`
+ *    (`previa_ausente`). O caminho é montado aqui, nunca recebido;
+ *  - passou: a MESMA linha passa a apontar para o hash (ou nasce uma), `ready`,
+ *    com a duração do objeto. A partir daí as ligações tocam o áudio novo.
+ * Nada daqui apaga o Storage: prévia não salva e áudio sem uso saem na limpeza do
+ * worker, 24 h depois de gravados (`FalasNoDisco.limparStorage`).
  *
- * Server-only (sha256 do Node). Banco, Storage e síntese entram como portas: o
- * teste troca os três.
+ * SEM import do cliente da ElevenLabs, de propósito: `menus.ts` importa este
+ * arquivo e `lib/channels/telefonia/numeros.ts` importa `menus.ts` — o teste-guarda
+ * `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` reprovaria a cadeia.
+ *
+ * Server-only (sha256 do Node). Banco e Storage entram como portas.
  */
 import { createHash } from "node:crypto";
+
+import { z } from "zod";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
 import type { PortaDoArmazem } from "./armazem";
-import { ErroDaElevenLabs } from "./elevenlabs";
 import { duracaoDoUlawMs } from "./ulaw";
 import {
   MODELO_DE_VOZ_PADRAO,
+  TAMANHO_MAXIMO_DA_FALA,
   type EstadoDaFala,
   type FalaGeral,
   type FalaPublica,
@@ -3198,6 +3616,17 @@ export function hashDaFala(texto: string, voiceId: string, modelId: string): str
 export function caminhoDaFala(organizationId: string, hash: string): string {
   return `${organizationId}/${hash}.ulaw`;
 }
+
+/**
+ * O corpo que salva uma fala: o texto e o hash da PRÉVIA dele (ou da fala em uso,
+ * quando o texto não mudou). Caminho do Storage nunca entra — `.strict()` recusa.
+ */
+export const falaParaSalvarSchema = z
+  .object({
+    texto: z.string().trim().min(1).max(TAMANHO_MAXIMO_DA_FALA),
+    hash: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
 
 /** A linha como o `pg` a devolve (datas chegam como `Date`). */
 export interface LinhaDaFala {
@@ -3222,6 +3651,7 @@ export function falaPublica(l: LinhaDaFala): FalaPublica {
     tipo: l.tipo,
     texto: l.texto,
     voice_id: l.voice_id,
+    hash: l.content_hash,
     status: l.status,
     erro: l.erro,
     duracao_ms: l.duracao_ms,
@@ -3283,25 +3713,35 @@ export async function falasGeraisDaOrg(
   };
 }
 
-export type Sintetizador = (p: { chave: string; voiceId: string; modelId: string; texto: string }) => Promise<Uint8Array>;
-
-export interface PedidoDeFala {
+export interface PedidoDeSalvar {
   db: Queryable;
-  armazem: PortaDoArmazem;
-  sintetizar: Sintetizador;
+  armazem: Pick<PortaDoArmazem, "baixar">;
   organizationId: string;
   userId: string | null;
   tipo: TipoDeFala;
   texto: string;
-  /** A fala que esta substitui (mesmo lugar: a mesma fala geral, o mesmo menu). `null` = nova. */
+  /** O hash da prévia — o servidor monta o caminho com ele e com a organização da sessão. */
+  hash: string;
+  /** A fala que esta substitui (a mesma fala geral, o mesmo menu, o mesmo aviso). `null` = nova. */
   falaAtualId: string | null;
-  chave: string | null;
   voz: VozDaOrganizacao | null;
 }
 
-export type ResultadoDaFala =
-  | { ok: true; fala: FalaPublica; gerada: boolean }
-  | { ok: false; motivo: FalhaDaFala; fala: FalaPublica | null };
+/** O que a prévia conferida passa a ser. */
+export interface NovaFala {
+  hash: string;
+  caminho: string;
+  duracaoMs: number;
+  voiceId: string;
+  modelId: string;
+}
+
+export type FalaConferida =
+  | { ok: true; atual: LinhaDaFala; nova: null }
+  | { ok: true; atual: LinhaDaFala | null; nova: NovaFala }
+  | { ok: false; motivo: FalhaDaFala };
+
+export type ResultadoDoSalvar = { ok: true; fala: FalaPublica; mudou: boolean } | { ok: false; motivo: FalhaDaFala };
 
 interface DadosDaLinha {
   organizationId: string;
@@ -3339,65 +3779,61 @@ async function gravar(db: Queryable, d: DadosDaLinha, idExistente: string | null
   return rows[0]!;
 }
 
-/** Apaga o objeto do Storage se nenhuma fala (desta organização — o caminho começa por ela) o usa mais. */
-async function apagarSeOrfao(db: Queryable, armazem: PortaDoArmazem, caminho: string): Promise<void> {
-  const { rows } = await db.query("select 1 from phone_prompts where storage_path = $1 limit 1", [caminho]);
-  if (rows.length === 0) await armazem.apagar([caminho]).catch(() => undefined);
-}
-
-export async function gerarFala(p: PedidoDeFala): Promise<ResultadoDaFala> {
+/**
+ * A prévia pedida pode virar a fala? NÃO grava nada — o menu confere as duas falas
+ * (a dele e a de tecla inválida) antes de gravar a primeira.
+ */
+export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
   const texto = p.texto.trim();
-  if (!p.voz) return { ok: false, motivo: "sem_voz", fala: null };
-  if (!p.chave) return { ok: false, motivo: "sem_chave", fala: null };
-  const { voiceId, modelId } = p.voz;
-  const hash = hashDaFala(texto, voiceId, modelId);
   const atual = p.falaAtualId ? await falaPorId(p.db, p.organizationId, p.falaAtualId) : null;
-  if (atual && atual.content_hash === hash && atual.status === "ready") {
-    return { ok: true, fala: falaPublica(atual), gerada: false };
+  if (atual && atual.status === "ready" && atual.content_hash === p.hash && atual.texto === texto) {
+    return { ok: true, atual, nova: null };
   }
-  const base = { organizationId: p.organizationId, userId: p.userId, tipo: p.tipo, texto, voiceId, modelId, hash };
-
-  const falhar = async (motivo: FalhaDaFala): Promise<ResultadoDaFala> => {
-    // O áudio que já existe continua tocando: uma falha ao EDITAR não apaga nada.
-    if (atual?.status === "ready") return { ok: false, motivo, fala: falaPublica(atual) };
-    const linha = await gravar(p.db, { ...base, storagePath: null, duracaoMs: null, status: "failed", erro: motivo }, atual?.id ?? null);
-    return { ok: false, motivo, fala: falaPublica(linha) };
-  };
-
-  let bytes: Uint8Array;
-  try {
-    bytes = await p.sintetizar({ chave: p.chave, voiceId, modelId, texto });
-  } catch (e) {
-    return falhar(e instanceof ErroDaElevenLabs ? e.motivo : "erro_do_provedor");
-  }
-  const caminho = caminhoDaFala(p.organizationId, hash);
-  try {
-    await p.armazem.enviar(caminho, bytes);
-  } catch {
-    return falhar("armazenamento");
-  }
-  const pronta = await gravar(
-    p.db,
-    { ...base, storagePath: caminho, duracaoMs: Math.max(1, duracaoDoUlawMs(bytes.length)), status: "ready", erro: null },
-    atual?.id ?? null,
-  );
-  if (atual?.storage_path && atual.storage_path !== caminho) await apagarSeOrfao(p.db, p.armazem, atual.storage_path);
-  return { ok: true, fala: falaPublica(pronta), gerada: true };
+  if (!p.voz) return { ok: false, motivo: "sem_voz" };
+  const { voiceId, modelId } = p.voz;
+  if (p.hash !== hashDaFala(texto, voiceId, modelId)) return { ok: false, motivo: "previa_desatualizada" };
+  const caminho = caminhoDaFala(p.organizationId, p.hash);
+  const bytes = await p.armazem.baixar(caminho).catch(() => null);
+  if (!bytes || bytes.length === 0) return { ok: false, motivo: "previa_ausente" };
+  return { ok: true, atual, nova: { hash: p.hash, caminho, duracaoMs: Math.max(1, duracaoDoUlawMs(bytes.length)), voiceId, modelId } };
 }
 
-/** Remove a fala (ex.: a de tecla inválida que o menu deixou de ter) e o arquivo, se órfão. */
-export async function descartarFala(
-  db: Queryable,
-  armazem: PortaDoArmazem,
-  organizationId: string,
-  id: string,
-): Promise<void> {
-  const { rows } = await db.query<{ storage_path: string | null }>(
-    "delete from phone_prompts where id = $1 and organization_id = $2 returning storage_path",
-    [id, organizationId],
+/** Grava o que `conferirFala` aprovou: a MESMA linha passa a apontar para o hash novo (ou nasce uma). */
+export async function gravarFalaConferida(
+  p: PedidoDeSalvar,
+  c: Extract<FalaConferida, { ok: true }>,
+): Promise<{ fala: FalaPublica; mudou: boolean }> {
+  if (c.nova === null) return { fala: falaPublica(c.atual), mudou: false };
+  const linha = await gravar(
+    p.db,
+    {
+      organizationId: p.organizationId,
+      userId: p.userId,
+      tipo: p.tipo,
+      texto: p.texto.trim(),
+      voiceId: c.nova.voiceId,
+      modelId: c.nova.modelId,
+      hash: c.nova.hash,
+      storagePath: c.nova.caminho,
+      duracaoMs: c.nova.duracaoMs,
+      status: "ready",
+      erro: null,
+    },
+    c.atual?.id ?? null,
   );
-  const caminho = rows[0]?.storage_path;
-  if (caminho) await apagarSeOrfao(db, armazem, caminho);
+  return { fala: falaPublica(linha), mudou: true };
+}
+
+/** O "Salvar e usar": confere e grava. Nunca chama a ElevenLabs. */
+export async function salvarFala(p: PedidoDeSalvar): Promise<ResultadoDoSalvar> {
+  const c = await conferirFala(p);
+  if (!c.ok) return c;
+  return { ok: true, ...(await gravarFalaConferida(p, c)) };
+}
+
+/** Remove a linha (ex.: a fala de tecla inválida que o menu deixou de ter). O objeto fica para a limpeza do worker. */
+export async function descartarFala(db: Queryable, organizationId: string, id: string): Promise<void> {
+  await db.query("delete from phone_prompts where id = $1 and organization_id = $2", [id, organizationId]);
 }
 ```
 
@@ -3406,15 +3842,211 @@ export async function descartarFala(
 Run: `pnpm exec vitest run lib/telefonia/falas.test.ts`
 Expected: PASS (9 testes).
 
-- [ ] **Step 6: A fiação completa da instalação**
+- [ ] **Step 6: Teste da prévia (falha: o módulo não existe)**
 
-Substitua o conteúdo inteiro de `lib/telefonia/servico-de-falas.ts` por:
+Crie `lib/telefonia/previa.test.ts`:
+
+```ts
+// @vitest-environment node
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { PortaDoArmazem } from "./armazem";
+import { ErroDaElevenLabs } from "./elevenlabs";
+import { caminhoDaFala, hashDaFala } from "./falas";
+import { gerarPrevia, type PedidoDePrevia } from "./previa";
+
+const ORG = "00000000-0000-4000-8000-00000000000a";
+const VOZ = { voiceId: "voz-1", modelId: "eleven_multilingual_v2" };
+const TEXTO = "Aguarde, por favor.";
+
+class ArmazemFalso implements Pick<PortaDoArmazem, "baixar" | "enviar"> {
+  objetos = new Map<string, Uint8Array>();
+  falharEnvio = false;
+  enviar = async (caminho: string, bytes: Uint8Array) => {
+    if (this.falharEnvio) throw new Error("storage fora");
+    this.objetos.set(caminho, bytes);
+  };
+  baixar = async (caminho: string) => {
+    const b = this.objetos.get(caminho);
+    return b ? new Uint8Array(b) : null;
+  };
+}
+
+let armazem: ArmazemFalso;
+let sintetizar: ReturnType<typeof vi.fn>;
+let consumirCota: ReturnType<typeof vi.fn>;
+
+const pedido = (p: Partial<PedidoDePrevia> = {}): PedidoDePrevia => ({
+  armazem,
+  sintetizar: sintetizar as unknown as PedidoDePrevia["sintetizar"],
+  consumirCota: consumirCota as unknown as PedidoDePrevia["consumirCota"],
+  organizationId: ORG,
+  texto: TEXTO,
+  chave: "sk_x",
+  voz: VOZ,
+  ...p,
+});
+
+beforeEach(() => {
+  armazem = new ArmazemFalso();
+  sintetizar = vi.fn(async () => new Uint8Array(1600));
+  consumirCota = vi.fn(async () => true);
+});
+
+describe("gerarPrevia — a ÚNICA hora em que a ElevenLabs é chamada", () => {
+  it("prévia nova: gasta uma da cota, sintetiza UMA vez e grava em <org>/<hash>.ulaw", async () => {
+    const r = await gerarPrevia(pedido());
+    const hash = hashDaFala(TEXTO, VOZ.voiceId, VOZ.modelId);
+    expect(r).toMatchObject({ ok: true, hash, duracaoMs: 200, reaproveitada: false });
+    expect(sintetizar).toHaveBeenCalledTimes(1);
+    expect(sintetizar).toHaveBeenCalledWith({ chave: "sk_x", voiceId: "voz-1", modelId: "eleven_multilingual_v2", texto: TEXTO });
+    expect(consumirCota).toHaveBeenCalledTimes(1);
+    expect([...armazem.objetos.keys()]).toEqual([caminhoDaFala(ORG, hash)]);
+  });
+
+  it("o mesmo texto com a mesma voz de novo (espaços nas pontas não contam): reaproveita — nem ElevenLabs, nem cota", async () => {
+    await gerarPrevia(pedido());
+    sintetizar.mockClear();
+    consumirCota.mockClear();
+    const r = await gerarPrevia(pedido({ texto: `  ${TEXTO}  ` }));
+    expect(r).toMatchObject({ ok: true, reaproveitada: true, duracaoMs: 200 });
+    expect(sintetizar).not.toHaveBeenCalled();
+    expect(consumirCota).not.toHaveBeenCalled();
+  });
+
+  it("voz trocada é outro hash: vai à ElevenLabs de novo", async () => {
+    await gerarPrevia(pedido());
+    await gerarPrevia(pedido({ voz: { voiceId: "voz-2", modelId: VOZ.modelId } }));
+    expect(sintetizar).toHaveBeenCalledTimes(2);
+  });
+
+  it("sem voz: sem_voz, e nada é chamado", async () => {
+    expect(await gerarPrevia(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz" });
+    expect(sintetizar).not.toHaveBeenCalled();
+  });
+
+  it("sem chave: a prévia já guardada segue ouvível; texto novo é sem_chave", async () => {
+    await gerarPrevia(pedido());
+    expect(await gerarPrevia(pedido({ chave: null }))).toMatchObject({ ok: true, reaproveitada: true });
+    expect(await gerarPrevia(pedido({ chave: null, texto: "Outro texto." }))).toEqual({ ok: false, motivo: "sem_chave" });
+  });
+
+  it("cota da hora esgotada: limite_de_previas, e a ElevenLabs não é chamada", async () => {
+    consumirCota.mockResolvedValueOnce(false);
+    expect(await gerarPrevia(pedido())).toEqual({ ok: false, motivo: "limite_de_previas" });
+    expect(sintetizar).not.toHaveBeenCalled();
+  });
+
+  it("a ElevenLabs recusa: o motivo dela, e nada fica no Storage", async () => {
+    sintetizar.mockRejectedValueOnce(new ErroDaElevenLabs("sem_credito", 401));
+    expect(await gerarPrevia(pedido())).toEqual({ ok: false, motivo: "sem_credito" });
+    expect(armazem.objetos.size).toBe(0);
+  });
+
+  it("Storage fora do ar: armazenamento", async () => {
+    armazem.falharEnvio = true;
+    expect(await gerarPrevia(pedido())).toEqual({ ok: false, motivo: "armazenamento" });
+  });
+});
+```
+
+- [ ] **Step 7: Rodar e ver falhar**
+
+Run: `pnpm exec vitest run lib/telefonia/previa.test.ts`
+Expected: FAIL — `Failed to resolve import "./previa"`.
+
+- [ ] **Step 8: Implementar a prévia**
+
+Crie `lib/telefonia/previa.ts`:
+
+```ts
+/**
+ * A PRÉVIA DE UMA FALA — a ÚNICA hora em que a ElevenLabs é chamada (desenho da
+ * fase 2, D15 e §4, passo 1). Server-only.
+ *
+ *  - hash = sha256(modelo, voz, texto). O objeto `<org>/<hash>.ulaw` já existe no
+ *    Storage? Reaproveita: nada é pago e a cota não é tocada.
+ *  - Não existe: gasta uma unidade da cota da organização (30 por hora,
+ *    `consumirCotaDePrevia` em servico-de-falas.ts), chama a ElevenLabs UMA vez e
+ *    grava o objeto.
+ *  - NENHUMA linha de `phone_prompts` muda: as ligações seguem com o áudio salvo
+ *    até o "Salvar e usar" (`salvarFala`, em falas.ts). A prévia que ninguém salva
+ *    sai do Storage em 24 h, na limpeza do worker.
+ *
+ * Além de `servico-de-falas.ts`, é o único módulo de `lib/telefonia/` que importa o
+ * cliente da ElevenLabs. Nada do caminho da ligação o importa
+ * (`tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`).
+ *
+ * Storage, síntese e cota entram como portas: o teste troca as três.
+ */
+import type { PortaDoArmazem } from "./armazem";
+import { ErroDaElevenLabs } from "./elevenlabs";
+import { caminhoDaFala, hashDaFala, type VozDaOrganizacao } from "./falas";
+import { duracaoDoUlawMs } from "./ulaw";
+import type { FalhaDaFala } from "./vocabulario";
+
+export type Sintetizador = (p: { chave: string; voiceId: string; modelId: string; texto: string }) => Promise<Uint8Array>;
+
+export interface PedidoDePrevia {
+  armazem: Pick<PortaDoArmazem, "baixar" | "enviar">;
+  sintetizar: Sintetizador;
+  /** Gasta uma unidade da cota; `false` = estourou. Chamada SÓ quando a prévia vai à ElevenLabs. */
+  consumirCota: () => Promise<boolean>;
+  organizationId: string;
+  texto: string;
+  chave: string | null;
+  voz: VozDaOrganizacao | null;
+}
+
+export type ResultadoDaPrevia =
+  | { ok: true; hash: string; audio: Uint8Array; duracaoMs: number; reaproveitada: boolean }
+  | { ok: false; motivo: FalhaDaFala };
+
+export async function gerarPrevia(p: PedidoDePrevia): Promise<ResultadoDaPrevia> {
+  const texto = p.texto.trim();
+  if (!p.voz) return { ok: false, motivo: "sem_voz" };
+  const { voiceId, modelId } = p.voz;
+  const hash = hashDaFala(texto, voiceId, modelId);
+  const caminho = caminhoDaFala(p.organizationId, hash);
+
+  const guardado = await p.armazem.baixar(caminho).catch(() => null);
+  if (guardado && guardado.length > 0) {
+    return { ok: true, hash, audio: guardado, duracaoMs: Math.max(1, duracaoDoUlawMs(guardado.length)), reaproveitada: true };
+  }
+
+  // Daqui em diante a prévia custa crédito da conta do cliente.
+  if (!p.chave) return { ok: false, motivo: "sem_chave" };
+  if (!(await p.consumirCota())) return { ok: false, motivo: "limite_de_previas" };
+  let audio: Uint8Array;
+  try {
+    audio = await p.sintetizar({ chave: p.chave, voiceId, modelId, texto });
+  } catch (e) {
+    return { ok: false, motivo: e instanceof ErroDaElevenLabs ? e.motivo : "erro_do_provedor" };
+  }
+  try {
+    await p.armazem.enviar(caminho, audio);
+  } catch {
+    return { ok: false, motivo: "armazenamento" };
+  }
+  return { ok: true, hash, audio, duracaoMs: Math.max(1, duracaoDoUlawMs(audio.length)), reaproveitada: false };
+}
+```
+
+- [ ] **Step 9: Rodar e ver passar**
+
+Run: `pnpm exec vitest run lib/telefonia/previa.test.ts lib/telefonia/falas.test.ts`
+Expected: PASS (8 + 9 testes).
+
+- [ ] **Step 10: A fiação da instalação**
+
+Substitua o conteúdo inteiro de `lib/telefonia/servico-de-falas.ts` por (a Task 7 acrescenta a cota de prévias no fim):
 
 ```ts
 /**
  * A FIAÇÃO DA INSTALAÇÃO para as rotas do telefone — o único lugar que lê o env
  * da ElevenLabs, monta o armazém com o cliente de serviço e decide o status HTTP
- * de cada falha. Server-only.
+ * de cada falha. Server-only. Nada do caminho da ligação importa este arquivo
+ * (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts).
  */
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { env } from "@/lib/env";
@@ -3423,7 +4055,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { armazemDoSupabase, type PortaDoArmazem } from "./armazem";
 import { chaveDeVoz } from "./chave-elevenlabs";
 import { sintetizar, type OpcoesDoCliente } from "./elevenlabs";
-import { vozDaOrganizacao, type Sintetizador, type VozDaOrganizacao } from "./falas";
+import { vozDaOrganizacao, type VozDaOrganizacao } from "./falas";
+import type { Sintetizador } from "./previa";
 import type { FalhaDaFala } from "./vocabulario";
 
 /** A URL base só muda no e2e (a ElevenLabs falsa de tests/e2e/telefonia-ura-e-falas.spec.ts). */
@@ -3432,9 +4065,10 @@ export function opcoesDaElevenLabs(): OpcoesDoCliente {
 }
 
 /**
- * 422 (a pessoa pode consertar) ou 502 (o provedor/Storage falhou) — NUNCA 429
- * ou 503: o `apiClient` do navegador repete esses sozinho, e cada repetição de
- * síntese gasta crédito da conta do cliente.
+ * 422 (a pessoa pode consertar, ou esperar) ou 502 (o provedor/Storage falhou) —
+ * NUNCA 429 ou 503: o `apiClient` do navegador repete esses sozinho (com
+ * `Retry-After`, dorme o prazo inteiro antes), e cada repetição de síntese gasta
+ * crédito da conta do cliente. Vale também para o limite de prévias.
  */
 export const STATUS_DA_FALHA: Record<FalhaDaFala, 422 | 502> = {
   sem_chave: 422,
@@ -3444,6 +4078,9 @@ export const STATUS_DA_FALHA: Record<FalhaDaFala, 422 | 502> = {
   texto_recusado: 422,
   voz_inexistente: 422,
   limite_de_uso: 422,
+  limite_de_previas: 422,
+  previa_ausente: 422,
+  previa_desatualizada: 422,
   armazenamento: 502,
   sem_resposta: 502,
   erro_do_provedor: 502,
@@ -3458,7 +4095,7 @@ export function armazemDaInstalacao(): PortaDoArmazem {
   return armazemDoSupabase(createAdminClient());
 }
 
-/** A chave (decifrada) e a voz da organização — o que toda geração de fala precisa. */
+/** A chave (decifrada) e a voz da organização — o que a PRÉVIA precisa. Salvar não precisa de chave. */
 export async function contextoDeFala(
   db: Queryable,
   organizationId: string,
@@ -3468,50 +4105,410 @@ export async function contextoDeFala(
 }
 ```
 
-- [ ] **Step 7: Rodar o que depende dela e o typecheck**
+- [ ] **Step 11: Rodar o que depende dela e o typecheck**
 
-Run: `pnpm exec vitest run lib/telefonia/ app/api/v1/telefonia/voz/chave/route.test.ts && pnpm typecheck`
-Expected: PASS e `tsc` sem erro.
+Run: `pnpm exec vitest run lib/telefonia/ app/api/v1/telefonia/voz/chave/route.test.ts tests/unit/ligacao-nunca-chama-elevenlabs.test.ts && pnpm typecheck`
+Expected: PASS (inclusive o teste-guarda: nada de `lib/channels/telefonia/` nem de `workers/` alcança `previa.ts` ou `servico-de-falas.ts`) e `tsc` sem erro.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add lib/telefonia/armazem.ts lib/telefonia/falas.ts lib/telefonia/falas.test.ts lib/telefonia/servico-de-falas.ts
-git commit -m "feat(telefonia): gerar, regravar e descartar as falas do telefone
+git add lib/telefonia/armazem.ts lib/telefonia/falas.ts lib/telefonia/falas.test.ts lib/telefonia/previa.ts \
+  lib/telefonia/previa.test.ts lib/telefonia/servico-de-falas.ts
+git commit -m "feat(telefonia): prévia das falas na ElevenLabs e o Salvar e usar sem custo
 
-Cada fala é uma linha de phone_prompts e um μ-law no bucket privado, com hash de
-modelo+voz+texto: o mesmo texto não é pago duas vezes, o arquivo antigo sai do
-Storage quando ninguém mais o usa, e uma falha ao editar mantém o áudio que já
-tocava.
+A ElevenLabs só é chamada na prévia: o mesmo texto com a mesma voz reaproveita o
+objeto do Storage, e a prévia não muda nada nas ligações. Salvar confere que a
+prévia é deste texto com a voz atual e que o objeto existe na pasta da própria
+organização, e só então aponta a linha para ela. Nada daqui apaga o Storage.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 7: Rotas de voz, falas gerais e áudio da fala
+## Task 7: Rotas — a prévia (30 por hora por organização), voz, falas gerais e áudio da fala
 
 **Files:**
+- Modify: `lib/telefonia/servico-de-falas.ts` (import no topo e a cota de prévias no fim)
+- Create: `lib/telefonia/servico-de-falas.test.ts`
+- Create: `app/api/v1/telefonia/falas/previa/route.ts`, `app/api/v1/telefonia/falas/previa/route.test.ts`
 - Create: `app/api/v1/telefonia/voz/route.ts`
 - Create: `app/api/v1/telefonia/voz/vozes/route.ts`
 - Create: `app/api/v1/telefonia/falas/gerais/[tipo]/route.ts`, `app/api/v1/telefonia/falas/gerais/[tipo]/route.test.ts`
 - Create: `app/api/v1/telefonia/falas/[id]/audio/route.ts`
 - Modify: `lib/i18n/dicionario.ts`
 
-- [ ] **Step 1: Teste da rota da fala geral (falha: a rota não existe)**
+**O limitador é o que o CRM já usa:** `checkRateLimit(bucket, limit, windowSec)` de `lib/ai/dispatcher/rate-limit.ts` (Upstash, com contador em memória quando o Redis não responde) — o mesmo de `app/api/v1/marca/logo/route.ts` e de `lib/auth/rate-limit.ts`. Ele é de janela **fixa** (`INCR` + `EXPIRE`), não deslizante. A recusa volta **422** `limite_de_previas`, não 429 (convenção 7): o `apiClient` dormiria o `Retry-After` inteiro — até uma hora — antes de repetir.
 
-Crie `app/api/v1/telefonia/falas/gerais/[tipo]/route.test.ts`:
+- [ ] **Step 1: Teste da cota (falha: a função não existe)**
+
+Crie `lib/telefonia/servico-de-falas.test.ts`:
+
+```ts
+// @vitest-environment node
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const estado = vi.hoisted(() => ({ contagem: 1 }));
+vi.mock("@/lib/ai/dispatcher/rate-limit", () => ({
+  checkRateLimit: vi.fn(async (_bucket: string, limit: number, windowSec: number) => ({
+    allowed: estado.contagem <= limit,
+    count: estado.contagem,
+    limit,
+    window_sec: windowSec,
+  })),
+}));
+
+import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
+
+import { LIMITE_DE_PREVIAS_POR_HORA, consumirCotaDePrevia } from "./servico-de-falas";
+
+beforeEach(() => {
+  estado.contagem = 1;
+  vi.mocked(checkRateLimit).mockClear();
+});
+
+describe("a cota de prévias da organização (desenho §4: 30 por hora)", () => {
+  it("conta por organização, no limitador do CRM, com teto de 30 numa janela de uma hora", async () => {
+    const c = await consumirCotaDePrevia("org-1", new Date("2026-09-28T13:40:00Z"));
+    expect(checkRateLimit).toHaveBeenCalledWith("telefonia-previa:org-1", 30, 3600);
+    expect(LIMITE_DE_PREVIAS_POR_HORA).toBe(30);
+    expect(c).toEqual({ permitida: true, limite: 30, restantes: 29, reabreEmS: 1200 });
+  });
+
+  it("a 31ª da hora é recusada, com o tempo até a janela virar", async () => {
+    estado.contagem = 31;
+    expect(await consumirCotaDePrevia("org-1", new Date("2026-09-28T13:59:30Z"))).toEqual({
+      permitida: false,
+      limite: 30,
+      restantes: 0,
+      reabreEmS: 30,
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Rodar e ver falhar**
+
+Run: `pnpm exec vitest run lib/telefonia/servico-de-falas.test.ts`
+Expected: FAIL — `consumirCotaDePrevia is not a function`.
+
+- [ ] **Step 3: A cota de prévias**
+
+Em `lib/telefonia/servico-de-falas.ts`, logo depois da linha `import type { Queryable } from "@/lib/agent-engine/queue/queue";`, acrescente:
+
+```ts
+import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
+```
+
+e, no FIM do arquivo, acrescente:
+
+```ts
+/** Prévias que vão à ElevenLabs, por organização e por hora (desenho §4, passo 1). Reaproveitar não conta. */
+export const LIMITE_DE_PREVIAS_POR_HORA = 30;
+const JANELA_DAS_PREVIAS_S = 3600;
+
+export interface CotaDePrevia {
+  permitida: boolean;
+  limite: number;
+  restantes: number;
+  /** Segundos até a janela virar — o `Retry-After` da recusa. */
+  reabreEmS: number;
+}
+
+/**
+ * Gasta uma unidade da cota de prévias da organização, no limitador que o CRM já
+ * usa (`checkRateLimit`: Upstash, com contador em memória quando o Redis não
+ * responde). Janela FIXA de uma hora (INCR + EXPIRE, alinhada ao relógio) — é o
+ * que o limitador implementa, não uma janela deslizante. A organização vem da
+ * SESSÃO, pela rota: nenhum corpo escolhe de quem é a cota.
+ */
+export async function consumirCotaDePrevia(organizationId: string, agora: Date = new Date()): Promise<CotaDePrevia> {
+  const r = await checkRateLimit(`telefonia-previa:${organizationId}`, LIMITE_DE_PREVIAS_POR_HORA, JANELA_DAS_PREVIAS_S);
+  const segundos = Math.floor(agora.getTime() / 1000);
+  return {
+    permitida: r.allowed,
+    limite: r.limit,
+    restantes: Math.max(0, r.limit - r.count),
+    reabreEmS: JANELA_DAS_PREVIAS_S - (segundos % JANELA_DAS_PREVIAS_S),
+  };
+}
+```
+
+- [ ] **Step 4: Rodar e ver passar**
+
+Run: `pnpm exec vitest run lib/telefonia/servico-de-falas.test.ts`
+Expected: PASS (2 testes).
+
+- [ ] **Step 5: Teste da rota da prévia (falha: a rota não existe)**
+
+Crie `app/api/v1/telefonia/falas/previa/route.test.ts`:
 
 ```ts
 /**
- * A FALA GERAL PELA ROTA: tipo fora da lista não existe, a fala gerada é ligada à
- * coluna certa de `phone_settings`, a falha da ElevenLabs volta como estado (com a
- * mensagem traduzida) e toda gravação é auditada.
+ * A PRÉVIA PELA ROTA (desenho da fase 2, D15 e §4): gerente ou admin; o corpo só
+ * traz o texto; a cota é da organização da SESSÃO e só conta quando a prévia vai
+ * à ElevenLabs; o limite estourado volta 422 com Retry-After (nunca 429); a
+ * prévia sintetizada é auditada, a reaproveitada não.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
+const HASH = "a".repeat(64);
+const estado = vi.hoisted(() => ({
+  resultado: null as unknown,
+  /** A verdadeira só gasta cota quando iria à ElevenLabs; o falso imita isso. */
+  iriaAElevenLabs: true,
+  cota: { permitida: true, limite: 30, restantes: 29, reabreEmS: 1200 },
+}));
+
+vi.mock("@/lib/auth/require-role", () => ({
+  requireRole: vi.fn(async () => ({
+    ok: true,
+    user: { id: "11111111-1111-4111-8111-111111111111", email: "ana@exemplo.com", full_name: "Ana", idioma: "pt-BR" },
+    org: { orgId: "22222222-2222-4222-8222-222222222222", name: "Org", role: "manager" },
+  })),
+}));
+vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
+vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => ({})) }));
+vi.mock("@/lib/telefonia/servico-de-falas", () => ({
+  STATUS_DA_FALHA: {
+    sem_chave: 422, sem_voz: 422, chave_invalida: 422, sem_credito: 422, texto_recusado: 422,
+    voz_inexistente: 422, limite_de_uso: 422, limite_de_previas: 422, previa_ausente: 422,
+    previa_desatualizada: 422, armazenamento: 502, sem_resposta: 502, erro_do_provedor: 502,
+  },
+  contextoDeFala: vi.fn(async () => ({ chave: "sk_x", voz: { voiceId: "v1", modelId: "eleven_multilingual_v2" } })),
+  armazemDaInstalacao: vi.fn(() => ({})),
+  sintetizadorDaInstalacao: vi.fn(() => vi.fn()),
+  consumirCotaDePrevia: vi.fn(async () => estado.cota),
+}));
+vi.mock("@/lib/telefonia/previa", () => ({
+  gerarPrevia: vi.fn(async (p: { consumirCota: () => Promise<boolean> }) => {
+    if (estado.iriaAElevenLabs && !(await p.consumirCota())) return { ok: false, motivo: "limite_de_previas" };
+    return estado.resultado;
+  }),
+}));
+
+import { audit } from "@/lib/audit";
+import { requireRole } from "@/lib/auth/require-role";
+import { gerarPrevia } from "@/lib/telefonia/previa";
+import { consumirCotaDePrevia } from "@/lib/telefonia/servico-de-falas";
+
+import { POST } from "./route";
+
+const chamar = (corpo: unknown) =>
+  POST(
+    new NextRequest("https://crm.exemplo.com.br/api/v1/telefonia/falas/previa", { method: "POST", body: JSON.stringify(corpo) }),
+  );
+
+beforeEach(() => {
+  estado.iriaAElevenLabs = true;
+  estado.cota = { permitida: true, limite: 30, restantes: 29, reabreEmS: 1200 };
+  estado.resultado = { ok: true, hash: HASH, audio: new Uint8Array([0xff, 0x7f]), duracaoMs: 1, reaproveitada: false };
+  vi.mocked(audit).mockClear();
+  vi.mocked(gerarPrevia).mockClear();
+  vi.mocked(consumirCotaDePrevia).mockClear();
+  vi.mocked(requireRole).mockClear();
+});
+
+describe("POST /api/v1/telefonia/falas/previa", () => {
+  it("gerente ou admin: o aviso de instabilidade também passa pela prévia", async () => {
+    await chamar({ texto: "Aguarde." });
+    expect(vi.mocked(requireRole).mock.calls[0]![0]).toBe("manager");
+  });
+
+  it("prévia nova: hash, duração e o μ-law em base64; a cota é da organização da sessão; audita sem o texto", async () => {
+    const r = await chamar({ texto: "Aguarde." });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ data: { hash: HASH, duracao_ms: 1, reaproveitada: false, audio_base64: "/38=" } });
+    expect(consumirCotaDePrevia).toHaveBeenCalledWith(ORG);
+    expect(r.headers.get("X-RateLimit-Limit")).toBe("30");
+    expect(r.headers.get("X-RateLimit-Remaining")).toBe("29");
+    expect(vi.mocked(gerarPrevia).mock.calls[0]![0]).toMatchObject({ organizationId: ORG, texto: "Aguarde." });
+    const entrada = vi.mocked(audit).mock.calls[0]![0];
+    expect(entrada).toMatchObject({ action: "phone.prompt_previewed", resourceId: null, metadata: { hash: HASH, caracteres: 8 } });
+    expect(JSON.stringify(entrada)).not.toContain("Aguarde.");
+  });
+
+  it("prévia reaproveitada do Storage: não gasta cota nem audita (nada foi pago nem gravado)", async () => {
+    estado.iriaAElevenLabs = false;
+    estado.resultado = { ok: true, hash: HASH, audio: new Uint8Array([0xff]), duracaoMs: 1, reaproveitada: true };
+    const r = await chamar({ texto: "Aguarde." });
+    expect(r.status).toBe(200);
+    expect(consumirCotaDePrevia).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    expect(r.headers.get("X-RateLimit-Limit")).toBeNull();
+  });
+
+  it("limite de 30 por hora estourado: 422 limite_de_previas com Retry-After — nunca 429, que o apiClient repetiria", async () => {
+    estado.cota = { permitida: false, limite: 30, restantes: 0, reabreEmS: 1200 };
+    const r = await chamar({ texto: "Aguarde." });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("limite_de_previas");
+    expect(r.headers.get("Retry-After")).toBe("1200");
+    expect(r.headers.get("X-RateLimit-Remaining")).toBe("0");
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("a ElevenLabs recusou: a mensagem traduzida, com o status da falha", async () => {
+    estado.resultado = { ok: false, motivo: "sem_credito" };
+    const r = await chamar({ texto: "Aguarde." });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { error: { message: string } }).error.message).toMatch(/sem crédito/);
+  });
+
+  it("corpo inválido (texto vazio, ou um campo a mais como caminho) → 422 sem gerar nada", async () => {
+    expect((await chamar({ texto: "  " })).status).toBe(422);
+    expect((await chamar({ texto: "Oi.", caminho: "outra-org/x.ulaw" })).status).toBe(422);
+    expect(gerarPrevia).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 6: Rodar e ver falhar**
+
+Run: `pnpm exec vitest run app/api/v1/telefonia/falas/previa/route.test.ts`
+Expected: FAIL — `Failed to resolve import "./route"`.
+
+- [ ] **Step 7: A rota da prévia**
+
+Crie `app/api/v1/telefonia/falas/previa/route.ts`:
+
+```ts
+/**
+ * POST /api/v1/telefonia/falas/previa — gera a PRÉVIA de uma fala para a tela
+ * ouvir antes de salvar (gerente ou admin).
+ *
+ * Desenho da fase 2, D15 e §4 (passo 1). É a ÚNICA rota que faz a ElevenLabs
+ * sintetizar, e ela não muda nada nas ligações:
+ *  - mesmo texto, mesma voz e mesmo modelo que já têm objeto no Storage →
+ *    devolve o objeto, sem custo e sem gastar cota;
+ *  - senão, gasta uma da cota da organização da SESSÃO (30 por hora), chama a
+ *    ElevenLabs uma vez e grava `<org>/<hash>.ulaw`;
+ *  - nenhuma linha de `phone_prompts` muda — isso é o "Salvar e usar" (as rotas da
+ *    fala geral, do menu e do aviso), que recebe de volta o `hash` desta resposta.
+ *
+ * Gerente, e não só admin: o aviso de instabilidade (gerente ou admin, §7) também
+ * passa pela prévia. O corpo traz SÓ o texto — voz, modelo, organização e caminho
+ * saem do servidor.
+ *
+ * O limite estourado volta 422 (`limite_de_previas`) com `Retry-After`, NUNCA 429:
+ * o `apiClient` do navegador repete 429 depois de dormir o `Retry-After` inteiro.
+ * A prévia sintetizada é auditada (`phone.prompt_previewed`: gastou crédito da
+ * conta do cliente e gravou um objeto); a reaproveitada não fez nada e não audita.
+ * O áudio vai em base64 no JSON: 1000 caracteres de fala cabem em poucas centenas
+ * de KB, e uma ida só entrega o hash e o som.
+ */
+import { randomUUID } from "node:crypto";
+import type { NextRequest } from "next/server";
+import { z } from "zod";
+
+import { fail, ok } from "@/lib/api/wrappers";
+import { audit } from "@/lib/audit";
+import { requireRole } from "@/lib/auth/require-role";
+import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
+import { traduzir } from "@/lib/i18n/dicionario";
+import { requireSupportWrite } from "@/lib/impersonate/support";
+import { gerarPrevia } from "@/lib/telefonia/previa";
+import {
+  STATUS_DA_FALHA,
+  armazemDaInstalacao,
+  consumirCotaDePrevia,
+  contextoDeFala,
+  sintetizadorDaInstalacao,
+  type CotaDePrevia,
+} from "@/lib/telefonia/servico-de-falas";
+import { MENSAGEM_DA_FALHA_DA_FALA, TAMANHO_MAXIMO_DA_FALA, type PreviaNaResposta } from "@/lib/telefonia/vocabulario";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+const previaSchema = z.object({ texto: z.string().trim().min(1).max(TAMANHO_MAXIMO_DA_FALA) }).strict();
+
+export async function POST(req: NextRequest): Promise<Response> {
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
+  const requestId = randomUUID();
+  const authz = await requireRole("manager", { requestId, resource: "telefonia_falas" });
+  if (!authz.ok) return authz.response;
+  const t = (texto: string) => traduzir(texto, authz.user.idioma);
+
+  const parsed = previaSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return fail("validation_failed", t("Campos inválidos."), 422, { requestId });
+
+  const org = authz.org.orgId;
+  const { chave, voz } = await contextoDeFala(getRequestPool(), org);
+  // Num objeto, e não num `let`: o TypeScript não enxerga a atribuição feita dentro do callback.
+  const medida: { cota: CotaDePrevia | null } = { cota: null };
+  const r = await gerarPrevia({
+    armazem: armazemDaInstalacao(),
+    sintetizar: sintetizadorDaInstalacao(),
+    consumirCota: async () => {
+      medida.cota = await consumirCotaDePrevia(org);
+      return medida.cota.permitida;
+    },
+    organizationId: org,
+    texto: parsed.data.texto,
+    chave,
+    voz,
+  });
+
+  const cota = medida.cota;
+  const headers: Record<string, string> = {};
+  if (cota) {
+    headers["X-RateLimit-Limit"] = String(cota.limite);
+    headers["X-RateLimit-Remaining"] = String(cota.restantes);
+  }
+  if (!r.ok) {
+    if (r.motivo === "limite_de_previas" && cota) headers["Retry-After"] = String(cota.reabreEmS);
+    return fail(r.motivo, t(MENSAGEM_DA_FALHA_DA_FALA[r.motivo]), STATUS_DA_FALHA[r.motivo], { requestId, headers });
+  }
+
+  if (!r.reaproveitada) {
+    void audit({
+      action: "phone.prompt_previewed",
+      actorUserId: authz.user.id,
+      organizationId: org,
+      resourceType: "phone_prompt",
+      resourceId: null,
+      metadata: { hash: r.hash, caracteres: parsed.data.texto.length, duracao_ms: r.duracaoMs },
+      requestId,
+    });
+  }
+  const corpo: PreviaNaResposta = {
+    hash: r.hash,
+    duracao_ms: r.duracaoMs,
+    reaproveitada: r.reaproveitada,
+    audio_base64: Buffer.from(r.audio).toString("base64"),
+  };
+  return ok(corpo, { requestId, headers });
+}
+```
+
+- [ ] **Step 8: Rodar e ver passar**
+
+Run: `pnpm exec vitest run app/api/v1/telefonia/falas/previa/route.test.ts`
+Expected: PASS (6 testes).
+
+- [ ] **Step 9: Teste do "Salvar e usar" da fala geral (falha: a rota não existe)**
+
+Crie `app/api/v1/telefonia/falas/gerais/[tipo]/route.test.ts`:
+
+```ts
+/**
+ * O "SALVAR E USAR" DA FALA GERAL PELA ROTA: tipo fora da lista não existe; o corpo
+ * traz texto e hash (nunca caminho); a fala salva é ligada à coluna certa de
+ * `phone_settings` e auditada; a mesma fala de novo não escreve nem audita; e a
+ * rota não carrega o cliente da ElevenLabs.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
+
+const ORG = "22222222-2222-4222-8222-222222222222";
+const HASH = "b".repeat(64);
 const estado = vi.hoisted(() => ({
   consultas: [] as Array<{ sql: string; params: unknown[] }>,
   resultado: null as unknown,
@@ -3535,36 +4532,41 @@ vi.mock("@/lib/agent-engine/db/request-pool", () => ({
     },
   })),
 }));
+// Salvar não pode nem CARREGAR o cliente da ElevenLabs: só a rota da prévia o usa.
+vi.mock("@/lib/telefonia/elevenlabs", () => {
+  throw new Error("o Salvar e usar carregou o cliente da ElevenLabs");
+});
 vi.mock("@/lib/telefonia/servico-de-falas", () => ({
   STATUS_DA_FALHA: {
     sem_chave: 422, sem_voz: 422, chave_invalida: 422, sem_credito: 422, texto_recusado: 422,
-    voz_inexistente: 422, limite_de_uso: 422, armazenamento: 502, sem_resposta: 502, erro_do_provedor: 502,
+    voz_inexistente: 422, limite_de_uso: 422, limite_de_previas: 422, previa_ausente: 422,
+    previa_desatualizada: 422, armazenamento: 502, sem_resposta: 502, erro_do_provedor: 502,
   },
-  contextoDeFala: vi.fn(async () => ({ chave: "sk_x", voz: { voiceId: "v1", modelId: "eleven_multilingual_v2" } })),
   armazemDaInstalacao: vi.fn(() => ({})),
-  sintetizadorDaInstalacao: vi.fn(() => vi.fn()),
 }));
-vi.mock("@/lib/telefonia/falas", async () => {
-  const real = await vi.importActual<typeof import("@/lib/telefonia/falas")>("@/lib/telefonia/falas");
-  return { ...real, gerarFala: vi.fn(async () => estado.resultado) };
-});
+vi.mock("@/lib/telefonia/falas", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/telefonia/falas")>("@/lib/telefonia/falas")),
+  salvarFala: vi.fn(async () => estado.resultado),
+  vozDaOrganizacao: vi.fn(async () => ({ voiceId: "v1", modelId: "eleven_multilingual_v2" })),
+}));
 
 import { audit } from "@/lib/audit";
-import { gerarFala } from "@/lib/telefonia/falas";
+import { salvarFala } from "@/lib/telefonia/falas";
 
 import { PUT } from "./route";
 
 const FALA = {
   id: "33333333-3333-4333-8333-333333333333",
-  tipo: "waiting",
+  tipo: "after_hours",
   texto: "Aguarde.",
   voice_id: "v1",
+  hash: HASH,
   status: "ready",
   erro: null,
   duracao_ms: 900,
   atualizada_em: "2026-09-28T13:00:00.000Z",
 };
-const chamar = (tipo: string, corpo: unknown = { texto: "Aguarde." }) =>
+const chamar = (tipo: string, corpo: unknown = { texto: "Aguarde.", hash: HASH }) =>
   PUT(
     new NextRequest(`https://crm.exemplo.com.br/api/v1/telefonia/falas/gerais/${tipo}`, { method: "PUT", body: JSON.stringify(corpo) }),
     { params: Promise.resolve({ tipo }) },
@@ -3572,68 +4574,83 @@ const chamar = (tipo: string, corpo: unknown = { texto: "Aguarde." }) =>
 
 beforeEach(() => {
   estado.consultas = [];
-  estado.resultado = { ok: true, fala: FALA, gerada: true };
+  estado.resultado = { ok: true, fala: FALA, mudou: true };
   vi.mocked(audit).mockClear();
-  vi.mocked(gerarFala).mockClear();
+  vi.mocked(salvarFala).mockClear();
 });
 
 describe("PUT /api/v1/telefonia/falas/gerais/[tipo]", () => {
-  it("tipo que não é fala geral → 404, sem gerar nada", async () => {
+  it("tipo que não é fala geral → 404, sem salvar nada", async () => {
     const r = await chamar("menu");
     expect(r.status).toBe(404);
-    expect(gerarFala).not.toHaveBeenCalled();
+    expect(salvarFala).not.toHaveBeenCalled();
   });
 
-  it("gera e liga a fala à coluna do tipo em phone_settings, auditando", async () => {
+  it("salva a prévia e liga a fala à coluna do tipo em phone_settings, auditando", async () => {
     const r = await chamar("after_hours");
     expect(r.status).toBe(200);
-    expect(vi.mocked(gerarFala).mock.calls[0]![0]).toMatchObject({ tipo: "after_hours", texto: "Aguarde.", organizationId: ORG });
+    expect(vi.mocked(salvarFala).mock.calls[0]![0]).toMatchObject({
+      tipo: "after_hours",
+      texto: "Aguarde.",
+      hash: HASH,
+      falaAtualId: null,
+      organizationId: ORG,
+    });
     const update = estado.consultas.find((c) => /^\s*update phone_settings/i.test(c.sql))!;
     expect(update.sql).toMatch(/set after_hours_prompt_id = \$2/);
     expect(update.params).toEqual([ORG, FALA.id]);
     expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({ action: "phone.prompt_saved", resourceId: FALA.id });
   });
 
-  it("a ElevenLabs falhou mas há linha (failed ou o áudio antigo): 200 com a falha traduzida", async () => {
-    estado.resultado = { ok: false, motivo: "sem_credito", fala: { ...FALA, status: "failed", erro: "sem_credito" } };
+  it("a mesma fala de novo (nada mudou): 200, sem escrever e sem auditar", async () => {
+    estado.resultado = { ok: true, fala: FALA, mudou: false };
     const r = await chamar("waiting");
     expect(r.status).toBe(200);
-    const corpo = (await r.json()) as { data: { falha: { motivo: string; mensagem: string } } };
-    expect(corpo.data.falha).toEqual({ motivo: "sem_credito", mensagem: expect.stringMatching(/sem crédito/) });
+    expect(estado.consultas.some((c) => /^\s*update/i.test(c.sql))).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
   });
 
-  it("sem chave (nenhuma linha): 422, e nada é ligado", async () => {
-    estado.resultado = { ok: false, motivo: "sem_chave", fala: null };
+  it("a prévia não está no Storage da organização: 422 previa_ausente, e nada é ligado", async () => {
+    estado.resultado = { ok: false, motivo: "previa_ausente" };
     const r = await chamar("nobody");
     expect(r.status).toBe(422);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("previa_ausente");
     expect(estado.consultas.some((c) => /^\s*update/i.test(c.sql))).toBe(false);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("corpo com caminho (campo a mais) ou hash fora da régua → 422, sem salvar", async () => {
+    expect((await chamar("waiting", { texto: "Aguarde.", hash: HASH, caminho: `outra/${HASH}.ulaw` })).status).toBe(422);
+    expect((await chamar("waiting", { texto: "Aguarde.", hash: "x" })).status).toBe(422);
+    expect(salvarFala).not.toHaveBeenCalled();
   });
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [ ] **Step 10: Rodar e ver falhar**
 
 Run: `pnpm exec vitest run "app/api/v1/telefonia/falas/gerais/[tipo]/route.test.ts"`
 Expected: FAIL — `Failed to resolve import "./route"`.
 
-- [ ] **Step 3: A rota da fala geral**
+- [ ] **Step 11: A rota da fala geral**
 
 Crie `app/api/v1/telefonia/falas/gerais/[tipo]/route.ts`:
 
 ```ts
 /**
- * PUT /api/v1/telefonia/falas/gerais/[tipo] — gera (ou regrava) uma fala geral da
- * organização: `waiting` (aguarde), `nobody` (ninguém atendeu) ou `after_hours`
+ * PUT /api/v1/telefonia/falas/gerais/[tipo] — o "Salvar e usar" de uma fala geral
+ * da organização: `waiting` (aguarde), `nobody` (ninguém atendeu) ou `after_hours`
  * (fora do horário). Admin.
  *
- * Desenho da fase 2, §4 e §6.2. A fala é gerada na ElevenLabs e ligada a
- * `phone_settings`. Falha da ElevenLabs com linha (a `failed` nova, ou o áudio
- * antigo que continua tocando) volta 200 com `falha` — a tela mostra o estado e a
- * mensagem; sem linha nenhuma (sem chave, sem voz), 422.
+ * Desenho da fase 2, §4 (passo 3) e §6.2. O corpo traz o texto e o HASH da prévia
+ * dele (`POST /api/v1/telefonia/falas/previa`) — nunca um caminho. Esta rota NÃO
+ * chama a ElevenLabs: `salvarFala` confere que o hash é o do texto com a voz atual
+ * e que `<org da sessão>/<hash>.ulaw` existe, aponta a linha de `phone_prompts`
+ * para ele, e a fala é ligada à coluna do tipo em `phone_settings`. A partir daí
+ * as ligações tocam o áudio novo. A mesma fala de novo não escreve nem audita.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
-import { z } from "zod";
 
 import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
@@ -3641,25 +4658,12 @@ import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
-import { COLUNA_DA_FALA_GERAL, gerarFala } from "@/lib/telefonia/falas";
-import {
-  STATUS_DA_FALHA,
-  armazemDaInstalacao,
-  contextoDeFala,
-  sintetizadorDaInstalacao,
-} from "@/lib/telefonia/servico-de-falas";
-import {
-  FALAS_GERAIS,
-  MENSAGEM_DA_FALHA_DA_FALA,
-  TAMANHO_MAXIMO_DA_FALA,
-  type FalaGeral,
-  type FalhaDaFala,
-} from "@/lib/telefonia/vocabulario";
+import { COLUNA_DA_FALA_GERAL, falaParaSalvarSchema, salvarFala, vozDaOrganizacao } from "@/lib/telefonia/falas";
+import { STATUS_DA_FALHA, armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
+import { FALAS_GERAIS, MENSAGEM_DA_FALHA_DA_FALA, type FalaGeral } from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const textoSchema = z.object({ texto: z.string().trim().min(1).max(TAMANHO_MAXIMO_DA_FALA) }).strict();
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ tipo: string }> }): Promise<Response> {
   const supportDenied = await requireSupportWrite();
@@ -3675,56 +4679,52 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ tipo: strin
     return fail("not_found", t("Fala não encontrada."), 404, { requestId });
   }
   const tipo = tipoBruto as FalaGeral;
-  const parsed = textoSchema.safeParse(await req.json().catch(() => null));
+  const parsed = falaParaSalvarSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail("validation_failed", t("Campos inválidos."), 422, { requestId });
 
   const db = getRequestPool();
   const org = authz.org.orgId;
   const coluna = COLUNA_DA_FALA_GERAL[tipo];
-  const { chave, voz } = await contextoDeFala(db, org);
-  const { rows } = await db.query<{ id: string | null }>(`select ${coluna} as id from phone_settings where organization_id = $1`, [org]);
+  const [voz, { rows }] = await Promise.all([
+    vozDaOrganizacao(db, org),
+    db.query<{ id: string | null }>(`select ${coluna} as id from phone_settings where organization_id = $1`, [org]),
+  ]);
 
-  const r = await gerarFala({
+  const r = await salvarFala({
     db,
     armazem: armazemDaInstalacao(),
-    sintetizar: sintetizadorDaInstalacao(),
     organizationId: org,
     userId: authz.user.id,
     tipo,
     texto: parsed.data.texto,
+    hash: parsed.data.hash,
     falaAtualId: rows[0]?.id ?? null,
-    chave,
     voz,
   });
-  const fala = r.fala;
-  if (!fala) {
-    const motivo: FalhaDaFala = r.ok ? "erro_do_provedor" : r.motivo;
-    return fail(motivo, t(MENSAGEM_DA_FALHA_DA_FALA[motivo]), STATUS_DA_FALHA[motivo], { requestId });
-  }
+  if (!r.ok) return fail(r.motivo, t(MENSAGEM_DA_FALHA_DA_FALA[r.motivo]), STATUS_DA_FALHA[r.motivo], { requestId });
 
-  await db.query(`update phone_settings set ${coluna} = $2, updated_at = now() where organization_id = $1`, [org, fala.id]);
-  void audit({
-    action: "phone.prompt_saved",
-    actorUserId: authz.user.id,
-    organizationId: org,
-    resourceType: "phone_prompt",
-    resourceId: fala.id,
-    metadata: { tipo, status: fala.status, gerada: r.ok ? r.gerada : false, falha: r.ok ? null : r.motivo },
-    requestId,
-  });
-  return ok(
-    { fala, falha: r.ok ? null : { motivo: r.motivo, mensagem: t(MENSAGEM_DA_FALHA_DA_FALA[r.motivo]) } },
-    { requestId },
-  );
+  if (r.mudou) {
+    await db.query(`update phone_settings set ${coluna} = $2, updated_at = now() where organization_id = $1`, [org, r.fala.id]);
+    void audit({
+      action: "phone.prompt_saved",
+      actorUserId: authz.user.id,
+      organizationId: org,
+      resourceType: "phone_prompt",
+      resourceId: r.fala.id,
+      metadata: { tipo, hash: r.fala.hash },
+      requestId,
+    });
+  }
+  return ok({ fala: r.fala }, { requestId });
 }
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [ ] **Step 12: Rodar e ver passar**
 
 Run: `pnpm exec vitest run "app/api/v1/telefonia/falas/gerais/[tipo]/route.test.ts"`
-Expected: PASS (4 testes).
+Expected: PASS (5 testes).
 
-- [ ] **Step 5: A rota da voz**
+- [ ] **Step 13: A rota da voz e a das vozes da conta**
 
 Crie `app/api/v1/telefonia/voz/route.ts`:
 
@@ -3734,9 +4734,10 @@ Crie `app/api/v1/telefonia/voz/route.ts`:
  * PUT /api/v1/telefonia/voz — escolhe a voz da ElevenLabs (admin).
  *
  * Desenho da fase 2, §6.2 (aba Voz e falas). Trocar a voz NÃO regrava as falas: o
- * hash de cada uma inclui a voz, e a tela mostra "pronta, com a voz anterior" até
- * a pessoa gerar de novo — regravar sozinho gastaria crédito sem ninguém pedir.
- * A voz é conferida contra as vozes da conta antes de gravar.
+ * hash de cada uma inclui a voz, e a tela mostra "em uso, com a voz anterior" até
+ * a pessoa gerar a prévia com a voz nova e salvar — regravar sozinho gastaria
+ * crédito sem ninguém pedir. A voz é conferida contra as vozes da conta antes de
+ * gravar (listar vozes não sintetiza nada).
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -3835,7 +4836,7 @@ Crie `app/api/v1/telefonia/voz/vozes/route.ts`:
  *
  * A lista vem ao vivo da ElevenLabs (com a amostra pública de cada voz, para o
  * "Ouvir amostra"); nada é copiado para o banco — o nome de uma voz é da conta
- * do cliente, e muda lá.
+ * do cliente, e muda lá. Listar vozes não sintetiza nada e não gasta crédito.
  */
 import { randomUUID } from "node:crypto";
 
@@ -3868,19 +4869,20 @@ export async function GET(): Promise<Response> {
 }
 ```
 
-- [ ] **Step 6: A rota do áudio da fala**
+- [ ] **Step 14: A rota do áudio da fala salva**
 
 Crie `app/api/v1/telefonia/falas/[id]/audio/route.ts`:
 
 ```ts
 /**
- * GET /api/v1/telefonia/falas/[id]/audio — os bytes μ-law de uma fala pronta, para
- * a tela OUVIR (membro da organização).
+ * GET /api/v1/telefonia/falas/[id]/audio — os bytes μ-law de uma fala SALVA, para
+ * a tela ouvir o que as ligações tocam (membro da organização).
  *
  * O bucket é privado: a tela nunca recebe URL do Storage. Esta rota confere que a
  * fala é da organização da sessão, baixa com o cliente de serviço e devolve
- * `audio/basic`; o navegador converte em WAV (`ulawParaWav`). Uma chamada só, sem
- * custo na ElevenLabs. Leitura não audita.
+ * `audio/basic`; o navegador converte em WAV (`ulawParaWav`). Sem custo na
+ * ElevenLabs. A prévia (ainda não salva) não passa por aqui: ela chega no corpo
+ * da própria resposta da rota da prévia. Leitura não audita.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -3917,7 +4919,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 }
 ```
 
-- [ ] **Step 7: Dicionário**
+- [ ] **Step 15: Dicionário**
 
 Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
 
@@ -3926,29 +4928,35 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
   "O áudio desta fala não está disponível agora.": { es: "El audio de esta locución no está disponible ahora." },
 ```
 
-- [ ] **Step 8: Rodar, typecheck e lints**
+(As mensagens de falha da prévia e do salvar — `limite_de_previas`, `previa_ausente`, `previa_desatualizada` — entraram no dicionário na Task 5, junto com as outras de `MENSAGEM_DA_FALHA_DA_FALA`.)
 
-Run: `pnpm exec vitest run "app/api/v1/telefonia/" tests/unit/audit-resource-id-e-uuid.test.ts && pnpm typecheck && pnpm lint:role-rank && pnpm lint:channels`
-Expected: PASS; `tsc` e os dois lints sem erro.
+- [ ] **Step 16: Rodar, typecheck e lints**
 
-- [ ] **Step 9: Commit**
+Run: `pnpm exec vitest run "app/api/v1/telefonia/" lib/telefonia/ tests/unit/audit-resource-id-e-uuid.test.ts tests/unit/ligacao-nunca-chama-elevenlabs.test.ts && pnpm typecheck && pnpm lint:role-rank && pnpm lint:channels`
+Expected: PASS (inclusive o gate de `resourceId`: a prévia audita com `resourceId: null`, e o teste-guarda); `tsc` e os dois lints sem erro.
+
+- [ ] **Step 17: Commit**
 
 ```bash
-git add app/api/v1/telefonia/voz/route.ts app/api/v1/telefonia/voz/vozes/route.ts \
+git add lib/telefonia/servico-de-falas.ts lib/telefonia/servico-de-falas.test.ts \
+  app/api/v1/telefonia/falas/previa/route.ts app/api/v1/telefonia/falas/previa/route.test.ts \
+  app/api/v1/telefonia/voz/route.ts app/api/v1/telefonia/voz/vozes/route.ts \
   "app/api/v1/telefonia/falas/gerais/[tipo]/route.ts" "app/api/v1/telefonia/falas/gerais/[tipo]/route.test.ts" \
   "app/api/v1/telefonia/falas/[id]/audio/route.ts" lib/i18n/dicionario.ts
-git commit -m "feat(telefonia): rotas da voz, das falas gerais e do áudio da fala
+git commit -m "feat(telefonia): rota da prévia com 30 por hora, e o Salvar e usar das falas gerais
 
-A voz da organização (conferida contra a conta da ElevenLabs), as falas de
-aguarde, ninguém atendeu e fora do horário, e o μ-law de cada fala para a tela
-ouvir — o bucket segue privado.
+A prévia é a única rota que faz a ElevenLabs sintetizar: reaproveita o que já
+está no Storage, gasta a cota da organização só quando vai à ElevenLabs e
+recusa com 422 e Retry-After (nunca 429). Salvar a fala geral só confere a
+prévia e aponta a linha — sem ElevenLabs. Mais a voz da organização e o μ-law
+da fala salva para a tela ouvir.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 8: Menus de voz — leitura com "últimos 7 dias", gravação em transação, rotas
+## Task 8: Menus de voz — leitura com "últimos 7 dias", falas da prévia, gravação em transação, rotas
 
 **Files:**
 - Create: `lib/telefonia/menus.ts`, `lib/telefonia/menus.test.ts`
@@ -3971,12 +4979,13 @@ import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { arquivarMenu, gravarMenu, menuSchema, situacaoDoMenuParaNumero, teclaRepetida } from "./menus";
 
 const TIME = "44444444-4444-4444-8444-444444444444";
+const HASH = "a".repeat(64);
 const valido = {
   nome: "Principal",
   opcoes: [{ tecla: "1", time_id: TIME }],
   time_padrao_id: TIME,
-  texto_menu: "Para Suporte, digite 1.",
-  texto_invalida: "",
+  fala: { texto: "Para Suporte, digite 1.", hash: HASH },
+  fala_invalida: null,
 };
 
 function dbCom(linhas: Record<string, unknown>[]) {
@@ -4009,16 +5018,18 @@ function poolFalso(respostas: { update?: Array<{ id: string }> } = {}) {
 }
 
 describe("menuSchema", () => {
-  it("aceita o menu válido e trata fala de inválida vazia como ausente", () => {
-    const r = menuSchema.parse(valido);
-    expect(r.texto_invalida).toBeNull();
+  it("aceita o menu válido; sem fala de tecla inválida, ela é null", () => {
+    expect(menuSchema.parse(valido).fala_invalida).toBeNull();
+    expect(menuSchema.parse({ ...valido, fala_invalida: undefined }).fala_invalida).toBeNull();
   });
 
   it.each([
     ["tecla reservada", { ...valido, opcoes: [{ tecla: "*", time_id: TIME }] }],
     ["sem opção", { ...valido, opcoes: [] }],
     ["campo que não existe", { ...valido, aceita_ramal: true }],
-    ["fala vazia", { ...valido, texto_menu: "  " }],
+    ["fala vazia", { ...valido, fala: { texto: "  ", hash: HASH } }],
+    ["fala sem o hash da prévia", { ...valido, fala: { texto: "Oi." } }],
+    ["caminho no lugar do hash", { ...valido, fala: { texto: "Oi.", hash: "outra-org/x.ulaw" } }],
     ["mais de 10 opções", { ...valido, opcoes: Array.from({ length: 11 }, () => ({ tecla: "1", time_id: TIME })) }],
   ])("recusa: %s", (_caso, entrada) => {
     expect(menuSchema.safeParse(entrada).success).toBe(false);
@@ -4109,14 +5120,20 @@ Crie `lib/telefonia/menus.ts`:
  * mesma organização — a FK composta do banco é a catraca; `timesValidos` é a
  * mensagem boa antes dela. Um número só aponta para um menu com a fala pronta
  * (`situacaoDoMenuParaNumero`), e um menu que atende um número não é arquivado.
+ *
+ * As falas do menu chegam como texto + hash da PRÉVIA (`falaParaSalvarSchema`), e
+ * quem as confere e grava é `_salvar.ts` com `falas.ts` — nada aqui chama a
+ * ElevenLabs. Este arquivo é importado por `lib/channels/telefonia/numeros.ts`: um
+ * import do cliente da ElevenLabs aqui reprovaria o teste-guarda do D15.
  */
 import type pg from "pg";
 import { z } from "zod";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
+import { falaParaSalvarSchema } from "./falas";
 import { somarUltimosSeteDias, type LinhaDoMenuNaSemana } from "./ultimos-sete-dias";
-import { TAMANHO_MAXIMO_DA_FALA, type FalaPublica, type MenuPublico, type OpcaoDoMenuPublica } from "./vocabulario";
+import type { FalaPublica, MenuPublico, OpcaoDoMenuPublica } from "./vocabulario";
 
 export const menuSchema = z
   .object({
@@ -4126,14 +5143,11 @@ export const menuSchema = z
       .min(1)
       .max(10),
     time_padrao_id: z.string().uuid(),
-    texto_menu: z.string().trim().min(1).max(TAMANHO_MAXIMO_DA_FALA),
-    // Vazio = o menu não tem fala de tecla inválida (a URA só repete o menu).
-    texto_invalida: z
-      .string()
-      .trim()
-      .max(TAMANHO_MAXIMO_DA_FALA)
-      .nullish()
-      .transform((v) => (v ? v : null)),
+    // O texto e o hash da PRÉVIA da fala do menu — ou os da fala em uso, se o texto
+    // não mudou. Nunca um caminho do Storage: quem o monta é o servidor.
+    fala: falaParaSalvarSchema,
+    // Ausente ou `null` = o menu não tem fala de tecla inválida (a URA só repete o menu).
+    fala_invalida: falaParaSalvarSchema.nullish().transform((v) => v ?? null),
   })
   .strict();
 
@@ -4220,7 +5234,8 @@ export async function gravarMenu(
 }
 
 const falaJson = (a: string) => `case when ${a}.id is null then null else jsonb_build_object(
-  'id', ${a}.id, 'tipo', ${a}.kind, 'texto', ${a}."text", 'voice_id', ${a}.voice_id, 'status', ${a}.status,
+  'id', ${a}.id, 'tipo', ${a}.kind, 'texto', ${a}."text", 'voice_id', ${a}.voice_id, 'hash', ${a}.content_hash,
+  'status', ${a}.status,
   'erro', ${a}.error, 'duracao_ms', ${a}.duration_ms, 'atualizada_em', ${a}.updated_at) end`;
 
 interface LinhaDoMenu {
@@ -4314,7 +5329,7 @@ export async function situacaoDoMenuParaNumero(
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `pnpm exec vitest run lib/telefonia/menus.test.ts`
-Expected: PASS (12 testes).
+Expected: PASS (14 testes).
 
 - [ ] **Step 5: Teste da rota POST (falha: a rota não existe)**
 
@@ -4322,17 +5337,21 @@ Crie `app/api/v1/telefonia/menus/route.test.ts`:
 
 ```ts
 /**
- * SALVAR UM MENU DE VOZ: validação antes de gastar crédito, fala gerada e ligada
- * ao menu, falha da ElevenLabs que não perde o menu, e auditoria.
+ * SALVAR UM MENU DE VOZ: validação antes de tudo; as falas do menu chegam da
+ * PRÉVIA (texto + hash) e são conferidas ANTES de gravar qualquer coisa — prévia
+ * que não confere não salva menu nenhum; a rota não carrega o cliente da
+ * ElevenLabs; e a auditoria.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+const ORG = "22222222-2222-4222-8222-222222222222";
 const TIME = "44444444-4444-4444-8444-444444444444";
+const HASH = "a".repeat(64);
 const estado = vi.hoisted(() => ({
   timesOk: true,
-  contexto: { chave: "sk_x" as string | null, voz: { voiceId: "v1", modelId: "eleven_multilingual_v2" } as unknown },
-  resultado: null as unknown,
+  conferencia: null as unknown,
+  gravada: null as unknown,
 }));
 
 vi.mock("@/lib/auth/require-role", () => ({
@@ -4346,17 +5365,23 @@ vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async (
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => ({})) }));
 vi.mock("@/lib/channels/telefonia/ari", () => ({ configAriDoAmbiente: vi.fn(() => ({ baseUrl: "http://a", senha: "x" })) }));
+// Salvar o menu não pode nem CARREGAR o cliente da ElevenLabs: só a rota da prévia o usa.
+vi.mock("@/lib/telefonia/elevenlabs", () => {
+  throw new Error("salvar o menu carregou o cliente da ElevenLabs");
+});
 vi.mock("@/lib/telefonia/servico-de-falas", () => ({
   STATUS_DA_FALHA: {
     sem_chave: 422, sem_voz: 422, chave_invalida: 422, sem_credito: 422, texto_recusado: 422,
-    voz_inexistente: 422, limite_de_uso: 422, armazenamento: 502, sem_resposta: 502, erro_do_provedor: 502,
+    voz_inexistente: 422, limite_de_uso: 422, limite_de_previas: 422, previa_ausente: 422,
+    previa_desatualizada: 422, armazenamento: 502, sem_resposta: 502, erro_do_provedor: 502,
   },
-  contextoDeFala: vi.fn(async () => estado.contexto),
   armazemDaInstalacao: vi.fn(() => ({})),
-  sintetizadorDaInstalacao: vi.fn(() => vi.fn()),
 }));
-vi.mock("@/lib/telefonia/falas", () => ({
-  gerarFala: vi.fn(async () => estado.resultado),
+vi.mock("@/lib/telefonia/falas", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/telefonia/falas")>("@/lib/telefonia/falas")),
+  vozDaOrganizacao: vi.fn(async () => ({ voiceId: "v1", modelId: "eleven_multilingual_v2" })),
+  conferirFala: vi.fn(async () => estado.conferencia),
+  gravarFalaConferida: vi.fn(async () => estado.gravada),
   descartarFala: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/telefonia/menus", async () => {
@@ -4371,17 +5396,29 @@ vi.mock("@/lib/telefonia/menus", async () => {
 });
 
 import { audit } from "@/lib/audit";
-import { gerarFala } from "@/lib/telefonia/falas";
+import { conferirFala, gravarFalaConferida } from "@/lib/telefonia/falas";
 import { gravarMenu } from "@/lib/telefonia/menus";
 
 import { POST } from "./route";
 
-const FALA = { id: "66666666-6666-4666-8666-666666666666", tipo: "menu", status: "ready" };
+type Conferencia = Awaited<ReturnType<typeof conferirFala>>;
+
+const FALA = {
+  id: "66666666-6666-4666-8666-666666666666",
+  tipo: "menu",
+  texto: "Para Suporte, digite 1.",
+  voice_id: "v1",
+  hash: HASH,
+  status: "ready",
+  erro: null,
+  duracao_ms: 1500,
+  atualizada_em: "2026-09-28T13:00:00.000Z",
+};
 const corpo = (extra: Record<string, unknown> = {}) => ({
   nome: "Principal",
   opcoes: [{ tecla: "1", time_id: TIME }],
   time_padrao_id: TIME,
-  texto_menu: "Para Suporte, digite 1.",
+  fala: { texto: "Para Suporte, digite 1.", hash: HASH },
   ...extra,
 });
 const post = (c: unknown) =>
@@ -4389,51 +5426,71 @@ const post = (c: unknown) =>
 
 beforeEach(() => {
   estado.timesOk = true;
-  estado.contexto = { chave: "sk_x", voz: { voiceId: "v1", modelId: "eleven_multilingual_v2" } };
-  estado.resultado = { ok: true, fala: FALA, gerada: true };
+  estado.conferencia = {
+    ok: true,
+    atual: null,
+    nova: { hash: HASH, caminho: `${ORG}/${HASH}.ulaw`, duracaoMs: 1500, voiceId: "v1", modelId: "eleven_multilingual_v2" },
+  };
+  estado.gravada = { fala: FALA, mudou: true };
   vi.mocked(audit).mockClear();
-  vi.mocked(gerarFala).mockClear();
+  vi.mocked(conferirFala).mockClear();
+  vi.mocked(gravarFalaConferida).mockClear();
   vi.mocked(gravarMenu).mockClear();
 });
 
 describe("POST /api/v1/telefonia/menus", () => {
-  it("a mesma tecla para dois times → 422, sem gastar crédito", async () => {
+  it("a mesma tecla para dois times → 422, sem conferir prévia nenhuma", async () => {
     const r = await post(corpo({ opcoes: [{ tecla: "1", time_id: TIME }, { tecla: "1", time_id: TIME }] }));
     expect(r.status).toBe(422);
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("tecla_repetida");
-    expect(gerarFala).not.toHaveBeenCalled();
+    expect(conferirFala).not.toHaveBeenCalled();
   });
 
   it("time de outra organização → 422 time_invalido", async () => {
     estado.timesOk = false;
     const r = await post(corpo());
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("time_invalido");
-    expect(gerarFala).not.toHaveBeenCalled();
+    expect(conferirFala).not.toHaveBeenCalled();
   });
 
-  it("sem a chave da ElevenLabs → 422 sem_chave, sem gravar menu", async () => {
-    estado.contexto = { chave: null, voz: null };
+  it("a prévia da fala não confere → 422 com o motivo, e NADA é gravado (nem a fala, nem o menu)", async () => {
+    estado.conferencia = { ok: false, motivo: "previa_ausente" };
     const r = await post(corpo());
     expect(r.status).toBe(422);
-    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("sem_chave");
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("previa_ausente");
+    expect(gravarFalaConferida).not.toHaveBeenCalled();
     expect(gravarMenu).not.toHaveBeenCalled();
   });
 
-  it("sucesso: gera a fala, liga ao menu e audita o menu e a fala", async () => {
+  it("a fala de tecla inválida não confere: nem a fala do menu é gravada", async () => {
+    vi.mocked(conferirFala)
+      .mockResolvedValueOnce(estado.conferencia as Conferencia)
+      .mockResolvedValueOnce({ ok: false, motivo: "previa_desatualizada" });
+    const r = await post(corpo({ fala_invalida: { texto: "Opção inválida.", hash: "b".repeat(64) } }));
+    expect(r.status).toBe(422);
+    expect(gravarFalaConferida).not.toHaveBeenCalled();
+    expect(gravarMenu).not.toHaveBeenCalled();
+  });
+
+  it("sucesso: confere a prévia da sessão, grava a fala, liga ao menu e audita o menu e a fala", async () => {
     const r = await post(corpo());
     expect(r.status).toBe(201);
+    expect(vi.mocked(conferirFala).mock.calls[0]![0]).toMatchObject({
+      tipo: "menu",
+      texto: "Para Suporte, digite 1.",
+      hash: HASH,
+      falaAtualId: null,
+      organizationId: ORG,
+    });
     expect(vi.mocked(gravarMenu).mock.calls[0]![1]).toMatchObject({ id: null, falaId: FALA.id, falaInvalidaId: null });
     const acoes = vi.mocked(audit).mock.calls.map((c) => c[0].action);
     expect(acoes).toEqual(expect.arrayContaining(["phone.menu_saved", "phone.prompt_saved"]));
   });
 
-  it("a ElevenLabs falhou: o menu é salvo com a fala 'failed' e a resposta traz a falha", async () => {
-    estado.resultado = { ok: false, motivo: "texto_recusado", fala: { ...FALA, status: "failed" } };
-    const r = await post(corpo());
-    expect(r.status).toBe(201);
-    const json = (await r.json()) as { data: { falha: { motivo: string } } };
-    expect(json.data.falha.motivo).toBe("texto_recusado");
-    expect(vi.mocked(gravarMenu).mock.calls[0]![1]).toMatchObject({ falaId: FALA.id });
+  it("a fala não mudou (a prévia é a própria fala em uso): só o menu é auditado", async () => {
+    estado.gravada = { fala: FALA, mudou: false };
+    await post(corpo());
+    expect(vi.mocked(audit).mock.calls.map((c) => c[0].action)).toEqual(["phone.menu_saved"]);
   });
 });
 ```
@@ -4450,10 +5507,15 @@ Crie `app/api/v1/telefonia/menus/_salvar.ts`:
 ```ts
 /**
  * O miolo de POST (cria) e PATCH (edita) de um menu de voz — a mesma sequência
- * nos dois: validar ANTES de gastar crédito, gerar as falas na ElevenLabs, gravar
- * menu + opções numa transação, auditar. Uma falha da ElevenLabs NÃO perde o
- * menu: ele é salvo com a fala `failed` (e não pode ser ligado a número até ficar
- * pronta), e a resposta traz `falha` para a tela dizer o porquê.
+ * nos dois: validar; CONFERIR as falas (a do menu e a de tecla inválida, se
+ * houver) contra as prévias; só então gravar as falas, o menu e as opções;
+ * auditar.
+ *
+ * As falas chegam como texto + hash da PRÉVIA (`POST /api/v1/telefonia/falas/previa`),
+ * ou como a fala em uso quando o texto não mudou. Esta rota NÃO chama a
+ * ElevenLabs (desenho D15): confere e aponta. Conferir as duas antes de gravar a
+ * primeira é o que impede um menu meio salvo — a fala do menu trocada e o resto
+ * recusado.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -4464,7 +5526,13 @@ import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
-import { descartarFala, gerarFala, type ResultadoDaFala } from "@/lib/telefonia/falas";
+import {
+  conferirFala,
+  descartarFala,
+  gravarFalaConferida,
+  vozDaOrganizacao,
+  type PedidoDeSalvar,
+} from "@/lib/telefonia/falas";
 import {
   MENSAGEM_DA_FALHA_DO_MENU,
   gravarMenu,
@@ -4474,12 +5542,7 @@ import {
   teclaRepetida,
   timesValidos,
 } from "@/lib/telefonia/menus";
-import {
-  STATUS_DA_FALHA,
-  armazemDaInstalacao,
-  contextoDeFala,
-  sintetizadorDaInstalacao,
-} from "@/lib/telefonia/servico-de-falas";
+import { STATUS_DA_FALHA, armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
 import { MENSAGEM_DA_FALHA_DA_FALA, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
 
 export async function salvarMenu(req: NextRequest, idDoMenu: string | null): Promise<Response> {
@@ -4490,6 +5553,8 @@ export async function salvarMenu(req: NextRequest, idDoMenu: string | null): Pro
   const authz = await requireRole("admin", { requestId, resource: "telefonia_menus" });
   if (!authz.ok) return authz.response;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
+  const falhar = (motivo: FalhaDaFala) =>
+    fail(motivo, t(MENSAGEM_DA_FALHA_DA_FALA[motivo]), STATUS_DA_FALHA[motivo], { requestId });
 
   const parsed = menuSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
@@ -4508,28 +5573,43 @@ export async function salvarMenu(req: NextRequest, idDoMenu: string | null): Pro
   const atual = idDoMenu ? await menuDaOrg(pool, org, idDoMenu) : null;
   if (idDoMenu && !atual) return fail("not_found", t(MENSAGEM_DA_FALHA_DO_MENU.nao_encontrado), 404, { requestId });
 
-  const { chave, voz } = await contextoDeFala(pool, org);
-  if (!chave || !voz) {
-    const motivo: FalhaDaFala = !chave ? "sem_chave" : "sem_voz";
-    return fail(motivo, t(MENSAGEM_DA_FALHA_DA_FALA[motivo]), STATUS_DA_FALHA[motivo], { requestId });
-  }
-
-  const armazem = armazemDaInstalacao();
-  const base = { db: pool, armazem, sintetizar: sintetizadorDaInstalacao(), organizationId: org, userId: authz.user.id, chave, voz };
-  const fala = await gerarFala({ ...base, tipo: "menu", texto: e.texto_menu, falaAtualId: atual?.prompt_id ?? null });
-  const invalida = e.texto_invalida
-    ? await gerarFala({ ...base, tipo: "invalid", texto: e.texto_invalida, falaAtualId: atual?.invalid_prompt_id ?? null })
+  const base = {
+    db: pool,
+    armazem: armazemDaInstalacao(),
+    organizationId: org,
+    userId: authz.user.id,
+    voz: await vozDaOrganizacao(pool, org),
+  };
+  const pedidoDoMenu: PedidoDeSalvar = {
+    ...base,
+    tipo: "menu",
+    texto: e.fala.texto,
+    hash: e.fala.hash,
+    falaAtualId: atual?.prompt_id ?? null,
+  };
+  const pedidoDaInvalida: PedidoDeSalvar | null = e.fala_invalida
+    ? { ...base, tipo: "invalid", texto: e.fala_invalida.texto, hash: e.fala_invalida.hash, falaAtualId: atual?.invalid_prompt_id ?? null }
     : null;
+
+  // As DUAS conferidas antes de gravar qualquer uma: prévia que não confere não salva menu nenhum.
+  const conferidaDoMenu = await conferirFala(pedidoDoMenu);
+  if (!conferidaDoMenu.ok) return falhar(conferidaDoMenu.motivo);
+  const conferidaDaInvalida = pedidoDaInvalida ? await conferirFala(pedidoDaInvalida) : null;
+  if (conferidaDaInvalida && !conferidaDaInvalida.ok) return falhar(conferidaDaInvalida.motivo);
+
+  const fala = await gravarFalaConferida(pedidoDoMenu, conferidaDoMenu);
+  const invalida =
+    pedidoDaInvalida && conferidaDaInvalida ? await gravarFalaConferida(pedidoDaInvalida, conferidaDaInvalida) : null;
 
   const menuId = await gravarMenu(pool, {
     organizationId: org,
     id: idDoMenu,
     entrada: e,
-    falaId: fala.fala?.id ?? atual?.prompt_id ?? null,
-    falaInvalidaId: e.texto_invalida ? (invalida?.fala?.id ?? atual?.invalid_prompt_id ?? null) : null,
+    falaId: fala.fala.id,
+    falaInvalidaId: invalida?.fala.id ?? null,
   });
   if (!menuId) return fail("not_found", t(MENSAGEM_DA_FALHA_DO_MENU.nao_encontrado), 404, { requestId });
-  if (!e.texto_invalida && atual?.invalid_prompt_id) await descartarFala(pool, armazem, org, atual.invalid_prompt_id);
+  if (!e.fala_invalida && atual?.invalid_prompt_id) await descartarFala(pool, org, atual.invalid_prompt_id);
 
   void audit({
     action: "phone.menu_saved",
@@ -4537,33 +5617,30 @@ export async function salvarMenu(req: NextRequest, idDoMenu: string | null): Pro
     organizationId: org,
     resourceType: "phone_menu",
     resourceId: menuId,
-    metadata: { novo: !idDoMenu, nome: e.nome, opcoes: e.opcoes, time_padrao_id: e.time_padrao_id, com_fala_invalida: Boolean(e.texto_invalida) },
+    metadata: {
+      novo: !idDoMenu,
+      nome: e.nome,
+      opcoes: e.opcoes,
+      time_padrao_id: e.time_padrao_id,
+      com_fala_invalida: Boolean(e.fala_invalida),
+    },
     requestId,
   });
   for (const r of [fala, invalida]) {
-    if (!r?.fala) continue;
+    if (!r?.mudou) continue;
     void audit({
       action: "phone.prompt_saved",
       actorUserId: authz.user.id,
       organizationId: org,
       resourceType: "phone_prompt",
       resourceId: r.fala.id,
-      metadata: { tipo: r.fala.tipo, status: r.fala.status, gerada: r.ok ? r.gerada : false, falha: r.ok ? null : r.motivo, menu_id: menuId },
+      metadata: { tipo: r.fala.tipo, hash: r.fala.hash, menu_id: menuId },
       requestId,
     });
   }
 
-  const falhou = [fala, invalida].find(
-    (r): r is Extract<ResultadoDaFala, { ok: false }> => r !== null && !r.ok,
-  );
   const menus = await menusDaOrg(pool, org);
-  return ok(
-    {
-      menu: menus.find((m) => m.id === menuId) ?? null,
-      falha: falhou ? { motivo: falhou.motivo, mensagem: t(MENSAGEM_DA_FALHA_DA_FALA[falhou.motivo]) } : null,
-    },
-    { requestId, status: idDoMenu ? 200 : 201 },
-  );
+  return ok({ menu: menus.find((m) => m.id === menuId) ?? null }, { requestId, status: idDoMenu ? 200 : 201 });
 }
 ```
 
@@ -4572,7 +5649,7 @@ Crie `app/api/v1/telefonia/menus/route.ts`:
 ```ts
 /**
  * GET  /api/v1/telefonia/menus — os menus de voz da organização, com o "últimos 7 dias" (admin).
- * POST /api/v1/telefonia/menus — cria um menu e gera a fala dele (admin).
+ * POST /api/v1/telefonia/menus — cria um menu com a fala da prévia (admin; sem ElevenLabs).
  *
  * Desenho da fase 2, §6.2 (aba Menus). O miolo do POST mora em `_salvar.ts`,
  * igual ao do PATCH.
@@ -4686,7 +5763,7 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
 - [ ] **Step 9: Rodar, typecheck e lints**
 
 Run: `pnpm exec vitest run app/api/v1/telefonia/menus/route.test.ts lib/telefonia/menus.test.ts tests/unit/audit-resource-id-e-uuid.test.ts && pnpm typecheck && pnpm lint:role-rank && pnpm lint:channels`
-Expected: PASS (5 + 12 testes e o gate de auditoria); `tsc` e lints sem erro.
+Expected: PASS (6 + 14 testes e o gate de auditoria); `tsc` e lints sem erro.
 
 - [ ] **Step 10: Commit**
 
@@ -4694,11 +5771,12 @@ Expected: PASS (5 + 12 testes e o gate de auditoria); `tsc` e lints sem erro.
 git add lib/telefonia/menus.ts lib/telefonia/menus.test.ts app/api/v1/telefonia/menus/_salvar.ts \
   app/api/v1/telefonia/menus/route.ts app/api/v1/telefonia/menus/route.test.ts "app/api/v1/telefonia/menus/[id]/route.ts" \
   lib/i18n/dicionario.ts
-git commit -m "feat(telefonia): menus de voz da organização, com a fala gerada e os últimos 7 dias
+git commit -m "feat(telefonia): menus de voz da organização, com a fala da prévia e os últimos 7 dias
 
 Tecla → time, time padrão e as falas do menu e de tecla inválida, gravados numa
-transação; validação antes de gastar crédito; falha da ElevenLabs não perde o
-menu; menu que atende um número não é arquivado.
+transação. As falas chegam como texto + hash da prévia e as duas são conferidas
+antes de gravar qualquer coisa — salvar não chama a ElevenLabs. Menu que atende
+um número não é arquivado.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -5042,14 +6120,15 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-## Task 10: Aviso de instabilidade do time — ligar, desligar, ouvir
+## Task 10: Aviso de instabilidade do time — ligar com a prévia, prazo, desligar
 
 **Files:**
 - Create: `lib/telefonia/emergencias.ts`
 - Create: `app/api/v1/telefonia/emergencias/route.ts`
 - Create: `app/api/v1/telefonia/emergencias/[teamId]/route.ts`, `app/api/v1/telefonia/emergencias/[teamId]/route.test.ts`
-- Create: `app/api/v1/telefonia/emergencias/[teamId]/fala/route.ts`
 - Modify: `lib/i18n/dicionario.ts`
+
+**A prévia do aviso não tem rota própria:** a janela usa a mesma `POST /api/v1/telefonia/falas/previa` da Task 7 (que já aceita gerente), e "Ligar" manda o texto e o hash dela — ou os da fala em uso, quando o texto não mudou. Ligar NÃO chama a ElevenLabs (D15). Quem exige "Gerar prévia" e "Ouvir" antes de "Ligar" quando o texto mudou é a tela (Task 21, §6.3); a rota garante a outra metade: sem uma prévia que confira com o texto e a voz atual, nada liga.
 
 - [ ] **Step 1: Teste da rota de ligar/desligar (falha: a rota não existe)**
 
@@ -5057,14 +6136,18 @@ Crie `app/api/v1/telefonia/emergencias/[teamId]/route.test.ts`:
 
 ```ts
 /**
- * O AVISO DE INSTABILIDADE PELA ROTA (desenho da fase 2, D7/D8): gerente ou admin;
- * time de outra organização não existe; sem a fala do texto pedido nada liga; o
- * prazo sai da duração escolhida (2 h por padrão); ligar e desligar auditam.
+ * O AVISO DE INSTABILIDADE PELA ROTA (desenho da fase 2, D7/D8, §4 e §6.3):
+ * gerente ou admin; time de outra organização não existe; ligar recebe o texto e o
+ * HASH da prévia e não carrega o cliente da ElevenLabs — prévia que não confere
+ * não liga nada; o prazo sai da duração escolhida (2 h por padrão); ligar e
+ * desligar auditam.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+const ORG = "22222222-2222-4222-8222-222222222222";
 const TIME = "44444444-4444-4444-8444-444444444444";
+const HASH = "c".repeat(64);
 const estado = vi.hoisted(() => ({
   time: { id: "44444444-4444-4444-8444-444444444444", nome: "Suporte", falaId: null as string | null } as unknown,
   resultado: null as unknown,
@@ -5081,22 +6164,28 @@ vi.mock("@/lib/auth/require-role", () => ({
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => ({})) }));
+// Ligar não pode nem CARREGAR o cliente da ElevenLabs: só a rota da prévia o usa.
+vi.mock("@/lib/telefonia/elevenlabs", () => {
+  throw new Error("ligar o aviso carregou o cliente da ElevenLabs");
+});
 vi.mock("@/lib/telefonia/servico-de-falas", () => ({
   STATUS_DA_FALHA: {
     sem_chave: 422, sem_voz: 422, chave_invalida: 422, sem_credito: 422, texto_recusado: 422,
-    voz_inexistente: 422, limite_de_uso: 422, armazenamento: 502, sem_resposta: 502, erro_do_provedor: 502,
+    voz_inexistente: 422, limite_de_uso: 422, limite_de_previas: 422, previa_ausente: 422,
+    previa_desatualizada: 422, armazenamento: 502, sem_resposta: 502, erro_do_provedor: 502,
   },
-  contextoDeFala: vi.fn(async () => ({ chave: "sk_x", voz: { voiceId: "v1", modelId: "eleven_multilingual_v2" } })),
   armazemDaInstalacao: vi.fn(() => ({})),
-  sintetizadorDaInstalacao: vi.fn(() => vi.fn()),
 }));
-vi.mock("@/lib/telefonia/falas", () => ({ gerarFala: vi.fn(async () => estado.resultado) }));
+vi.mock("@/lib/telefonia/falas", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/telefonia/falas")>("@/lib/telefonia/falas")),
+  salvarFala: vi.fn(async () => estado.resultado),
+  vozDaOrganizacao: vi.fn(async () => ({ voiceId: "v1", modelId: "eleven_multilingual_v2" })),
+}));
 vi.mock("@/lib/telefonia/emergencias", async () => {
   const real = await vi.importActual<typeof import("@/lib/telefonia/emergencias")>("@/lib/telefonia/emergencias");
   return {
     ...real,
     timeParaAviso: vi.fn(async () => estado.time),
-    vincularFalaAoTime: vi.fn(async () => undefined),
     ligarAviso: vi.fn(async () => true),
     desligarAviso: vi.fn(async () => estado.desligado),
     avisosDaOrg: vi.fn(async () => []),
@@ -5106,10 +6195,22 @@ vi.mock("@/lib/telefonia/emergencias", async () => {
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { ligarAviso } from "@/lib/telefonia/emergencias";
+import { salvarFala } from "@/lib/telefonia/falas";
 
 import { DELETE, PUT } from "./route";
 
-const FALA = { id: "66666666-6666-4666-8666-666666666666", tipo: "emergency", status: "ready" };
+const FALA = {
+  id: "66666666-6666-4666-8666-666666666666",
+  tipo: "emergency",
+  texto: "Instabilidade.",
+  voice_id: "v1",
+  hash: HASH,
+  status: "ready",
+  erro: null,
+  duracao_ms: 2000,
+  atualizada_em: "2026-09-28T13:00:00.000Z",
+};
+const PREVIA = { texto: "Instabilidade.", hash: HASH };
 const params = { params: Promise.resolve({ teamId: TIME }) };
 const ligar = (corpo: unknown) =>
   PUT(new NextRequest(`https://crm.exemplo.com.br/api/v1/telefonia/emergencias/${TIME}`, { method: "PUT", body: JSON.stringify(corpo) }), params);
@@ -5117,43 +6218,66 @@ const desligar = () => DELETE(new NextRequest(`https://crm.exemplo.com.br/api/v1
 
 beforeEach(() => {
   estado.time = { id: TIME, nome: "Suporte", falaId: null };
-  estado.resultado = { ok: true, fala: FALA, gerada: true };
+  estado.resultado = { ok: true, fala: FALA, mudou: true };
   estado.desligado = { desde: "2026-09-28T13:00:00.000Z", expiraEm: null };
   vi.mocked(audit).mockClear();
   vi.mocked(ligarAviso).mockClear();
+  vi.mocked(salvarFala).mockClear();
   vi.mocked(requireRole).mockClear();
 });
 
 describe("PUT /api/v1/telefonia/emergencias/[teamId] — ligar", () => {
   it("gerente ou admin (a régua é manager)", async () => {
-    await ligar({ texto: "Instabilidade.", duracao: "1h" });
+    await ligar({ fala: PREVIA, duracao: "1h" });
     expect(vi.mocked(requireRole).mock.calls[0]![0]).toBe("manager");
   });
 
-  it("time de outra organização (ou arquivado) → 404", async () => {
+  it("time de outra organização (ou arquivado) → 404, sem conferir prévia", async () => {
     estado.time = null;
-    expect((await ligar({ texto: "Instabilidade." })).status).toBe(404);
+    expect((await ligar({ fala: PREVIA })).status).toBe(404);
+    expect(salvarFala).not.toHaveBeenCalled();
     expect(ligarAviso).not.toHaveBeenCalled();
   });
 
-  it("a fala do texto pedido não saiu → nada liga, e a mensagem vem traduzida", async () => {
-    estado.resultado = { ok: false, motivo: "sem_credito", fala: null };
-    const r = await ligar({ texto: "Instabilidade." });
+  it("a prévia não confere (o texto mudou depois dela) → 422 com o motivo, e nada liga", async () => {
+    estado.resultado = { ok: false, motivo: "previa_desatualizada" };
+    const r = await ligar({ fala: PREVIA });
     expect(r.status).toBe(422);
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("previa_desatualizada");
     expect(ligarAviso).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
   });
 
-  it("liga com o prazo da duração escolhida (2 h por padrão) e audita", async () => {
-    const r = await ligar({ texto: "Instabilidade." });
+  it("liga com o hash da prévia e o prazo da duração escolhida (2 h por padrão), e audita", async () => {
+    const r = await ligar({ fala: PREVIA });
     expect(r.status).toBe(200);
+    expect(vi.mocked(salvarFala).mock.calls[0]![0]).toMatchObject({
+      tipo: "emergency",
+      texto: "Instabilidade.",
+      hash: HASH,
+      falaAtualId: null,
+      organizationId: ORG,
+    });
     const pedido = vi.mocked(ligarAviso).mock.calls[0]![1];
+    expect(pedido.falaId).toBe(FALA.id);
     expect(pedido.expiraEm!.getTime() - pedido.desde.getTime()).toBe(2 * 3_600_000);
-    expect(vi.mocked(audit).mock.calls.map((c) => c[0].action)).toContain("phone.emergency_activated");
+    expect(vi.mocked(audit).mock.calls.map((c) => c[0].action)).toEqual(["phone.emergency_activated", "phone.prompt_saved"]);
+  });
+
+  it("o aviso de antes, sem mudança no texto: liga, e só o ligar é auditado", async () => {
+    estado.resultado = { ok: true, fala: FALA, mudou: false };
+    await ligar({ fala: PREVIA, duracao: "4h" });
+    expect(vi.mocked(audit).mock.calls.map((c) => c[0].action)).toEqual(["phone.emergency_activated"]);
   });
 
   it("'até eu desligar' liga sem prazo", async () => {
-    await ligar({ texto: "Instabilidade.", duracao: "indefinida" });
+    await ligar({ fala: PREVIA, duracao: "indefinida" });
     expect(vi.mocked(ligarAviso).mock.calls[0]![1].expiraEm).toBeNull();
+  });
+
+  it("sem a prévia no corpo → 422, sem conferir nada", async () => {
+    expect((await ligar({ duracao: "1h" })).status).toBe(422);
+    expect(salvarFala).not.toHaveBeenCalled();
   });
 });
 
@@ -5188,26 +6312,27 @@ Crie `lib/telefonia/emergencias.ts`:
  *
  * Ligado, toda ligação DE FORA que entra na fila do time ouve o aviso inteiro
  * antes de tocar nos atendentes. Liga e desliga gerente ou admin; a duração é
- * escolhida ao ligar. Vencido, o worker para de tocar na hora (lê
- * `expires_at`) e a passada de 60 s o desliga no banco, com auditoria e aviso na
- * Central (`desligarAvisosVencidos`, em lib/channels/telefonia/repositorio.ts).
+ * escolhida ao ligar. Ligar recebe o texto e o hash da PRÉVIA do aviso (§4 e
+ * §6.3) e não chama a ElevenLabs: `salvarFala` confere a prévia, e a fala do time
+ * passa a ser ela. Vencido, o worker para de tocar na hora (lê `expires_at`) e a
+ * passada de 60 s o desliga no banco, com auditoria e aviso na Central
+ * (`desligarAvisosVencidos`, em lib/channels/telefonia/repositorio.ts).
  */
 import { z } from "zod";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
-import { COLUNAS_DA_FALA, falaPublica, type LinhaDaFala } from "./falas";
+import { COLUNAS_DA_FALA, falaParaSalvarSchema, falaPublica, type LinhaDaFala } from "./falas";
 import { DURACAO_PADRAO, DURACOES_DA_EMERGENCIA, avisoVigente } from "./vencimento-da-emergencia";
-import { TAMANHO_MAXIMO_DA_FALA, type AvisoDoTimePublico, type FalaPublica } from "./vocabulario";
+import type { AvisoDoTimePublico, FalaPublica } from "./vocabulario";
 
 export const ligarAvisoSchema = z
   .object({
-    texto: z.string().trim().min(1).max(TAMANHO_MAXIMO_DA_FALA),
+    // O texto e o hash da prévia ouvida — ou os da fala em uso, se o texto não mudou.
+    fala: falaParaSalvarSchema,
     duracao: z.enum(DURACOES_DA_EMERGENCIA).default(DURACAO_PADRAO),
   })
   .strict();
-
-export const falaDoAvisoSchema = z.object({ texto: z.string().trim().min(1).max(TAMANHO_MAXIMO_DA_FALA) }).strict();
 
 export async function avisosDaOrg(db: Queryable, organizationId: string, agora: Date): Promise<AvisoDoTimePublico[]> {
   const { rows } = await db.query<{
@@ -5265,13 +6390,6 @@ export async function timeParaAviso(
   return r ? { id: r.id, nome: r.nome, falaId: r.fala_id } : null;
 }
 
-export async function vincularFalaAoTime(db: Queryable, organizationId: string, teamId: string, falaId: string): Promise<void> {
-  await db.query(
-    "update attendance_teams set phone_emergency_prompt_id = $3, updated_at = now() where id = $1 and organization_id = $2",
-    [teamId, organizationId, falaId],
-  );
-}
-
 export async function ligarAviso(
   db: Queryable,
   p: { organizationId: string; teamId: string; falaId: string; userId: string; desde: Date; expiraEm: Date | null },
@@ -5312,7 +6430,7 @@ export async function desligarAviso(
 }
 ```
 
-- [ ] **Step 4: As três rotas**
+- [ ] **Step 4: As duas rotas**
 
 Crie `app/api/v1/telefonia/emergencias/route.ts`:
 
@@ -5353,10 +6471,13 @@ Crie `app/api/v1/telefonia/emergencias/[teamId]/route.ts`:
  * PUT    /api/v1/telefonia/emergencias/[teamId] — liga o aviso de instabilidade do time (manager+).
  * DELETE /api/v1/telefonia/emergencias/[teamId] — desliga (manager+).
  *
- * Desenho da fase 2, D7/D8 e §6.3. Ligar gera (ou reaproveita) a fala do texto
- * pedido; se a ElevenLabs não entregar ESSE texto, nada liga — tocar um aviso
- * antigo com texto diferente do que o gerente acabou de escrever seria pior que
- * não tocar. A duração vira `expires_at` (nulo = até alguém desligar).
+ * Desenho da fase 2, D7/D8, §4 e §6.3. Ligar recebe o texto e o HASH da prévia do
+ * aviso (`POST /api/v1/telefonia/falas/previa`) — ou os da fala em uso, quando o
+ * texto não mudou — e NÃO chama a ElevenLabs: `salvarFala` confere que a prévia é
+ * deste texto com a voz atual e que o objeto existe na pasta da organização da
+ * SESSÃO. Não conferiu, nada liga: tocar um aviso com texto diferente do que o
+ * gerente acabou de ouvir seria pior que não tocar. A duração vira `expires_at`
+ * (nulo = até alguém desligar).
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -5368,21 +6489,9 @@ import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
-import {
-  avisosDaOrg,
-  desligarAviso,
-  ligarAviso,
-  ligarAvisoSchema,
-  timeParaAviso,
-  vincularFalaAoTime,
-} from "@/lib/telefonia/emergencias";
-import { gerarFala } from "@/lib/telefonia/falas";
-import {
-  STATUS_DA_FALHA,
-  armazemDaInstalacao,
-  contextoDeFala,
-  sintetizadorDaInstalacao,
-} from "@/lib/telefonia/servico-de-falas";
+import { avisosDaOrg, desligarAviso, ligarAviso, ligarAvisoSchema, timeParaAviso } from "@/lib/telefonia/emergencias";
+import { salvarFala, vozDaOrganizacao } from "@/lib/telefonia/falas";
+import { STATUS_DA_FALHA, armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
 import { expiraEm } from "@/lib/telefonia/vencimento-da-emergencia";
 import { MENSAGEM_DA_FALHA_DA_FALA } from "@/lib/telefonia/vocabulario";
 
@@ -5410,24 +6519,18 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ teamId: str
   const time = await timeParaAviso(db, org, id.data);
   if (!time) return fail("not_found", t("Time não encontrado."), 404, { requestId });
 
-  const { chave, voz } = await contextoDeFala(db, org);
-  const r = await gerarFala({
+  const r = await salvarFala({
     db,
     armazem: armazemDaInstalacao(),
-    sintetizar: sintetizadorDaInstalacao(),
     organizationId: org,
     userId: authz.user.id,
     tipo: "emergency",
-    texto: parsed.data.texto,
+    texto: parsed.data.fala.texto,
+    hash: parsed.data.fala.hash,
     falaAtualId: time.falaId,
-    chave,
-    voz,
+    voz: await vozDaOrganizacao(db, org),
   });
-  if (!r.ok) {
-    // A linha `failed` fica ligada ao time, para a tela mostrar o porquê da próxima vez.
-    if (r.fala?.status === "failed") await vincularFalaAoTime(db, org, time.id, r.fala.id);
-    return fail(r.motivo, t(MENSAGEM_DA_FALHA_DA_FALA[r.motivo]), STATUS_DA_FALHA[r.motivo], { requestId });
-  }
+  if (!r.ok) return fail(r.motivo, t(MENSAGEM_DA_FALHA_DA_FALA[r.motivo]), STATUS_DA_FALHA[r.motivo], { requestId });
 
   const desde = new Date();
   const prazo = expiraEm(parsed.data.duracao, desde);
@@ -5441,14 +6544,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ teamId: str
     metadata: { duracao: parsed.data.duracao, expira_em: prazo?.toISOString() ?? null, fala_id: r.fala.id },
     requestId,
   });
-  if (r.gerada) {
+  if (r.mudou) {
     void audit({
       action: "phone.prompt_saved",
       actorUserId: authz.user.id,
       organizationId: org,
       resourceType: "phone_prompt",
       resourceId: r.fala.id,
-      metadata: { tipo: "emergency", status: r.fala.status, gerada: true, team_id: time.id },
+      metadata: { tipo: "emergency", hash: r.fala.hash, team_id: time.id },
       requestId,
     });
   }
@@ -5484,93 +6587,6 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ teamId:
 }
 ```
 
-Crie `app/api/v1/telefonia/emergencias/[teamId]/fala/route.ts`:
-
-```ts
-/**
- * POST /api/v1/telefonia/emergencias/[teamId]/fala — gera a fala do aviso SEM
- * ligar, para o gerente ouvir antes (o botão "Ouvir" da janela). Manager+.
- *
- * A fala fica ligada ao time (a próxima vez que ligar com o mesmo texto não paga
- * de novo). Falha com linha volta 200 com `falha`; sem linha, 422.
- */
-import { randomUUID } from "node:crypto";
-import type { NextRequest } from "next/server";
-import { z } from "zod";
-
-import { fail, ok } from "@/lib/api/wrappers";
-import { audit } from "@/lib/audit";
-import { requireRole } from "@/lib/auth/require-role";
-import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
-import { traduzir } from "@/lib/i18n/dicionario";
-import { requireSupportWrite } from "@/lib/impersonate/support";
-import { falaDoAvisoSchema, timeParaAviso, vincularFalaAoTime } from "@/lib/telefonia/emergencias";
-import { gerarFala } from "@/lib/telefonia/falas";
-import {
-  STATUS_DA_FALHA,
-  armazemDaInstalacao,
-  contextoDeFala,
-  sintetizadorDaInstalacao,
-} from "@/lib/telefonia/servico-de-falas";
-import { MENSAGEM_DA_FALHA_DA_FALA, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
-
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
-export async function POST(req: NextRequest, ctx: { params: Promise<{ teamId: string }> }): Promise<Response> {
-  const supportDenied = await requireSupportWrite();
-  if (supportDenied) return supportDenied;
-
-  const requestId = randomUUID();
-  const authz = await requireRole("manager", { requestId, resource: "telefonia_avisos" });
-  if (!authz.ok) return authz.response;
-  const t = (texto: string) => traduzir(texto, authz.user.idioma);
-
-  const id = z.string().uuid().safeParse((await ctx.params).teamId);
-  if (!id.success) return fail("not_found", t("Time não encontrado."), 404, { requestId });
-  const parsed = falaDoAvisoSchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return fail("validation_failed", t("Campos inválidos."), 422, { requestId });
-
-  const db = getRequestPool();
-  const org = authz.org.orgId;
-  const time = await timeParaAviso(db, org, id.data);
-  if (!time) return fail("not_found", t("Time não encontrado."), 404, { requestId });
-
-  const { chave, voz } = await contextoDeFala(db, org);
-  const r = await gerarFala({
-    db,
-    armazem: armazemDaInstalacao(),
-    sintetizar: sintetizadorDaInstalacao(),
-    organizationId: org,
-    userId: authz.user.id,
-    tipo: "emergency",
-    texto: parsed.data.texto,
-    falaAtualId: time.falaId,
-    chave,
-    voz,
-  });
-  const fala = r.fala;
-  if (!fala) {
-    const motivo: FalhaDaFala = r.ok ? "erro_do_provedor" : r.motivo;
-    return fail(motivo, t(MENSAGEM_DA_FALHA_DA_FALA[motivo]), STATUS_DA_FALHA[motivo], { requestId });
-  }
-  await vincularFalaAoTime(db, org, time.id, fala.id);
-  void audit({
-    action: "phone.prompt_saved",
-    actorUserId: authz.user.id,
-    organizationId: org,
-    resourceType: "phone_prompt",
-    resourceId: fala.id,
-    metadata: { tipo: "emergency", status: fala.status, gerada: r.ok ? r.gerada : false, falha: r.ok ? null : r.motivo, team_id: time.id },
-    requestId,
-  });
-  return ok(
-    { fala, falha: r.ok ? null : { motivo: r.motivo, mensagem: t(MENSAGEM_DA_FALHA_DA_FALA[r.motivo]) } },
-    { requestId },
-  );
-}
-```
-
 - [ ] **Step 5: Dicionário**
 
 Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
@@ -5582,18 +6598,19 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
 - [ ] **Step 6: Rodar, typecheck e lints**
 
 Run: `pnpm exec vitest run "app/api/v1/telefonia/emergencias/[teamId]/route.test.ts" tests/unit/audit-resource-id-e-uuid.test.ts && pnpm typecheck && pnpm lint:role-rank && pnpm lint:channels`
-Expected: PASS (7 testes + o gate); `tsc` e lints sem erro.
+Expected: PASS (9 testes + o gate); `tsc` e lints sem erro.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add lib/telefonia/emergencias.ts app/api/v1/telefonia/emergencias/route.ts "app/api/v1/telefonia/emergencias/[teamId]/route.ts" \
-  "app/api/v1/telefonia/emergencias/[teamId]/route.test.ts" "app/api/v1/telefonia/emergencias/[teamId]/fala/route.ts" lib/i18n/dicionario.ts
-git commit -m "feat(telefonia): aviso de instabilidade por time — ligar com prazo, desligar, ouvir antes
+  "app/api/v1/telefonia/emergencias/[teamId]/route.test.ts" lib/i18n/dicionario.ts
+git commit -m "feat(telefonia): aviso de instabilidade por time — ligar com a prévia ouvida, prazo e desligar
 
 Gerente ou admin liga o aviso com a duração escolhida (2 h por padrão, ou até
-desligar); sem a fala do texto pedido nada liga; ligar e desligar auditam. A
-leitura calcula o vencimento contra o relógio da requisição.
+desligar), mandando o texto e o hash da prévia. Ligar não chama a ElevenLabs, e
+prévia que não confere com o texto e a voz atual não liga nada. Ligar e desligar
+auditam; a leitura calcula o vencimento contra o relógio da requisição.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -6317,10 +7334,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-## Task 12: As falas no disco — do Storage para o volume que o Asterisk lê
+## Task 12: As falas no disco — do Storage para o volume que o Asterisk lê, e a limpeza do Storage
 
 **Files:**
 - Create: `lib/channels/telefonia/falas-no-disco.ts`, `lib/channels/telefonia/falas-no-disco.test.ts`
+
+**A limpeza do Storage (desenho §4, passo 4) mora aqui**, na mesma passada do worker: a prévia que ninguém salvou e o áudio que nenhuma fala referencia saem do bucket 24 h depois de gravados. Uma regra só cobre os dois casos, e a janela é o que protege a prévia recém-gerada, que ainda não tem linha. É pela API do Storage (`listarPastas`/`listarObjetos`/`apagar`, Task 6), nunca por SQL em `storage.objects` — ver "Decisões de implementação".
 
 **Ramo B (só se a Task 0 terminou em "ramo B"):** use `export const DIRETORIO_NO_ASTERISK = "deskcomm";` no Step 3 e, no teste, espere `sound:deskcomm/<org>/<hash>`. O resto da task não muda.
 
@@ -6337,8 +7356,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import type { ObjetoDoArmazem } from "@/lib/telefonia/armazem";
 
-import { FalasNoDisco, caminhoValido, midiaDaFala } from "./falas-no-disco";
+import { FalasNoDisco, JANELA_DO_STORAGE_MS, caminhoValido, midiaDaFala } from "./falas-no-disco";
 
 const ORG = "00000000-0000-4000-8000-00000000000a";
 const caminho = (c: string) => `${ORG}/${c.repeat(64)}.ulaw`;
@@ -6348,18 +7368,43 @@ let dir: string;
 let prontas: string[];
 let objetos: Map<string, Uint8Array>;
 let baixar: ReturnType<typeof vi.fn>;
+/** Os caminhos que alguma linha de `phone_prompts` referencia (qualquer estado). */
+let usados: string[];
+/** Os que estão em uso quando a limpeza confere de novo, logo antes de apagar. */
+let usadosNaHoraDeApagar: string[];
+let pastasNoStorage: string[];
+let objetosNoStorage: ObjetoDoArmazem[];
+let apagadosDoStorage: string[];
 
+const linhas = (caminhos: string[]) => ({ rows: caminhos.map((storage_path) => ({ storage_path })), rowCount: caminhos.length });
 const db: Queryable = {
-  query: (async () => ({ rows: prontas.map((storage_path) => ({ storage_path })), rowCount: prontas.length })) as unknown as Queryable["query"],
+  query: (async (sql: string, params: unknown[] = []) => {
+    if (sql.includes("status = 'ready'")) return linhas(prontas);
+    if (sql.includes("= any($1")) return linhas((params[0] as string[]).filter((c) => usadosNaHoraDeApagar.includes(c)));
+    return linhas(usados);
+  }) as unknown as Queryable["query"],
 };
-const disco = () =>
-  new FalasNoDisco(dir, db, { baixar: baixar as unknown as (c: string) => Promise<Uint8Array<ArrayBuffer> | null> }, log);
+const armazem = () => ({
+  baixar: baixar as unknown as (c: string) => Promise<Uint8Array<ArrayBuffer> | null>,
+  listarPastas: async () => pastasNoStorage,
+  listarObjetos: async (pasta: string) => objetosNoStorage.filter((o) => o.caminho.startsWith(`${pasta}/`)),
+  apagar: async (caminhos: string[]) => {
+    apagadosDoStorage.push(...caminhos);
+  },
+});
+const disco = () => new FalasNoDisco(dir, db, armazem(), log);
+const horasAtras = (h: number) => new Date(Date.now() - h * 3_600_000);
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "falas-"));
   prontas = [];
   objetos = new Map();
   baixar = vi.fn(async (c: string) => (objetos.has(c) ? new Uint8Array(objetos.get(c)!) : null));
+  usados = [];
+  usadosNaHoraDeApagar = [];
+  pastasNoStorage = [];
+  objetosNoStorage = [];
+  apagadosDoStorage = [];
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -6430,6 +7475,36 @@ describe("sincronizar — a passada de 60 s", () => {
     expect(await disco().sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 1 });
   });
 });
+
+describe("limparStorage — prévia não salva e áudio sem uso saem do Storage em 24 h (desenho §4)", () => {
+  it("apaga só o que nenhuma linha usa E foi gravado há mais de 24 h; pasta fora da régua nem é olhada", async () => {
+    expect(JANELA_DO_STORAGE_MS).toBe(24 * 3_600_000);
+    pastasNoStorage = [ORG, "nao-e-org"];
+    usados = [caminho("a")];
+    usadosNaHoraDeApagar = usados;
+    objetosNoStorage = [
+      { caminho: caminho("a"), criadoEm: horasAtras(48) }, // em uso: fica
+      { caminho: caminho("b"), criadoEm: horasAtras(48) }, // sem uso e velho: sai
+      { caminho: caminho("c"), criadoEm: horasAtras(2) }, // prévia recém-gerada, ainda sem linha: fica
+      { caminho: `nao-e-org/${"d".repeat(64)}.ulaw`, criadoEm: horasAtras(48) },
+    ];
+    expect(await disco().limparStorage()).toEqual({ apagados: 1, falhas: 0 });
+    expect(apagadosDoStorage).toEqual([caminho("b")]);
+  });
+
+  it("o que passou a ser usado entre a leitura e a remoção (um Salvar e usar no meio) não é apagado", async () => {
+    pastasNoStorage = [ORG];
+    usadosNaHoraDeApagar = [caminho("b")];
+    objetosNoStorage = [{ caminho: caminho("b"), criadoEm: horasAtras(48) }];
+    expect(await disco().limparStorage()).toEqual({ apagados: 0, falhas: 0 });
+    expect(apagadosDoStorage).toEqual([]);
+  });
+
+  it("Storage fora do ar: conta a falha e não lança", async () => {
+    const d = new FalasNoDisco(dir, db, { ...armazem(), listarPastas: async () => Promise.reject(new Error("fora")) }, log);
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1 });
+  });
+});
 ```
 
 - [ ] **Step 2: Rodar e ver falhar**
@@ -6453,6 +7528,11 @@ Crie `lib/channels/telefonia/falas-no-disco.ts`:
  *     apaga os arquivos que nenhuma fala pronta referencia mais;
  *   - antes de tocar (`garantir`): o arquivo existe? se não, baixa na hora. Não
  *     deu → `null`, e a ligação pula a fala (o controlador avisa na Central).
+ *     Baixar do Storage nunca chama a ElevenLabs: este arquivo não conhece o
+ *     cliente dela (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts);
+ *   - a limpeza do Storage (`limparStorage`, na mesma passada): a prévia que
+ *     ninguém salvou e o áudio que nenhuma fala referencia saem do bucket 24 h
+ *     depois de gravados (desenho §4, passo 4).
  *
  * Escrita atômica (temporário + `rename`): o Asterisk nunca abre um arquivo pela
  * metade. Permissões 0644/0755: o Asterisk roda como o usuário `asterisk` e só lê;
@@ -6463,7 +7543,7 @@ import { chmod, mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/
 import { join } from "node:path";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
-import type { PortaDoArmazem } from "@/lib/telefonia/armazem";
+import type { ObjetoDoArmazem, PortaDoArmazem } from "@/lib/telefonia/armazem";
 
 import type { Registro } from "./controle";
 import type { FalaDoBanco } from "./repositorio";
@@ -6481,6 +7561,12 @@ const CAMINHO_VALIDO = new RegExp(`^${UUID}/[0-9a-f]{64}\\.ulaw$`);
 const ORG_VALIDA = new RegExp(`^${UUID}$`);
 /** Arquivo recém-escrito não é órfão ainda: a fala pode ter nascido depois da leitura do banco. */
 const CARENCIA_DO_ORFAO_MS = 5 * 60_000;
+/**
+ * Prévia não salva e áudio sem uso saem do STORAGE 24 h depois de gravados
+ * (desenho §4, passo 4). A janela é o que protege a prévia recém-gerada, que ainda
+ * não tem linha em `phone_prompts`.
+ */
+export const JANELA_DO_STORAGE_MS = 24 * 3_600_000;
 
 /** A mesma régua do CHECK `phone_prompts_storage_path_check`: `<org>/<sha256>.ulaw`, nada de `..`. */
 export function caminhoValido(storagePath: string): boolean {
@@ -6504,7 +7590,7 @@ export class FalasNoDisco {
   constructor(
     private readonly dir: string,
     private readonly db: Queryable,
-    private readonly armazem: Pick<PortaDoArmazem, "baixar">,
+    private readonly armazem: Pick<PortaDoArmazem, "baixar" | "listarPastas" | "listarObjetos" | "apagar">,
     private readonly log: Registro,
     private readonly agora: () => number = Date.now,
   ) {}
@@ -6576,13 +7662,69 @@ export class FalasNoDisco {
     if (baixadas || apagadas || falhas) this.log.info("telefonia: falas sincronizadas no disco", { baixadas, apagadas, falhas });
     return { baixadas, apagadas, falhas };
   }
+
+  /**
+   * A limpeza do Storage (desenho da fase 2, §4, passo 4): sai do bucket o objeto
+   * que nenhuma linha de `phone_prompts` referencia E foi gravado há mais de 24 h
+   * — a prévia que ninguém salvou e o áudio que uma fala deixou de usar. Quem está
+   * em uso é conferido DE NOVO logo antes de apagar: um "Salvar e usar" entre a
+   * leitura e a remoção não perde o áudio. Só pastas de organização (uuid) e só
+   * caminhos na régua. Nunca lança.
+   */
+  async limparStorage(): Promise<{ apagados: number; falhas: number }> {
+    let apagados = 0;
+    let falhas = 0;
+    const motivo = (e: unknown) => (e instanceof Error ? e.message.slice(0, 160) : String(e));
+    try {
+      const pastas = await this.armazem.listarPastas();
+      const { rows } = await this.db.query<{ storage_path: string }>(
+        "select distinct storage_path from phone_prompts where storage_path is not null",
+      );
+      const usados = new Set(rows.map((r) => r.storage_path));
+      const limite = this.agora() - JANELA_DO_STORAGE_MS;
+      for (const org of pastas) {
+        if (!ORG_VALIDA.test(org)) continue;
+        let objetos: ObjetoDoArmazem[];
+        try {
+          objetos = await this.armazem.listarObjetos(org);
+        } catch (e) {
+          falhas++;
+          this.log.warn("telefonia: não listei as falas do Storage", { organization_id: org, erro: motivo(e) });
+          continue;
+        }
+        const candidatos = objetos
+          .filter((o) => caminhoValido(o.caminho) && !usados.has(o.caminho) && o.criadoEm.getTime() < limite)
+          .map((o) => o.caminho);
+        if (candidatos.length === 0) continue;
+        const { rows: emUso } = await this.db.query<{ storage_path: string }>(
+          "select storage_path from phone_prompts where storage_path = any($1::text[])",
+          [candidatos],
+        );
+        const emUsoAgora = new Set(emUso.map((r) => r.storage_path));
+        const velhos = candidatos.filter((c) => !emUsoAgora.has(c));
+        if (velhos.length === 0) continue;
+        try {
+          await this.armazem.apagar(velhos);
+          apagados += velhos.length;
+        } catch (e) {
+          falhas++;
+          this.log.warn("telefonia: não apaguei falas sem uso do Storage", { organization_id: org, erro: motivo(e) });
+        }
+      }
+    } catch (e) {
+      falhas++;
+      this.log.warn("telefonia: limpeza das falas no Storage falhou", { erro: motivo(e) });
+    }
+    if (apagados || falhas) this.log.info("telefonia: limpeza das falas no Storage", { apagados, falhas });
+    return { apagados, falhas };
+  }
 }
 ```
 
 - [ ] **Step 4: Rodar e ver passar**
 
-Run: `pnpm exec vitest run lib/channels/telefonia/falas-no-disco.test.ts`
-Expected: PASS (8 testes).
+Run: `pnpm exec vitest run lib/channels/telefonia/falas-no-disco.test.ts tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`
+Expected: PASS (11 testes, e o teste-guarda verde: `falas-no-disco.ts` só conhece o tipo `PortaDoArmazem`, nunca o cliente da ElevenLabs).
 
 - [ ] **Step 5: Commit**
 
@@ -6592,7 +7734,8 @@ git commit -m "feat(telefonia): as falas prontas chegam ao volume que o Asterisk
 
 A passada de 60 s baixa do Storage o que falta e apaga os órfãos velhos; antes de
 tocar, a fala é garantida no disco ou pulada. Escrita atômica, 0644/0755, e o
-caminho conferido pela mesma régua do CHECK.
+caminho conferido pela mesma régua do CHECK. E a limpeza do Storage: prévia não
+salva e áudio sem uso saem 24 h depois de gravados, conferidos de novo antes.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -8516,13 +9659,17 @@ import { DIRETORIO_DAS_FALAS, FalasNoDisco } from "./falas-no-disco";
 (b) logo ANTES de `export interface EstadoDaTelefonia {`, acrescente:
 
 ```ts
-/** O Storage visto do worker (cliente de serviço). Sem credencial, nenhuma fala baixa — e o log diz por quê. */
-function armazemDoWorker(log: Registro): Pick<PortaDoArmazem, "baixar"> {
+/**
+ * O Storage visto do worker (cliente de serviço): baixar as falas e limpar o que
+ * ninguém usa. Sem credencial, nada baixa nem é apagado — e o log diz por quê.
+ * Nunca a ElevenLabs: o worker não a conhece (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts).
+ */
+function armazemDoWorker(log: Registro): Pick<PortaDoArmazem, "baixar" | "listarPastas" | "listarObjetos" | "apagar"> {
   try {
     return armazemDoSupabase(createAdminClient());
   } catch (e) {
     log.error("telefonia: sem cliente do Storage — as falas não chegam ao disco", { erro: String(e).slice(0, 200) });
-    return { baixar: async () => null };
+    return { baixar: async () => null, listarPastas: async () => [], listarObjetos: async () => [], apagar: async () => undefined };
   }
 }
 ```
@@ -8553,16 +9700,18 @@ por
 por
 
 ```ts
-  // A passada do telefone que NÃO depende da ARI: as falas do Storage para o disco
-  // e os avisos de instabilidade vencidos (desenho da fase 2, §5.5). Fora da fila
-  // serial — baixar arquivo não pode atrasar o evento de uma ligação — e sem
-  // reentrância: uma passada lenta não empilha outra.
+  // A passada do telefone que NÃO depende da ARI: as falas do Storage para o disco,
+  // a limpeza do Storage (prévia não salva e áudio sem uso, 24 h — desenho §4) e os
+  // avisos de instabilidade vencidos (§5.5). Fora da fila serial — baixar arquivo
+  // não pode atrasar o evento de uma ligação — e sem reentrância: uma passada lenta
+  // não empilha outra.
   let passadaEmCurso = false;
   const passadaDoTelefone = async () => {
     if (passadaEmCurso) return;
     passadaEmCurso = true;
     try {
       await falasNoDisco.sincronizar();
+      await falasNoDisco.limparStorage();
       for (const v of await repo.desligarAvisosVencidos(opts.pool, new Date())) {
         opts.log.info("telefonia: aviso de instabilidade venceu e foi desligado", {
           time: v.id,
@@ -8631,7 +9780,7 @@ e, no `volumes:` do topo, logo depois de `  caddy-config:`, acrescente a linha `
 
 - [ ] **Step 5: Rodar os gates do compose e do kit**
 
-Run: `pnpm exec vitest run tests/unit/telefonia-falas-no-volume.test.ts tests/unit/portas-do-compose.test.ts tests/unit/packaging-artefato-do-cliente.test.ts lib/channels/telefonia/ && pnpm typecheck && pnpm test:shell`
+Run: `pnpm exec vitest run tests/unit/telefonia-falas-no-volume.test.ts tests/unit/portas-do-compose.test.ts tests/unit/packaging-artefato-do-cliente.test.ts tests/unit/ligacao-nunca-chama-elevenlabs.test.ts lib/channels/telefonia/ && pnpm typecheck && pnpm test:shell`
 Expected: PASS em todos; `tsc` sem erro; `test:shell` termina sem `✗` (o `update.sh` roda `dc up -d`, que cria o volume declarado e recria `worker` e `asterisk` com a montagem nova — nenhuma edição manual pedida ao operador).
 
 Conferir também que o compose continua válido para o Docker (o `.env` vazio só existe para o `env_file:` resolver):
@@ -8647,8 +9796,8 @@ git commit -m "feat(telefonia): o worker leva as falas ao volume do Asterisk e d
 
 Volume nomeado telefonia-falas (escrita no worker, só leitura no asterisk),
 declarado no compose para o update.sh criá-lo em quem já instalou. A passada de
-60 s sincroniza as falas e desliga os avisos vencidos, fora da fila serial dos
-eventos das ligações.
+60 s sincroniza as falas, limpa do Storage o que ninguém usa há 24 h e desliga
+os avisos vencidos, fora da fila serial dos eventos das ligações.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -8953,11 +10102,15 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Create: `components/connections/telefone/TelefoniaDesligada.tsx`
 - Create: `components/connections/telefone/EstadoDaFala.tsx`
 - Create: `components/telefonia/OuvirFala.tsx`
+- Create: `components/telefonia/usePreviaDaFala.ts`
+- Create: `components/telefonia/OuvirPrevia.tsx`
 - Create: `components/connections/telefone/VozEFalas.tsx`, `components/connections/telefone/VozEFalas.test.tsx`
 - Create: `components/connections/telefone/MenusDoTelefone.tsx` (casca mínima aqui; a Task 19 a completa)
 - Modify: `components/connections/ConexoesShell.tsx` (linha 62 `const sub = …`, linha 67 do `irPara`, e o `<TabsContent value="telefone">`)
 - Modify: `components/connections/CanalTelefoneClient.tsx` (o bloco `if (dados && !dados.oferecida) { … }`)
 - Modify: `lib/i18n/dicionario.ts`
+
+**O fluxo de cada fala é o do dono (D15 e §4):** "Gerar prévia" → ouvir → "Salvar e usar". A tela só faz a ElevenLabs trabalhar no "Gerar prévia"; o "Salvar e usar" manda o texto e o hash da prévia e não gasta nada. O `usePreviaDaFala` desta task é o mesmo que o editor de menu (Task 19) e a janela do aviso (Task 21) usam.
 
 - [ ] **Step 1: Teste da aba Voz e falas (falha: o componente não existe)**
 
@@ -8965,12 +10118,14 @@ Crie `components/connections/telefone/VozEFalas.test.tsx`:
 
 ```tsx
 /**
- * A ABA VOZ E FALAS: sem a chave, diz onde cadastrar; com chave e voz, as três
- * falas gerais aparecem com o texto sugerido, e "Gerar e ouvir" manda o texto
- * digitado para a rota da fala certa.
+ * A ABA VOZ E FALAS (desenho da fase 2, §4 e §6.2): sem a chave, diz onde
+ * cadastrar; com chave e voz, as três falas gerais aparecem com o texto sugerido
+ * (o de "fora do horário" com o WhatsApp conectado da organização, quando houver);
+ * "Salvar e usar" só destrava depois de "Gerar prévia" do texto que está no campo,
+ * e manda o hash dessa prévia — editar o texto depois pede prévia de novo.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8978,18 +10133,27 @@ vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (texto: string) => texto }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/feedback/ApiErrorToast", () => ({ showApiError: vi.fn() }));
 vi.mock("@/components/telefonia/OuvirFala", () => ({ OuvirFala: () => null }));
+vi.mock("@/components/telefonia/OuvirPrevia", () => ({ OuvirPrevia: () => null }));
 
+const HASH = "d".repeat(64);
 const api = vi.hoisted(() => ({
   voz: null as unknown,
-  put: vi.fn(async () => ({ data: { fala: null, falha: null } })),
+  canais: [] as unknown[],
+  post: vi.fn(async () => ({ data: { hash: "d".repeat(64), duracao_ms: 1000, reaproveitada: false, audio_base64: "//8=" } })),
+  put: vi.fn(async () => ({ data: { fala: null } })),
 }));
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
     get: vi.fn(async (url: string) =>
       url.endsWith("/vozes") ? { data: { vozes: [{ voice_id: "v1", nome: "Ana", categoria: null, amostra_url: null }] } } : { data: api.voz },
     ),
+    post: api.post,
     put: api.put,
   },
+}));
+vi.mock("@/hooks/channels/useChannelSessions", async () => ({
+  ...(await vi.importActual<typeof import("@/hooks/channels/useChannelSessions")>("@/hooks/channels/useChannelSessions")),
+  useChannelSessions: () => ({ data: api.canais, isLoading: false, isError: false, schemaOutdated: false }),
 }));
 
 import { TEXTO_SUGERIDO } from "@/lib/telefonia/texto-do-menu";
@@ -9005,8 +10169,15 @@ function pintar() {
   );
 }
 
+async function cartao(tipo: string): Promise<HTMLElement> {
+  await screen.findByText("Fora do horário");
+  return document.querySelector(`[data-fala-geral="${tipo}"]`) as HTMLElement;
+}
+
 beforeEach(() => {
+  api.post.mockClear();
   api.put.mockClear();
+  api.canais = [];
   api.voz = {
     oferecida: true,
     chave: { cadastrada: true, last4: "1234" },
@@ -9024,15 +10195,49 @@ describe("aba Voz e falas", () => {
     expect(link).toHaveAttribute("href", "/app/ai/credentials");
   });
 
-  it("as três falas gerais aparecem com o texto sugerido; 'Gerar e ouvir' manda o texto para a rota da fala", async () => {
+  it("as três falas gerais com o texto sugerido; 'Salvar e usar' só depois da prévia, e com o hash dela", async () => {
     pintar();
-    const cartao = (await screen.findByText("Fora do horário")).closest("[data-fala-geral]") as HTMLElement;
-    expect(cartao).toHaveAttribute("data-fala-geral", "after_hours");
-    expect(within(cartao).getByRole("textbox")).toHaveValue(TEXTO_SUGERIDO.after_hours);
+    const c = await cartao("after_hours");
     expect(document.querySelectorAll("[data-fala-geral]")).toHaveLength(3);
+    expect(within(c).getByRole("textbox")).toHaveValue(TEXTO_SUGERIDO.after_hours);
+    expect(within(c).getByRole("button", { name: /Salvar e usar/ })).toBeDisabled();
 
-    await userEvent.click(within(cartao).getByRole("button", { name: /Gerar e ouvir/ }));
-    expect(api.put).toHaveBeenCalledWith("/api/v1/telefonia/falas/gerais/after_hours", { texto: TEXTO_SUGERIDO.after_hours });
+    await userEvent.click(within(c).getByRole("button", { name: /Gerar prévia/ }));
+    expect(api.post).toHaveBeenCalledWith(
+      "/api/v1/telefonia/falas/previa",
+      { texto: TEXTO_SUGERIDO.after_hours },
+      { timeoutMs: 60_000 },
+    );
+    await waitFor(() => expect(within(c).getByRole("button", { name: /Salvar e usar/ })).toBeEnabled());
+    expect(c.querySelector('[data-estado-da-fala="previa"]')).not.toBeNull();
+
+    await userEvent.click(within(c).getByRole("button", { name: /Salvar e usar/ }));
+    expect(api.put).toHaveBeenCalledWith("/api/v1/telefonia/falas/gerais/after_hours", {
+      texto: TEXTO_SUGERIDO.after_hours,
+      hash: HASH,
+    });
+  });
+
+  it("editar o texto depois da prévia pede prévia de novo", async () => {
+    pintar();
+    const c = await cartao("waiting");
+    await userEvent.click(within(c).getByRole("button", { name: /Gerar prévia/ }));
+    await waitFor(() => expect(within(c).getByRole("button", { name: /Salvar e usar/ })).toBeEnabled());
+    await userEvent.type(within(c).getByRole("textbox"), " Obrigado.");
+    expect(within(c).getByRole("button", { name: /Salvar e usar/ })).toBeDisabled();
+  });
+
+  it("com um WhatsApp conectado, o 'fora do horário' sugerido já traz o número — e segue editável", async () => {
+    api.canais = [
+      { id: "c1", meio: "site_chat", status: "WORKING", phone_number: null },
+      { id: "c2", meio: "whatsapp", status: "WORKING", phone_number: "+5561999990000" },
+    ];
+    pintar();
+    const campo = within(await cartao("after_hours")).getByRole("textbox") as HTMLTextAreaElement;
+    expect(campo.value).toContain("(61) 99999-0000");
+    await userEvent.clear(campo);
+    await userEvent.type(campo, "Fechado.");
+    expect(campo.value).toBe("Fechado.");
   });
 });
 ```
@@ -9057,7 +10262,7 @@ Crie `components/connections/telefone/api.ts`:
 import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api/client";
-import type { FalaGeral, FalaPublica, FalhaNaResposta, MenuPublico } from "@/lib/telefonia/vocabulario";
+import type { FalaGeral, FalaPublica, MenuPublico } from "@/lib/telefonia/vocabulario";
 
 export interface VozDoTelefone {
   oferecida: boolean;
@@ -9073,14 +10278,13 @@ export interface VozDaConta {
   amostra_url: string | null;
 }
 
+/** A resposta do "Salvar e usar" de uma fala geral. Falha volta como erro (422/502), nunca aqui. */
 export interface RespostaDaFala {
-  fala: FalaPublica | null;
-  falha: FalhaNaResposta | null;
+  fala: FalaPublica;
 }
 
 export interface RespostaDoMenu {
   menu: MenuPublico | null;
-  falha: FalhaNaResposta | null;
 }
 
 export const CHAVE_DA_VOZ = ["telefonia", "voz"] as const;
@@ -9143,9 +10347,10 @@ Crie `components/connections/telefone/EstadoDaFala.tsx`:
 ```tsx
 "use client";
 /**
- * O selo de uma fala: gerando (a requisição em curso), ainda não gerada, pronta,
- * pronta com a voz anterior (trocou-se a voz e ela não foi regravada) ou falhou —
- * com o motivo traduzido, porque "falhou" sem porquê não diz o que fazer.
+ * O selo de uma fala (desenho da fase 2, §6.2): gerando a prévia, falhou (com o
+ * motivo traduzido — "falhou" sem porquê não diz o que fazer), prévia não salva
+ * (as ligações ainda tocam a anterior), ainda não gerada, em uso com a voz
+ * anterior (trocou-se a voz e ninguém salvou de novo) ou em uso.
  */
 import { Badge } from "@/components/ui/badge";
 import { useT } from "@/hooks/i18n/useT";
@@ -9155,16 +10360,38 @@ export function EstadoDaFala({
   fala,
   vozAtual,
   gerando = false,
+  previaNaoSalva = false,
+  erro = null,
 }: {
+  /** A fala EM USO (a que as ligações tocam), ou `null`. */
   fala: FalaPublica | null;
   vozAtual: string | null;
+  /** A prévia está sendo gerada agora. */
   gerando?: boolean;
+  /** Há uma prévia deste texto que ainda não foi salva. */
+  previaNaoSalva?: boolean;
+  /** A falha da última prévia, já traduzida. */
+  erro?: string | null;
 }) {
   const t = useT();
   if (gerando) {
     return (
       <Badge variant="secondary" data-estado-da-fala="gerando">
-        {t("Gerando…")}
+        {t("Gerando a prévia…")}
+      </Badge>
+    );
+  }
+  if (erro) {
+    return (
+      <Badge variant="destructive" title={erro} data-estado-da-fala="falhou">
+        {t("Falhou:")} {erro}
+      </Badge>
+    );
+  }
+  if (previaNaoSalva) {
+    return (
+      <Badge variant="secondary" data-estado-da-fala="previa">
+        {t("Prévia não salva")}
       </Badge>
     );
   }
@@ -9186,13 +10413,13 @@ export function EstadoDaFala({
   if (vozAtual && fala.voice_id !== vozAtual) {
     return (
       <Badge variant="outline" data-estado-da-fala="outra-voz">
-        {t("Pronta, com a voz anterior")}
+        {t("Em uso, com a voz anterior")}
       </Badge>
     );
   }
   return (
-    <Badge className="bg-emerald-600 text-white hover:bg-emerald-600" data-estado-da-fala="pronta">
-      {t("Pronta")}
+    <Badge className="bg-emerald-600 text-white hover:bg-emerald-600" data-estado-da-fala="em-uso">
+      {t("Em uso")}
     </Badge>
   );
 }
@@ -9203,10 +10430,11 @@ Crie `components/telefonia/OuvirFala.tsx`:
 ```tsx
 "use client";
 /**
- * Toca uma fala do telefone no navegador. A rota devolve o μ-law (8 kHz)
- * exatamente como o Asterisk o toca; aqui ele vira PCM16 dentro de um WAV
- * (`ulawParaWav`), porque navegador não toca μ-law cru. Uma chamada só, sem
- * custo na ElevenLabs.
+ * Toca uma fala SALVA do telefone no navegador — a que as ligações tocam. A rota
+ * devolve o μ-law (8 kHz) exatamente como o Asterisk o toca; aqui ele vira PCM16
+ * dentro de um WAV (`ulawParaWav`), porque navegador não toca μ-law cru. Uma
+ * chamada só, sem custo na ElevenLabs. A prévia (ainda não salva) é outra peça:
+ * `OuvirPrevia`, que toca o áudio que já está na memória da aba.
  */
 import { useEffect, useRef, useState } from "react";
 
@@ -9253,6 +10481,164 @@ export function OuvirFala({ falaId, tocarAoCarregar = false }: { falaId: string;
 }
 ```
 
+Crie `components/telefonia/usePreviaDaFala.ts` (a prévia na tela — usada aqui, no editor de menu da Task 19 e na janela do aviso da Task 21):
+
+```ts
+"use client";
+/**
+ * A PRÉVIA DE UMA FALA NA TELA (desenho da fase 2, D15 e §4): "Gerar prévia" →
+ * ouvir → salvar. É a ÚNICA hora em que a tela faz a ElevenLabs trabalhar, e ela
+ * não muda nada nas ligações — quem muda é o "Salvar e usar" (ou "Salvar menu",
+ * ou "Ligar" o aviso), que devolve à API o hash desta prévia.
+ *
+ * A prévia vale para UM texto: editar o campo depois de gerar a invalida
+ * (`falaParaSalvar` passa a devolver `null`), e o botão de salvar volta a pedir
+ * prévia — é o que impede salvar um texto com o áudio de outro. O áudio chega em
+ * base64 na resposta e fica só na memória da aba: ouvir de novo não custa nada.
+ */
+import { useMutation } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { apiClient } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/types";
+import type { FalaParaSalvar, FalaPublica, PreviaNaResposta } from "@/lib/telefonia/vocabulario";
+
+export interface PreviaDaFala {
+  /** O texto EXATO (aparado) que gerou o áudio. */
+  texto: string;
+  hash: string;
+  duracao_ms: number;
+  /** O áudio já estava no Storage: a ElevenLabs não foi chamada. */
+  reaproveitada: boolean;
+  /** μ-law 8 kHz, como o Asterisk toca. */
+  audio: Uint8Array;
+}
+
+/** A síntese de 1000 caracteres pode passar dos 30 s do prazo padrão de escrita do `apiClient`. */
+const PRAZO_DA_PREVIA_MS = 60_000;
+
+export function bytesDoBase64(b64: string): Uint8Array {
+  const bruto = atob(b64);
+  const bytes = new Uint8Array(bruto.length);
+  for (let i = 0; i < bruto.length; i++) bytes[i] = bruto.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * O que vai no corpo do "Salvar": a prévia DESTE texto, ou — se o texto é o da
+ * fala em uso — a própria fala em uso (nada a regravar). `null` = falta gerar a
+ * prévia do texto que está no campo.
+ */
+export function falaParaSalvar(texto: string, emUso: FalaPublica | null, previa: PreviaDaFala | null): FalaParaSalvar | null {
+  const limpo = texto.trim();
+  if (!limpo) return null;
+  if (previa && previa.texto === limpo) return { texto: previa.texto, hash: previa.hash };
+  if (emUso?.status === "ready" && emUso.texto === limpo) return { texto: emUso.texto, hash: emUso.hash };
+  return null;
+}
+
+/** A mensagem da falha da prévia para a tela: a que a rota já traduziu, ou uma genérica. `null` sem falha. */
+export function mensagemDaFalhaDaPrevia(erro: unknown, t: (texto: string) => string): string | null {
+  if (!erro) return null;
+  if (erro instanceof ApiError && erro.message && erro.message !== erro.code) return erro.message;
+  return t("Não foi possível gerar a prévia. Tente de novo em instantes.");
+}
+
+export function usePreviaDaFala() {
+  const [previa, setPrevia] = useState<PreviaDaFala | null>(null);
+  const [ouvida, setOuvida] = useState(false);
+  const gerar = useMutation({
+    mutationFn: async (texto: string): Promise<PreviaDaFala> => {
+      const limpo = texto.trim();
+      const r = (
+        await apiClient.post<{ data: PreviaNaResposta }>(
+          "/api/v1/telefonia/falas/previa",
+          { texto: limpo },
+          { timeoutMs: PRAZO_DA_PREVIA_MS },
+        )
+      ).data;
+      return {
+        texto: limpo,
+        hash: r.hash,
+        duracao_ms: r.duracao_ms,
+        reaproveitada: r.reaproveitada,
+        audio: bytesDoBase64(r.audio_base64),
+      };
+    },
+    onMutate: () => {
+      setPrevia(null);
+      setOuvida(false);
+    },
+    onSuccess: (p) => setPrevia(p),
+  });
+  return {
+    previa,
+    /** A pessoa tocou a prévia atual (o aviso de instabilidade só liga depois disso, §6.3). */
+    ouvida,
+    marcarOuvida: () => setOuvida(true),
+    gerar: (texto: string) => gerar.mutate(texto),
+    gerando: gerar.isPending,
+    erro: gerar.error,
+    /** A prévia é deste texto? */
+    valePara: (texto: string) => previa !== null && previa.texto === texto.trim(),
+    limpar: () => {
+      setPrevia(null);
+      setOuvida(false);
+      gerar.reset();
+    },
+  };
+}
+```
+
+Crie `components/telefonia/OuvirPrevia.tsx`:
+
+```tsx
+"use client";
+/**
+ * Toca a PRÉVIA de uma fala, que está só na memória da aba (o μ-law que a rota da
+ * prévia devolveu, convertido em WAV). Ouvir de novo não vai à rede e não custa
+ * nada. `aoOuvir` avisa quem precisa saber que a pessoa ouviu — o botão "Ouvir" e
+ * o play do próprio `<audio>` contam: o aviso de instabilidade só liga depois
+ * disso (desenho §6.3).
+ */
+import { useEffect, useRef, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { useT } from "@/hooks/i18n/useT";
+import { ulawParaWav } from "@/lib/telefonia/ulaw";
+import { Play } from "@/lib/ui/icons";
+
+export function OuvirPrevia({ audio, aoOuvir }: { audio: Uint8Array; aoOuvir?: () => void }) {
+  const t = useT();
+  const [url, setUrl] = useState<string | null>(null);
+  const el = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const criada = URL.createObjectURL(new Blob([ulawParaWav(audio)], { type: "audio/wav" }));
+    setUrl(criada);
+    return () => URL.revokeObjectURL(criada);
+  }, [audio]);
+
+  if (!url) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          aoOuvir?.();
+          void Promise.resolve(el.current?.play()).catch(() => undefined);
+        }}
+      >
+        <Play size={14} aria-hidden /> {t("Ouvir")}
+      </Button>
+      <audio ref={el} controls src={url} data-previa-audio onPlay={() => aoOuvir?.()} className="h-8 max-w-full" />
+    </span>
+  );
+}
+```
+
 Crie `components/connections/telefone/MenusDoTelefone.tsx` (casca; a Task 19 troca o arquivo inteiro):
 
 ```tsx
@@ -9270,12 +10656,15 @@ Crie `components/connections/telefone/VozEFalas.tsx`:
 ```tsx
 "use client";
 /**
- * Conexões › Telefone › Voz e falas (desenho da fase 2, §6.2).
+ * Conexões › Telefone › Voz e falas (desenho da fase 2, §4 e §6.2).
  *
  * A voz das falas e as três falas gerais da organização — aguarde, ninguém
- * atendeu e fora do horário. Cada fala é gerada na ElevenLabs pela API, fica no
- * Storage e é tocada pelo worker; aqui a pessoa escreve, gera e ouve. Sem a chave
- * da ElevenLabs nada é gerado, e a tela diz onde cadastrar.
+ * atendeu e fora do horário. O fluxo de cada fala é o do dono (D15): "Gerar
+ * prévia" (a ÚNICA hora em que a ElevenLabs trabalha; o mesmo texto com a mesma voz
+ * não é pago de novo), ouvir aqui mesmo, e "Salvar e usar" — só então as ligações
+ * passam a tocar o áudio novo. Sem a chave da ElevenLabs nada é gerado, e a tela
+ * diz onde cadastrar. O "fora do horário" sugerido já traz o WhatsApp conectado da
+ * organização, quando houver (desenho §4), e segue editável.
  */
 import Link from "next/link";
 import { useState } from "react";
@@ -9289,16 +10678,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { OuvirFala } from "@/components/telefonia/OuvirFala";
+import { OuvirPrevia } from "@/components/telefonia/OuvirPrevia";
+import { falaParaSalvar, mensagemDaFalhaDaPrevia, usePreviaDaFala } from "@/components/telefonia/usePreviaDaFala";
+import { ehChatDoSite, useChannelSessions, type ChannelSession } from "@/hooks/channels/useChannelSessions";
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
-import { TEXTO_SUGERIDO } from "@/lib/telefonia/texto-do-menu";
-import {
-  FALAS_GERAIS,
-  MENSAGEM_DA_FALHA_DA_FALA,
-  TAMANHO_MAXIMO_DA_FALA,
-  type FalaGeral,
-  type FalaPublica,
-} from "@/lib/telefonia/vocabulario";
+import { TEXTO_SUGERIDO, textoSugeridoForaDoHorario } from "@/lib/telefonia/texto-do-menu";
+import { FALAS_GERAIS, TAMANHO_MAXIMO_DA_FALA, type FalaGeral, type FalaParaSalvar, type FalaPublica } from "@/lib/telefonia/vocabulario";
 import { Play } from "@/lib/ui/icons";
 
 import { CHAVE_DA_VOZ, useVozDoTelefone, useVozesDaConta, type RespostaDaFala } from "./api";
@@ -9317,6 +10703,15 @@ const QUANDO_TOCA: Record<FalaGeral, string> = {
   after_hours: "Toca quando o time está fora do horário, e a ligação é encerrada em seguida.",
 };
 
+/**
+ * O primeiro WhatsApp conectado da organização, pela mesma lista que o Inbox e a
+ * barra lateral usam (`GET /api/v1/channel-sessions`). O chat do site não tem
+ * número para dizer ao telefone.
+ */
+function whatsAppConectado(canais: ChannelSession[] | undefined): string | null {
+  return (canais ?? []).find((c) => !ehChatDoSite(c) && c.status === "WORKING" && c.phone_number)?.phone_number ?? null;
+}
+
 export function VozEFalas() {
   const t = useT();
   const qc = useQueryClient();
@@ -9324,11 +10719,12 @@ export function VozEFalas() {
   const dados = consulta.data;
   const temChave = Boolean(dados?.chave.cadastrada);
   const vozes = useVozesDaConta(temChave);
+  const canais = useChannelSessions().data;
 
   const salvarVoz = useMutation({
     mutationFn: (voice_id: string) => apiClient.put("/api/v1/telefonia/voz", { voice_id }),
     onSuccess: async () => {
-      toast.success(t("Voz salva. Gere as falas de novo para usar a voz nova."));
+      toast.success(t("Voz salva. Gere a prévia e salve cada fala de novo para usar a voz nova."));
       await qc.invalidateQueries({ queryKey: CHAVE_DA_VOZ });
     },
     onError: (e) => showApiError(e),
@@ -9362,6 +10758,8 @@ export function VozEFalas() {
 
   const vozAtual = dados.voz?.voice_id ?? null;
   const amostra = (vozes.data ?? []).find((v) => v.voice_id === vozAtual)?.amostra_url ?? null;
+  const sugerido = (tipo: FalaGeral) =>
+    tipo === "after_hours" ? textoSugeridoForaDoHorario(whatsAppConectado(canais), t) : t(TEXTO_SUGERIDO[tipo]);
 
   return (
     <div className="space-y-4">
@@ -9369,7 +10767,7 @@ export function VozEFalas() {
         <h2 className="text-base font-semibold">{t("Voz das falas")}</h2>
         <p className="text-sm text-muted-foreground">
           {t(
-            "A mesma voz vale para todas as falas desta organização. Trocar a voz não regrava as falas já geradas: gere cada uma de novo.",
+            "A mesma voz vale para todas as falas desta organização. Trocar a voz não muda as falas em uso: gere a prévia e salve cada uma de novo.",
           )}
         </p>
         <div className="flex flex-wrap items-end gap-2">
@@ -9407,41 +10805,60 @@ export function VozEFalas() {
       </Card>
 
       {FALAS_GERAIS.map((tipo) => (
-        <CartaoDaFalaGeral key={tipo} tipo={tipo} fala={dados.falas[tipo]} vozAtual={vozAtual} />
+        <CartaoDaFalaGeral key={tipo} tipo={tipo} fala={dados.falas[tipo]} vozAtual={vozAtual} sugerido={sugerido(tipo)} />
       ))}
     </div>
   );
 }
 
-function CartaoDaFalaGeral({ tipo, fala, vozAtual }: { tipo: FalaGeral; fala: FalaPublica | null; vozAtual: string | null }) {
+function CartaoDaFalaGeral({
+  tipo,
+  fala,
+  vozAtual,
+  sugerido,
+}: {
+  tipo: FalaGeral;
+  fala: FalaPublica | null;
+  vozAtual: string | null;
+  sugerido: string;
+}) {
   const t = useT();
   const qc = useQueryClient();
-  const [texto, setTexto] = useState(fala?.texto ?? t(TEXTO_SUGERIDO[tipo]));
-  const [ouvir, setOuvir] = useState<string | null>(null);
+  // `null` = a pessoa não mexeu no campo: vale o texto da fala em uso, ou o sugerido
+  // (que pode chegar depois — o WhatsApp da organização vem de outra consulta).
+  const [editado, setEditado] = useState<string | null>(null);
+  const texto = editado ?? fala?.texto ?? sugerido;
+  const previa = usePreviaDaFala();
+  const paraSalvar = falaParaSalvar(texto, fala, previa.previa);
+  // Há o que salvar só quando a prévia deste texto não é a fala que já está em uso.
+  const mudou = paraSalvar !== null && paraSalvar.hash !== fala?.hash;
+  const emUsoNoCampo = fala?.status === "ready" && fala.texto === texto.trim();
 
-  const gerar = useMutation({
-    mutationFn: async () =>
-      (await apiClient.put<{ data: RespostaDaFala }>(`/api/v1/telefonia/falas/gerais/${tipo}`, { texto })).data,
-    onSuccess: async (r) => {
+  const salvar = useMutation({
+    mutationFn: async (p: FalaParaSalvar) =>
+      (await apiClient.put<{ data: RespostaDaFala }>(`/api/v1/telefonia/falas/gerais/${tipo}`, p)).data,
+    onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: CHAVE_DA_VOZ });
-      if (r?.falha) {
-        toast.error(t(MENSAGEM_DA_FALHA_DA_FALA[r.falha.motivo]));
-        return;
-      }
-      if (r?.fala) setOuvir(r.fala.id);
-      toast.success(t("Fala gerada."));
+      previa.limpar();
+      setEditado(null);
+      toast.success(t("Fala salva. As ligações já tocam o áudio novo."));
     },
     onError: (e) => showApiError(e),
   });
 
-  const idParaOuvir = ouvir ?? (fala?.status === "ready" ? fala.id : null);
   const idDoCampo = `tel-fala-${tipo}`;
 
   return (
     <Card className="space-y-3 p-5" data-fala-geral={tipo}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">{t(TITULO[tipo])}</h3>
-        <EstadoDaFala fala={fala} vozAtual={vozAtual} gerando={gerar.isPending} />
+        <EstadoDaFala
+          fala={fala}
+          vozAtual={vozAtual}
+          gerando={previa.gerando}
+          previaNaoSalva={mudou}
+          erro={mensagemDaFalhaDaPrevia(previa.erro, t)}
+        />
       </div>
       <p className="text-xs text-muted-foreground">{t(QUANDO_TOCA[tipo])}</p>
       <Label htmlFor={idDoCampo} className="sr-only">
@@ -9452,15 +10869,37 @@ function CartaoDaFalaGeral({ tipo, fala, vozAtual }: { tipo: FalaGeral; fala: Fa
         rows={3}
         maxLength={TAMANHO_MAXIMO_DA_FALA}
         value={texto}
-        onChange={(e) => setTexto(e.target.value)}
+        onChange={(e) => setEditado(e.target.value)}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" onClick={() => gerar.mutate()} disabled={!vozAtual || !texto.trim() || gerar.isPending}>
-          <Play size={16} aria-hidden /> {gerar.isPending ? t("Gerando…") : t("Gerar e ouvir")}
+        <Button
+          type="button"
+          variant="outline"
+          data-gerar-previa={tipo}
+          onClick={() => previa.gerar(texto)}
+          disabled={!vozAtual || !texto.trim() || previa.gerando}
+        >
+          <Play size={16} aria-hidden /> {previa.gerando ? t("Gerando a prévia…") : t("Gerar prévia")}
+        </Button>
+        <Button
+          type="button"
+          onClick={() => {
+            if (paraSalvar && mudou) salvar.mutate(paraSalvar);
+          }}
+          disabled={!mudou || salvar.isPending}
+        >
+          {salvar.isPending ? t("Salvando…") : t("Salvar e usar")}
         </Button>
         {!vozAtual ? <span className="text-xs text-muted-foreground">{t("Escolha a voz acima antes de gerar.")}</span> : null}
-        {idParaOuvir ? <OuvirFala falaId={idParaOuvir} tocarAoCarregar={ouvir !== null} /> : null}
       </div>
+      {previa.previa && previa.valePara(texto) ? (
+        <OuvirPrevia audio={previa.previa.audio} aoOuvir={previa.marcarOuvida} />
+      ) : emUsoNoCampo && fala ? (
+        <OuvirFala falaId={fala.id} />
+      ) : null}
+      {!emUsoNoCampo && paraSalvar === null && texto.trim() && !previa.gerando ? (
+        <p className="text-xs text-muted-foreground">{t("Gere a prévia deste texto e ouça antes de salvar.")}</p>
+      ) : null}
     </Card>
   );
 }
@@ -9552,7 +10991,7 @@ por
 Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
 
 ```ts
-  // Telefonia, fase 2 — Conexões › Telefone (abas, voz e falas)
+  // Telefonia, fase 2 — Conexões › Telefone (abas, voz e falas, prévia)
   Números: { es: "Números" },
   Menus: { es: "Menús" },
   "Voz e falas": { es: "Voz y locuciones" },
@@ -9565,8 +11004,8 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
   },
   "Cadastrar a chave em Credenciais de IA": { es: "Registrar la clave en Credenciales de IA" },
   "Voz das falas": { es: "Voz de las locuciones" },
-  "A mesma voz vale para todas as falas desta organização. Trocar a voz não regrava as falas já geradas: gere cada uma de novo.": {
-    es: "La misma voz vale para todas las locuciones de esta organización. Cambiar la voz no regraba las locuciones ya generadas: genera cada una de nuevo.",
+  "A mesma voz vale para todas as falas desta organização. Trocar a voz não muda as falas em uso: gere a prévia e salve cada uma de novo.": {
+    es: "La misma voz vale para todas las locuciones de esta organización. Cambiar la voz no cambia las locuciones en uso: genera la vista previa y guarda cada una de nuevo.",
   },
   Voz: { es: "Voz" },
   "Escolha uma voz": { es: "Elige una voz" },
@@ -9574,8 +11013,8 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
   "Não foi possível listar as vozes da sua conta da ElevenLabs. Confira a chave em Credenciais de IA.": {
     es: "No se pudieron listar las voces de tu cuenta de ElevenLabs. Revisa la clave en Credenciales de IA.",
   },
-  "Voz salva. Gere as falas de novo para usar a voz nova.": {
-    es: "Voz guardada. Genera las locuciones de nuevo para usar la voz nueva.",
+  "Voz salva. Gere a prévia e salve cada fala de novo para usar a voz nova.": {
+    es: "Voz guardada. Genera la vista previa y guarda cada locución de nuevo para usar la voz nueva.",
   },
   Aguarde: { es: "Espere" },
   "Ninguém atendeu": { es: "Nadie atendió" },
@@ -9590,13 +11029,23 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
     es: "Suena cuando el equipo está fuera de horario, y la llamada se cierra a continuación.",
   },
   "Texto da fala": { es: "Texto de la locución" },
-  "Gerar e ouvir": { es: "Generar y escuchar" },
+  "Gerar prévia": { es: "Generar vista previa" },
+  "Gerando a prévia…": { es: "Generando la vista previa…" },
+  "Salvar e usar": { es: "Guardar y usar" },
   "Escolha a voz acima antes de gerar.": { es: "Elige la voz arriba antes de generar." },
-  "Fala gerada.": { es: "Locución generada." },
+  "Gere a prévia deste texto e ouça antes de salvar.": {
+    es: "Genera la vista previa de este texto y escúchala antes de guardar.",
+  },
+  "Fala salva. As ligações já tocam o áudio novo.": { es: "Locución guardada. Las llamadas ya reproducen el audio nuevo." },
+  "Não foi possível gerar a prévia. Tente de novo em instantes.": {
+    es: "No se pudo generar la vista previa. Inténtalo de nuevo en unos instantes.",
+  },
+  Ouvir: { es: "Escuchar" },
   "Ainda não gerada": { es: "Aún no generada" },
   "Falhou:": { es: "Falló:" },
-  "Pronta, com a voz anterior": { es: "Lista, con la voz anterior" },
-  Pronta: { es: "Lista" },
+  "Prévia não salva": { es: "Vista previa sin guardar" },
+  "Em uso, com a voz anterior": { es: "En uso, con la voz anterior" },
+  "Em uso": { es: "En uso" },
   "Não foi possível carregar o áudio desta fala.": { es: "No se pudo cargar el audio de esta locución." },
   "Carregando o áudio…": { es: "Cargando el audio…" },
   // Os textos sugeridos das falas (lib/telefonia/texto-do-menu.ts), passados por t()
@@ -9609,6 +11058,9 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
   "Nosso atendimento está fechado agora. Ligue de novo no nosso horário de atendimento. Obrigado pela ligação.": {
     es: "Nuestra atención está cerrada ahora. Llame de nuevo en nuestro horario de atención. Gracias por su llamada.",
   },
+  "Nosso atendimento está fechado agora. Se preferir, mande uma mensagem no nosso WhatsApp, {numero}. Obrigado pela ligação.": {
+    es: "Nuestra atención está cerrada ahora. Si lo prefiere, envíe un mensaje a nuestro WhatsApp, {numero}. Gracias por su llamada.",
+  },
   "Estamos com uma instabilidade no momento e já estamos trabalhando para resolver. Obrigado pela paciência.": {
     es: "Tenemos una inestabilidad en este momento y ya estamos trabajando para resolverla. Gracias por su paciencia.",
   },
@@ -9619,19 +11071,21 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
 - [ ] **Step 7: Rodar os testes da tela, o gate de i18n e o typecheck**
 
 Run: `pnpm exec vitest run components/connections/ tests/unit/i18n-espanhol-cobre-a-tela.test.ts tests/unit/templates-do-parceiro.test.ts && pnpm typecheck`
-Expected: PASS (inclusive `CanalTelefoneClient.prefixo.test.tsx`); `tsc` sem erro.
+Expected: PASS (inclusive os 4 casos de `VozEFalas.test.tsx` e `CanalTelefoneClient.prefixo.test.tsx`); `tsc` sem erro.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add components/connections/telefone/ components/telefonia/OuvirFala.tsx components/connections/ConexoesShell.tsx \
+git add components/connections/telefone/ components/telefonia/OuvirFala.tsx components/telefonia/usePreviaDaFala.ts \
+  components/telefonia/OuvirPrevia.tsx components/connections/ConexoesShell.tsx \
   components/connections/CanalTelefoneClient.tsx lib/i18n/dicionario.ts
 git commit -m "feat(telefonia): abas Números, Menus e Voz e falas em Conexões › Telefone
 
-A voz da organização (com amostra) e as três falas gerais, com texto sugerido,
-Gerar e ouvir e o estado de cada uma. O áudio é ouvido no navegador a partir do
-μ-law que o Asterisk toca, convertido em WAV. Sem a chave, a aba diz onde
-cadastrar.
+A voz da organização (com amostra) e as três falas gerais, com texto sugerido (o
+de fora do horário traz o WhatsApp conectado), Gerar prévia, Ouvir e Salvar e
+usar: a ElevenLabs só trabalha na prévia, e nada muda nas ligações antes de
+salvar. O áudio é ouvido no navegador a partir do μ-law que o Asterisk toca,
+convertido em WAV. Sem a chave, a aba diz onde cadastrar.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -9654,10 +11108,13 @@ Crie `components/connections/telefone/MenusDoTelefone.test.tsx`:
  * A ABA MENUS: o cartão de cada menu diz o que ele faz (tecla → time, padrão,
  * números que o tocam) e o que as ligações fizeram nele nos últimos 7 dias — com o
  * alerta quando muita gente cai no padrão sem escolher (o laço de retorno da URA).
+ * E o editor segue o fluxo do dono (D15): sem mexer na fala, salva com o hash da
+ * fala em uso; texto novo só salva depois de "Gerar prévia" daquele texto.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MenuPublico } from "@/lib/telefonia/vocabulario";
 
@@ -9666,6 +11123,10 @@ vi.mock("@/hooks/inbox/useTimesDoInbox", () => ({ useTimesDoInbox: () => ({ data
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/feedback/ApiErrorToast", () => ({ showApiError: vi.fn() }));
 vi.mock("@/components/telefonia/OuvirFala", () => ({ OuvirFala: () => null }));
+vi.mock("@/components/telefonia/OuvirPrevia", () => ({ OuvirPrevia: () => null }));
+
+const HASH_EM_USO = "e".repeat(64);
+const HASH_NOVO = "f".repeat(64);
 
 const MENU: MenuPublico = {
   id: "m1",
@@ -9681,6 +11142,7 @@ const MENU: MenuPublico = {
     tipo: "menu",
     texto: "Para Suporte, digite 1. Para Financeiro, digite 2.",
     voice_id: "v1",
+    hash: HASH_EM_USO,
     status: "ready",
     erro: null,
     duracao_ms: 3000,
@@ -9692,6 +11154,10 @@ const MENU: MenuPublico = {
   ultimos_7_dias: { total: 10, por_tecla: { "1": 4, "2": 1 }, sem_escolha: 4, tecla_errada: 1, desligou_no_menu: 0 },
 };
 
+const api = vi.hoisted(() => ({
+  patch: vi.fn(async () => ({ data: { menu: null } })),
+  post: vi.fn(async () => ({ data: { hash: "f".repeat(64), duracao_ms: 1000, reaproveitada: false, audio_base64: "//8=" } })),
+}));
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
     get: vi.fn(async (url: string) =>
@@ -9706,24 +11172,39 @@ vi.mock("@/lib/api/client", () => ({
             },
           },
     ),
-    post: vi.fn(),
-    patch: vi.fn(),
+    post: api.post,
+    patch: api.patch,
     delete: vi.fn(),
   },
 }));
 
 import { MenusDoTelefone } from "./MenusDoTelefone";
 
+function pintar() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MenusDoTelefone />
+    </QueryClientProvider>,
+  );
+}
+
+async function abrirEditor(): Promise<HTMLElement> {
+  pintar();
+  const cartao = (await screen.findByText("Principal")).closest("[data-menu]") as HTMLElement;
+  await userEvent.click(within(cartao).getByRole("button", { name: "Editar" }));
+  return document.querySelector("[data-editor-de-menu]") as HTMLElement;
+}
+
+beforeEach(() => {
+  api.patch.mockClear();
+  api.post.mockClear();
+});
 afterEach(() => cleanup());
 
 describe("aba Menus", () => {
   it("o cartão diz o que o menu faz e o que as ligações fizeram nele — com o alerta de menu que confunde", async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MenusDoTelefone />
-      </QueryClientProvider>,
-    );
+    pintar();
     const cartao = (await screen.findByText("Principal")).closest("[data-menu]") as HTMLElement;
     expect(within(cartao).getByText(/1 → Suporte/)).toBeInTheDocument();
     expect(within(cartao).getByText(/2 → Financeiro/)).toBeInTheDocument();
@@ -9734,6 +11215,39 @@ describe("aba Menus", () => {
     expect(semana).toHaveTextContent("Sem escolha: 4");
     expect(semana).toHaveTextContent("Tecla errada: 1");
     expect(within(semana).getByText(/talvez a fala do menu esteja confusa/)).toBeInTheDocument();
+  });
+
+  it("editar sem mexer na fala: 'Salvar menu' manda o texto e o hash da fala em uso, sem gerar prévia", async () => {
+    const editor = await abrirEditor();
+    await userEvent.click(within(editor).getByRole("button", { name: "Salvar menu" }));
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.patch).toHaveBeenCalledWith(
+      "/api/v1/telefonia/menus/m1",
+      expect.objectContaining({ fala: { texto: MENU.fala!.texto, hash: HASH_EM_USO }, fala_invalida: null }),
+    );
+  });
+
+  it("texto novo: 'Salvar menu' só depois de 'Gerar prévia' daquele texto, e manda o hash novo", async () => {
+    const editor = await abrirEditor();
+    const campo = within(editor).getByLabelText("Fala do menu");
+    await userEvent.clear(campo);
+    await userEvent.type(campo, "Para Suporte, digite 1.");
+    expect(within(editor).getByRole("button", { name: "Salvar menu" })).toBeDisabled();
+
+    const gerar = editor.querySelector('[data-gerar-previa="menu"]') as HTMLButtonElement;
+    await waitFor(() => expect(gerar).toBeEnabled());
+    await userEvent.click(gerar);
+    expect(api.post).toHaveBeenCalledWith(
+      "/api/v1/telefonia/falas/previa",
+      { texto: "Para Suporte, digite 1." },
+      { timeoutMs: 60_000 },
+    );
+    await waitFor(() => expect(within(editor).getByRole("button", { name: "Salvar menu" })).toBeEnabled());
+    await userEvent.click(within(editor).getByRole("button", { name: "Salvar menu" }));
+    expect(api.patch).toHaveBeenCalledWith(
+      "/api/v1/telefonia/menus/m1",
+      expect.objectContaining({ fala: { texto: "Para Suporte, digite 1.", hash: HASH_NOVO } }),
+    );
   });
 });
 ```
@@ -9753,10 +11267,12 @@ Substitua o conteúdo inteiro de `components/connections/telefone/MenusDoTelefon
  * Conexões › Telefone › Menus (desenho da fase 2, §6.2).
  *
  * O menu de voz (URA) da organização: tecla → time, o time padrão para quem não
- * escolhe, e a fala — montada a partir das opções e editável antes de gerar. Um
- * menu serve a vários números; quem liga o menu a um número é a aba Números, e só
- * com a fala pronta. O bloco "últimos 7 dias" é o laço de retorno (desenho §8):
- * muita gente caindo no padrão sem escolher é o sinal de que a fala confunde.
+ * escolhe, e a fala — montada a partir das opções e editável. "Gerar prévia" faz
+ * o áudio (a única hora em que a ElevenLabs trabalha, D15), a pessoa ouve aqui, e
+ * "Salvar menu" só aceita a prévia do texto que está no campo — ou a fala em uso,
+ * se o texto não mudou. Um menu serve a vários números; quem liga o menu a um
+ * número é a aba Números. O bloco "últimos 7 dias" é o laço de retorno (desenho
+ * §8): muita gente caindo no padrão sem escolher é o sinal de que a fala confunde.
  */
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9770,13 +11286,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { OuvirFala } from "@/components/telefonia/OuvirFala";
+import { OuvirPrevia } from "@/components/telefonia/OuvirPrevia";
+import { falaParaSalvar, mensagemDaFalhaDaPrevia, usePreviaDaFala } from "@/components/telefonia/usePreviaDaFala";
 import { useT } from "@/hooks/i18n/useT";
 import { useTimesDoInbox } from "@/hooks/inbox/useTimesDoInbox";
 import { apiClient } from "@/lib/api/client";
 import { FRASE_DA_OPCAO, TEXTO_SUGERIDO, montarTextoDoMenu } from "@/lib/telefonia/texto-do-menu";
 import { menuConfunde } from "@/lib/telefonia/ultimos-sete-dias";
-import { MENSAGEM_DA_FALHA_DA_FALA, TAMANHO_MAXIMO_DA_FALA, type MenuPublico } from "@/lib/telefonia/vocabulario";
-import { PencilSimple, Plus, Trash, TreeStructure } from "@/lib/ui/icons";
+import { TAMANHO_MAXIMO_DA_FALA, type FalaPublica, type MenuPublico } from "@/lib/telefonia/vocabulario";
+import { PencilSimple, Play, Plus, Trash, TreeStructure } from "@/lib/ui/icons";
 
 import { CHAVE_DOS_MENUS, useMenusDoTelefone, useVozDoTelefone, type RespostaDoMenu } from "./api";
 import { EstadoDaFala } from "./EstadoDaFala";
@@ -9837,14 +11355,14 @@ export function MenusDoTelefone() {
 
       {menus.map((m) =>
         editando === m.id ? (
-          <EditorDeMenu key={m.id} menu={m} aoFechar={() => setEditando(null)} />
+          <EditorDeMenu key={m.id} menu={m} vozAtual={vozAtual} aoFechar={() => setEditando(null)} />
         ) : (
           <CartaoDoMenu key={m.id} menu={m} vozAtual={vozAtual} aoEditar={() => setEditando(m.id)} />
         ),
       )}
 
       {editando === "novo" ? (
-        <EditorDeMenu menu={null} aoFechar={() => setEditando(null)} />
+        <EditorDeMenu menu={null} vozAtual={vozAtual} aoFechar={() => setEditando(null)} />
       ) : (
         <Button type="button" variant="outline" onClick={() => setEditando("novo")} disabled={semVoz}>
           <Plus size={16} aria-hidden /> {t("Novo menu")}
@@ -9941,11 +11459,21 @@ function CartaoDoMenu({ menu, vozAtual, aoEditar }: { menu: MenuPublico; vozAtua
   );
 }
 
-function EditorDeMenu({ menu, aoFechar }: { menu: MenuPublico | null; aoFechar: () => void }) {
+function EditorDeMenu({
+  menu,
+  vozAtual,
+  aoFechar,
+}: {
+  menu: MenuPublico | null;
+  vozAtual: string | null;
+  aoFechar: () => void;
+}) {
   const t = useT();
   const qc = useQueryClient();
   const times = (useTimesDoInbox().data ?? []).filter((x) => !x.archived);
   const nomeDoTime = (id: string) => times.find((x) => x.id === id)?.name ?? "";
+  const previaDoMenu = usePreviaDaFala();
+  const previaDaInvalida = usePreviaDaFala();
 
   const [r, setR] = useState<Rascunho>(() =>
     menu
@@ -9968,13 +11496,21 @@ function EditorDeMenu({ menu, aoFechar }: { menu: MenuPublico | null; aoFechar: 
   const teclasUsadas = r.opcoes.map((o) => o.tecla);
   const repetida = new Set(teclasUsadas).size !== teclasUsadas.length;
   const proximaTecla = TECLAS.find((k) => !teclasUsadas.includes(k));
+  // O que vai no corpo: a prévia DESTE texto, ou a fala em uso se o texto não mudou (D15).
+  const falaDoMenu = falaParaSalvar(textoDoMenu, menu?.fala ?? null, previaDoMenu.previa);
+  const textoDaInvalida = r.texto_invalida.trim();
+  const falaDaInvalida = textoDaInvalida
+    ? falaParaSalvar(textoDaInvalida, menu?.fala_invalida ?? null, previaDaInvalida.previa)
+    : null;
+  const faltaPrevia = falaDoMenu === null || (textoDaInvalida !== "" && falaDaInvalida === null);
   const podeSalvar =
     r.nome.trim() !== "" &&
     r.opcoes.length > 0 &&
     r.opcoes.every((o) => o.time_id) &&
     !repetida &&
     r.time_padrao_id !== "" &&
-    textoDoMenu.trim() !== "";
+    textoDoMenu.trim() !== "" &&
+    !faltaPrevia;
 
   const salvar = useMutation({
     mutationFn: async () => {
@@ -9982,18 +11518,17 @@ function EditorDeMenu({ menu, aoFechar }: { menu: MenuPublico | null; aoFechar: 
         nome: r.nome,
         opcoes: r.opcoes,
         time_padrao_id: r.time_padrao_id,
-        texto_menu: textoDoMenu,
-        texto_invalida: r.texto_invalida.trim() || null,
+        fala: falaDoMenu,
+        fala_invalida: falaDaInvalida,
       };
       const resp = menu
         ? await apiClient.patch<{ data: RespostaDoMenu }>(`/api/v1/telefonia/menus/${menu.id}`, corpo)
         : await apiClient.post<{ data: RespostaDoMenu }>("/api/v1/telefonia/menus", corpo);
       return resp.data;
     },
-    onSuccess: async (d) => {
+    onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: CHAVE_DOS_MENUS });
-      if (d?.falha) toast.error(t(MENSAGEM_DA_FALHA_DA_FALA[d.falha.motivo]));
-      else toast.success(t("Menu salvo, com a fala pronta."));
+      toast.success(t("Menu salvo."));
       aoFechar();
     },
     onError: (e) => showApiError(e),
@@ -10112,6 +11647,7 @@ function EditorDeMenu({ menu, aoFechar }: { menu: MenuPublico | null; aoFechar: 
             </Button>
           ) : null}
         </div>
+        <PreviaDoCampo qual="menu" texto={textoDoMenu} emUso={menu?.fala ?? null} previa={previaDoMenu} vozAtual={vozAtual} />
       </div>
 
       <div className="space-y-1.5">
@@ -10127,17 +11663,74 @@ function EditorDeMenu({ menu, aoFechar }: { menu: MenuPublico | null; aoFechar: 
         <p className="text-xs text-muted-foreground">
           {t("Toca quando o cliente aperta uma tecla que não é opção, antes de repetir o menu.")}
         </p>
+        {textoDaInvalida ? (
+          <PreviaDoCampo
+            qual="invalid"
+            texto={r.texto_invalida}
+            emUso={menu?.fala_invalida ?? null}
+            previa={previaDaInvalida}
+            vozAtual={vozAtual}
+          />
+        ) : null}
       </div>
 
+      {faltaPrevia && textoDoMenu.trim() ? (
+        <p className="text-xs text-muted-foreground">{t("Gere a prévia de cada fala que mudou antes de salvar o menu.")}</p>
+      ) : null}
       <div className="flex gap-2">
         <Button type="button" onClick={() => salvar.mutate()} disabled={!podeSalvar || salvar.isPending}>
-          {salvar.isPending ? t("Gerando a fala…") : t("Salvar e gerar a fala")}
+          {salvar.isPending ? t("Salvando…") : t("Salvar menu")}
         </Button>
         <Button type="button" variant="ghost" onClick={aoFechar} disabled={salvar.isPending}>
           {t("Cancelar")}
         </Button>
       </div>
     </Card>
+  );
+}
+
+/** "Gerar prévia" de uma fala do menu, o selo dela e o que dá para ouvir (a prévia, ou a fala em uso). */
+function PreviaDoCampo({
+  qual,
+  texto,
+  emUso,
+  previa,
+  vozAtual,
+}: {
+  qual: "menu" | "invalid";
+  texto: string;
+  emUso: FalaPublica | null;
+  previa: ReturnType<typeof usePreviaDaFala>;
+  vozAtual: string | null;
+}) {
+  const t = useT();
+  const paraSalvar = falaParaSalvar(texto, emUso, previa.previa);
+  const emUsoNoCampo = emUso?.status === "ready" && emUso.texto === texto.trim();
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-gerar-previa={qual}
+        onClick={() => previa.gerar(texto)}
+        disabled={!vozAtual || !texto.trim() || previa.gerando}
+      >
+        <Play size={14} aria-hidden /> {previa.gerando ? t("Gerando a prévia…") : t("Gerar prévia")}
+      </Button>
+      <EstadoDaFala
+        fala={emUso}
+        vozAtual={vozAtual}
+        gerando={previa.gerando}
+        previaNaoSalva={paraSalvar !== null && paraSalvar.hash !== emUso?.hash}
+        erro={mensagemDaFalhaDaPrevia(previa.erro, t)}
+      />
+      {previa.previa && previa.valePara(texto) ? (
+        <OuvirPrevia audio={previa.previa.audio} aoOuvir={previa.marcarOuvida} />
+      ) : emUsoNoCampo && emUso ? (
+        <OuvirFala falaId={emUso.id} />
+      ) : null}
+    </div>
   );
 }
 ```
@@ -10194,15 +11787,17 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
   "Toca quando o cliente aperta uma tecla que não é opção, antes de repetir o menu.": {
     es: "Suena cuando el cliente marca una tecla que no es opción, antes de repetir el menú.",
   },
-  "Gerando a fala…": { es: "Generando la locución…" },
-  "Salvar e gerar a fala": { es: "Guardar y generar la locución" },
-  "Menu salvo, com a fala pronta.": { es: "Menú guardado, con la locución lista." },
+  "Gere a prévia de cada fala que mudou antes de salvar o menu.": {
+    es: "Genera la vista previa de cada locución que cambió antes de guardar el menú.",
+  },
+  "Salvar menu": { es: "Guardar menú" },
+  "Menu salvo.": { es: "Menú guardado." },
 ```
 
 - [ ] **Step 5: Rodar, gate de i18n e typecheck**
 
 Run: `pnpm exec vitest run components/connections/telefone/ tests/unit/i18n-espanhol-cobre-a-tela.test.ts && pnpm typecheck`
-Expected: PASS; `tsc` sem erro.
+Expected: PASS (os 3 casos de `MenusDoTelefone.test.tsx` e os de `VozEFalas.test.tsx`); `tsc` sem erro.
 
 - [ ] **Step 6: Commit**
 
@@ -10210,9 +11805,11 @@ Expected: PASS; `tsc` sem erro.
 git add components/connections/telefone/MenusDoTelefone.tsx components/connections/telefone/MenusDoTelefone.test.tsx lib/i18n/dicionario.ts
 git commit -m "feat(telefonia): aba Menus — editor de tecla → time e o 'últimos 7 dias'
 
-A fala do menu nasce das opções ('Para Suporte, digite 1…') e pode ser editada
-antes de gerar; a fala de tecla inválida é opcional. Cada menu mostra o que as
-ligações fizeram nele e avisa quando muita gente cai no padrão sem escolher.
+A fala do menu nasce das opções ('Para Suporte, digite 1…') e pode ser editada;
+Gerar prévia faz o áudio, ouve-se na tela, e Salvar menu só aceita a prévia do
+texto do campo (ou a fala em uso, se ele não mudou). A fala de tecla inválida é
+opcional. Cada menu mostra o que as ligações fizeram nele e avisa quando muita
+gente cai no padrão sem escolher.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -10490,15 +12087,17 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-## Task 21: Tela — o aviso de instabilidade em Configurações › Times e a faixa em todo o CRM
+## Task 21: Tela — o aviso de instabilidade em Configurações › Times (com a prévia ouvida) e a faixa em todo o CRM
 
 **Files:**
 - Create: `components/telefonia/useAvisosDeInstabilidade.ts`
-- Create: `components/telefonia/AvisoDeInstabilidadeDoTime.tsx`
+- Create: `components/telefonia/AvisoDeInstabilidadeDoTime.tsx`, `components/telefonia/AvisoDeInstabilidadeDoTime.test.tsx`
 - Create: `components/telefonia/FaixaDoAvisoDeInstabilidade.tsx`, `components/telefonia/FaixaDoAvisoDeInstabilidade.test.tsx`
 - Modify: `app/app/settings/teams/_client.tsx:60-62`
 - Modify: `app/app/layout.tsx:248` (logo depois de `<ConexaoCaidaBanner caidas={conexoesCaidas} />`)
 - Modify: `lib/i18n/dicionario.ts`
+
+**A regra do dono para o aviso (§4 e §6.3):** se o texto mudou, a janela exige "Gerar prévia" e "Ouvir" antes de "Ligar", e "Ligar" manda o texto e o hash da prévia ouvida (a rota da Task 10 confere). Com o texto já gravado, liga direto com o hash dele. A prévia usa `usePreviaDaFala` e `OuvirPrevia` da Task 18.
 
 **Decisão registrada (polling, não Realtime):** ver "Decisões de implementação" no topo do plano — `attendance_teams` não está na publicação `supabase_realtime`; a faixa relê a cada 60 s (só onde a telefonia é oferecida) e na volta do foco, e a aba de quem liga/desliga invalida a consulta na hora.
 
@@ -10633,12 +12232,7 @@ import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
 import type { DuracaoDaEmergencia } from "@/lib/telefonia/vencimento-da-emergencia";
-import {
-  MENSAGEM_DA_FALHA_DA_FALA,
-  type AvisoDoTimePublico,
-  type FalaPublica,
-  type FalhaNaResposta,
-} from "@/lib/telefonia/vocabulario";
+import type { AvisoDoTimePublico, FalaParaSalvar } from "@/lib/telefonia/vocabulario";
 
 export const CHAVE_DOS_AVISOS = ["telefonia", "avisos"] as const;
 
@@ -10672,8 +12266,9 @@ export function useLigarAviso() {
   const qc = useQueryClient();
   const t = useT();
   return useMutation({
-    mutationFn: (p: { teamId: string; texto: string; duracao: DuracaoDaEmergencia }) =>
-      apiClient.put(`/api/v1/telefonia/emergencias/${p.teamId}`, { texto: p.texto, duracao: p.duracao }),
+    // Ligar NÃO gera fala: manda o texto e o hash da prévia ouvida (ou da fala em uso).
+    mutationFn: (p: { teamId: string; fala: FalaParaSalvar; duracao: DuracaoDaEmergencia }) =>
+      apiClient.put(`/api/v1/telefonia/emergencias/${p.teamId}`, { fala: p.fala, duracao: p.duracao }),
     onSuccess: async () => {
       toast.success(t("Aviso de instabilidade ligado."));
       await qc.invalidateQueries({ queryKey: CHAVE_DOS_AVISOS });
@@ -10682,25 +12277,6 @@ export function useLigarAviso() {
   });
 }
 
-/** Gera a fala do aviso SEM ligar — o botão "Ouvir" da janela. */
-export function useGerarFalaDoAviso() {
-  const qc = useQueryClient();
-  const t = useT();
-  return useMutation({
-    mutationFn: async (p: { teamId: string; texto: string }) =>
-      (
-        await apiClient.post<{ data: { fala: FalaPublica | null; falha: FalhaNaResposta | null } }>(
-          `/api/v1/telefonia/emergencias/${p.teamId}/fala`,
-          { texto: p.texto },
-        )
-      ).data,
-    onSuccess: async (r) => {
-      if (r?.falha) toast.error(t(MENSAGEM_DA_FALHA_DA_FALA[r.falha.motivo]));
-      await qc.invalidateQueries({ queryKey: CHAVE_DOS_AVISOS });
-    },
-    onError: (e) => showApiError(e),
-  });
-}
 ```
 
 - [ ] **Step 4: A faixa**
@@ -10768,7 +12344,140 @@ export function FaixaDoAvisoDeInstabilidade() {
 }
 ```
 
-- [ ] **Step 5: O cartão em Configurações › Times**
+- [ ] **Step 5: Teste da janela do aviso (falha: o componente não existe)**
+
+Crie `components/telefonia/AvisoDeInstabilidadeDoTime.test.tsx`:
+
+```tsx
+/**
+ * A JANELA DO AVISO DE INSTABILIDADE (desenho da fase 2, §4 e §6.3): com o texto
+ * mudado, "Ligar" só destrava depois de "Gerar prévia" E "Ouvir" — e manda o hash
+ * da prévia ouvida; com o texto do aviso já gravado, liga direto com o hash dele.
+ */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (texto: string) => texto }));
+vi.mock("@/hooks/i18n/useLocaleDeData", () => ({ useLocaleDeData: () => undefined }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/feedback/ApiErrorToast", () => ({ showApiError: vi.fn() }));
+vi.mock("./OuvirFala", () => ({ OuvirFala: () => null }));
+// O "Ouvir" de verdade toca o áudio; aqui basta que ele avise que a pessoa ouviu.
+vi.mock("./OuvirPrevia", () => ({
+  OuvirPrevia: ({ aoOuvir }: { aoOuvir?: () => void }) => (
+    <button type="button" onClick={() => aoOuvir?.()}>
+      Ouvir
+    </button>
+  ),
+}));
+vi.mock("@/hooks/auth/AuthProvider", () => ({
+  useAuth: () => ({
+    user: { id: "u1", is_platform_admin: false, support: null },
+    activeOrg: { orgId: "o1", name: "Org", role: "manager" },
+  }),
+}));
+
+const HASH_PREVIA = "1".repeat(64);
+const HASH_GRAVADO = "2".repeat(64);
+const api = vi.hoisted(() => ({
+  fala: null as unknown,
+  post: vi.fn(async () => ({ data: { hash: "1".repeat(64), duracao_ms: 2000, reaproveitada: false, audio_base64: "//8=" } })),
+  put: vi.fn(async () => ({ data: { aviso: null } })),
+}));
+vi.mock("@/lib/api/client", () => ({
+  apiClient: {
+    get: vi.fn(async () => ({
+      data: {
+        oferecida: true,
+        times: [
+          { team_id: "t1", time_nome: "Suporte", ativa: false, desde: null, expira_em: null, ligada_por: null, fala: api.fala },
+        ],
+      },
+    })),
+    post: api.post,
+    put: api.put,
+    delete: vi.fn(),
+  },
+}));
+
+import { TEXTO_SUGERIDO } from "@/lib/telefonia/texto-do-menu";
+
+import { AvisoDeInstabilidadeDoTime } from "./AvisoDeInstabilidadeDoTime";
+
+async function abrirJanela() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <AvisoDeInstabilidadeDoTime teamId="t1" />
+    </QueryClientProvider>,
+  );
+  await userEvent.click(await screen.findByRole("button", { name: "Ligar aviso" }));
+  await screen.findByRole("dialog");
+}
+const ligar = () => screen.getByRole("button", { name: "Ligar" });
+
+beforeEach(() => {
+  api.fala = null;
+  api.post.mockClear();
+  api.put.mockClear();
+});
+afterEach(() => cleanup());
+
+describe("janela do aviso de instabilidade", () => {
+  it("texto novo: 'Ligar' só depois de gerar a prévia E ouvir, e manda o hash da prévia ouvida", async () => {
+    await abrirJanela();
+    expect(ligar()).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: /Gerar prévia/ }));
+    expect(api.post).toHaveBeenCalledWith(
+      "/api/v1/telefonia/falas/previa",
+      { texto: TEXTO_SUGERIDO.emergency },
+      { timeoutMs: 60_000 },
+    );
+    await screen.findByRole("button", { name: "Ouvir" });
+    expect(ligar()).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Ouvir" }));
+    await waitFor(() => expect(ligar()).toBeEnabled());
+    await userEvent.click(ligar());
+    expect(api.put).toHaveBeenCalledWith("/api/v1/telefonia/emergencias/t1", {
+      fala: { texto: TEXTO_SUGERIDO.emergency, hash: HASH_PREVIA },
+      duracao: "2h",
+    });
+  });
+
+  it("o texto do aviso já gravado, sem mudança: liga direto, com o hash dele e sem prévia", async () => {
+    api.fala = {
+      id: "f9",
+      tipo: "emergency",
+      texto: "Instabilidade no sistema.",
+      voice_id: "v1",
+      hash: HASH_GRAVADO,
+      status: "ready",
+      erro: null,
+      duracao_ms: 2000,
+      atualizada_em: "2026-09-28T13:00:00.000Z",
+    };
+    await abrirJanela();
+    expect(ligar()).toBeEnabled();
+    await userEvent.click(ligar());
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.put).toHaveBeenCalledWith("/api/v1/telefonia/emergencias/t1", {
+      fala: { texto: "Instabilidade no sistema.", hash: HASH_GRAVADO },
+      duracao: "2h",
+    });
+  });
+});
+```
+
+- [ ] **Step 6: Rodar e ver falhar**
+
+Run: `pnpm exec vitest run components/telefonia/AvisoDeInstabilidadeDoTime.test.tsx`
+Expected: FAIL — `Failed to resolve import "./AvisoDeInstabilidadeDoTime"`.
+
+- [ ] **Step 7: O cartão em Configurações › Times**
 
 Crie `components/telefonia/AvisoDeInstabilidadeDoTime.tsx`:
 
@@ -10779,9 +12488,11 @@ Crie `components/telefonia/AvisoDeInstabilidadeDoTime.tsx`:
  * Times (desenho da fase 2, D7/D8 e §6.3).
  *
  * Desligado: o texto guardado e "Ligar aviso", que abre a janela com o texto
- * editável, "Ouvir", a duração (2 h por padrão) e "Ligar". Ligado: quando, por
- * quem e até quando, e "Desligar agora". Os botões são de gerente e admin — a
- * mesma régua da rota. Só aparece onde a instalação oferece telefonia.
+ * editável, "Gerar prévia", "Ouvir", a duração (2 h por padrão) e "Ligar" — com o
+ * texto mudado, "Ligar" só destrava depois de gerar a prévia E ouvir (§6.3), e
+ * manda o hash dela; ligar não chama a ElevenLabs. Ligado: quando, por quem e até
+ * quando, e "Desligar agora". Os botões são de gerente e admin — a mesma régua da
+ * rota. Só aparece onde a instalação oferece telefonia.
  */
 import { useState } from "react";
 import { format } from "date-fns";
@@ -10802,7 +12513,9 @@ import { TAMANHO_MAXIMO_DA_FALA, type AvisoDoTimePublico } from "@/lib/telefonia
 import { Play, Siren } from "@/lib/ui/icons";
 
 import { OuvirFala } from "./OuvirFala";
-import { useAvisosDeInstabilidade, useDesligarAviso, useGerarFalaDoAviso, useLigarAviso } from "./useAvisosDeInstabilidade";
+import { OuvirPrevia } from "./OuvirPrevia";
+import { useAvisosDeInstabilidade, useDesligarAviso, useLigarAviso } from "./useAvisosDeInstabilidade";
+import { falaParaSalvar, mensagemDaFalhaDaPrevia, usePreviaDaFala } from "./usePreviaDaFala";
 
 export function AvisoDeInstabilidadeDoTime({ teamId }: { teamId: string }) {
   const t = useT();
@@ -10860,11 +12573,19 @@ export function AvisoDeInstabilidadeDoTime({ teamId }: { teamId: string }) {
 
 function JanelaDoAviso({ aviso, aoFechar }: { aviso: AvisoDoTimePublico; aoFechar: () => void }) {
   const t = useT();
-  const [texto, setTexto] = useState(aviso.fala?.texto ?? t(TEXTO_SUGERIDO.emergency));
+  const emUso = aviso.fala?.status === "ready" ? aviso.fala : null;
+  const [texto, setTexto] = useState(emUso?.texto ?? t(TEXTO_SUGERIDO.emergency));
   const [duracao, setDuracao] = useState<DuracaoDaEmergencia>(DURACAO_PADRAO);
-  const [ouvir, setOuvir] = useState<string | null>(null);
-  const gerar = useGerarFalaDoAviso();
+  const previa = usePreviaDaFala();
   const ligar = useLigarAviso();
+
+  // §6.3: se o texto mudou, "Ligar" exige "Gerar prévia" E "Ouvir". Com o texto do
+  // aviso já gravado, liga direto — ele foi ouvido quando foi gravado.
+  const textoGravado = emUso !== null && emUso.texto === texto.trim();
+  const previaOuvida = previa.valePara(texto) && previa.ouvida;
+  const fala = falaParaSalvar(texto, emUso, previa.previa);
+  const podeLigar = fala !== null && (textoGravado || previaOuvida);
+  const falhaDaPrevia = mensagemDaFalhaDaPrevia(previa.erro, t);
 
   return (
     <Dialog
@@ -10896,22 +12617,26 @@ function JanelaDoAviso({ aviso, aoFechar }: { aviso: AvisoDoTimePublico; aoFecha
           <Button
             type="button"
             variant="outline"
-            disabled={!texto.trim() || gerar.isPending}
-            onClick={() =>
-              gerar.mutate(
-                { teamId: aviso.team_id, texto },
-                {
-                  onSuccess: (r) => {
-                    if (r?.fala?.status === "ready") setOuvir(r.fala.id);
-                  },
-                },
-              )
-            }
+            data-gerar-previa="emergency"
+            disabled={!texto.trim() || previa.gerando}
+            onClick={() => previa.gerar(texto)}
           >
-            <Play size={16} aria-hidden /> {gerar.isPending ? t("Gerando…") : t("Ouvir")}
+            <Play size={16} aria-hidden /> {previa.gerando ? t("Gerando a prévia…") : t("Gerar prévia")}
           </Button>
-          {ouvir ? <OuvirFala falaId={ouvir} tocarAoCarregar /> : null}
+          {previa.previa && previa.valePara(texto) ? (
+            <OuvirPrevia audio={previa.previa.audio} aoOuvir={previa.marcarOuvida} />
+          ) : textoGravado && emUso ? (
+            <OuvirFala falaId={emUso.id} />
+          ) : null}
         </div>
+        {falhaDaPrevia ? (
+          <p role="alert" className="text-sm text-destructive">
+            {falhaDaPrevia}
+          </p>
+        ) : null}
+        {!podeLigar && texto.trim() ? (
+          <p className="text-xs text-muted-foreground">{t("Gere a prévia e ouça o aviso antes de ligar.")}</p>
+        ) : null}
         <div className="space-y-1.5">
           <Label htmlFor="aviso-duracao">{t("Desligar sozinho depois de")}</Label>
           <Select value={duracao} onValueChange={(v) => setDuracao(v as DuracaoDaEmergencia)}>
@@ -10932,8 +12657,10 @@ function JanelaDoAviso({ aviso, aoFechar }: { aviso: AvisoDoTimePublico; aoFecha
           </Button>
           <Button
             type="button"
-            onClick={() => ligar.mutate({ teamId: aviso.team_id, texto, duracao }, { onSuccess: aoFechar })}
-            disabled={!texto.trim() || ligar.isPending}
+            onClick={() => {
+              if (fala && podeLigar) ligar.mutate({ teamId: aviso.team_id, fala, duracao }, { onSuccess: aoFechar });
+            }}
+            disabled={!podeLigar || ligar.isPending}
           >
             {ligar.isPending ? t("Ligando…") : t("Ligar")}
           </Button>
@@ -10944,7 +12671,7 @@ function JanelaDoAviso({ aviso, aoFechar }: { aviso: AvisoDoTimePublico; aoFecha
 }
 ```
 
-- [ ] **Step 6: As portas — o cartão em cada time, a faixa no layout**
+- [ ] **Step 8: As portas — o cartão em cada time, a faixa no layout**
 
 Em `app/app/settings/teams/_client.tsx`, acrescente o import `import { AvisoDeInstabilidadeDoTime } from "@/components/telefonia/AvisoDeInstabilidadeDoTime";` e troque
 
@@ -10980,7 +12707,7 @@ por
         <FaixaDoAvisoDeInstabilidade />
 ```
 
-- [ ] **Step 7: Dicionário**
+- [ ] **Step 9: Dicionário**
 
 Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
 
@@ -11000,7 +12727,7 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
     es: "Toda llamada externa que entre en la fila del equipo escucha este aviso completo antes de sonar para los agentes. La llamada transferida por un agente no lo escucha.",
   },
   "Texto do aviso": { es: "Texto del aviso" },
-  Ouvir: { es: "Escuchar" },
+  "Gere a prévia e ouça o aviso antes de ligar.": { es: "Genera la vista previa y escucha el aviso antes de activarlo." },
   "Desligar sozinho depois de": { es: "Desactivar solo después de" },
   "1 hora": { es: "1 hora" },
   "2 horas (padrão)": { es: "2 horas (predeterminado)" },
@@ -11011,21 +12738,23 @@ Em `lib/i18n/dicionario.ts`, antes do `};` que fecha `DICIONARIO`, acrescente:
   "Aviso de instabilidade ligado.": { es: "Aviso de inestabilidad activado." },
 ```
 
-- [ ] **Step 8: Rodar (a cerca do layout inclusive), gate de i18n e typecheck**
+- [ ] **Step 10: Rodar (a cerca do layout inclusive), gate de i18n e typecheck**
 
 Run: `pnpm exec vitest run components/telefonia/ tests/unit/faixa-de-conexao-caida-vem-do-seam.test.tsx tests/unit/i18n-espanhol-cobre-a-tela.test.ts app/app/settings/ && pnpm typecheck`
-Expected: PASS (3 testes novos da faixa e as cercas existentes); `tsc` sem erro.
+Expected: PASS (3 testes da faixa, 2 da janela do aviso e as cercas existentes); `tsc` sem erro.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add components/telefonia/useAvisosDeInstabilidade.ts components/telefonia/AvisoDeInstabilidadeDoTime.tsx \
+  components/telefonia/AvisoDeInstabilidadeDoTime.test.tsx \
   components/telefonia/FaixaDoAvisoDeInstabilidade.tsx components/telefonia/FaixaDoAvisoDeInstabilidade.test.tsx \
   app/app/settings/teams/_client.tsx app/app/layout.tsx lib/i18n/dicionario.ts
 git commit -m "feat(telefonia): aviso de instabilidade no cartão do time e a faixa em todo o CRM
 
-Gerente ou admin liga o aviso com texto, 'Ouvir' e duração; ligado, o cartão diz
-quando, por quem e até quando. A faixa aparece para todo membro enquanto houver
+Gerente ou admin liga o aviso com texto, prévia, 'Ouvir' e duração — com o texto
+mudado, 'Ligar' só destrava depois de gerar a prévia e ouvir, e manda o hash
+dela; ligado, o cartão diz quando, por quem e até quando. A faixa aparece para todo membro enquanto houver
 aviso, com Desligar para gerente e admin, e some sem recarregar (polling de 60 s:
 attendance_teams não está na publicação do Realtime).
 
@@ -11266,12 +12995,16 @@ Crie `tests/e2e/telefonia-ura-e-falas.spec.ts`:
  * O que só a tela prova, e esta spec mede:
  *  1. a chave da ElevenLabs entra por Credenciais de IA, validada — a recusada
  *     volta ao lado do campo, e a chave NUNCA vai na URL;
- *  2. a voz sai de uma lista vinda da conta, e "Gerar e ouvir" produz um áudio que
- *     o NAVEGADOR toca (duração ~1 s, medida no <audio>, não a olho);
- *  3. o menu nasce das opções ("Para X, digite 1. Para Y, digite 2.") e fica pronto;
+ *  2. a voz sai de uma lista vinda da conta, e "Gerar prévia" produz um áudio que
+ *     o NAVEGADOR toca (duração ~1 s, medida no <audio>, não a olho) SEM mudar
+ *     nada nas ligações: a linha de `phone_prompts` só nasce no "Salvar e usar", e
+ *     a mesma prévia de novo não chama a ElevenLabs (D15 — contado no receptor falso);
+ *  3. o menu nasce das opções ("Para X, digite 1. Para Y, digite 2.") e só salva
+ *     com a prévia da fala;
  *  4. o número passa a tocar o menu — e o banco guarda só o menu, nunca os dois;
- *  5. o aviso de instabilidade é ligado no time, a faixa aparece em outra tela
- *     para o ATENDENTE (sem o botão) e some sem recarregar quando o gerente desliga.
+ *  5. o aviso de instabilidade só liga depois de "Gerar prévia" E "Ouvir" (§6.3),
+ *     a faixa aparece em outra tela para o ATENDENTE (sem o botão) e some sem
+ *     recarregar quando o gerente desliga.
  *
  * ElevenLabs FALSA: um servidor HTTP que a própria spec sobe na porta de
  * ELEVENLABS_API_BASE_URL (.env.e2e). A telefonia é "oferecida" pela PRESENÇA de
@@ -11432,16 +13165,22 @@ test.describe("telefonia — URA e falas pela tela", () => {
       for (const p of pedidos) expect(p.url, "a chave nunca vai na URL").not.toContain("e2e-chave");
     });
 
-    await test.step("a voz e a fala de aguarde: gerar e ouvir no navegador", async () => {
+    await test.step("a fala de aguarde: prévia ouvida no navegador, só vira fala no 'Salvar e usar', e a mesma prévia não paga de novo", async () => {
       await page.goto("/app/connections?aba=telefone&sub=falas");
       await page.locator("#tel-voz").click();
       await page.getByRole("option", { name: VOZ.name }).click();
       await expect(page.getByText("Voz salva.", { exact: false })).toBeVisible();
 
+      const sinteses = () => pedidos.filter((p) => p.metodo === "POST" && p.url.startsWith("/v1/text-to-speech/"));
+      const falasDeAguarde = () =>
+        contagem("select count(*)::int as n from phone_prompts where organization_id = $1 and kind = 'waiting' and status = 'ready'", [
+          orgId,
+        ]);
+
       const cartao = page.locator('[data-fala-geral="waiting"]');
-      await cartao.getByRole("button", { name: /Gerar e ouvir/ }).click();
-      await expect(cartao.locator('[data-estado-da-fala="pronta"]')).toBeVisible({ timeout: 20_000 });
-      const audio = cartao.locator("audio[data-fala-audio]");
+      await cartao.getByRole("button", { name: "Gerar prévia" }).click();
+      await expect(cartao.locator('[data-estado-da-fala="previa"]')).toBeVisible({ timeout: 20_000 });
+      const audio = cartao.locator("audio[data-previa-audio]");
       await expect(audio).toBeVisible();
       const duracao = await audio.evaluate(
         (el) =>
@@ -11453,12 +13192,24 @@ test.describe("telefonia — URA e falas pela tela", () => {
       );
       expect(duracao).toBeGreaterThan(0.9);
       expect(duracao).toBeLessThan(1.1);
-      const sintese = pedidos.find((p) => p.metodo === "POST");
-      expect(JSON.parse(sintese!.corpo)).toMatchObject({ model_id: "eleven_multilingual_v2" });
+      expect(sinteses()).toHaveLength(1);
+      expect(JSON.parse(sinteses()[0]!.corpo)).toMatchObject({ model_id: "eleven_multilingual_v2" });
+      // A prévia não muda nada nas ligações: nenhuma fala de aguarde ainda (D15).
+      expect(await falasDeAguarde()).toBe(0);
+      await page.screenshot({ path: `${EVIDENCIA}/e2e-previa-da-fala.png`, fullPage: true });
+
+      await cartao.getByRole("button", { name: "Salvar e usar" }).click();
+      await expect(cartao.locator('[data-estado-da-fala="em-uso"]')).toBeVisible({ timeout: 20_000 });
+      await expect.poll(falasDeAguarde).toBe(1);
+      // Salvar não chamou a ElevenLabs; e a mesma prévia de novo sai do Storage, de graça.
+      expect(sinteses()).toHaveLength(1);
+      await cartao.getByRole("button", { name: "Gerar prévia" }).click();
+      await expect(cartao.locator("audio[data-previa-audio]")).toBeVisible({ timeout: 20_000 });
+      expect(sinteses()).toHaveLength(1);
       await page.screenshot({ path: `${EVIDENCIA}/e2e-voz-e-falas.png`, fullPage: true });
     });
 
-    await test.step("o menu nasce das opções e fica pronto", async () => {
+    await test.step("o menu nasce das opções e só salva com a prévia da fala", async () => {
       await page.getByRole("tab", { name: "Menus" }).click();
       await page.getByRole("button", { name: "Novo menu" }).click();
       const editor = page.locator("[data-editor-de-menu]");
@@ -11473,9 +13224,13 @@ test.describe("telefonia — URA e falas pela tela", () => {
       await expect(editor.locator("#menu-texto")).toHaveValue(
         `Para ${TIME_A.nome}, digite 1. Para ${TIME_B.nome}, digite 2.`,
       );
-      await editor.getByRole("button", { name: "Salvar e gerar a fala" }).click();
+      // Sem a prévia do texto, o menu não salva.
+      await expect(editor.getByRole("button", { name: "Salvar menu" })).toBeDisabled();
+      await editor.locator('[data-gerar-previa="menu"]').click();
+      await expect(editor.locator("audio[data-previa-audio]")).toBeVisible({ timeout: 20_000 });
+      await editor.getByRole("button", { name: "Salvar menu" }).click();
       const cartao = page.locator("[data-menu]").filter({ hasText: MENU_NOME });
-      await expect(cartao.locator('[data-estado-da-fala="pronta"]')).toBeVisible({ timeout: 20_000 });
+      await expect(cartao.locator('[data-estado-da-fala="em-uso"]')).toBeVisible({ timeout: 20_000 });
       await page.screenshot({ path: `${EVIDENCIA}/e2e-menu-pronto.png`, fullPage: true });
     });
 
@@ -11500,17 +13255,23 @@ test.describe("telefonia — URA e falas pela tela", () => {
       expect(rows[0]).toEqual({ sip_team_id: null, tem_menu: true });
     });
 
-    await test.step("o aviso de instabilidade é ligado no time, e a faixa aparece no topo", async () => {
+    await test.step("o aviso de instabilidade só liga depois de gerar a prévia e ouvir, e a faixa aparece no topo", async () => {
       await page.goto("/app/settings/teams");
       const cartao = page.locator(`[data-aviso-de-instabilidade="${TIME_A.id}"]`);
       await expect(cartao).toHaveAttribute("data-ativo", "nao", { timeout: 20_000 });
       await cartao.getByRole("button", { name: "Ligar aviso" }).click();
       const janela = page.locator("[data-janela-do-aviso]");
-      await janela.getByRole("button", { name: /Ouvir/ }).click();
-      await expect(janela.locator("audio[data-fala-audio]")).toBeVisible({ timeout: 20_000 });
+      const ligar = janela.getByRole("button", { name: "Ligar", exact: true });
+      // Texto novo: "Ligar" só destrava depois de gerar a prévia E ouvir (§6.3).
+      await expect(ligar).toBeDisabled();
+      await janela.getByRole("button", { name: "Gerar prévia" }).click();
+      await expect(janela.locator("audio[data-previa-audio]")).toBeVisible({ timeout: 20_000 });
+      await expect(ligar).toBeDisabled();
+      await janela.getByRole("button", { name: "Ouvir", exact: true }).click();
+      await expect(ligar).toBeEnabled();
       await janela.locator("#aviso-duracao").click();
       await page.getByRole("option", { name: "1 hora" }).click();
-      await janela.getByRole("button", { name: "Ligar", exact: true }).click();
+      await ligar.click();
 
       await expect(cartao).toHaveAttribute("data-ativo", "sim");
       await expect(cartao).toContainText("Ligado às");
@@ -11557,7 +13318,7 @@ Expected: PASS — a spec nova está em `SPECS_PARTE_3`.
 - [ ] **Step 5: Rodar a spec contra o ambiente local (Supabase local + build de produção)**
 
 Run: `pnpm e2e:env && pnpm e2e:build && pnpm exec playwright test tests/e2e/telefonia-ura-e-falas.spec.ts`
-Expected: `1 passed`. As três capturas ficam em `.superpowers/evidence/telefonia/e2e-*.png`.
+Expected: `1 passed`. As capturas ficam em `.superpowers/evidence/telefonia/e2e-*.png` (inclusive `e2e-previa-da-fala.png`, a prévia ainda não salva).
 
 Se a spec falhar por seletor (não por comportamento), conserte a SPEC; se falhar por comportamento, volte à task da tela correspondente (17–22) e conserte lá, com teste de unidade que reproduza.
 
@@ -11567,10 +13328,11 @@ Se a spec falhar por seletor (não por comportamento), conserte a SPEC; se falha
 git add tests/e2e/telefonia-ura-e-falas.spec.ts scripts/gerar-env-e2e.sh .github/workflows/e2e.yml
 git commit -m "test(telefonia): e2e da URA e das falas pela tela, com a ElevenLabs falsa
 
-Chave validada (a recusada ao lado do campo, nunca na URL), voz, fala ouvida no
-navegador com duração medida, menu montado das opções, número tocando o menu (só
-o menu no banco), aviso ligado com a faixa para o atendente e desligado sem
-recarregar.
+Chave validada (a recusada ao lado do campo, nunca na URL), voz, prévia ouvida
+no navegador com duração medida — sem linha de fala até o Salvar e usar, e sem
+nova chamada à ElevenLabs para a mesma prévia —, menu montado das opções e salvo
+com a prévia, número tocando o menu (só o menu no banco), aviso ligado só depois
+de gerar a prévia e ouvir, com a faixa para o atendente e desligado sem recarregar.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -11637,13 +13399,16 @@ por:
       expect(grau(peca), `${peca} com menos de 2 arestas — é ilha pelo invariante 1`).toBeGreaterThanOrEqual(2);
     }
     const arestas = (m.edges ?? []).map((e) => `${e.from}→${e.to}`);
-    // A fala chega ao Asterisk pelo volume, só de leitura — nunca pela rede.
+    // A fala chega ao Asterisk pelo volume, só de leitura — nunca pela rede; a prévia
+    // é o único caminho até a ElevenLabs; e a limpeza do Storage é do worker.
     expect(arestas).toEqual(
       expect.arrayContaining([
         "rota_voz→elevenlabs",
         "rota_voz→bucket_falas",
         "bucket_falas→falas_no_disco",
         "falas_no_disco→volume_falas",
+        "falas_no_disco→bucket_falas",
+        "rota_emergencias→bucket_falas",
         "volume_falas→asterisk_core",
         "t_sessions→t_menus",
         "ura→distribuicao",
@@ -11669,14 +13434,14 @@ CAMINHO = "docs/architecture/telefonia.architecture.json"
 s = open(CAMINHO, encoding="utf-8").read()
 
 NOS = [
-    ("elevenlabs", "fora", 2, "external", "ElevenLabs — a conta da PRÓPRIA organização: lista as vozes e gera cada fala em μ-law 8 kHz (`ulaw_8000`). A chave vai só no header `xi-api-key`"),
+    ("elevenlabs", "fora", 2, "external", "ElevenLabs — a conta da PRÓPRIA organização: lista as vozes e gera a PRÉVIA de cada fala em μ-law 8 kHz (`ulaw_8000`) — nunca numa ligação (D15). A chave vai só no header `xi-api-key`"),
     ("volume_falas", "infra", 5, "backend", "Volume `telefonia-falas` (`docker-compose.prod.yml`): escrita no `worker`, SÓ LEITURA no `asterisk`, montado nos dois em `/var/lib/deskcomm/falas`"),
-    ("falas_no_disco", "worker", 6, "backend", "`lib/channels/telefonia/falas-no-disco.ts` — passada de 60 s (baixa do Storage as falas prontas, apaga órfãs) e `garantir` antes de tocar; escrita atômica, caminho conferido pela régua `<org>/<hash>.ulaw`"),
+    ("falas_no_disco", "worker", 6, "backend", "`lib/channels/telefonia/falas-no-disco.ts` — passada de 60 s (baixa do Storage as falas prontas, apaga órfãs) e `garantir` antes de tocar; escrita atômica, caminho conferido pela régua `<org>/<hash>.ulaw`; e limpa do Storage a prévia não salva e o áudio sem uso, 24 h depois de gravados"),
     ("ura", "worker", 7, "backend", "`lib/telefonia/ura.ts` — a URA como regra pura: estado + evento (fim da fala, tecla, prazo de 5 s, desligou) → ação. Duas repetições e o time padrão"),
     ("rota_chave", "api", 12, "backend", "`/api/v1/telefonia/voz/chave` — GET estado (gerente+) / PUT chave (admin): valida listando as vozes, cifra, devolve só os 4 últimos dígitos"),
-    ("rota_voz", "api", 13, "backend", "`/api/v1/telefonia/{voz, voz/vozes, falas/gerais/[tipo], falas/[id]/audio, menus}` — voz, falas gerais, áudio da fala e menus; organização da SESSÃO; falha da ElevenLabs volta 422/502, nunca 429/503"),
-    ("rota_emergencias", "api", 14, "backend", "`/api/v1/telefonia/emergencias` — GET (membro) e, por time, PUT liga com prazo / DELETE desliga / POST fala para ouvir (gerente+)"),
-    ("aba_voz", "tela", 9, "frontend", "Conexões › Telefone › **Menus** e **Voz e falas** (`?aba=telefone&sub=menus|falas`): voz, as três falas gerais, editor de menu com a fala montada das opções e \"últimos 7 dias\""),
+    ("rota_voz", "api", 13, "backend", "`/api/v1/telefonia/{voz, voz/vozes, falas/previa, falas/gerais/[tipo], falas/[id]/audio, menus}` — a PRÉVIA é a única síntese (30 por hora por organização; o mesmo hash não paga de novo); salvar a fala geral e o menu só conferem a prévia e apontam a linha; organização da SESSÃO; falha volta 422/502, nunca 429/503"),
+    ("rota_emergencias", "api", 14, "backend", "`/api/v1/telefonia/emergencias` — GET (membro) e, por time, PUT liga com o hash da prévia ouvida e o prazo / DELETE desliga (gerente+); ligar não chama a ElevenLabs"),
+    ("aba_voz", "tela", 9, "frontend", "Conexões › Telefone › **Menus** e **Voz e falas** (`?aba=telefone&sub=menus|falas`): voz, as três falas gerais (Gerar prévia → Ouvir → Salvar e usar; o fora do horário sugerido traz o WhatsApp), editor de menu com a fala montada das opções e \"últimos 7 dias\""),
     ("cartao_elevenlabs", "tela", 10, "frontend", "Credenciais de IA › cartão **ElevenLabs (voz do telefone)**: a chave entra, é validada e nunca volta"),
     ("faixa_aviso", "tela", 11, "frontend", "Cartão do aviso de instabilidade em Configurações › Times + faixa no topo de todo o CRM (relê a cada 60 s; Desligar só para gerente e admin)"),
     ("t_credenciais", "banco", 11, "database", "`ai_provider_credentials` com `provider = 'elevenlabs'` — a chave cifrada (`AI_CRED_AES_KEY`) e o `last4`"),
@@ -11693,20 +13458,22 @@ ARESTAS = [
     ("rota_chave", "t_audit", "`ai.credential_created` com `provider = elevenlabs` — sem a chave"),
     ("aba", "aba_voz", "sub-abas do Telefone (`?sub=`)"),
     ("aba_voz", "cartao_elevenlabs", "sem chave: o link para Credenciais de IA"),
-    ("aba_voz", "rota_voz", "voz, falas gerais, menus; \"Ouvir\" busca o μ-law e toca em WAV"),
-    ("rota_voz", "t_credenciais", "`chaveDeVoz` decifrada só para sintetizar"),
-    ("rota_voz", "elevenlabs", "texto + voz → áudio `ulaw_8000`"),
-    ("rota_voz", "bucket_falas", "grava `<org>/<hash>.ulaw` (mesmo texto e voz reaproveitam)"),
-    ("rota_voz", "t_prompts", "linha da fala: `ready` ou `failed` com motivo"),
+    ("aba_voz", "rota_voz", "voz, falas gerais, menus; \"Gerar prévia\" traz o μ-law da prévia e \"Ouvir\" toca em WAV"),
+    ("rota_voz", "t_credenciais", "`chaveDeVoz` decifrada só para a prévia"),
+    ("rota_voz", "elevenlabs", "SÓ na prévia: texto + voz → `ulaw_8000`; o mesmo hash não é pago de novo; 30 por hora por organização"),
+    ("rota_voz", "bucket_falas", "a prévia grava `<org>/<hash>.ulaw`; salvar confere que ela existe na pasta da organização da sessão"),
+    ("rota_voz", "t_prompts", "\"Salvar e usar\": a linha aponta para o hash da prévia (`ready`), sem ElevenLabs"),
     ("rota_voz", "t_menus", "menu e opções numa transação"),
-    ("rota_voz", "t_audit", "`phone.voice_changed`, `phone.prompt_saved`, `phone.menu_saved`, `phone.menu_archived`"),
+    ("rota_voz", "t_audit", "`phone.voice_changed`, `phone.prompt_previewed`, `phone.prompt_saved`, `phone.menu_saved`, `phone.menu_archived`"),
     ("rota_numeros", "t_menus", "`sip_menu_id` só aponta para menu com a fala pronta; `phone.number_destination_changed`"),
     ("faixa_aviso", "rota_emergencias", "GET a cada 60 s e na volta do foco; PUT/DELETE"),
-    ("faixa_aviso", "rota_voz", "\"Ouvir\" o aviso antes de ligar"),
+    ("faixa_aviso", "rota_voz", "\"Gerar prévia\" e \"Ouvir\" o aviso antes de ligar, quando o texto mudou"),
     ("rota_emergencias", "t_times", "liga com prazo (1 h, 2 h, 4 h ou até desligar) / desliga"),
     ("rota_emergencias", "t_audit", "`phone.emergency_activated` / `phone.emergency_deactivated`"),
+    ("rota_emergencias", "bucket_falas", "ligar confere a prévia do aviso na pasta da organização"),
     ("bucket_falas", "falas_no_disco", "baixa as falas prontas pela service role"),
-    ("laco", "falas_no_disco", "passada de 60 s: falas e avisos vencidos"),
+    ("falas_no_disco", "bucket_falas", "apaga a prévia não salva e o áudio sem uso, 24 h depois de gravados"),
+    ("laco", "falas_no_disco", "passada de 60 s: falas, limpeza do Storage e avisos vencidos"),
     ("controle", "falas_no_disco", "`garantir` a fala antes de tocar"),
     ("falas_no_disco", "volume_falas", "escreve `.ulaw` (tmp + rename)"),
     ("volume_falas", "asterisk_core", "`sound:/var/lib/deskcomm/falas/<org>/<hash>` — só leitura"),
@@ -11725,7 +13492,9 @@ CARTAO = {
     "title": "Fase 2, versão 1 — URA e falas: o laço de retorno (invariante 7)",
     "items": [
         "Menu que confunde: o bloco \"últimos 7 dias\" do cartão do menu conta escolhas por tecla, sem escolha, tecla errada e quem desligou no menu, e avisa quando muita gente cai no time padrão sem escolher — o dono reescreve a fala",
-        "Fala que não toca (arquivo ausente ou ElevenLabs fora): a ligação segue sem ela, e a Central recebe `phone_prompt_unplayable` com o link para a aba Voz e falas",
+        "Fala que não toca (arquivo ausente no disco e no Storage): a ligação segue sem ela — sem chamar a ElevenLabs —, e a Central recebe `phone_prompt_unplayable` com o link para a aba Voz e falas",
+        "A ligação nunca chama a ElevenLabs (D15): só a prévia da tela sintetiza, 30 por hora por organização, e o mesmo texto com a mesma voz não é pago de novo. O teste-guarda `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` reprova qualquer módulo de `lib/channels/telefonia/` ou `workers/` que alcance o cliente",
+        "Prévia que ninguém salvou não fica para sempre no Storage (que é a mesma cota do cliente): a passada do worker a apaga 24 h depois de gravada, junto com o áudio que nenhuma fala usa mais",
         "Aviso de instabilidade esquecido: vence sozinho no prazo escolhido; o worker desliga na passada de 60 s, audita `phone.emergency_expired` e avisa na Central (`phone_emergency_expired`). Na hora da ligação o worker lê `expires_at` e não depende da passada",
         "Fora do horário SEM fala gerada segue a fase 1 (fila de 2 min → perdida com \"Ligar de volta\"): desligar em silêncio seria beco sem saída para quem ainda não cadastrou a chave",
     ],
@@ -11766,7 +13535,7 @@ print("ok:", len(NOS), "peças,", len(ARESTAS), "arestas, 1 cartão")
 PY
 ```
 
-Expected: `ok: 15 peças, 31 arestas, 1 cartão`.
+Expected: `ok: 15 peças, 33 arestas, 1 cartão`.
 
 - [ ] **Step 3: Rodar o gate dos mapas**
 
@@ -11816,7 +13585,7 @@ E troque
 por
 
 ```markdown
-**F2 v1 — URA e falas: implementada, prova na VPS pendente** (J36; migration 0288; desenho `docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`): menu por tecla com time padrão, fala de aguarde a cada ~40 s, "ninguém disponível", fora do horário pela agenda do time, aviso de instabilidade por time com prazo e faixa em todo o CRM; as falas são geradas pela ElevenLabs com a chave da própria organização, cadastrada em Credenciais de IA. Sem a chave, nada muda: a ligação segue como na F1. **Fases seguintes, a fazer:** F2 v2 — transferência; F2 v3 — ramais;
+**F2 v1 — URA e falas: implementada, prova na VPS pendente** (J36; migration 0288; desenho `docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`): menu por tecla com time padrão, fala de aguarde a cada ~40 s, "ninguém disponível", fora do horário pela agenda do time, aviso de instabilidade por time com prazo e faixa em todo o CRM; as falas são geradas pela ElevenLabs só na prévia da tela (o mesmo texto com a mesma voz não é pago de novo; 30 prévias por hora por organização), com a chave da própria organização, cadastrada em Credenciais de IA; a ligação nunca chama a ElevenLabs. Sem a chave, nada muda: a ligação segue como na F1. **Fases seguintes, a fazer:** F2 v2 — transferência; F2 v3 — ramais;
 ```
 
 Confira que as duas trocas pegaram: `grep -c "publicada na release 1.49.0" docs/current-state.md` → `1`; `grep -c "F2 v1 — URA e falas: implementada" docs/current-state.md` → `1`.
@@ -11850,10 +13619,10 @@ da URA e as falas na fila estão em unidade (`lib/telefonia/ura.test.ts`,
 | Caso | Prioridade | Resultado |
 |---|---|---|
 | J36.1 O admin cola a chave da ElevenLabs em Credenciais de IA: a errada é recusada ao lado do campo; a certa é guardada e a tela mostra só os 4 últimos dígitos | `[P0]` | **PASS** (e2e, ElevenLabs falsa); a chave nunca foi para a URL |
-| J36.2 Voz escolhida numa lista vinda da conta; "Gerar e ouvir" da fala de aguarde toca no navegador | `[P0]` | **PASS** (e2e; duração medida no `<audio>`, ~1 s) |
-| J36.3 Menu novo: a fala é montada das opções ("Para X, digite 1. Para Y, digite 2.") e fica pronta | `[P0]` | **PASS** (e2e) |
+| J36.2 Voz escolhida numa lista vinda da conta; "Gerar prévia" da fala de aguarde toca no navegador sem criar fala; "Salvar e usar" a cria; a mesma prévia de novo não chama a ElevenLabs | `[P0]` | **PASS** (e2e; duração medida no `<audio>`, ~1 s; sínteses contadas no receptor falso e linhas contadas no banco) |
+| J36.3 Menu novo: a fala é montada das opções ("Para X, digite 1. Para Y, digite 2.") e o menu só salva com a prévia dela | `[P0]` | **PASS** (e2e) |
 | J36.4 O número passa a "tocar o menu"; o banco guarda só o menu (`sip_team_id` nulo) | `[P0]` | **PASS** (e2e) |
-| J36.5 Aviso de instabilidade ligado por 1 hora no time: a faixa aparece no topo para o atendente, sem o botão; o gerente desliga pela faixa e ela some sem recarregar | `[P0]` | **PASS** (e2e; auditoria `phone.emergency_activated` e `phone.emergency_deactivated` conferida no banco) |
+| J36.5 Aviso de instabilidade: com o texto novo, "Ligar" só destrava depois de "Gerar prévia" e "Ouvir"; ligado por 1 hora no time: a faixa aparece no topo para o atendente, sem o botão; o gerente desliga pela faixa e ela some sem recarregar | `[P0]` | **PASS** (e2e; auditoria `phone.emergency_activated` e `phone.emergency_deactivated` conferida no banco) |
 | J36.6 Ligação real, opção 1: o cliente ouve o menu, digita 1 e toca no time da opção 1; o cartão diz a escolha | `[P0]` | pendente — prova na VPS (Task 29) |
 | J36.7 Ligação real, opção 2 | `[P0]` | pendente — prova na VPS (Task 29) |
 | J36.8 Tecla errada: ouve a fala de tecla inválida (se houver) e o menu repete; depois de 2 repetições, time padrão com "sem escolha" | `[P0]` | pendente — prova na VPS (Task 29) |
@@ -11862,6 +13631,7 @@ da URA e as falas na fila estão em unidade (`lib/telefonia/ura.test.ts`,
 | J36.11 Aviso de instabilidade ligado: o cliente ouve o aviso inteiro (tecla não interrompe) e segue para a fila; desligado, não ouve | `[P0]` | pendente — prova na VPS (Task 29) |
 | J36.12 Fora do horário do time, com a fala pronta: ouve a fala e a ligação cai; o cartão diz "fora do horário" e a Central não recebe aviso | `[P0]` | pendente — prova na VPS (Task 29) |
 | J36.13 Ninguém atende: "aguarde" a cada ~40 s entre a música; em 2 min, "ninguém disponível" e a perdida vai para a Central | `[P1]` | pendente — prova na VPS (Task 29) |
+| J36.14 O "fora do horário" sugerido já traz o número do WhatsApp conectado da organização, e segue editável | `[P1]` | pendente — prova na VPS (Task 29); em unidade, `components/connections/telefone/VozEFalas.test.tsx` |
 
 **Não medido:** a qualidade da voz no celular do cliente (G.711 da operadora); tecla enviada
 por RFC 2833 × SIP INFO em outras operadoras (medido só na da Totus, Task 0B); o cliente que
@@ -11888,10 +13658,12 @@ escolheram, quantos erraram a tecla e quantos desligaram no menu.
 
 As falas são geradas pela **ElevenLabs**, com a conta da própria empresa: a chave é cadastrada
 em **Credenciais de IA** (validada na hora; depois disso a tela mostra só os 4 últimos dígitos),
-a voz é escolhida em **Conexões › Telefone › Voz e falas**, e cada fala pode ser ouvida no
-navegador antes de ir para as ligações. Além do menu, há três falas gerais: **aguarde** (repetida
-a cada ~40 s enquanto o cliente espera), **ninguém disponível** e **fora do horário** (pela agenda
-do time).
+a voz é escolhida em **Conexões › Telefone › Voz e falas**, e cada fala passa por uma **prévia**:
+gera, ouve no navegador e só então "Salvar e usar". A ElevenLabs só é chamada na prévia — nunca
+numa ligação —, o mesmo texto com a mesma voz não é cobrado duas vezes, e há um limite de 30
+prévias por hora. Além do menu, há três falas gerais: **aguarde** (repetida a cada ~40 s enquanto
+o cliente espera), **ninguém disponível** e **fora do horário** (pela agenda do time; o texto
+sugerido já traz o WhatsApp da empresa, quando há um conectado).
 
 Em **Configurações › Times**, gerentes e admins ligam um **aviso de instabilidade** por time, com
 prazo (1 h, 2 h, 4 h ou até desligar): quem liga para aquele time ouve o aviso
@@ -11914,7 +13686,7 @@ git add tests/unit/mapas-de-arquitetura.test.ts docs/architecture/telefonia.arch
 git commit -m "docs(telefonia): URA e falas nos documentos de autoridade, no mapa vivo e no fragmento
 
 Spec 20 §8 e current-state dizem o estado da F1 (1.49.0) e da F2 v1; J36 no mapa
-de jornadas; 15 peças e 31 arestas no mapa da telefonia, com o caso do DoD 13
+de jornadas; 15 peças e 33 arestas no mapa da telefonia, com o caso do DoD 13
 cobrando grau ≥2; fragmento capacidade_nova.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -11967,6 +13739,18 @@ Vermelhos conhecidos DESTA máquina (macOS), que passam no CI e não são do dif
 
 Se o rodapé e o `grep` não baterem, a sonda está cega: rode de novo com `pnpm test:unit --reporter=verbose > /tmp/vt.log 2>&1`. Qualquer outro arquivo vermelho é deste trabalho até prova em contrário — e a prova é o mesmo arquivo vermelho na `origin/main` limpa.
 
+Depois, a prova de que o teste-guarda do D15 ainda morde com o código final — agora por um caminho que existe de verdade (`falas-no-disco.ts` → `servico-de-falas.ts` → cliente da ElevenLabs):
+
+```bash
+printf '\nimport "@/lib/telefonia/servico-de-falas";\n' >> lib/channels/telefonia/falas-no-disco.ts
+pnpm exec vitest run tests/unit/ligacao-nunca-chama-elevenlabs.test.ts; echo "exit=$?"
+git checkout -- lib/channels/telefonia/falas-no-disco.ts
+pnpm exec vitest run tests/unit/ligacao-nunca-chama-elevenlabs.test.ts; echo "exit=$?"
+git status --short
+```
+
+Expected: a primeira rodada `exit=1`, com `a ligação alcança a ElevenLabs por: lib/channels/telefonia/falas-no-disco.ts → lib/telefonia/servico-de-falas.ts → lib/telefonia/elevenlabs.ts`; a segunda `exit=0`; o `git status` vazio. Primeira rodada verde = o teste está cego: volte à Task 2 e conserte o teste antes de seguir.
+
 - [ ] **Step 4: Invariantes contra Postgres real (precisa de Docker)**
 
 Run: `pnpm test:db > /tmp/db.log 2>&1; echo "exit=$?"; grep -aE "Test Files|Tests " /tmp/db.log | tail -2`
@@ -12018,9 +13802,14 @@ Tente QUEBRAR, com prova (arquivo:linha e o passo a passo do ataque), cada uma d
    recebido; toda consulta com o pool `postgres` (que ignora RLS) filtra organization_id. Tente ler
    ou mudar menu, fala, áudio, voz ou aviso de OUTRA organização passando ids dela.
 3. Papéis: menus, falas, voz e destino do número = admin; aviso de instabilidade = gerente ou admin;
-   ler o áudio de uma fala e a lista de avisos = qualquer membro. Procure rota que aceite papel menor.
+   gerar PRÉVIA = gerente ou admin (a janela do aviso também a usa, e o gerente não salva fala
+   geral nem menu); ler o áudio de uma fala e a lista de avisos = qualquer membro. Procure rota que
+   aceite papel menor.
 4. O áudio sai do bucket privado `phone-prompts` só pela rota autenticada; o caminho do Storage vem
-   do banco (CHECK `<org>/<hash>.ulaw`), nunca do pedido.
+   do banco (CHECK `<org>/<hash>.ulaw`), nunca do pedido. A prévia e o "Salvar e usar" montam o
+   caminho com a organização da SESSÃO e o hash (64 hex): tente salvar na sua organização o hash de
+   uma prévia de OUTRA (deve dar `previa_ausente`), salvar um texto com o hash de outro texto (deve
+   dar `previa_desatualizada`) e mandar caminho no corpo (deve dar 422).
 5. O worker só escreve no volume `telefonia-falas` caminhos que passam pela régua (sem `..`, sem
    barra absoluta, sem organização trocada) e o Asterisk monta o volume só para leitura; o `media`
    do playback da ARI não aceita nada que o cliente final ou a tela controlem.
@@ -12034,7 +13823,14 @@ Tente QUEBRAR, com prova (arquivo:linha e o passo a passo do ataque), cada uma d
    GRANT a anon; nenhuma função nova exposta pelo PostgREST.
 10. Falha da ElevenLabs volta 422/502, nunca 429/503 (o apiClient do navegador repetiria e
     gastaria crédito da conta do cliente); Zod em todo corpo (texto vazio, texto > 1000, tecla fora
-    de 0–9, time de outra organização).
+    de 0–9, time de outra organização). O limite de 30 prévias por hora é da organização da SESSÃO,
+    conta só a prévia que vai à ElevenLabs e recusa com 422 `limite_de_previas` + `Retry-After`.
+11. A ElevenLabs só é chamada pela rota da prévia (desenho D15): nenhum módulo de
+    `lib/channels/telefonia/` ou `workers/` a alcança — confira que
+    `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` é transitivo e que os controles provam que
+    ele não está cego; "Salvar e usar", salvar menu e ligar aviso não sintetizam nada; e a limpeza
+    do worker nunca apaga um objeto que uma linha de `phone_prompts` referencia, nem uma prévia com
+    menos de 24 h.
 
 Para cada item: CONFIRMADO (com a evidência de comportamento — teste que existe e o que ele mede,
 ou o trecho que impede) ou QUEBRADO (com o ataque). Separe o que você MEDIU (rodou teste/consulta)
@@ -12071,6 +13867,10 @@ Telefonia, fase 2, **versão 1 — URA e falas** (DYD-10). Desenho:
 `docs/superpowers/plans/2026-09-28-telefonia-fase2-v1-ura.md`.
 
 - Chave da ElevenLabs em Credenciais de IA (validada listando as vozes; só os 4 últimos dígitos voltam).
+- A ElevenLabs só é chamada na **prévia** ("Gerar prévia" → ouvir → "Salvar e usar"): o mesmo texto com a
+  mesma voz reaproveita o áudio, 30 prévias por hora por organização (422 com `Retry-After`), a ligação
+  nunca a chama (teste-guarda `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`) e o worker tira do
+  Storage o que ninguém usa há 24 h.
 - Conexões › Telefone ganha as abas **Menus** e **Voz e falas**; o número escolhe tocar no time ou o menu.
 - Worker: URA (menu, tecla, 5 s, 2 repetições, time padrão), aguarde a cada ~40 s, "ninguém disponível",
   fora do horário pela agenda do time, aviso de instabilidade tocado inteiro na entrada da fila.
@@ -12209,7 +14009,7 @@ select to_char(v.started_at at time zone 'America/Sao_Paulo', 'HH24:MI:SS') as h
 
 e rode com o mesmo `ssh … psql "$(url_do_schema)" -At -f - < "$SCRATCH/ligacoes-ura.sql"` da Task 28. Log do worker: `ssh … 'docker logs --since 15m $(docker ps --format "{{.Names}}" | grep worker) 2>&1 | grep -iE "fala|ura|menu|aviso" | tail -30'`.
 
-- [ ] **Step 1: Montar pela tela** — o dono: (a) cola a chave em Credenciais de IA e vê os 4 últimos dígitos; (b) em Conexões › Telefone › Voz e falas escolhe a voz e gera e ouve as três falas; (c) em Menus cria o menu com os times reais (ex.: 1 → Suporte, 2 → Financeiro), o time padrão e a fala de tecla inválida, e gera; (d) em Números aponta o 3686-1503 para o menu. Captura de cada tela. Expected: as falas "pronta", o cartão do número "Quando ligarem: menu …".
+- [ ] **Step 1: Montar pela tela** — o dono: (a) cola a chave em Credenciais de IA e vê os 4 últimos dígitos; (b) em Conexões › Telefone › Voz e falas escolhe a voz e, em cada uma das três falas, "Gerar prévia", ouve e "Salvar e usar" — e confere que o texto sugerido de fora do horário já traz o número do WhatsApp conectado (J36.14); (c) em Menus cria o menu com os times reais (ex.: 1 → Suporte, 2 → Financeiro), o time padrão e a fala de tecla inválida, gera a prévia das duas falas, ouve e "Salvar menu"; (d) em Números aponta o 3686-1503 para o menu. Captura de cada tela. Expected: as falas "Em uso", o cartão do número "Quando ligarem: menu …"; gerar de novo a prévia de uma fala já salva NÃO cria linha nova de `phone.prompt_previewed` (conte com `select count(*) from api_audit_log where action = 'phone.prompt_previewed' and created_at > now() - interval '1 hour';` antes e depois, pelo mesmo `ssh … psql` da Task 28); e o log do worker (o `docker logs` acima, com `grep -iE "Storage"`) não tem `limpeza das falas no Storage falhou` nem `não listei as falas do Storage` — a listagem pela service role funciona nesta instalação. A janela de 24 h da limpeza só se prova no dia seguinte: anote a hora e confira então que a prévia não salva sumiu do bucket.
 
 - [ ] **Step 2: Opção 1** — liga, espera o menu, digita 1. Expected: toca no navegador de um atendente do time da opção 1; na consulta, `menu_digit=1`, `menu_outcome=chosen`; o cartão da ligação diz a escolha.
 
@@ -12221,13 +14021,13 @@ e rode com o mesmo `ssh … psql "$(url_do_schema)" -At -f - < "$SCRATCH/ligacoe
 
 - [ ] **Step 6: Desligar no menu** — desliga durante o menu. Expected: a ligação vira perdida; "Ligar de volta" aparece na Central para o time padrão.
 
-- [ ] **Step 7: Aviso de instabilidade** — o gerente liga o aviso no time da opção 1 (Configurações › Times, "Ouvir", 1 hora, "Ligar"); a faixa aparece para todos. Liga, digita 1 e aperta teclas durante o aviso. Expected: o aviso toca INTEIRO (a tecla não corta), depois a fila; `ouviu_aviso=t`. O gerente desliga; nova ligação com 1 não ouve o aviso (`ouviu_aviso=f`) e a faixa sumiu nas outras abas em até 60 s.
+- [ ] **Step 7: Aviso de instabilidade** — o gerente liga o aviso no time da opção 1 (Configurações › Times, "Gerar prévia", "Ouvir", 1 hora, "Ligar" — conferindo que "Ligar" fica desabilitado até ouvir); a faixa aparece para todos. Liga, digita 1 e aperta teclas durante o aviso. Expected: o aviso toca INTEIRO (a tecla não corta), depois a fila; `ouviu_aviso=t`. O gerente desliga; nova ligação com 1 não ouve o aviso (`ouviu_aviso=f`) e a faixa sumiu nas outras abas em até 60 s.
 
 - [ ] **Step 8: Fora do horário** — com o dono, feche temporariamente o horário do time da opção 1 em Configurações › Times (anote o horário original ANTES). Liga e digita 1. Expected: ouve a fala de fora do horário e a ligação cai; `end_reason=after_hours`; o cartão diz "fora do horário"; **nenhum** aviso novo na Central. Restaure o horário original e confira na tela.
 
 - [ ] **Step 9: Ninguém disponível** — com os atendentes do time da opção 2 fora (sem o navegador aberto ou em pausa), liga e digita 2. Expected: "aguarde", música, "aguarde" de novo a cada ~40 s; em 2 min, "ninguém disponível" e a ligação cai; "Ligar de volta" na Central.
 
-- [ ] **Step 10: Registrar** — numa branch nova a partir da `main` (`git fetch origin && git switch -c claude/telefonia-ura-prova-vps origin/main`), troque em `docs/testing/user-journey-map.md` o "pendente — prova na VPS (Task 29)" de J36.6–J36.13 pelo resultado de cada passo (**PASS** com a data e o nome da evidência, ou **FAIL** com o sintoma), e em `docs/current-state.md` troque "prova na VPS pendente" pelo que foi provado. Commit (`docs(telefonia): prova da URA na VPS — J36`, com o `Co-Authored-By`), PR, e pergunta ao dono antes de mesclar. Defeito achado → conserto na causa raiz, com teste que reproduza, em PR próprio; nova release só com nova autorização.
+- [ ] **Step 10: Registrar** — numa branch nova a partir da `main` (`git fetch origin && git switch -c claude/telefonia-ura-prova-vps origin/main`), troque em `docs/testing/user-journey-map.md` o "pendente — prova na VPS (Task 29)" de J36.6–J36.14 pelo resultado de cada passo (**PASS** com a data e o nome da evidência, ou **FAIL** com o sintoma), e em `docs/current-state.md` troque "prova na VPS pendente" pelo que foi provado. Commit (`docs(telefonia): prova da URA na VPS — J36`, com o `Co-Authored-By`), PR, e pergunta ao dono antes de mesclar. Defeito achado → conserto na causa raiz, com teste que reproduza, em PR próprio; nova release só com nova autorização.
 
 - [ ] **Step 11: Devolver ao estado que o dono quiser** — pergunte se o 3686-1503 continua no menu ou volta a tocar direto no time, e se o aviso de instabilidade fica desligado. Faça pela tela, com ele.
 
@@ -12239,7 +14039,8 @@ e rode com o mesmo `ssh … psql "$(url_do_schema)" -At -f - < "$SCRATCH/ligacoe
 |---|---|
 | §2 Passo zero (playback e DTMF) | Tasks 0, 0B, 0C |
 | §3.1 Dados da versão 1 | Task 4 (migration 0288, invariantes), Task 11 (SQL do worker) |
-| §4 Áudio: ElevenLabs → Storage → volume → Asterisk | Tasks 1 (μ-law), 2 (cliente), 6 (falas e armazém), 12 (falas no disco), 13 (`tocarFala`), 16 (volume) |
+| §4 Áudio: prévia → ouvir → "Salvar e usar" → Storage → volume → Asterisk; limpeza de 24 h; texto sugerido com o WhatsApp | Tasks 1 (μ-law, texto sugerido), 2 (cliente), 6 (armazém, prévia, salvar), 7 (rota da prévia com 30 por hora; salvar a fala geral), 8 e 10 (salvar o menu e ligar o aviso com a prévia), 12 (falas no disco e limpeza do Storage), 13 (`tocarFala`), 16 (volume e passada), 18, 19 e 21 (telas: Gerar prévia, Ouvir, Salvar) |
+| D15 A ElevenLabs só na prévia, nunca numa ligação | Task 2 (teste-guarda `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`, sabotado e revertido), Tasks 6 e 7 (`gerarPrevia` é a única síntese; reaproveita pelo hash; cota de 30 por hora), Task 25 (sabotagem de novo, com o código final), Task 26 (item 11 do revisor) |
 | §5.1 Recebida com URA | Task 3 (`passoDaUra`), Task 15 (controlador), Task 11 (`registrarMenu`, `definirTimeDaLigacao`) |
 | §5.2 Fila do time (fora do horário, aviso, aguarde ~40 s, ninguém disponível) | Task 11 (`situacaoDoTime` separa fora do horário de ninguém disponível), Task 14, Task 3 (vencimento) |
 | §5.3 Rede de proteção `allow_transfer=no` | Task 13 |
@@ -12266,9 +14067,15 @@ Nenhum destes muda o desenho; cada um é uma lacuna ou uma escolha que o plano t
 4. **Durações do aviso** (o desenho não fixa): 1 h, 2 h, 4 h ou até desligar; padrão 2 h.
 5. **Auditoria além da lista do §7:** `phone.voice_changed` e `phone.menu_archived`; a chave é auditada como `ai.credential_created` com `provider = elevenlabs`.
 6. **`accepts_extension`** nasce na 0288 sem controle na tela (o §6.2 lista no editor "(versão 3)"); o editor da v1 não mostra.
-7. **Texto sugerido de "fora do horário" não cita o WhatsApp** (a F2 da spec 20 prometia "mensagem de fora do horário com WhatsApp"). É editável; decidir se o sugerido deve trazer o número do WhatsApp da organização — exigiria ler o canal oficial ao montar o texto.
-8. **Síntese sem rate limit.** As rotas são só de admin e o mesmo texto + voz reaproveita a fala (hash), mas cada texto novo gasta crédito da conta do cliente. O DoD só exige rate limit em rota pública.
+7. **Texto sugerido de "fora do horário" com o WhatsApp — RESOLVIDO pelo dono em 2026-09-28 (§4 do desenho).** O sugerido cita o primeiro WhatsApp conectado da organização (`useChannelSessions`, a mesma lista do Inbox) e segue editável (Tasks 1 e 18; J36.14).
+8. **Custo da síntese — RESOLVIDO pelo dono em 2026-09-28 (D15).** A ElevenLabs só é chamada na prévia, o mesmo hash reaproveita o áudio, e há limite de 30 prévias por hora por organização no limitador que o CRM já usa (Tasks 6 e 7).
 9. **`docs/current-state.md` tem outras afirmações velhas na mesma linha**: além da frase de publicação (a Task 24 corrige), "A RECEBIDA: infraestrutura provada, produto não" e "nenhuma spec Playwright" da F1. A memória do dono registra a recebida atendida no navegador em produção em 28/09; atualizar com evidência fica fora da v1.
 10. **Se a Task 0B reprovar**, a Task 0C muda o `dtmf_mode` dos troncos da F1 e precisa de deploy antes da prova da URA — possivelmente uma release só para isso, com a própria autorização.
 11. **O `e2e` do CI não roda em PR** neste repositório: a prova das telas antes do merge é a execução local da Task 23/25; o CI só a repete no push da `main`.
 12. **Nenhuma função SQL nova** (o §10 pede "o `revoke` das funções novas"): toda escrita vai pela API e pelo worker com o pool `postgres` e filtro manual de `organization_id`. Se o revisor da Task 26 preferir função `security definer` para alguma escrita, ela entra com o `revoke` das duas origens.
+13. **Nenhuma linha `failed` nasce na v1**, embora o §3.1 mantenha `status` com `failed` e `error`. Com a prévia, a falha da ElevenLabs fica na prévia, que não escreve linha, e o "Salvar e usar" recusa em vez de gravar `failed`. O CHECK e a leitura continuam (o worker ignora `failed`; a tela sabe mostrá-la). Decidir se o `failed` sai do schema numa versão futura.
+14. **O limitador do CRM é de janela fixa**, não deslizante como o CLAUDE.md diz ("Upstash Redis sliding window"): `checkRateLimit` faz `INCR` + `EXPIRE` (`lib/ai/dispatcher/rate-limit.ts`). Uma rajada na virada da hora pode passar de 30. O plano usa o limitador que existe, como o desenho pede; corrigir a frase do CLAUDE.md fica fora da v1.
+15. **Auditoria da prévia:** `phone.prompt_previewed` não está na lista do §7, mas a prévia que vai à ElevenLabs gasta crédito da conta do cliente e grava objeto — é mutação com efeito. A reaproveitada não audita (a mesma régua do "cron que não fez nada").
+16. **A rota da prévia aceita gerente**, não só admin (o §7 põe falas e menus em admin): a janela do aviso de instabilidade, que é de gerente, precisa gerar a prévia. O gerente continua sem salvar fala geral nem menu.
+17. **A limpeza do Storage lista pela API do Storage**, não por SQL em `storage.objects`: num Supabase próprio a `SUPABASE_DB_URL` pode ser uma role com grants só em `public`. A Task 29 confere no log do worker que a listagem funciona na VPS; a janela de 24 h só se prova no dia seguinte.
+18. **"Ouvir" é obrigatório só no aviso de instabilidade** (§6.3). Nas falas gerais e no menu, salvar exige a prévia do texto do campo, não o play; se o dono quiser o mesmo rigor ali, é trocar a condição do botão pela de `JanelaDoAviso` (Task 21).
