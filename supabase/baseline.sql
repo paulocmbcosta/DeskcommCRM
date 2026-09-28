@@ -29251,7 +29251,7 @@ create index if not exists idx_channel_sessions_sip_team
 comment on column public.channel_sessions.sip_server is
   'Servidor SIP da operadora (host ou IP), para o registro do tronco. NULL em canal que não é telefonia.';
 comment on column public.channel_sessions.sip_username is
-  'Usuário da conta SIP na operadora. Com sip_server, é a identidade do tronco — única entre os ativos da instalação: duas linhas registrando a mesma conta disputariam as ligações recebidas. Espelhado em lib/channels/session-ref.ts.';
+  'Usuário da conta SIP na operadora. Com sip_server, é a identidade do tronco — única entre os ativos da instalação: duas linhas registrando a mesma conta disputariam as ligações recebidas. Lido por lib/channels/telefonia/repositorio.ts e numeros.ts (fora do session-ref: sip_trunk não é canal de mensagem).';
 comment on column public.channel_sessions.sip_password_encrypted is
   'Senha da conta SIP cifrada com fn_encrypt_oauth (pgcrypto, chave só no servidor). Nenhuma rota a devolve; a tela só escreve.';
 comment on column public.channel_sessions.sip_team_id is

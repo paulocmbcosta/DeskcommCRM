@@ -6,36 +6,40 @@
  * A senha entra em claro SÓ aqui, é cifrada DENTRO do mesmo comando SQL
  * (`fn_encrypt_oauth`) e nunca é lida de volta por este módulo: a leitura
  * pública (`numerosDaOrg`) não seleciona a coluna. Editar sem mandar senha
- * mantém a que está guardada.
+ * mantém a que está guardada — mas só enquanto a CONTA é a mesma (ver
+ * `atualizarNumero`).
  */
 import { z } from "zod";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { numeroParaLigar } from "@/lib/telefonia/numero";
 
+import { motivoDoServidorInvalido, normalizarServidor, usuarioSipValido } from "./conta-sip";
 import { PROVIDER } from "./repositorio";
-
-/** Host ou IP, sem esquema nem caminho — o que a operadora entrega como "servidor". */
-const HOST = /^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
 
 export const numeroSchema = z
   .object({
     nome: z.string().trim().min(1).max(80),
     numero: z.string().trim().min(8).max(30),
+    // A MESMA régua que o worker aplica antes de empurrar o tronco
+    // (`conta-sip.ts`): a coluna também é gravável pela REST, sem este Zod.
     servidor: z
       .string()
-      .trim()
-      .toLowerCase()
-      .transform((s) => s.replace(/^sips?:/, "").replace(/:\d+$/, ""))
-      .refine((s) => HOST.test(s), "servidor inválido"),
+      .transform(normalizarServidor)
+      .superRefine((s, ctx) => {
+        const motivo = motivoDoServidorInvalido(s);
+        if (motivo === "interno") {
+          ctx.addIssue({
+            code: "custom",
+            message: "Use o endereço público da operadora — endereço interno, localhost ou nome sem domínio não são aceitos.",
+          });
+        } else if (motivo) {
+          ctx.addIssue({ code: "custom", message: "servidor inválido" });
+        }
+      }),
     porta: z.coerce.number().int().min(1).max(65535).default(5060),
     transporte: z.enum(["udp", "tcp"]).default("udp"),
-    usuario: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .refine((s) => !/[\s@:;<>"]/.test(s), "usuário inválido"),
+    usuario: z.string().trim().refine(usuarioSipValido, "usuário inválido"),
     senha: z.string().min(1).max(128).optional(),
     time_id: z.string().uuid().nullable().default(null),
   })
@@ -73,7 +77,14 @@ export async function numerosDaOrg(db: Queryable, organizationId: string): Promi
   return rows;
 }
 
-export type FalhaDoCadastro = "numero_invalido" | "time_invalido" | "senha_obrigatoria" | "numero_ja_existe" | "conta_ja_usada" | "nao_encontrado";
+export type FalhaDoCadastro =
+  | "numero_invalido"
+  | "time_invalido"
+  | "senha_obrigatoria"
+  | "senha_obrigatoria_na_troca"
+  | "numero_ja_existe"
+  | "conta_ja_usada"
+  | "nao_encontrado";
 
 /**
  * O número exibido (DID) em E.164. Geográfico com DDD pela régua da discagem;
@@ -131,6 +142,30 @@ export async function criarNumero(
   }
 }
 
+interface ContaGuardada {
+  servidor: string;
+  porta: number;
+  transporte: string;
+  usuario: string;
+}
+
+/**
+ * A senha é da CONTA — usuário naquele servidor, por aquela porta e transporte.
+ * Trocar qualquer um dos quatro sem digitar a senha de novo mandaria a senha
+ * guardada para outra conta: com o servidor trocado, o Asterisk responde ao
+ * desafio de autenticação de QUALQUER host que o admin digitar, e o digest que
+ * sai dali é quebrável offline. Quem edita a tela nunca viu a senha (ela só é
+ * escrita), então editar não pode ser o jeito de levá-la a outro lugar.
+ */
+function trocouAConta(guardada: ContaGuardada, e: EntradaDoNumero): boolean {
+  return (
+    guardada.servidor !== e.servidor ||
+    Number(guardada.porta) !== e.porta ||
+    guardada.transporte !== e.transporte ||
+    guardada.usuario !== e.usuario
+  );
+}
+
 export async function atualizarNumero(
   db: Queryable,
   organizationId: string,
@@ -140,7 +175,23 @@ export async function atualizarNumero(
   const numero = e164DoNumero(e.numero);
   if (!numero) return { ok: false, motivo: "numero_invalido" };
   if (!(await timeDaOrg(db, organizationId, e.time_id))) return { ok: false, motivo: "time_invalido" };
+
+  const { rows: atuais } = await db.query<ContaGuardada>(
+    `select lower(sip_server) as servidor, coalesce(sip_port, 5060) as porta,
+            coalesce(sip_transport, 'udp') as transporte, sip_username as usuario
+       from channel_sessions
+      where id = $1 and organization_id = $2 and provider = $3 and archived_at is null`,
+    [id, organizationId, PROVIDER],
+  );
+  const atual = atuais[0];
+  if (!atual) return { ok: false, motivo: "nao_encontrado" };
+  if (!e.senha && trocouAConta(atual, e)) return { ok: false, motivo: "senha_obrigatoria_na_troca" };
+
   try {
+    // A última cláusula repete a regra de `trocouAConta` DENTRO do comando: sem
+    // ela, duas edições simultâneas (uma trocando o servidor com a senha nova,
+    // outra salvando o formulário antigo sem senha) terminavam com a senha nova
+    // apontada para o servidor antigo.
     const { rowCount } = await db.query(
       `update channel_sessions
           set display_name = $4, phone_number = $5, sip_server = $6, sip_port = $7,
@@ -148,7 +199,10 @@ export async function atualizarNumero(
               sip_password_encrypted = case when $11::text is null then sip_password_encrypted
                                             else public.fn_encrypt_oauth($11) end,
               status = 'STARTING', status_reason = null, updated_at = now()
-        where id = $1 and organization_id = $2 and provider = $3 and archived_at is null`,
+        where id = $1 and organization_id = $2 and provider = $3 and archived_at is null
+          and ($11::text is not null
+               or (lower(sip_server) = $6 and coalesce(sip_port, 5060) = $7
+                   and coalesce(sip_transport, 'udp') = $8 and sip_username = $9))`,
       [id, organizationId, PROVIDER, e.nome, numero, e.servidor, e.porta, e.transporte, e.usuario, e.time_id, e.senha ?? null],
     );
     return (rowCount ?? 0) > 0 ? { ok: true } : { ok: false, motivo: "nao_encontrado" };
@@ -178,6 +232,8 @@ export const MENSAGEM_DA_FALHA: Record<FalhaDoCadastro, string> = {
   numero_invalido: "O número precisa ser um telefone brasileiro com DDD.",
   time_invalido: "Esse time não existe nesta organização.",
   senha_obrigatoria: "Informe a senha da conta SIP.",
+  senha_obrigatoria_na_troca:
+    "Ao trocar o servidor, a porta, o transporte ou o usuário, digite a senha da conta SIP de novo.",
   numero_ja_existe: "Esse número já está conectado nesta organização.",
   conta_ja_usada: "Essa conta SIP já está conectada nesta instalação.",
   nao_encontrado: "Número não encontrado.",

@@ -25,6 +25,15 @@ export const PUBLIC_PATHS: RegExp[] = [
   // solto daria carona a qualquer rota futura criada debaixo dele — inclusive
   // uma que presuma login.
   /^\/api\/v1\/site-chat\/[^/]+\/(config|messages)$/,
+  // O PORTEIRO DO WEBSOCKET DO RAMAL. Quem chama é o proxy (forward_auth do
+  // Caddy / forwardAuth do Traefik), e ele não repassa `Set-Cookie` ao
+  // navegador. O `getUser()` do `proxy.ts` RENOVA a sessão que está a menos de
+  // 90 s de vencer — aqui a renovação trocaria o refresh token no GoTrue e o
+  // novo se perderia, e o reúso do velho revogaria a sessão do atendente. A
+  // rota autoriza sozinha, sem renovar (`lib/auth/sessao-sem-renovar.ts`):
+  // "público" aqui é "o proxy não decide", como em `/api/v1/contacts` abaixo.
+  // Ancorada com `$`.
+  /^\/api\/v1\/telefonia\/ws\/autorizar$/,
   // Heartbeat do agente do host (bearer INTERNAL_SECRET/INTERNAL_CRON_SECRET,
   // checado dentro da própria rota) — sem cookie de sessão, igual /cron/.
   /^\/api\/v1\/system\/agent$/,

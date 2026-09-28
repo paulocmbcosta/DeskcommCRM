@@ -235,6 +235,14 @@ export function transportaMensagem(provider: string | null | undefined): boolean
 export const MEIOS_DE_CANAL = ["whatsapp", "site_chat", "phone"] as const;
 export type MeioDeCanal = (typeof MEIOS_DE_CANAL)[number];
 
+/**
+ * O meio da conversa de telefone (`conversations.channel`). Mora aqui, e não só
+ * na telefonia, porque quem precisa perguntar "esta conversa é de telefone?"
+ * fica FORA de `lib/channels/` — o rodízio de conversas, por exemplo, que não
+ * pode distribuir a conversa de uma ligação (quem a atende é a telefonia).
+ */
+export const MEIO_TELEFONE = "phone" satisfies MeioDeCanal;
+
 const MEIO_DO_PROVIDER: Record<ProviderDeMensagem, MeioDeCanal> = {
   waha: "whatsapp",
   meta_cloud: "whatsapp",

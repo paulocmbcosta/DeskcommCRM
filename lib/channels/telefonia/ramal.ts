@@ -19,6 +19,8 @@ import { ORDEM_DE_GRAVACAO, idDoRamal, objetosDoRamal } from "./pjsip";
 export interface CredencialDoRamal {
   usuario: string;
   senha: string;
+  /** `true` quando esta chamada CRIOU o ramal no Asterisk; `false` quando devolveu o que já existia. */
+  nova: boolean;
 }
 
 async function senhaExistente(ari: ClienteAri, id: string): Promise<string | null> {
@@ -40,11 +42,11 @@ export async function credencialDoRamal(ari: ClienteAri, userId: string, nome: s
   const existente = await senhaExistente(ari, usuario);
   // Já existe: devolve a mesma e não regrava nada. Regravar a AOR de um ramal
   // registrado arrisca derrubar o registro da outra aba no meio de uma ligação.
-  if (existente) return { usuario, senha: existente };
+  if (existente) return { usuario, senha: existente, nova: false };
   const senha = randomBytes(24).toString("base64url");
   const objetos = objetosDoRamal({ userId, senha, nome });
   for (const tipo of ORDEM_DE_GRAVACAO) {
     for (const o of objetos.filter((x) => x.tipo === tipo)) await ari.gravarObjeto(o.tipo, o.id, o.campos);
   }
-  return { usuario, senha };
+  return { usuario, senha, nova: true };
 }

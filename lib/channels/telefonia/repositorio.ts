@@ -17,12 +17,12 @@ import { FUSO_PADRAO, fusoValido } from "@/lib/tempo/fusos";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
 
-import { CHANNEL_PROVIDER_SIP_TRUNK } from "../capabilities";
+import { CHANNEL_PROVIDER_SIP_TRUNK, MEIO_TELEFONE } from "../capabilities";
 import type { TroncoSip, TransporteSip } from "./pjsip";
 
 export const PROVIDER = CHANNEL_PROVIDER_SIP_TRUNK;
-/** O meio da conversa de telefone (`conversations.channel`). */
-export const MEIO_TELEFONE = "phone";
+/** O meio da conversa de telefone (`conversations.channel`) — definido em `capabilities.ts`. */
+export { MEIO_TELEFONE };
 
 export interface TroncoDoBanco extends TroncoSip {
   organizationId: string;

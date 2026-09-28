@@ -8,6 +8,7 @@
  * `ramal-<user_id>`.
  */
 import type { CampoPjsip } from "./ari";
+import { portaSipValida, servidorSipValido, usuarioSipValido } from "./conta-sip";
 
 export type TransporteSip = "udp" | "tcp";
 
@@ -64,6 +65,9 @@ function hostDoServidor(t: TroncoSip): string {
  * 25 s mantém o mapeamento do NAT aberto para a INVITE da operadora chegar;
  * `line=yes` + `endpoint` fazem a ligação recebida casar com ESTE tronco mesmo
  * quando dois números da mesma operadora chegam do mesmo IP.
+ *
+ * Quem chama garante que o tronco passou por `problemaDoTronco` — os valores
+ * vão crus para campos PJSIP, e alguns deles (o `contact` da AOR) são listas.
  */
 export function objetosDoTronco(t: TroncoSip): ObjetoPjsip[] {
   const id = idDoTronco(t.id);
@@ -86,6 +90,21 @@ export function objetosDoTronco(t: TroncoSip): ObjetoPjsip[] {
       campos: [
         f("transport", transporte),
         f("context", "de-tronco"),
+        // O tronco NÃO se identifica pelo `From`. O padrão do Asterisk é
+        // `identify_by=username,ip`, e o tronco não tem `auth` de entrada (só
+        // `outbound_auth`): medido em 2026-09-28 num Asterisk 20 (Alpine 3.22)
+        // com exatamente estes objetos, uma INVITE forjada com
+        // `From: <sip:tronco-<id>@qualquer>` casou este endpoint pelo nome, foi
+        // atendida em `de-tronco` e o `P-Asserted-Identity` inventado virou o
+        // número do cliente (`trust_id_inbound=yes`, abaixo). Com `identify_by=ip`
+        // e nenhum objeto `identify`, a mesma INVITE leva "No matching endpoint
+        // found" / 401. A ligação de verdade não depende disso: casa pelo
+        // identificador `line` do registro (ver `line`/`endpoint` na registration),
+        // que não tem nome e roda antes de todos — medido na VPS no mesmo dia, uma
+        // recebida real da operadora (INVITE `sip:…;line=aqsytoa`, vinda do IP da
+        // operadora) caiu em `tronco-<id>` com esta linha no lugar
+        // (.superpowers/evidence/telefonia/identificacao-tronco-vps-2026-09-28.log).
+        f("identify_by", "ip"),
         f("disallow", "all"),
         f("allow", "alaw,ulaw"),
         f("outbound_auth", id),
@@ -123,6 +142,21 @@ export function objetosDoTronco(t: TroncoSip): ObjetoPjsip[] {
       ],
     },
   ];
+}
+
+export type ProblemaDoTronco = "servidor_invalido" | "usuario_invalido" | "porta_invalida";
+
+/**
+ * `null` quando o tronco pode ir para o Asterisk. A MESMA régua da rota que
+ * cadastra (`conta-sip.ts`), aplicada de novo aqui porque a linha do banco
+ * também é gravável pela REST, sem passar pelo Zod da rota — e o worker empurra
+ * o que estiver lá.
+ */
+export function problemaDoTronco(t: Pick<TroncoSip, "servidor" | "usuario" | "porta">): ProblemaDoTronco | null {
+  if (!servidorSipValido(t.servidor)) return "servidor_invalido";
+  if (!usuarioSipValido(t.usuario)) return "usuario_invalido";
+  if (!portaSipValida(t.porta)) return "porta_invalida";
+  return null;
 }
 
 export interface RamalSip {

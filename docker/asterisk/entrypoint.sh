@@ -14,22 +14,61 @@ if [ -z "${TELEFONIA_ARI_PASSWORD:-}" ]; then
   exit 1
 fi
 
+# IPv4 em quatro octetos decimais de 0 a 255, e nada além disso. O IP público
+# vai CRU para o pjsip.conf e o rtp.conf (external_media_address,
+# ice_host_candidates): uma quebra de linha no valor abriria seção nova no
+# arquivo, e o valor vem de fora — do .env ou, sem ele, da resposta de um
+# serviço na internet (ipify), que pode voltar uma página de erro, um proxy
+# cativo ou qualquer coisa. Zero à esquerda é recusado: `010` é 8 para quem lê
+# com inet_aton.
+ipv4_valido() {
+  case "$1" in
+    "" | *[!0-9.]* | .* | *. | *..*) return 1 ;;
+  esac
+  _ifs_antigo="$IFS"
+  IFS=.
+  # shellcheck disable=SC2086 # a divisão pelos pontos é o propósito
+  set -- $1
+  IFS="$_ifs_antigo"
+  [ "$#" -eq 4 ] || return 1
+  for _octeto in "$@"; do
+    case "$_octeto" in
+      0) ;;
+      0*) return 1 ;;
+    esac
+    [ "${#_octeto}" -le 3 ] || return 1
+    [ "$_octeto" -le 255 ] || return 1
+  done
+  return 0
+}
+
 RTP_INICIO="${TELEFONIA_RTP_INICIO:-20000}"
 RTP_FIM="${TELEFONIA_RTP_FIM:-20039}"
 IP_PUBLICO="${TELEFONIA_IP_PUBLICO:-}"
+ORIGEM_DO_IP="TELEFONIA_IP_PUBLICO"
 if [ -z "$IP_PUBLICO" ]; then
   # Fallback: o kit grava o IP no .env; sem ele, pergunta a quem vê de fora.
   IP_PUBLICO="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  ORIGEM_DO_IP="a detecção automática (api.ipify.org)"
 fi
 if [ -z "$IP_PUBLICO" ]; then
   echo "asterisk: não sei o IP público desta máquina (TELEFONIA_IP_PUBLICO vazio e sem internet)." >&2
   echo "asterisk: sem ele o áudio não volta. Defina TELEFONIA_IP_PUBLICO no .env." >&2
   exit 1
 fi
+if ! ipv4_valido "$IP_PUBLICO"; then
+  # Só o começo do valor, numa linha: pode ser uma página HTML inteira.
+  AMOSTRA="$(printf '%s' "$IP_PUBLICO" | tr -c '[:alnum:].:-' '?' | cut -c1-40)"
+  echo "asterisk: o IP público vindo de ${ORIGEM_DO_IP} não é um IPv4 válido: \"${AMOSTRA}\"." >&2
+  echo "asterisk: defina TELEFONIA_IP_PUBLICO no .env com o IPv4 público desta máquina (ex.: 203.0.113.10) e suba de novo." >&2
+  exit 1
+fi
 IP_CONTEINER="$(hostname -i | awk '{print $1}')"
 
-DEST=/etc/asterisk
-cp /usr/share/deskcomm-asterisk/conf/* "$DEST"/
+# Os dois caminhos só mudam no teste (tests/shell/asterisk-entrypoint.test.sh),
+# que roda este script fora da imagem; no contêiner valem os padrões.
+DEST="${ASTERISK_CONF_DESTINO:-/etc/asterisk}"
+cp "${ASTERISK_CONF_ORIGEM:-/usr/share/deskcomm-asterisk/conf}"/* "$DEST"/
 
 # Senha da ARI entre aspas não existe no formato .conf do Asterisk: o valor vai
 # cru até o fim da linha. Recusar quebra de linha evita injetar seção nova.
@@ -78,9 +117,15 @@ cat > "$DEST/pjsip.conf" <<PJSIP
 type=global
 user_agent=SIP
 ; Nenhum endpoint anônimo: INVITE que não casa com tronco nem ramal é recusada.
-; A ligação recebida casa com o tronco pelo parâmetro `line` do Contact que o
+; A ligação recebida casa com o tronco pelo parâmetro "line" do Contact que o
 ; próprio registro anunciou (registration line=yes) — é o que separa dois
-; números da mesma operadora, que chegam do MESMO IP.
+; números da mesma operadora, que chegam do MESMO IP. E SÓ por ele: o endpoint
+; do tronco tem identify_by=ip sem objeto identify (lib/channels/telefonia/
+; pjsip.ts), porque com o padrão identify_by=username,ip uma INVITE forjada com
+; From: tronco-<id> casava o tronco pelo nome e era atendida sem senha (medido
+; em 2026-09-28 num Asterisk 20).
+; Sem crase neste bloco: o heredoc não é citado, e uma crase aqui vira
+; substituição de comando (a versão anterior rodava "line" a cada partida).
 
 [transport-udp]
 type=transport

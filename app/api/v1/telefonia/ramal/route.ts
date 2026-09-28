@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
+import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { ClienteAri, configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
@@ -55,6 +56,18 @@ export async function POST(req: NextRequest): Promise<Response> {
       authz.user.id,
       authz.user.full_name ?? authz.user.email,
     );
+    // É mutação (grava auth/AOR/endpoint na memória do Asterisk quando o ramal
+    // não existia) e entrega uma credencial: audita mesmo quando reaproveita,
+    // porque a senha saiu para um navegador. Sem a senha, nunca.
+    void audit({
+      action: "phone_extension.credential_issued",
+      actorUserId: authz.user.id,
+      organizationId: authz.org.orgId,
+      resourceType: "phone_extension",
+      resourceId: authz.user.id,
+      metadata: { ramal: cred.usuario, nova: cred.nova },
+      requestId,
+    });
     return ok(
       {
         ativo: true,

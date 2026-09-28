@@ -78,7 +78,9 @@ function Situacao({ n }: { n: NumeroSip }) {
         ? t("A operadora recusou o usuário ou a senha")
         : n.status_reason === "senha_ilegivel"
           ? t("A senha guardada não pôde ser lida — digite de novo")
-          : t("A operadora não respondeu");
+          : n.status_reason === "configuracao_invalida"
+            ? t("Servidor ou usuário inválido — edite o número")
+            : t("A operadora não respondeu");
     return (
       <Badge variant="destructive" title={motivo}>
         {motivo}

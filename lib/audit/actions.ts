@@ -637,6 +637,10 @@ export const AUDIT_ACTIONS = [
   "channel.phone_trunk_updated",
   "channel.phone_trunk_archived",
   "phone_call.started",
+  // O ramal do navegador entregue a um atendente (POST /telefonia/ramal): quem
+  // recebeu, qual ramal e se ele foi criado agora no Asterisk ou reaproveitado.
+  // `metadata` NUNCA leva a senha do ramal.
+  "phone_extension.credential_issued",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

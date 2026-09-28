@@ -1,0 +1,434 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Telefonia SIP — o número da operadora como canal, a ligação como conversa",
+    "subtitle": "O Asterisk só carrega o áudio; o CRM é a fonte da verdade dos números e decide quem atende. Números cadastrados pela tela (senha cifrada, nunca devolvida), empurrados para a MEMÓRIA do Asterisk pela ARI. O worker é a aplicação Stasis `crm`: na recebida toca um ramal por vez (menos RECEBIDAS atendidas hoje primeiro, 20 s, 2 voltas, fila de 2 min); na feita só disca com um pedido criado pela API para aquele atendente há menos de 60 s. Provider `sip_trunk` (transporte, só em lib/channels) × meio `phone` (conversas.channel). Migration 0286. Spec 20.",
+    "output": "telefonia.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "fora", "label": "Fora do CRM" },
+    { "id": "infra", "label": "Instalação e rede (VPS)" },
+    { "id": "asterisk", "label": "Asterisk (profile telefonia — só áudio)" },
+    { "id": "worker", "label": "Worker — aplicação Stasis `crm`" },
+    { "id": "api", "label": "API do app" },
+    { "id": "tela", "label": "Tela" },
+    { "id": "banco", "label": "Banco" }
+  ],
+  "mainPath": [
+    "operadora",
+    "asterisk_core",
+    "dialplan",
+    "ari",
+    "laco",
+    "controle",
+    "distribuicao",
+    "ramal_nav",
+    "repositorio",
+    "t_messages",
+    "inbox"
+  ],
+  "nodes": [
+    {
+      "id": "operadora",
+      "lane": "fora",
+      "col": 1,
+      "type": "external",
+      "label": "Operadora SIP (na prova: FreeSWITCH, UDP/TCP 5060, sem TLS, G.711 A-law) — registro de saída; a INVITE recebida volta pelo mapeamento de NAT do próprio registro, sem porta SIP publicada"
+    },
+    {
+      "id": "ci_imagem",
+      "lane": "infra",
+      "col": 1,
+      "type": "external",
+      "label": "`publish-image.yml` publica `deskcomm-asterisk` (`Dockerfile.asterisk`: pacote do Alpine + `docker/asterisk/`) junto com as outras três imagens; `stable` aponta para as quatro"
+    },
+    {
+      "id": "kit",
+      "lane": "infra",
+      "col": 2,
+      "type": "backend",
+      "label": "`install.sh` / `update.sh` — `gravar_imagens` fixa `ASTERISK_IMAGE` na versão; `completar_segredos_da_telefonia` gera `TELEFONIA_ARI_PASSWORD`. Ligar é `COMPOSE_PROFILES=telefonia` + `TELEFONIA_ARI_URL`"
+    },
+    {
+      "id": "compose",
+      "lane": "infra",
+      "col": 3,
+      "type": "backend",
+      "label": "Serviço `asterisk` em `docker-compose.prod.yml`: profile `telefonia` (desligado por padrão), 256 MB, só a faixa de áudio `20000-20039/udp` publicada, só IPv4"
+    },
+    {
+      "id": "proxy_ws",
+      "lane": "infra",
+      "col": 4,
+      "type": "backend",
+      "label": "Caddy (`handle @ramal`, com `forward_auth`) ou Traefik (`deskcomm-ramal`, com `forwardAuth`): só `/telefonia/ws` → `asterisk:8088/ws`, e só depois de o app autorizar. A ARI nunca é roteada para fora"
+    },
+    {
+      "id": "entrypoint",
+      "lane": "asterisk",
+      "col": 1,
+      "type": "backend",
+      "label": "`docker/asterisk/entrypoint.sh` — IP público (`TELEFONIA_IP_PUBLICO` ou ipify), validado como IPv4 (senão não sobe), em `ice_host_candidates` e `external_media_address`; ARI e AMI com a senha do `.env`"
+    },
+    {
+      "id": "dialplan",
+      "lane": "asterisk",
+      "col": 2,
+      "type": "backend",
+      "label": "`extensions.conf` — `[de-tronco]` e `[de-ramal]` só fazem `Stasis(crm,entrada|saida)`; nenhuma extensão disca para fora"
+    },
+    {
+      "id": "asterisk_core",
+      "lane": "asterisk",
+      "col": 3,
+      "type": "backend",
+      "label": "Asterisk 20 — endpoints PJSIP em MEMÓRIA (`sorcery.conf`): `tronco-<id>` e `ramal-<user_id>`, gravados pela ARI e perdidos num reinício; canais, pontes `p-<voice_call_id>`, música de espera"
+    },
+    {
+      "id": "ari",
+      "lane": "asterisk",
+      "col": 4,
+      "type": "backend",
+      "label": "ARI (HTTP + WebSocket de eventos) e AMI (`PJSIPShowRegistrationsOutbound`) — só na rede interna"
+    },
+    {
+      "id": "laco",
+      "lane": "worker",
+      "col": 1,
+      "type": "backend",
+      "label": "`lib/channels/telefonia/laco.ts` — conecta na ARI, fila SERIAL de eventos, reconexão com backoff até 30 s; sem `TELEFONIA_ARI_URL`/`_PASSWORD` não sobe (info, sem erro)"
+    },
+    {
+      "id": "sincronizador",
+      "lane": "worker",
+      "col": 2,
+      "type": "backend",
+      "label": "`sincronizacao.ts` — completa a cada (re)conexão, reconciliação a cada 60 s, estado dos registros pela AMI a cada 15 s; RECRIA o tronco quando o hash muda (editar UDP→TCP só vale recriando); tronco fora da régua de `conta-sip.ts` não é empurrado"
+    },
+    {
+      "id": "controle",
+      "lane": "worker",
+      "col": 3,
+      "type": "backend",
+      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: toca UM ramal por vez e faz a ponte; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s) e disca; `recuperar()` após reinício do worker"
+    },
+    {
+      "id": "distribuicao",
+      "lane": "worker",
+      "col": 4,
+      "type": "backend",
+      "label": "`lib/telefonia/distribuicao.ts` — função pura: menos RECEBIDAS atendidas hoje primeiro, empate = há mais tempo sem atender; 20 s por atendente, 2 voltas; ninguém disponível = fila de 2 min reavaliada a cada 5 s"
+    },
+    {
+      "id": "repositorio",
+      "lane": "worker",
+      "col": 5,
+      "type": "backend",
+      "label": "`repositorio.ts` — toda leitura e escrita do worker; `organization_id` sempre do TRONCO (endpoint do Asterisk), nunca de dado do chamador"
+    },
+    {
+      "id": "rota_numeros",
+      "lane": "api",
+      "col": 1,
+      "type": "backend",
+      "label": "`/api/v1/telefonia/numeros` (GET/POST) e `…/[id]` (PATCH/DELETE), admin — `numeros.ts`: senha cifrada por `fn_encrypt_oauth` no mesmo comando e nunca devolvida; remover ARQUIVA"
+    },
+    {
+      "id": "empurrar",
+      "lane": "api",
+      "col": 2,
+      "type": "backend",
+      "label": "`empurrar.ts` — caminho RÁPIDO: empurra/retira o tronco na mesma requisição; nunca lança (se o Asterisk não responde, o worker reconcilia em até 1 min)"
+    },
+    {
+      "id": "rota_ramal",
+      "lane": "api",
+      "col": 3,
+      "type": "backend",
+      "label": "`POST /api/v1/telefonia/ramal` (agent+) + `ramal.ts` — credencial TEMPORÁRIA `ramal-<user_id>`, só na memória do Asterisk; `{ ativo: false }` sem telefonia ou sem número"
+    },
+    {
+      "id": "rota_chamadas",
+      "lane": "api",
+      "col": 4,
+      "type": "backend",
+      "label": "`POST /api/v1/telefonia/chamadas` (agent+) + `saida.ts` — cria o PEDIDO (`voice_calls` outbound/`starting` com dono); 5 saídas simultâneas por org, 1 por atendente; a conversa fica com quem liga"
+    },
+    {
+      "id": "politica",
+      "lane": "api",
+      "col": 5,
+      "type": "backend",
+      "label": "`lib/telefonia/numero.ts` — E.164 brasileiro com DDD; bloqueia internacional, 0300/0500/0800/0900/400x, serviço curto e sem DDD. Conferida na rota E de novo no controlador"
+    },
+    {
+      "id": "rota_estado",
+      "lane": "api",
+      "col": 6,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/chamadas/[id]` (agent+, da própria org) — o estado de verdade (chamando / atendeu / encerrou), que o JsSIP sozinho não distingue"
+    },
+    {
+      "id": "capacidades",
+      "lane": "api",
+      "col": 7,
+      "type": "backend",
+      "label": "`capabilities.ts` — `sip_trunk` em `PROVIDERS_SEM_MENSAGEM`, `meioDoCanal` → `phone`; `janela.ts` devolve `sem_restricao` para canal de voz (lançar ali derrubava o Inbox)"
+    },
+    {
+      "id": "recusa_envio",
+      "lane": "api",
+      "col": 8,
+      "type": "backend",
+      "label": "`messages/_handler.ts` — conversa de canal sem mensagem → 422 `channel_cannot_send_messages` ANTES de gravar (senão a mensagem ficava em `sending` para sempre)"
+    },
+    {
+      "id": "aba",
+      "lane": "tela",
+      "col": 1,
+      "type": "frontend",
+      "label": "Conexões › Telefone (`CanalTelefoneClient` em `ConexoesShell`) — adicionar, editar, remover; time que recebe; estado ao vivo (Conectando / Conectado / Falhou + motivo), relido a cada 3 s enquanto conecta. Telefonia desligada: diz como ligar"
+    },
+    {
+      "id": "ramal_nav",
+      "lane": "tela",
+      "col": 2,
+      "type": "frontend",
+      "label": "`TelefoniaProvider` (`TelefoniaContext.tsx`, JsSIP) no layout do app — registra o ramal por WSS, atende, desliga, mudo e teclado; credencial recusada (o Asterisk reiniciou e esqueceu o ramal) pede outra em 1 s, outra falha tenta de novo em 15 s"
+    },
+    {
+      "id": "painel",
+      "lane": "tela",
+      "col": 3,
+      "type": "frontend",
+      "label": "`BotaoDoTelefone` (discador no cabeçalho) + `PainelDoTelefone` (banner da recebida e painel da ligação ativa)"
+    },
+    {
+      "id": "botao_ligar",
+      "lane": "tela",
+      "col": 4,
+      "type": "frontend",
+      "label": "`BotaoLigar` — cabeçalho da conversa (qualquer meio, se o contato tem telefone), faixa da conversa `phone` e ficha do contato"
+    },
+    {
+      "id": "inbox",
+      "lane": "tela",
+      "col": 5,
+      "type": "frontend",
+      "label": "Inbox — card com ícone `PhoneCall` (`data-meio=\"phone\"`), `Composer` só em nota interna (`somenteNota`), `CartaoDaLigacao` no chat (sentido, quem atendeu, duração, desfecho)"
+    },
+    {
+      "id": "central",
+      "lane": "tela",
+      "col": 6,
+      "type": "frontend",
+      "label": "Central (`/app/ai/inbox`) — `voice_call_missed` com o botão \"Ligar de volta\", que abre a ficha do contato"
+    },
+    {
+      "id": "timeline",
+      "lane": "tela",
+      "col": 7,
+      "type": "frontend",
+      "label": "Linha do tempo do negócio (\"Chamada de voz\" / \"perdida\" / \"sem resposta\") e Radar de Risco — ligação ATENDIDA carimba `last_activity_at` (0235); perdida e sem resposta não"
+    },
+    {
+      "id": "audit_tela",
+      "lane": "tela",
+      "col": 8,
+      "type": "frontend",
+      "label": "Audit Log (`/app/audit`) — `channel.phone_trunk_created` / `_updated` / `_archived` (servidor, usuário, time; nunca a senha), `phone_call.started` e `phone_extension.credential_issued` (ramal entregue a um navegador; nunca a senha)"
+    },
+    {
+      "id": "t_sessions",
+      "lane": "banco",
+      "col": 1,
+      "type": "database",
+      "label": "`channel_sessions` — provider `sip_trunk`, `sip_server/port/transport/username`, `sip_password_encrypted`, `sip_team_id`; `status`/`status_reason` espelham o registro na operadora (migration 0286)"
+    },
+    {
+      "id": "t_disponibilidade",
+      "lane": "banco",
+      "col": 2,
+      "type": "database",
+      "label": "`attendance_teams.schedule` + `attendance_team_members` + `attendant_availability.is_available` — as MESMAS peças do rodízio de conversas, menos o teto de conversas, mais \"não está em outra ligação\""
+    },
+    {
+      "id": "t_voice_calls",
+      "lane": "banco",
+      "col": 3,
+      "type": "database",
+      "label": "`voice_calls` — `provider = sip_trunk`, `sip_call_ref` único por org (idempotência), `ringing_user_id`, `conversation_id`, `team_id`, `answered_at`, `end_reason`"
+    },
+    {
+      "id": "t_contacts",
+      "lane": "banco",
+      "col": 4,
+      "type": "database",
+      "label": "`contacts` — achado pelo número (`phoneLookupVariants`, as duas grafias do nono dígito) ou criado com `source = phone_call`"
+    },
+    {
+      "id": "t_conversations",
+      "lane": "banco",
+      "col": 5,
+      "type": "database",
+      "label": "`conversations` — `channel = 'phone'` (o MEIO), uma por contato e por número, reaberta a cada ligação"
+    },
+    {
+      "id": "t_messages",
+      "lane": "banco",
+      "col": 6,
+      "type": "database",
+      "label": "`messages` — o registro da ligação: `type=system`, `direction=outbound` (não emite `message.received`: não acorda a IA nem o termômetro), `external_id = ligacao:<id>`, `metadata.voice_call`"
+    },
+    {
+      "id": "t_inbox",
+      "lane": "banco",
+      "col": 7,
+      "type": "database",
+      "label": "`agent_inbox_items` — recebida que ninguém atendeu vira `voice_call_missed` (kind que já existia, da voz do WhatsApp)"
+    },
+    {
+      "id": "t_activities",
+      "lane": "banco",
+      "col": 8,
+      "type": "database",
+      "label": "`crm_lead_activities` — `voice_call` / `voice_call_missed` / `voice_call_unanswered` pelo `emitAgentActivityForContact` (negócio ambíguo ou inexistente: `agent.activity_unrouted`, não adivinha)"
+    },
+    {
+      "id": "t_audit",
+      "lane": "banco",
+      "col": 9,
+      "type": "database",
+      "label": "`api_audit_log` — cadastro, edição e remoção de número; pedido de ligação de saída; credencial do ramal entregue"
+    },
+    {
+      "id": "rodizio",
+      "lane": "banco",
+      "col": 10,
+      "type": "backend",
+      "label": "`trg_conversation_routing_requested` (0040) + `routing-worker` — a conversa `phone` NOVA nasce sem dono e pede o rodízio; o worker lê o MEIO (`conversations.channel` = `MEIO_TELEFONE`) e fecha o evento como `skipped_voice_channel`, sem atribuir: quem recebe a ligação é a distribuição da telefonia"
+    },
+    {
+      "id": "rota_ws_autorizar",
+      "lane": "api",
+      "col": 9,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/ws/autorizar` — o porteiro do WebSocket do ramal, chamado pelo proxy: 204 só para `agent`+ do próprio site (`Origin`); NUNCA renova a sessão (`lib/auth/sessao-sem-renovar.ts`: token lido do cookie, 401 se vencido (perto de vencer é aceito: nada renova, o GoTrue confere o `exp`), `getUser(token)`, a regra de papel de `requireRole`); em `PUBLIC_PATHS` para o `proxy.ts` não renovar"
+    },
+    {
+      "id": "conta_sip",
+      "lane": "api",
+      "col": 10,
+      "type": "backend",
+      "label": "`conta-sip.ts` — a régua da conta SIP, pura e única: servidor público (sem loopback, faixas privadas, link-local, nome sem domínio, IP não canônico), usuário sem caractere de URI; usada pelo Zod da rota E pelo worker (`problemaDoTronco`)"
+    }
+  ],
+  "edges": [
+    { "from": "ci_imagem", "to": "compose", "label": "imagem `deskcomm-asterisk:<versão>`" },
+    { "from": "ci_imagem", "to": "entrypoint", "label": "empacota `docker/asterisk/` (conf + entrypoint)" },
+    { "from": "ci_imagem", "to": "dialplan", "label": "`extensions.conf` vai dentro da imagem" },
+    { "from": "kit", "to": "compose", "label": "`ASTERISK_IMAGE` fixado + `TELEFONIA_ARI_PASSWORD`" },
+    { "from": "kit", "to": "laco", "label": "`TELEFONIA_ARI_URL/_PASSWORD` no .env (ausentes = telefonia OFF)" },
+    { "from": "compose", "to": "entrypoint", "label": "sobe com IP público e faixa RTP" },
+    { "from": "entrypoint", "to": "ari", "label": "ARI e AMI com a senha do .env" },
+    { "from": "entrypoint", "to": "asterisk_core", "label": "transportes com o IP público (o áudio volta)" },
+    { "from": "operadora", "to": "asterisk_core", "label": "REGISTER 200 OK · INVITE recebida pelo NAT do registro · RTP" },
+    { "from": "asterisk_core", "to": "operadora", "label": "REGISTER a cada 300 s, qualify 25 s · INVITE de saída (407 → autenticada) · RTP G.711" },
+    { "from": "asterisk_core", "to": "dialplan", "label": "contexto do endpoint" },
+    { "from": "dialplan", "to": "ari", "label": "`Stasis(crm,…)`" },
+    { "from": "ari", "to": "laco", "label": "WebSocket: StasisStart, Dial, ChannelHangupRequest, ChannelDestroyed" },
+    { "from": "ari", "to": "asterisk_core", "label": "executa: originar ramal, ponte, música, discar tronco, gravar endpoint" },
+    { "from": "laco", "to": "controle", "label": "cada evento, EM ORDEM" },
+    { "from": "laco", "to": "sincronizador", "label": "completa a cada conexão + a cada 60 s" },
+    { "from": "sincronizador", "to": "ari", "label": "PUT/DELETE `/asterisk/config/dynamic/res_pjsip/…` · AMI lê os registros" },
+    { "from": "t_sessions", "to": "sincronizador", "label": "troncos ativos, senha decifrada (`fn_decrypt_oauth`)" },
+    { "from": "sincronizador", "to": "t_sessions", "label": "WORKING / FAILED + `registro_recusado` · `sem_resposta_da_operadora` · `senha_ilegivel` · `configuracao_invalida`" },
+    { "from": "controle", "to": "distribuicao", "label": "`proximoToque(disponíveis, estado)`" },
+    { "from": "controle", "to": "ari", "label": "comandos da ligação" },
+    { "from": "distribuicao", "to": "controle", "label": "tocar <atendente> · esperar na fila · desistir (vira perdida)" },
+    { "from": "controle", "to": "repositorio", "label": "contato, conversa, ligação, desfecho" },
+    { "from": "controle", "to": "politica", "label": "confere o número de novo antes de discar" },
+    { "from": "t_disponibilidade", "to": "repositorio", "label": "quem do time está disponível, dentro do horário" },
+    { "from": "t_sessions", "to": "t_disponibilidade", "label": "`sip_team_id` escolhe o time que recebe" },
+    { "from": "t_voice_calls", "to": "repositorio", "label": "RECEBIDAS atendidas hoje (fuso da org) e quem já está em ligação — o laço da distribuição" },
+    { "from": "repositorio", "to": "distribuicao", "label": "`CandidatoAoToque[]`" },
+    { "from": "repositorio", "to": "t_voice_calls", "label": "cria · `ringing_user_id` · atendida · encerrada (idempotente)" },
+    { "from": "repositorio", "to": "t_contacts", "label": "acha pelo número ou cria" },
+    { "from": "repositorio", "to": "t_conversations", "label": "acha ou cria a `phone`; atribui a quem atendeu (`fn_conversation_assign` claim)" },
+    { "from": "repositorio", "to": "t_messages", "label": "registro da ligação, uma vez" },
+    { "from": "repositorio", "to": "t_inbox", "label": "recebida perdida → `voice_call_missed`" },
+    { "from": "repositorio", "to": "t_activities", "label": "`emitAgentActivityForContact`" },
+    { "from": "aba", "to": "rota_numeros", "label": "adicionar · editar · remover" },
+    { "from": "rota_numeros", "to": "t_sessions", "label": "insert/update com `organization_id` da SESSÃO; senha cifrada" },
+    { "from": "rota_numeros", "to": "empurrar", "label": "na mesma requisição" },
+    { "from": "rota_numeros", "to": "t_audit", "label": "`channel.phone_trunk_*`" },
+    { "from": "empurrar", "to": "ari", "label": "recria (ou retira) `tronco-<id>`" },
+    { "from": "t_sessions", "to": "aba", "label": "estado ao vivo, com o motivo da falha" },
+    { "from": "t_sessions", "to": "rota_ramal", "label": "números da org (nenhum = `ativo: false`)" },
+    { "from": "ramal_nav", "to": "rota_ramal", "label": "pede a credencial ao abrir o app" },
+    { "from": "rota_ramal", "to": "ari", "label": "grava `ramal-<user_id>` (reusa a senha se já existe)" },
+    { "from": "ramal_nav", "to": "proxy_ws", "label": "REGISTER por WSS" },
+    { "from": "proxy_ws", "to": "asterisk_core", "label": "`/telefonia/ws` → `:8088/ws`" },
+    { "from": "asterisk_core", "to": "ramal_nav", "label": "INVITE para o ramal escolhido (20 s, `X-Ligacao-Id`) · áudio DTLS-SRTP pela faixa publicada" },
+    { "from": "painel", "to": "ramal_nav", "label": "discar número avulso · atender · desligar" },
+    { "from": "botao_ligar", "to": "ramal_nav", "label": "`ligar({ contatoId })`" },
+    { "from": "ramal_nav", "to": "rota_chamadas", "label": "pede a saída; disca `c-<id>`" },
+    { "from": "ramal_nav", "to": "rota_estado", "label": "pergunta o estado da ligação" },
+    { "from": "rota_estado", "to": "painel", "label": "chamando → em ligação → encerrada" },
+    { "from": "t_voice_calls", "to": "rota_estado", "label": "status, `answered_at`, `end_reason`" },
+    { "from": "rota_chamadas", "to": "politica", "label": "número permitido?" },
+    { "from": "politica", "to": "rota_chamadas", "label": "recusa com motivo → 422 `numero_<motivo>`" },
+    { "from": "rota_numeros", "to": "politica", "label": "o número exibido passa pela mesma régua (0800/400x aceitos para RECEBER)" },
+    { "from": "t_contacts", "to": "rota_chamadas", "label": "telefone do cadastro" },
+    { "from": "t_contacts", "to": "botao_ligar", "label": "sem telefone (ou anonimizado) = sem botão" },
+    { "from": "rota_chamadas", "to": "t_voice_calls", "label": "pedido outbound/`starting` com dono" },
+    { "from": "rota_chamadas", "to": "t_conversations", "label": "acha/cria a `phone` e atribui a quem liga" },
+    { "from": "rota_chamadas", "to": "t_audit", "label": "`phone_call.started`" },
+    { "from": "t_conversations", "to": "inbox", "label": "`channel = phone` decide ícone e compositor" },
+    { "from": "t_messages", "to": "inbox", "label": "`metadata.voice_call` → `CartaoDaLigacao`" },
+    { "from": "capacidades", "to": "inbox", "label": "`meioDoCanal` → `phone`; janela `sem_restricao`" },
+    { "from": "capacidades", "to": "recusa_envio", "label": "`canalConhecidoSemMensagem`" },
+    { "from": "recusa_envio", "to": "inbox", "label": "422 com a mensagem traduzida" },
+    { "from": "t_sessions", "to": "capacidades", "label": "provider `sip_trunk` da conversa" },
+    { "from": "inbox", "to": "recusa_envio", "label": "resposta de texto que escapar do compositor → 422" },
+    { "from": "inbox", "to": "botao_ligar", "label": "faixa: \"Para falar com o cliente, ligue\"" },
+    { "from": "t_inbox", "to": "central", "label": "aviso \"Ligar de volta\"" },
+    { "from": "central", "to": "botao_ligar", "label": "abre a ficha do contato, onde está o botão" },
+    { "from": "t_activities", "to": "timeline", "label": "rótulo pelo tipo; `voice_call` quebra o silêncio do negócio" },
+    { "from": "timeline", "to": "inbox", "label": "o Radar leva à conversa do negócio que esfriou" },
+    { "from": "t_audit", "to": "audit_tela", "label": "quem mexeu no número, e quando" },
+    { "from": "audit_tela", "to": "aba", "label": "a correção de um número é feita na aba" },
+    { "from": "t_conversations", "to": "rodizio", "label": "INSERT sem dono em fila aberta → `conversation.routing_requested`" },
+    { "from": "rodizio", "to": "t_conversations", "label": "NÃO atribui: `skipped_voice_channel` (a ligação tem distribuição própria)" },
+    { "from": "proxy_ws", "to": "rota_ws_autorizar", "label": "antes de abrir o WebSocket: cookie e `Origin` do navegador (sem `Upgrade`)" },
+    { "from": "rota_ws_autorizar", "to": "proxy_ws", "label": "204 abre · 401 sem sessão ou vencida · 403 papel, MFA, suporte ou outro site" },
+    { "from": "rota_ramal", "to": "t_audit", "label": "`phone_extension.credential_issued`" },
+    { "from": "rota_numeros", "to": "conta_sip", "label": "servidor e usuário pela régua (Zod)" },
+    { "from": "t_sessions", "to": "conta_sip", "label": "a linha também é gravável pela REST, fora do Zod" },
+    { "from": "conta_sip", "to": "sincronizador", "label": "`problemaDoTronco`: fora da régua não vai para o Asterisk" }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "O laço de retorno (invariante 7): o que muda no sistema quando a telefonia erra",
+      "items": [
+        "Registro caído vira FAILED + motivo na linha do número, e a aba Telefone mostra — mas NÃO vira aviso na Central nem a faixa de conexão caída: `listarConexoesCaidas` e `sincronizarSaudeDaConexao` só olham `PROVIDERS_DE_MENSAGEM`",
+        "Recebida que ninguém atende vira `voice_call_missed` na Central, com \"Ligar de volta\". O aviso não fecha sozinho quando alguém retorna a ligação: quem resolve é a pessoa",
+        "A distribuição se corrige pelo próprio resultado: cada ligação ATENDIDA entra na contagem do dia e empurra aquele atendente para o fim da fila da próxima. Quem deixa tocar sem atender não perde nada — não existe pausa automática nem métrica de toque não atendido",
+        "Asterisk reiniciado volta com a memória vazia: a queda do WebSocket dispara a sincronização completa e o re-registro. Worker reiniciado: `recuperar()` retoma ponte viva e encerra o resto como perdido (e a recebida perdida vira aviso)"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Não-ligações declaradas",
+      "items": [
+        "O painel da voz do WhatsApp (`useVoiceCallSession`, `/api/v1/voice/calls/history`, `resolveVoiceCall`) filtra `provider = wacalls`: a ligação de telefone mora na mesma `voice_calls` e NÃO aparece nele — adotá-la abria o \"Ouvir aqui\" por cima do painel do telefone e disputava o microfone",
+        "`voice_call.ended` no `event_log` nasce `done` e não tem consumidor: é registro, não comando (mesmo desenho da ponte do WaCalls)",
+        "O agente de IA não participa: o registro da ligação é `outbound`/`system` e não acorda turno nenhum; o contexto do agente não lê ligação nem a nota interna da conversa `phone`",
+        "A senha do número só entra (POST/PATCH) e só sai decifrada para o worker e para o Asterisk; nenhuma rota a devolve ao navegador — e o PATCH que troca servidor, porta, transporte ou usuário exige a senha de novo", "O rodízio de conversas NÃO distribui a conversa `phone`: fecha o pedido como `skipped_voice_channel`. Dono da conversa de uma ligação é quem atendeu (`claim`) ou quem ligou; a perdida fica sem dono, no time do número"
+      ]
+    }
+  ]
+}

@@ -16,11 +16,34 @@ import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
 import { type ClienteAri } from "./ari";
 import { lerRegistros } from "./ami";
-import { ORDEM_DE_GRAVACAO, idDoTronco, objetosDoTronco, type TroncoSip } from "./pjsip";
-import { gravarEstadoDoTronco, troncosAtivos } from "./repositorio";
+import {
+  ORDEM_DE_GRAVACAO,
+  idDoTronco,
+  objetosDoTronco,
+  problemaDoTronco,
+  type ProblemaDoTronco,
+  type TroncoSip,
+} from "./pjsip";
+import { gravarEstadoDoTronco, troncosAtivos, type TroncoDoBanco } from "./repositorio";
 import type { Registro } from "./controle";
 
+/** O tronco do banco não passa na régua de `conta-sip.ts` e não vai para o Asterisk. */
+export class TroncoInvalido extends Error {
+  constructor(readonly motivo: ProblemaDoTronco) {
+    super(`tronco_invalido:${motivo}`);
+    this.name = "TroncoInvalido";
+  }
+}
+
+/** O que a tela mostra no número recusado aqui (`channel_sessions.status_reason`). */
+export const MOTIVO_CONFIGURACAO_INVALIDA = "configuracao_invalida";
+
 export async function empurrarTronco(ari: ClienteAri, t: TroncoSip): Promise<void> {
+  // Antes de QUALQUER chamada à ARI — nem o `retirarTronco` abaixo roda: um
+  // valor que não passa na régua não chega a virar campo PJSIP (uma vírgula no
+  // servidor viraria um segundo contato na AOR).
+  const problema = problemaDoTronco(t);
+  if (problema) throw new TroncoInvalido(problema);
   // RECRIA, não atualiza: um registro de saída que só recebe PUT por cima troca
   // a configuração e continua registrando com a antiga — medido na prova pela
   // tela: o número editado para TCP seguiu mandando REGISTER por UDP, e uma
@@ -67,7 +90,24 @@ export class SincronizadorDeTroncos {
   /** `completa`: esquece o que acha que enviou (Asterisk pode ter reiniciado). */
   async sincronizar(completa = false): Promise<void> {
     if (completa) this.enviados.clear();
-    const { troncos, ilegiveis } = await troncosAtivos(this.db);
+    const { troncos: lidos, ilegiveis } = await troncosAtivos(this.db);
+    // A linha do banco é gravável pela REST, fora do Zod da rota: o que não
+    // passa na régua dela não é empurrado, e fica FORA de `ativos` — então, se
+    // uma versão válida anterior ainda estiver no Asterisk, a varredura de sobras
+    // abaixo a retira. O banco é a fonte da verdade; seguir registrando com a
+    // configuração velha faria a ligação chegar enquanto a tela diz "Falhou".
+    const troncos: TroncoDoBanco[] = [];
+    for (const t of lidos) {
+      const problema = problemaDoTronco(t);
+      if (!problema) {
+        troncos.push(t);
+        continue;
+      }
+      const mudou = await gravarEstadoDoTronco(this.db, t.id, "FAILED", MOTIVO_CONFIGURACAO_INVALIDA);
+      // Só na transição: a reconciliação roda a cada minuto, e um aviso por
+      // minuto por número inválido afogaria o log que alguém precisa ler.
+      if (mudou) this.log.warn("telefonia: tronco com configuração inválida não enviado", { tronco: t.id, problema });
+    }
     const ativos = new Set(troncos.map((t) => t.id));
 
     for (const t of troncos) {

@@ -52,6 +52,19 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/api/v1/site-chat/wc_abcdefghijklmnopqrstuvwx/messages")).toBe(true);
   });
 
+  /**
+   * O porteiro do WebSocket do ramal responde ao PROXY, que não repassa
+   * `Set-Cookie`: se o `proxy.ts` renovasse a sessão aqui, o refresh token novo
+   * se perderia e o reúso do velho revogaria a sessão do atendente. A rota
+   * autoriza sozinha, sem renovar (`lib/auth/sessao-sem-renovar.ts`).
+   */
+  it("o porteiro do WebSocket do ramal passa pelo proxy sem renovar a sessão — e só ele", () => {
+    expect(isPublicPath("/api/v1/telefonia/ws/autorizar")).toBe(true);
+    expect(isPublicPath("/api/v1/telefonia/ws/autorizar/extra")).toBe(false);
+    expect(isPublicPath("/api/v1/telefonia/ramal")).toBe(false);
+    expect(isPublicPath("/api/v1/telefonia/numeros")).toBe(false);
+  });
+
   it("e só esses dois: a administração do chat do site exige sessão", () => {
     expect(isPublicPath("/api/v1/site-chat")).toBe(false);
     expect(isPublicPath("/api/v1/site-chat/wc_abc/config/extra")).toBe(false);

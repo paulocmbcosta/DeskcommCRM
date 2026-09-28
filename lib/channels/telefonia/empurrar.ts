@@ -9,7 +9,7 @@ import { logger } from "@/lib/logger";
 
 import { ClienteAri, configAriDoAmbiente } from "./ari";
 import { troncoPorId } from "./repositorio";
-import { empurrarTronco, retirarTronco } from "./sincronizacao";
+import { TroncoInvalido, empurrarTronco, retirarTronco } from "./sincronizacao";
 
 export async function empurrarTroncoAgora(db: Queryable, id: string): Promise<void> {
   const cfg = configAriDoAmbiente();
@@ -18,6 +18,13 @@ export async function empurrarTroncoAgora(db: Queryable, id: string): Promise<vo
     const tronco = await troncoPorId(db, id);
     if (tronco) await empurrarTronco(new ClienteAri(cfg), tronco);
   } catch (e) {
+    // A rota validou com a mesma régua, então isto só acontece se a linha mudou
+    // por fora (REST) entre gravar e empurrar. Não é "o worker reconcilia": o
+    // worker também recusa, e marca o número como falho na tela.
+    if (e instanceof TroncoInvalido) {
+      logger.warn("[telefonia] tronco com configuração inválida não empurrado", { tronco: id, problema: e.motivo });
+      return;
+    }
     logger.warn("[telefonia] tronco não empurrado agora — o worker reconcilia", {
       tronco: id,
       erro: e instanceof Error ? e.message.slice(0, 160) : String(e),

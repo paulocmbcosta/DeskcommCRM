@@ -242,6 +242,44 @@ describe("a fronteira de rede do que o cliente instala", () => {
     expect(caddy).toMatch(/@ramal path \/telefonia\/ws/);
   });
 
+  it("o WebSocket do ramal só abre com sessão de atendente — nos dois proxies", () => {
+    // Revisão de segurança de 2026-09-28: os dois proxies entregavam
+    // `/telefonia/ws` ao Asterisk para qualquer anônimo da internet. O porteiro
+    // é a rota do app; aqui se cobra que os DOIS proxies perguntem a ela antes,
+    // e que ela exista (um endereço para rota inexistente fecharia tudo com 404
+    // — seguro, mas o ramal nunca abriria).
+    const ROTA = "/api/v1/telefonia/ws/autorizar";
+    expect(
+      fs.existsSync(path.join(RAIZ, "app", ...ROTA.split("/").filter(Boolean), "route.ts")),
+      `a rota ${ROTA} sumiu — os proxies perguntam a ela antes de abrir o WebSocket`,
+    ).toBe(true);
+
+    // Caddy: `forward_auth` para o app DENTRO do `handle @ramal`, sem os
+    // cabeçalhos de Upgrade no pedido de autorização (o Next fecha o socket de
+    // um pedido com Upgrade que casa uma rota, e o ramal nunca abriria).
+    const caddy = fs
+      .readFileSync(path.join(RAIZ, "Caddyfile"), "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    const ramal = /handle @ramal \{([\s\S]*?)\n\t\t\}/.exec(caddy)?.[1] ?? "";
+    expect(ramal, "o bloco `handle @ramal` sumiu do Caddyfile").toContain("reverse_proxy asterisk:8088");
+    const auth = /forward_auth app:3000 \{([\s\S]*?)\}/.exec(ramal)?.[1] ?? "";
+    expect(auth, "`/telefonia/ws` sem forward_auth: o Asterisk fica aberto à internet").toContain(`uri ${ROTA}`);
+    expect(auth).toMatch(/header_up -Connection/);
+    expect(auth).toMatch(/header_up -Upgrade/);
+
+    // Traefik: o roteador do ramal passa por um forwardAuth que aponta para a
+    // mesma rota, e ele vem ANTES da reescrita para `/ws`.
+    const traefik = semComentarios(SERVICOS.get("docker-compose.traefik.yml")!.get("asterisk") ?? "");
+    const middlewares = /routers\.deskcomm-ramal\.middlewares:\s*"([^"]+)"/.exec(traefik)?.[1]?.split(",") ?? [];
+    const comAuth = middlewares.filter((m) =>
+      new RegExp(`middlewares\\.${m}\\.forwardauth\\.address:\\s*"[^"]*${ROTA.replace(/\//g, "\\/")}"`).test(traefik),
+    );
+    expect(comAuth, "o roteador do ramal no Traefik não passa por forwardAuth").toHaveLength(1);
+    expect(middlewares.indexOf(comAuth[0]!)).toBe(0);
+  });
+
   it("só o app (e o ramal) recebe label de roteamento do proxy externo", () => {
     const roteados: string[] = [];
 
