@@ -9505,6 +9505,20 @@ export const DICIONARIO: Traducoes = {
     es: "Si la inestabilidad continúa, vuelve a activar el aviso en el equipo.",
   },
   "Abrir os times": { es: "Abrir los equipos" },
+  // Os textos sugeridos das falas (lib/telefonia/texto-do-menu.ts), passados por t()
+  "Todos os nossos atendentes estão ocupados no momento. Por favor, aguarde na linha que já vamos atender você.": {
+    es: "Todos nuestros agentes están ocupados en este momento. Por favor, espere en línea que enseguida le atenderemos.",
+  },
+  "No momento não conseguimos atender. Registramos a sua ligação e vamos retornar assim que possível. Obrigado.": {
+    es: "En este momento no podemos atender. Registramos su llamada y le devolveremos la llamada lo antes posible. Gracias.",
+  },
+  "Nosso atendimento está fechado agora. Ligue de novo no nosso horário de atendimento. Obrigado pela ligação.": {
+    es: "Nuestra atención está cerrada ahora. Llame de nuevo en nuestro horario de atención. Gracias por su llamada.",
+  },
+  "Estamos com uma instabilidade no momento e já estamos trabalhando para resolver. Obrigado pela paciência.": {
+    es: "Tenemos una inestabilidad en este momento y ya estamos trabajando para resolverla. Gracias por su paciencia.",
+  },
+  "Opção inválida.": { es: "Opción inválida." },
 };
 
 /**
