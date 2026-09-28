@@ -12,7 +12,13 @@
  * `baixar` separa "o objeto não existe" (`null`) de "o Storage falhou" (lança).
  * A diferença custa dinheiro: a prévia reaproveita o objeto que existe e só vai à
  * ElevenLabs quando ele NÃO existe — uma falha passageira do Storage lida como
- * "não existe" pagaria uma síntese por um áudio que já estava guardado.
+ * "não existe" pagaria uma síntese por um áudio que já estava guardado. Bucket
+ * ausente também é falha (lança), não objeto ausente: sem bucket, a síntese paga
+ * não teria onde ficar.
+ *
+ * `enviar` NÃO sobrescreve: o primeiro a gravar um caminho vence, e o segundo
+ * recebe `"ja_existia"`. Duas prévias do mesmo texto ao mesmo tempo gravam o MESMO
+ * caminho; com sobrescrita, a pessoa podia ouvir um áudio e ficar guardado outro.
  *
  * `listarPastas`/`listarObjetos` existem para a limpeza do worker (Task 12 do
  * plano da fase 2): a pasta do topo é a organização, e a data de criação decide a
@@ -35,7 +41,11 @@ export interface ObjetoDoArmazem {
 }
 
 export interface PortaDoArmazem {
-  enviar(caminho: string, bytes: Uint8Array): Promise<void>;
+  /**
+   * Grava sem sobrescrever. `"ja_existia"` = outro envio gravou este caminho
+   * antes, e o objeto guardado é o DELE. Lança se o Storage falhou.
+   */
+  enviar(caminho: string, bytes: Uint8Array): Promise<"gravado" | "ja_existia">;
   /** `null` = o objeto não existe. LANÇA se o Storage falhou: falha não é ausência. */
   baixar(caminho: string): Promise<Uint8Array<ArrayBuffer> | null>;
   /** Lança se o Storage recusar: quem limpa precisa saber que não limpou. */
@@ -49,14 +59,42 @@ export interface PortaDoArmazem {
 /** Tamanho da página do `list` do Storage (o padrão dele é 100). */
 const PAGINA = 1000;
 
+/** Os campos que o `StorageApiError` do storage-js carrega: HTTP, e o corpo do Storage. */
+function campos(error: unknown): { status: unknown; statusCode: unknown; code: unknown; mensagem: string } {
+  const e = (error ?? {}) as { status?: unknown; statusCode?: unknown; code?: unknown };
+  return { status: e.status, statusCode: e.statusCode, code: e.code, mensagem: error instanceof Error ? error.message : "" };
+}
+
 /**
- * O erro do `download` quer dizer "não existe"? A mesma régua do `exists()` do
- * storage-js: HTTP 400 ou 404 (o Storage responde 400 com `statusCode: "404"` para
- * objeto ausente em versões antigas, e 404 nas novas). Erro sem `status` é de rede.
+ * O BUCKET não existe (instalação sem o apêndice da 0288, ou bucket apagado)? O
+ * Storage responde com o MESMO `statusCode: "404"` de objeto ausente; o que
+ * separa é o `code` (`NoSuchBucket`, versões novas) ou a mensagem (`Bucket not
+ * found`, todas as versões).
+ */
+function bucketAusente(error: unknown): boolean {
+  const { code, mensagem } = campos(error);
+  return code === "NoSuchBucket" || /bucket not found/i.test(mensagem);
+}
+
+/**
+ * O erro do `download` quer dizer "este objeto não existe"? A régua do `exists()`
+ * do storage-js — HTTP 400 ou 404 (o Storage responde 400 com `statusCode: "404"`
+ * em versões antigas, e 404 nas novas) —, menos o bucket ausente. Erro sem
+ * `status` é de rede.
  */
 function objetoAusente(error: unknown): boolean {
-  const status = (error as { status?: unknown } | null)?.status;
-  return status === 400 || status === 404;
+  const { status } = campos(error);
+  return (status === 400 || status === 404) && !bucketAusente(error);
+}
+
+/**
+ * O `upload` sem `upsert` achou o objeto já gravado? O Storage responde 409 —
+ * como HTTP nas versões novas, e como `statusCode: "409"` num HTTP 400 nas
+ * antigas —, com `code: "Duplicate"` e "The resource already exists".
+ */
+function jaExiste(error: unknown): boolean {
+  const { status, statusCode, code, mensagem } = campos(error);
+  return status === 409 || statusCode === "409" || code === "Duplicate" || /already exists/i.test(mensagem);
 }
 
 /**
@@ -75,8 +113,10 @@ export function armazemDoSupabase(admin: SupabaseClient): PortaDoArmazem {
   const bucket = () => admin.storage.from(BUCKET_DAS_FALAS);
   return {
     async enviar(caminho, bytes) {
-      const { error } = await bucket().upload(caminho, bytes, { contentType: "audio/basic", upsert: true });
-      if (error) throw new Error(`armazem_envio: ${descrever(error)}`);
+      const { error } = await bucket().upload(caminho, bytes, { contentType: "audio/basic", upsert: false });
+      if (!error) return "gravado";
+      if (jaExiste(error) && !bucketAusente(error)) return "ja_existia";
+      throw new Error(`armazem_envio: ${descrever(error)}`);
     },
     async baixar(caminho) {
       const { data, error } = await bucket().download(caminho);
@@ -93,10 +133,14 @@ export function armazemDoSupabase(admin: SupabaseClient): PortaDoArmazem {
       if (error) throw new Error(`armazem_remocao: ${descrever(error)}`);
     },
     async listarPastas() {
-      const { data, error } = await bucket().list("", { limit: PAGINA });
-      if (error || !data) throw new Error(`armazem_lista: ${error ? descrever(error) : "sem resposta"}`);
-      // No `list` do Storage, pasta é a entrada sem `id`.
-      return data.filter((o) => o.id === null).map((o) => o.name);
+      const pastas: string[] = [];
+      for (let offset = 0; ; offset += PAGINA) {
+        const { data, error } = await bucket().list("", { limit: PAGINA, offset });
+        if (error || !data) throw new Error(`armazem_lista: ${error ? descrever(error) : "sem resposta"}`);
+        // No `list` do Storage, pasta é a entrada sem `id`.
+        for (const o of data) if (o.id === null) pastas.push(o.name);
+        if (data.length < PAGINA) return pastas;
+      }
     },
     async listarObjetos(pasta) {
       const objetos: ObjetoDoArmazem[] = [];

@@ -8,7 +8,12 @@
  *
  * O áudio nasce na PRÉVIA (`gerarPrevia`, em previa.ts — a única que chama a
  * ElevenLabs). Aqui mora o "Salvar e usar" (`salvarFala`), que NUNCA a chama:
- *  - a fala atual já é esta prévia (mesmo tipo, mesmo hash e mesmo texto) → nada muda;
+ *  - texto vazio, longo demais ou com o caractere NUL → `texto_recusado` (o
+ *    Postgres recusa o NUL com erro, que seria um 500);
+ *  - a fala atual já é esta prévia (mesmo tipo, mesmo hash e mesmo texto) e o
+ *    objeto dela está no Storage → nada muda. Se o objeto SUMIU, `previa_ausente`
+ *    (a pessoa gera a prévia de novo, que regrava o objeto, e salva: a linha é
+ *    consertada com a duração do objeto novo);
  *  - senão, o hash tem de ser o do texto com a voz ATUAL da organização
  *    (`previa_desatualizada` se não for: texto editado depois da prévia, ou voz
  *    trocada) e o objeto tem de existir em `<org da SESSÃO>/<hash>.ulaw`
@@ -35,6 +40,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { logger } from "@/lib/logger";
 
 import type { PortaDoArmazem } from "./armazem";
 import { duracaoDoUlawMs } from "./ulaw";
@@ -76,6 +82,21 @@ export function caminhoDaFala(organizationId: string, hash: string): string {
   return `${org}/${hash}.ulaw`;
 }
 
+/** O caractere NUL: o Postgres não o aceita em `text` (erro, não truncamento). */
+const NUL = "\u0000";
+
+/**
+ * O texto pode virar fala? Sem as pontas: não vazio, até `TAMANHO_MAXIMO_DA_FALA`
+ * (o CHECK `phone_prompts_text_check`) e sem NUL. A régua ÚNICA da prévia (antes
+ * de gastar cota) e do salvar. O `length` do JavaScript conta unidades UTF-16 e o
+ * `char_length` do Postgres conta caracteres: um emoji conta 2 aqui e 1 lá, então
+ * esta régua é mais estrita que o CHECK, nunca mais frouxa.
+ */
+export function textoDaFalaValido(texto: string): boolean {
+  const t = texto.trim();
+  return t.length >= 1 && t.length <= TAMANHO_MAXIMO_DA_FALA && !t.includes(NUL);
+}
+
 /**
  * O corpo que salva uma fala: o texto e o hash da PRÉVIA dele (ou da fala em uso,
  * quando o texto não mudou). Caminho do Storage e organização nunca entram —
@@ -83,7 +104,12 @@ export function caminhoDaFala(organizationId: string, hash: string): string {
  */
 export const falaParaSalvarSchema = z
   .object({
-    texto: z.string().trim().min(1).max(TAMANHO_MAXIMO_DA_FALA),
+    texto: z
+      .string()
+      .trim()
+      .min(1)
+      .max(TAMANHO_MAXIMO_DA_FALA)
+      .refine((t) => !t.includes(NUL), { message: "texto com caractere inválido" }),
     hash: z.string().regex(FORMATO_DO_HASH),
   })
   .strict();
@@ -94,6 +120,7 @@ export interface LinhaDaFala {
   tipo: TipoDeFala;
   texto: string;
   voice_id: string;
+  model_id: string;
   status: EstadoDaFala;
   erro: string | null;
   duracao_ms: number | null;
@@ -102,7 +129,7 @@ export interface LinhaDaFala {
   storage_path: string | null;
 }
 
-export const COLUNAS_DA_FALA = `id, kind as tipo, "text" as texto, voice_id, status, error as erro,
+export const COLUNAS_DA_FALA = `id, kind as tipo, "text" as texto, voice_id, model_id, status, error as erro,
   duration_ms as duracao_ms, updated_at as atualizada_em, content_hash, storage_path`;
 
 export function falaPublica(l: LinhaDaFala): FalaPublica {
@@ -241,31 +268,64 @@ async function gravar(db: Queryable, d: DadosDaLinha, idExistente: string | null
 }
 
 /**
+ * A duração do objeto em `caminho`, ou por que não há: `previa_ausente` (não existe,
+ * ou está vazio) ou `armazenamento` (o Storage falhou — a pessoa não precisa gerar
+ * de novo, e a causa vai para o log).
+ */
+async function duracaoDoObjeto(
+  p: PedidoDeSalvar,
+  caminho: string,
+): Promise<{ ok: true; duracaoMs: number } | { ok: false; motivo: FalhaDaFala }> {
+  let bytes: Uint8Array | null;
+  try {
+    bytes = await p.armazem.baixar(caminho);
+  } catch (e) {
+    logger.error("[telefonia] salvar fala: o Storage falhou ao conferir o áudio", {
+      etapa: "conferir_storage",
+      organization_id: p.organizationId,
+      causa: e instanceof Error ? e.message.slice(0, 300) : "desconhecida",
+    });
+    return { ok: false, motivo: "armazenamento" };
+  }
+  if (!bytes || bytes.length === 0) return { ok: false, motivo: "previa_ausente" };
+  return { ok: true, duracaoMs: Math.max(1, duracaoDoUlawMs(bytes.length)) };
+}
+
+/**
  * A prévia pedida pode virar a fala? NÃO grava nada — o menu confere as duas falas
  * (a dele e a de tecla inválida) antes de gravar a primeira.
  */
 export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
+  if (!textoDaFalaValido(p.texto)) return { ok: false, motivo: "texto_recusado" };
   const texto = p.texto.trim();
   const lida = p.falaAtualId ? await falaPorId(p.db, p.organizationId, p.falaAtualId) : null;
   // Uma fala de OUTRO tipo não é "a atual" desta: nem vale como "nada mudou", nem
   // é regravada (a coluna `kind` não muda no UPDATE) — nasce uma linha do tipo pedido.
   const atual = lida && lida.tipo === p.tipo ? lida : null;
   if (atual && atual.status === "ready" && atual.content_hash === p.hash && atual.texto === texto) {
-    return { ok: true, atual, nova: null };
+    // "Nada mudou" só vale se o áudio em uso ainda existe: uma linha `ready` que
+    // aponta para objeto sumido faz a ligação pular a fala, e o "Salvar" diria
+    // que está tudo certo. A voz e o modelo são os DA FALA, não os atuais da
+    // organização: é o áudio em uso que se confere (e se conserta).
+    const caminhoAtual = caminhoDaFala(p.organizationId, atual.content_hash);
+    const objeto = await duracaoDoObjeto(p, caminhoAtual);
+    if (!objeto.ok) return objeto;
+    if (objeto.duracaoMs === atual.duracao_ms) return { ok: true, atual, nova: null };
+    // O objeto foi regravado por uma prévia nova do mesmo texto: outra síntese,
+    // outra duração. A linha passa a dizer a duração do áudio que está guardado.
+    return {
+      ok: true,
+      atual,
+      nova: { hash: atual.content_hash, caminho: caminhoAtual, duracaoMs: objeto.duracaoMs, voiceId: atual.voice_id, modelId: atual.model_id },
+    };
   }
   if (!p.voz) return { ok: false, motivo: "sem_voz" };
   const { voiceId, modelId } = p.voz;
   if (p.hash !== hashDaFala(texto, voiceId, modelId)) return { ok: false, motivo: "previa_desatualizada" };
   const caminho = caminhoDaFala(p.organizationId, p.hash);
-  let bytes: Uint8Array | null;
-  try {
-    bytes = await p.armazem.baixar(caminho);
-  } catch {
-    // Falha do Storage não é "a prévia sumiu": a pessoa não precisa gerar de novo.
-    return { ok: false, motivo: "armazenamento" };
-  }
-  if (!bytes || bytes.length === 0) return { ok: false, motivo: "previa_ausente" };
-  return { ok: true, atual, nova: { hash: p.hash, caminho, duracaoMs: Math.max(1, duracaoDoUlawMs(bytes.length)), voiceId, modelId } };
+  const objeto = await duracaoDoObjeto(p, caminho);
+  if (!objeto.ok) return objeto;
+  return { ok: true, atual, nova: { hash: p.hash, caminho, duracaoMs: objeto.duracaoMs, voiceId, modelId } };
 }
 
 /** Grava o que `conferirFala` aprovou: a MESMA linha passa a apontar para o hash novo (ou nasce uma). */

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { logger } from "@/lib/logger";
 
 import type { PortaDoArmazem } from "./armazem";
 import {
@@ -14,6 +15,10 @@ import {
   type LinhaDaFala,
   type PedidoDeSalvar,
 } from "./falas";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
 const ORG = "00000000-0000-4000-8000-00000000000a";
 const OUTRA = "00000000-0000-4000-8000-00000000000b";
@@ -113,6 +118,7 @@ function previaNoStorage(org: string, hash: string) {
 beforeEach(() => {
   banco = new BancoDeFalas();
   armazem = new ArmazemFalso();
+  for (const f of Object.values(vi.mocked(logger))) f.mockClear();
 });
 
 afterEach(() => {
@@ -212,11 +218,68 @@ describe("salvarFala — o 'Salvar e usar' (nunca chama a ElevenLabs)", () => {
     expect(banco.escritas).toBe(0);
   });
 
-  it("Storage fora do ar: armazenamento (502), não previa_ausente — e nada gravado", async () => {
+  it("Storage fora do ar: armazenamento (502), não previa_ausente — e nada gravado, com a causa no log", async () => {
     previaNoStorage(ORG, HASH);
     armazem.falharBaixar = true;
     expect(await salvarFala(pedido())).toEqual({ ok: false, motivo: "armazenamento" });
     expect(banco.escritas).toBe(0);
+    expect(vi.mocked(logger).error).toHaveBeenCalledTimes(1);
+    const [, contexto] = vi.mocked(logger).error.mock.calls[0]!;
+    expect(contexto).toMatchObject({ etapa: "conferir_storage", organization_id: ORG, causa: expect.stringContaining("StorageApiError 500") });
+    expect(JSON.stringify(contexto)).not.toContain(TEXTO);
+  });
+
+  it.each([
+    ["o caractere NUL (o Postgres recusa: seria 500)", "Aguarde\u0000, por favor."],
+    ["vazio", "   "],
+    ["mais de 1000 caracteres (o CHECK da 0288)", "a".repeat(1001)],
+  ])("texto com %s: texto_recusado, sem lançar e sem escrever", async (_caso, texto) => {
+    const hash = hashDaFala(texto.trim(), VOZ.voiceId, VOZ.modelId);
+    previaNoStorage(ORG, hash);
+    expect(await salvarFala(pedido({ texto, hash }))).toEqual({ ok: false, motivo: "texto_recusado" });
+    expect(banco.escritas).toBe(0);
+  });
+
+  it("fala em uso cujo objeto SUMIU do Storage: salvar de novo não finge que está tudo bem — previa_ausente, nada escrito", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const id = primeira.ok ? primeira.fala.id : null;
+    armazem.objetos.delete(caminhoDaFala(ORG, HASH));
+    const escritas = banco.escritas;
+    expect(await salvarFala(pedido({ falaAtualId: id }))).toEqual({ ok: false, motivo: "previa_ausente" });
+    expect(banco.escritas).toBe(escritas);
+  });
+
+  it("…e gerada a prévia de novo, salvar CONSERTA: a mesma linha, pronta, com a duração do objeto que está guardado agora", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const id = primeira.ok ? primeira.fala.id : null;
+    armazem.objetos.delete(caminhoDaFala(ORG, HASH));
+    // A nova síntese do mesmo texto não tem, necessariamente, a mesma duração: 2400 bytes = 300 ms.
+    armazem.objetos.set(caminhoDaFala(ORG, HASH), new Uint8Array(2400));
+    const conserto = await salvarFala(pedido({ falaAtualId: id }));
+    expect(conserto).toMatchObject({ ok: true, mudou: true, fala: { id, status: "ready", duracao_ms: 300, hash: HASH } });
+    expect(banco.linhas.size).toBe(1);
+    expect(await salvarFala(pedido({ falaAtualId: id }))).toMatchObject({ ok: true, mudou: false });
+  });
+
+  it("fala em uso e Storage fora do ar: armazenamento — nem 'nada mudou', nem 'gere de novo'", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    armazem.falharBaixar = true;
+    expect(await salvarFala(pedido({ falaAtualId: primeira.ok ? primeira.fala.id : null }))).toEqual({
+      ok: false,
+      motivo: "armazenamento",
+    });
+  });
+
+  it("voz trocada DEPOIS de salvar: o texto igual com o hash da fala em uso mantém a fala (em uso com a voz anterior), sem escrita", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const escritas = banco.escritas;
+    const r = await salvarFala(pedido({ falaAtualId: primeira.ok ? primeira.fala.id : null, voz: { voiceId: "voz-2", modelId: VOZ.modelId } }));
+    expect(r).toMatchObject({ ok: true, mudou: false, fala: { voice_id: "voz-1", hash: HASH } });
+    expect(banco.escritas).toBe(escritas);
   });
 
   it("sem voz escolhida e hash novo: sem_voz", async () => {
@@ -274,6 +337,7 @@ describe("falaParaSalvarSchema — o corpo traz texto e hash, nunca caminho nem 
     expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: HASH.toUpperCase() }).success).toBe(false);
     expect(falaParaSalvarSchema.safeParse({ texto: "  ", hash: HASH }).success).toBe(false);
     expect(falaParaSalvarSchema.safeParse({ texto: "a".repeat(1001), hash: HASH }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi\u0000.", hash: HASH }).success).toBe(false);
     expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: HASH, caminho: `${OUTRA}/${HASH}.ulaw` }).success).toBe(false);
     expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: HASH, organization_id: OUTRA }).success).toBe(false);
   });
