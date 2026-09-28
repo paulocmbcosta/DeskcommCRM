@@ -9389,15 +9389,21 @@ alter table public.channel_sessions
 alter table public.channel_sessions
   add column if not exists site_widget_key text;
 
+-- sip_trunk (migration 0286, telefonia SIP) — as colunas de ref do sexto
+-- provider, pelo mesmo motivo do site_widget_key acima. O resto do tronco e o
+-- racional estão no bloco da 0286, no fim deste arquivo.
+alter table public.channel_sessions
+  add column if not exists sip_server text,
+  add column if not exists sip_username text;
+
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_check;
 
 alter table public.channel_sessions
   add constraint channel_sessions_provider_check
-  -- 'wacalls' (migration 0233, chamada de voz) e 'site_widget' (migration 0272,
-  -- chat do site) somados aqui — UM bloco só por constraint, doutrina de
-  -- baseline (não duplicar drop+add por migration).
-  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'wacalls'::text, 'site_widget'::text]));
+  -- wacalls (0233), site_widget (0272) e sip_trunk (0286) somados aqui — UM
+  -- bloco só por constraint (não duplicar drop+add por migration).
+  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'wacalls'::text, 'site_widget'::text, 'sip_trunk'::text]));
 
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_ref_check;
@@ -9408,7 +9414,8 @@ alter table public.channel_sessions
     (provider = 'meta_cloud'  and meta_phone_number_id is not null) or
     (provider = 'zernio'      and zernio_account_id    is not null) or
     (provider = 'wacalls'     and wacalls_session_id   is not null) or
-    (provider = 'site_widget' and site_widget_key      is not null)
+    (provider = 'site_widget' and site_widget_key      is not null) or
+    (provider = 'sip_trunk'   and sip_username         is not null and sip_server is not null)
   );
 
 comment on column public.channel_sessions.zernio_account_id is
@@ -27698,13 +27705,15 @@ comment on column public.channel_sessions.site_widget_seen_host is
   'hostname do site que carregou o widget por último (do header Origin). Só o host: caminho e query de site alheio não são nossos para guardar.';
 
 -- `conversations.channel` é o MEIO pelo qual a pessoa fala, não o provider: três
--- transportes diferentes gravam 'whatsapp' aqui. 'site_chat' é o segundo meio.
+-- transportes diferentes gravam 'whatsapp' aqui. 'site_chat' é o segundo meio;
+-- 'phone' (migration 0286, telefonia SIP) é o terceiro — um bloco só por
+-- constraint.
 alter table public.conversations
   drop constraint if exists conversations_channel_check;
 
 alter table public.conversations
   add constraint conversations_channel_check
-  check (channel = any (array['whatsapp'::text, 'site_chat'::text]));
+  check (channel = any (array['whatsapp'::text, 'site_chat'::text, 'phone'::text]));
 
 notify pgrst, 'reload schema';
 
@@ -29205,6 +29214,96 @@ update public.conversations
      )
    );
 -- ---- cura 0285: fim ----
+
+-- ---- telefonia SIP: tronco como canal, ligação como conversa (migration 0286) ----
+-- Racional completo no cabeçalho de supabase/migrations/20260928120000_0286_telefonia_sip.sql
+-- e em docs/specs/20-spec-telefonia-sip.md.
+alter table public.channel_sessions
+  add column if not exists sip_server text,
+  add column if not exists sip_port integer,
+  add column if not exists sip_transport text,
+  add column if not exists sip_username text,
+  add column if not exists sip_password_encrypted bytea,
+  add column if not exists sip_team_id uuid references public.attendance_teams(id) on delete set null;
+
+alter table public.channel_sessions
+  drop constraint if exists channel_sessions_sip_transport_check;
+alter table public.channel_sessions
+  add constraint channel_sessions_sip_transport_check
+  check (sip_transport is null or sip_transport = any (array['udp'::text, 'tcp'::text]));
+
+alter table public.channel_sessions
+  drop constraint if exists channel_sessions_sip_port_check;
+alter table public.channel_sessions
+  add constraint channel_sessions_sip_port_check
+  check (sip_port is null or (sip_port between 1 and 65535));
+
+-- provider_check e provider_ref_check: bloco único perto da 0087 (acima).
+
+create unique index if not exists channel_sessions_sip_conta_unique
+  on public.channel_sessions (lower(sip_server), sip_username)
+  where sip_username is not null and archived_at is null;
+
+create index if not exists idx_channel_sessions_sip_team
+  on public.channel_sessions (sip_team_id)
+  where sip_team_id is not null;
+
+comment on column public.channel_sessions.sip_server is
+  'Servidor SIP da operadora (host ou IP), para o registro do tronco. NULL em canal que não é telefonia.';
+comment on column public.channel_sessions.sip_username is
+  'Usuário da conta SIP na operadora. Com sip_server, é a identidade do tronco — única entre os ativos da instalação: duas linhas registrando a mesma conta disputariam as ligações recebidas. Espelhado em lib/channels/session-ref.ts.';
+comment on column public.channel_sessions.sip_password_encrypted is
+  'Senha da conta SIP cifrada com fn_encrypt_oauth (pgcrypto, chave só no servidor). Nenhuma rota a devolve; a tela só escreve.';
+comment on column public.channel_sessions.sip_team_id is
+  'Time que recebe as ligações deste número. NULL = ninguém atende (a tela mostra); apagar o time não apaga o número.';
+
+alter table public.voice_calls
+  add column if not exists provider text not null default 'wacalls',
+  add column if not exists sip_call_ref text,
+  add column if not exists conversation_id uuid references public.conversations(id) on delete set null,
+  add column if not exists team_id uuid references public.attendance_teams(id) on delete set null,
+  add column if not exists ringing_user_id uuid references auth.users(id) on delete set null;
+
+alter table public.voice_calls alter column wacalls_call_id drop not null;
+
+alter table public.voice_calls
+  drop constraint if exists voice_calls_provider_check;
+alter table public.voice_calls
+  add constraint voice_calls_provider_check
+  check (provider = any (array['wacalls'::text, 'sip_trunk'::text]));
+
+alter table public.voice_calls
+  drop constraint if exists voice_calls_provider_ref_check;
+alter table public.voice_calls
+  add constraint voice_calls_provider_ref_check check (
+    (provider = 'wacalls'   and wacalls_call_id is not null) or
+    (provider = 'sip_trunk' and sip_call_ref    is not null)
+  );
+
+create unique index if not exists voice_calls_org_sip_call_ref_unique
+  on public.voice_calls (organization_id, sip_call_ref)
+  where sip_call_ref is not null;
+
+create index if not exists idx_voice_calls_conversation
+  on public.voice_calls (conversation_id)
+  where conversation_id is not null;
+
+-- "Em outra ligação": a pergunta do distribuidor a cada toque. Parcial nas
+-- ligações vivas — o histórico inteiro não entra no índice.
+create index if not exists idx_voice_calls_vivas_por_atendente
+  on public.voice_calls (organization_id, owner_user_id)
+  where status <> 'ended';
+
+comment on column public.voice_calls.provider is
+  'De onde veio a ligação: wacalls (voz do WhatsApp) ou sip_trunk (telefonia SIP, spec 20). Default wacalls: toda linha anterior à 0286 é do WaCalls.';
+comment on column public.voice_calls.sip_call_ref is
+  'Id da ligação no Asterisk (linkedid da perna que a originou). Único por organização — é a chave de idempotência dos eventos do worker.';
+comment on column public.voice_calls.ringing_user_id is
+  'A quem a ligação recebida está tocando agora. Só o banner dessa pessoa aparece; o distribuidor não toca outra ligação para ela enquanto isto estiver preenchido.';
+
+-- conversations_channel_check: bloco único da 0272 (acima).
+
+notify pgrst, 'reload schema';
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

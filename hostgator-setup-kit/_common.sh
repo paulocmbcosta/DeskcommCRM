@@ -454,6 +454,9 @@ IMG_NS="ghcr.io/paulocmbcosta"
 IMG_APP="${IMG_NS}/deskcommcrm"
 IMG_WORKER="${IMG_NS}/deskcomm-worker"
 IMG_SCHEDULER="${IMG_NS}/deskcomm-scheduler"
+# Telefonia SIP (spec 20): serviço de profile opcional, fixado na MESMA versão
+# que as outras três por `gravar_imagens` — ligado ou não, o pin fica pronto.
+IMG_ASTERISK="${IMG_NS}/deskcomm-asterisk"
 
 # A última versão publicada (ex.: "1.2.1"), ou vazio se não deu para saber.
 #
@@ -706,6 +709,8 @@ gravar_imagens() {
   set_env_var "$envfile" WORKER_PULL_POLICY    "$politica"
   set_env_var "$envfile" SCHEDULER_IMAGE       "${IMG_SCHEDULER}:${versao}"
   set_env_var "$envfile" SCHEDULER_PULL_POLICY "$politica"
+  set_env_var "$envfile" ASTERISK_IMAGE        "${IMG_ASTERISK}:${versao}"
+  set_env_var "$envfile" ASTERISK_PULL_POLICY  "$politica"
 }
 
 # ── Os segredos da chamada de voz, no .env de quem já tinha instalado ────────
@@ -745,6 +750,21 @@ completar_segredos_da_voz() {  # completar_segredos_da_voz [envfile]
   done
 
   printf '%s' "${criados# }"
+}
+
+# ── O segredo da telefonia SIP (spec 20), no .env de quem já tinha instalado ──
+#
+# Mesmo racional de `completar_segredos_da_voz`: gerar a senha da ARI não liga
+# nada (sem `telefonia` em COMPOSE_PROFILES o Asterisk nem é criado, e sem
+# TELEFONIA_ARI_URL o app e o worker não o procuram). Só impede que ligar a
+# telefonia comece por inventar um segredo num editor dentro da VPS.
+completar_segredos_da_telefonia() {  # completar_segredos_da_telefonia [envfile]
+  local envfile="${1:-.env}"
+  [ -f "$envfile" ] || return 0
+  [ -w "$envfile" ] || return 0
+  grep -qE "^TELEFONIA_ARI_PASSWORD=" "$envfile" && return 0
+  set_env_var "$envfile" TELEFONIA_ARI_PASSWORD "$(openssl rand -hex 32)"
+  printf 'TELEFONIA_ARI_PASSWORD'
 }
 
 # Grava (ou reescreve) uma chave no .env — sem duplicar linha se ela já existe.

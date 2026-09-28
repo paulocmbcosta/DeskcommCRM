@@ -122,6 +122,26 @@ services:
   # (`docker compose up -d caddy`) ATIVA o profile dele automaticamente e o
   # contêiner sobe assim mesmo, indo bater de frente com o Traefik. Por isso o
   # update.sh checa REVERSE_PROXY antes de recriar o proxy.
+  # Telefonia SIP (spec 20): o WebSocket do ramal do navegador — equivalente
+  # ao `handle @ramal` do Caddyfile. Só `/telefonia/ws`, reescrito para `/ws`;
+  # a ARI do Asterisk nunca ganha rota. Só vale com o profile `telefonia`
+  # ligado (sem ele, o serviço nem existe e estes rótulos não pesam nada).
+  asterisk:
+    networks:
+      - internal
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:-traefik}"
+      traefik.http.routers.deskcomm-ramal.rule: "Host(`${DOMAIN}`) && Path(`/telefonia/ws`)"
+      traefik.http.routers.deskcomm-ramal.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
+      traefik.http.routers.deskcomm-ramal.tls.certresolver: "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      traefik.http.routers.deskcomm-ramal.priority: "900"
+      traefik.http.routers.deskcomm-ramal.middlewares: "deskcomm-ramal-ws"
+      traefik.http.routers.deskcomm-ramal.service: "deskcomm-ramal"
+      traefik.http.middlewares.deskcomm-ramal-ws.replacepath.path: "/ws"
+      traefik.http.services.deskcomm-ramal.loadbalancer.server.port: "8088"
+
   caddy:
     profiles: ["caddy-nao-usado-com-proxy-externo"]
 

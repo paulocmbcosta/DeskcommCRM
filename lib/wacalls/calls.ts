@@ -33,6 +33,13 @@ export interface VoiceCallWithSession {
  *  - nenhum dos dois → não há áudio de ninguém para cortar, e o caminho certo é
  *    recusar (`/reject`), não desligar.
  */
+/**
+ * O valor de `voice_calls.provider` das ligações deste serviço (migration 0286).
+ * A mesma tabela guarda as ligações de telefone (spec 20); tudo o que é do
+ * WaCalls filtra por isto.
+ */
+export const PROVIDER_DA_LIGACAO_WACALLS = "wacalls";
+
 export function podeEncerrar(call: VoiceCallWithSession, userId: string): boolean {
   if (call.ownerUserId) return call.ownerUserId === userId;
   return call.createdBy !== null && call.createdBy === userId;
@@ -51,6 +58,10 @@ export async function resolveVoiceCall(
     )
     .eq("organization_id", organizationId)
     .eq("id", voiceCallId)
+    // Só as ligações DESTE serviço: desde a telefonia SIP (migration 0286)
+    // `voice_calls` guarda os dois, e aceitar/recusar/negociar mídia de uma
+    // ligação de telefone por aqui falaria com o serviço errado.
+    .eq("provider", PROVIDER_DA_LIGACAO_WACALLS)
     .maybeSingle();
   const row = data as {
     id: string;

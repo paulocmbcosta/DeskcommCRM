@@ -5,6 +5,7 @@ import { TenantSwitcher } from "./TenantSwitcher";
 import { UserMenu } from "./UserMenu";
 import { SearchTrigger } from "./SearchTrigger";
 import { StatusDoAtendente } from "./StatusDoAtendente";
+import { BotaoDoTelefone } from "@/components/telefonia/BotaoDoTelefone";
 
 export function TopBar() {
   return (
@@ -17,6 +18,7 @@ export function TopBar() {
         <SearchTrigger />
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        <BotaoDoTelefone />
         <StatusDoAtendente />
         <AlertsBell />
         <UserMenu />
