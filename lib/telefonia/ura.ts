@@ -16,6 +16,21 @@
  *  - o menu toca no máximo 3 vezes (a primeira + 2 repetições); falhou a terceira
  *    → o time padrão, com `default_invalid` se ALGUMA tecla errada foi apertada,
  *    ou `default_no_input` se nenhuma.
+ *
+ * O estado é uma união discriminada por `fase`, o que elimina combinações
+ * impossíveis (não dá para estar "tocando" E "esperando" ao mesmo tempo):
+ *  - `"tocando"` — uma fala está no ar (`fala`: qual);
+ *  - `"esperando"` — nada tocando, contando os 5 s depois do menu;
+ *  - `"decidida"` — a ligação já foi encaminhada. É estado FINAL: todo evento
+ *    que chegar depois (um DTMF atrasado, um prazo que ainda ia disparar) é
+ *    ignorado e o estado não muda. Sem isso, uma tecla depois de já ter
+ *    decidido gerava um SEGUNDO `encaminhar` — o bug que esta versão corrige.
+ *
+ * O prazo tem identidade: a ação `esperar` carrega a `vez` que abriu aquela
+ * espera, e o evento `prazo` tem que trazer a MESMA `vez` de volta. Um `prazo`
+ * com `vez` diferente da espera atual é de um timer velho (do controlador) e é
+ * ignorado — sem isso, um timer perdido consumiria uma repetição que não era
+ * dele.
  */
 import type { DesfechoDoMenu } from "./vocabulario";
 
@@ -35,21 +50,34 @@ export interface MenuDaUra {
 
 export type FalaDaUra = "menu" | "invalida";
 
-export interface EstadoDaUra {
-  /** Quantas vezes o menu já foi (ou está sendo) oferecido, a partir de 1. */
-  vez: number;
-  tocando: FalaDaUra | null;
-  esperando: boolean;
-  houveInvalida: boolean;
-}
+export type EstadoDaUra =
+  | {
+      readonly fase: "tocando";
+      /** Quantas vezes o menu já foi (ou está sendo) oferecido, a partir de 1. */
+      readonly vez: number;
+      readonly fala: FalaDaUra;
+      readonly houveInvalida: boolean;
+    }
+  | {
+      readonly fase: "esperando";
+      /** A vez do menu cujo fim abriu esta espera — é o que o `prazo` de volta tem que bater. */
+      readonly vez: number;
+      readonly houveInvalida: boolean;
+    }
+  | { readonly fase: "decidida" };
 
-export const ESTADO_INICIAL_DA_URA: EstadoDaUra = { vez: 1, tocando: "menu", esperando: false, houveInvalida: false };
+export const ESTADO_INICIAL_DA_URA: Readonly<EstadoDaUra> = Object.freeze({
+  fase: "tocando",
+  vez: 1,
+  fala: "menu",
+  houveInvalida: false,
+});
 
-export type EventoDaUra = { tipo: "tecla"; digito: string } | { tipo: "fim_da_fala" } | { tipo: "prazo" };
+export type EventoDaUra = { tipo: "tecla"; digito: string } | { tipo: "fim_da_fala" } | { tipo: "prazo"; vez: number };
 
 export type AcaoDaUra =
   | { tipo: "tocar"; fala: FalaDaUra; pararAtual: boolean }
-  | { tipo: "esperar"; ms: number }
+  | { tipo: "esperar"; ms: number; vez: number }
   | { tipo: "encaminhar"; teamId: string; desfecho: DesfechoDoMenu; digito: string | null; pararAtual: boolean }
   | { tipo: "ignorar" };
 
@@ -58,41 +86,48 @@ export function passoDaUra(
   estado: EstadoDaUra,
   evento: EventoDaUra,
 ): { estado: EstadoDaUra; acao: AcaoDaUra } {
+  if (estado.fase === "decidida") return { estado, acao: { tipo: "ignorar" } };
+
   switch (evento.tipo) {
     case "tecla": {
-      const pararAtual = estado.tocando !== null;
+      const pararAtual = estado.fase === "tocando";
       const opcao = menu.opcoes.find((o) => o.digito === evento.digito);
       if (opcao) {
         return {
-          estado: { ...estado, tocando: null, esperando: false },
+          estado: { fase: "decidida" },
           acao: { tipo: "encaminhar", teamId: opcao.teamId, desfecho: "chosen", digito: opcao.digito, pararAtual },
         };
       }
       const vez = estado.vez + 1;
       if (vez > VEZES_DO_MENU) {
         return {
-          estado: { ...estado, tocando: null, esperando: false, houveInvalida: true },
+          estado: { fase: "decidida" },
           acao: { tipo: "encaminhar", teamId: menu.defaultTeamId, desfecho: "default_invalid", digito: null, pararAtual },
         };
       }
       const fala: FalaDaUra = menu.temFalaInvalida ? "invalida" : "menu";
-      return { estado: { vez, tocando: fala, esperando: false, houveInvalida: true }, acao: { tipo: "tocar", fala, pararAtual } };
+      return { estado: { fase: "tocando", vez, fala, houveInvalida: true }, acao: { tipo: "tocar", fala, pararAtual } };
     }
     case "fim_da_fala": {
-      if (estado.tocando === "menu") {
-        return { estado: { ...estado, tocando: null, esperando: true }, acao: { tipo: "esperar", ms: ESPERA_APOS_O_MENU_MS } };
+      if (estado.fase !== "tocando") return { estado, acao: { tipo: "ignorar" } };
+      if (estado.fala === "menu") {
+        return {
+          estado: { fase: "esperando", vez: estado.vez, houveInvalida: estado.houveInvalida },
+          acao: { tipo: "esperar", ms: ESPERA_APOS_O_MENU_MS, vez: estado.vez },
+        };
       }
-      if (estado.tocando === "invalida") {
-        return { estado: { ...estado, tocando: "menu", esperando: false }, acao: { tipo: "tocar", fala: "menu", pararAtual: false } };
-      }
-      return { estado, acao: { tipo: "ignorar" } };
+      return {
+        estado: { fase: "tocando", vez: estado.vez, fala: "menu", houveInvalida: estado.houveInvalida },
+        acao: { tipo: "tocar", fala: "menu", pararAtual: false },
+      };
     }
     case "prazo": {
-      if (!estado.esperando) return { estado, acao: { tipo: "ignorar" } };
+      if (estado.fase !== "esperando") return { estado, acao: { tipo: "ignorar" } };
+      if (evento.vez !== estado.vez) return { estado, acao: { tipo: "ignorar" } };
       const vez = estado.vez + 1;
       if (vez > VEZES_DO_MENU) {
         return {
-          estado: { ...estado, esperando: false },
+          estado: { fase: "decidida" },
           acao: {
             tipo: "encaminhar",
             teamId: menu.defaultTeamId,
@@ -102,7 +137,10 @@ export function passoDaUra(
           },
         };
       }
-      return { estado: { ...estado, vez, tocando: "menu", esperando: false }, acao: { tipo: "tocar", fala: "menu", pararAtual: false } };
+      return {
+        estado: { fase: "tocando", vez, fala: "menu", houveInvalida: estado.houveInvalida },
+        acao: { tipo: "tocar", fala: "menu", pararAtual: false },
+      };
     }
   }
 }

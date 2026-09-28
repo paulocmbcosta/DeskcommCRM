@@ -1,10 +1,20 @@
 /**
  * O "últimos 7 dias" de cada menu (desenho da fase 2, §6.2 e §8) — puro e
  * client-safe. É o laço de retorno da URA: muita gente caindo no time padrão sem
- * escolher é o sinal de que a fala confunde, e o dono reescreve.
+ * escolher, ou desligando no meio do menu, é o sinal de que a fala confunde, e o
+ * dono reescreve.
  */
 import type { DesfechoDoMenu, UltimosSeteDias } from "./vocabulario";
 
+/**
+ * Uma linha agregada da semana. `menu_outcome=null` é quem DESLIGOU dentro do
+ * menu, sem escolher e sem cair no padrão.
+ *
+ * **Para quem escreve a consulta (Task 8):** some só ligações JÁ ENCERRADAS.
+ * Uma ligação ainda em curso pode terminar escolhendo uma opção — contá-la
+ * aqui como "desligou no menu" (ou em qualquer bucket) seria contar um
+ * desfecho que ainda não aconteceu.
+ */
 export interface LinhaDoMenuNaSemana {
   menu_outcome: DesfechoDoMenu | null;
   menu_digit: string | null;
@@ -26,6 +36,15 @@ export function somarUltimosSeteDias(linhas: readonly LinhaDoMenuNaSemana[]): Ul
   return u;
 }
 
+/**
+ * Menu que confunde: 5+ ligações na semana e 30%+ delas sem escolher — caindo
+ * no padrão (sem tecla ou tecla errada) OU desligando no meio. Desistir no
+ * meio do menu é o mesmo sinal de confusão que cair no padrão sem digitar
+ * nada; menu comprido demais também faz o cliente desistir.
+ */
 export function menuConfunde(u: UltimosSeteDias): boolean {
-  return u.total >= MINIMO_PARA_ALERTA && (u.sem_escolha + u.tecla_errada) / u.total >= PROPORCAO_QUE_CONFUNDE;
+  return (
+    u.total >= MINIMO_PARA_ALERTA &&
+    (u.sem_escolha + u.tecla_errada + u.desligou_no_menu) / u.total >= PROPORCAO_QUE_CONFUNDE
+  );
 }
