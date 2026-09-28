@@ -295,6 +295,8 @@ Esperado: os dois nomes impressos. Resultado da task = "ramo A" ou "ramo B", com
 
 ## Task 0B: Passo zero B — as teclas da operadora chegam? (VPS de produção) — **ORQUESTRADOR, manual**
 
+> **FEITA em 2026-09-28, APROVADA.** Numa ligação real para o (61) 3686-1503, o dono teclou 1, 2, 3, 9, 0 com a música de espera tocando. O Asterisk de produção registrou `DTMF begin/end` de cada tecla no canal do tronco, pelo `rfc4733` (140 ms cada), e a operadora negocia `a=rtpmap:101 telephone-event/8000`. O `dtmf_mode=rfc4733` atual serve. A evidência (só as linhas de DTMF) está em `.superpowers/evidence/telefonia/dtmf-operadora-2026-09-28.log`. O log foi desligado e o arquivo removido do contêiner. Os passos abaixo ficam como registro do procedimento.
+
 **Quem:** o orquestrador, **nunca um subagente**. Exige (1) autorização explícita do dono para mexer no log do Asterisk de produção e (2) o dono ligando do celular para o **(61) 3686-1503** e teclando. É só log: nada muda no atendimento. **Não** abra uma segunda conexão WebSocket da ARI na aplicação `crm` — ela roubaria os eventos do worker e derrubaria as ligações de verdade.
 
 **Por quê:** o tronco anuncia `dtmf_mode=rfc4733` (`objetosDoTronco`, `pjsip.ts`). Se a operadora manda o DTMF na banda do áudio ou por SIP INFO, a URA nunca recebe `ChannelDtmfReceived` — e isso tem de aparecer aqui, não na prova final.
@@ -350,6 +352,8 @@ docker exec "$AST" rm -f /var/log/asterisk/dtmf-teste
 ---
 
 ## Task 0C (CONDICIONAL — só se a Task 0B reprovar): `dtmf_mode` do tronco
+
+> **NÃO NECESSÁRIA:** a Task 0B aprovou em 2026-09-28. Pule esta task.
 
 **Files:**
 - Modify: `lib/channels/telefonia/pjsip.ts:118` (a linha `f("dtmf_mode", "rfc4733"),` de `objetosDoTronco`)
