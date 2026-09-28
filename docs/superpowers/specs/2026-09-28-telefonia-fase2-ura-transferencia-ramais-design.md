@@ -23,6 +23,7 @@
 | D12 | Áudio até o Asterisk | **Volume compartilhado**: o worker escreve, o Asterisk só lê; o Storage é a fonte da verdade |
 | D13 | Ordem da tela para o worker | **Evento de usuário da ARI**: a API valida e emite, o worker revalida e age |
 | D14 | Onde testar | **(61) 3686-1503**, que é o número de teste da Totus |
+| D15 | Quando a ElevenLabs é chamada | **Só ao gerar prévia na tela**, nunca numa ligação. Fluxo prévia → ouvir → "Salvar e usar"; o mesmo texto com a mesma voz não é cobrado duas vezes (§4) |
 
 ## 2. Passo zero — duas medições antes de escrever a URA
 
@@ -100,21 +101,36 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
 
 ## 4. Áudio: da ElevenLabs ao Asterisk (D12)
 
-1. **Gerar na tela.** A rota chama a ElevenLabs:
-   - `POST /v1/text-to-speech/{voice_id}?output_format=ulaw_8000`, com o header `xi-api-key`;
-   - modelo `eleven_multilingual_v2`.
-2. **Guardar.** Os bytes vão para o Storage e a linha de `phone_prompts` fica `ready`.
-3. **Ouvir.** A tela recebe o áudio de volta: o navegador converte μ-law em PCM16 e monta um WAV para o `<audio>`. É uma chamada só e não custa a mais.
-4. **Levar ao Asterisk.** O volume nomeado `telefonia-falas` é montado com leitura e escrita no `worker` e só leitura no `asterisk`. A passada de 60 s que já reconcilia os troncos passa a:
+**A ElevenLabs só é chamada quando alguém cria ou altera uma fala na tela. NUNCA durante uma ligação.** Toda ligação toca um arquivo já gravado; mil ligações custam zero na ElevenLabs. Um teste de unidade reprova o CI se qualquer módulo do caminho da ligação (`lib/channels/telefonia/`, `workers/`) importar o cliente da ElevenLabs.
+
+**Fluxo de edição: prévia, ouvir, salvar (pedido do dono em 2026-09-28).** Nada muda nas ligações até o "Salvar e usar".
+
+1. **Gerar prévia.**
+   - A rota calcula `content_hash` = sha256 de texto + voz + modelo.
+   - Se o objeto `<org>/<hash>.ulaw` já existe no Storage, **reaproveita e não chama a ElevenLabs**.
+   - Senão, chama a ElevenLabs uma vez (`POST /v1/text-to-speech/{voice_id}?output_format=ulaw_8000`, header `xi-api-key`, modelo `eleven_multilingual_v2`) e grava o objeto.
+   - Limite de 30 prévias por hora por organização, contra clique repetido, com o limitador Upstash que o CRM já usa.
+2. **Ouvir.** A tela recebe o áudio da prévia: o navegador converte μ-law em PCM16 e monta um WAV para o `<audio>`. Ouvir de novo não custa nada.
+3. **Salvar e usar.**
+   - A linha de `phone_prompts` passa a apontar para o hash da prévia e fica `ready`. Não há chamada à ElevenLabs aqui.
+   - A partir desse momento, as ligações tocam o áudio novo.
+   - A API recusa salvar um hash cujo objeto não existe no Storage.
+4. **Limpeza.**
+   - Prévia não salva: sai do Storage depois de 24 h.
+   - Áudio antigo: sai quando nenhuma linha o referencia.
+   - Quem limpa é a passada do worker.
+5. **Levar ao Asterisk.** O volume nomeado `telefonia-falas` é montado com leitura e escrita no `worker` e só leitura no `asterisk`. A passada de 60 s que já reconcilia os troncos passa a:
    - baixar do Storage as falas `ready` que faltam no volume;
-   - apagar os arquivos que nenhuma linha referencia mais.
-5. **Antes de tocar.** O worker confere se o arquivo existe; se faltar, baixa na hora.
+   - apagar do volume os arquivos que nenhuma linha referencia mais.
+6. **Antes de tocar.** O worker confere se o arquivo existe; se faltar, baixa do Storage na hora. Isso nunca chama a ElevenLabs.
    - Se não conseguir, a ligação **pula a fala** e segue.
    - Um menu sem áudio manda direto para o time padrão.
    - Abre um item na Central, `phone_prompt_unplayable`.
-6. **Validação na API.** A API recusa apontar um número para um menu enquanto alguma fala dele não estiver `ready`.
+7. **Validação na API.** A API recusa apontar um número para um menu enquanto alguma fala dele não estiver `ready`.
 
-**Chave sem crédito ou revogada:** as falas já geradas continuam tocando. Só editar falha, com a mensagem da ElevenLabs traduzida na tela.
+**Chave sem crédito ou revogada:** as falas salvas continuam tocando. Só gerar prévia falha, com a mensagem da ElevenLabs traduzida na tela.
+
+**Texto sugerido de "fora do horário":** já traz o número de WhatsApp da organização quando houver um conectado, e continua editável antes de gerar.
 
 ## 5. Fluxo da ligação
 
@@ -204,7 +220,7 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
 2. **Conexões › Telefone** (`/app/connections`), com abas **Números · Menus · Voz e falas** (`?aba=`):
    - **Voz e falas:**
      - escolha da voz numa lista das vozes da conta, com "Ouvir amostra";
-     - as três falas gerais, com texto sugerido, "Gerar e ouvir" e o estado (pronta, gerando, falhou com motivo);
+     - as três falas gerais, com texto sugerido, "Gerar prévia", "Ouvir" e "Salvar e usar" (§4), e o estado (em uso, prévia não salva, falhou com motivo);
      - sem chave: aviso com link para Credenciais de IA.
    - **Menus:**
      - lista e editor: nome, opções (tecla → time), time padrão e `accepts_extension` (versão 3);
@@ -215,7 +231,7 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
      - "Quando ligarem: [tocar no time ▾] ou [tocar o menu ▾]";
      - um menu com fala pendente aparece desabilitado, com o motivo.
 3. **Configurações › Times** (`/app/settings/teams`), cartão "Aviso de instabilidade (telefone)" em cada time:
-   - Desligado: o texto salvo e o botão "Ligar aviso". Ele abre uma janela com o texto editável, "Ouvir", a duração e "Ligar".
+   - Desligado: o texto salvo e o botão "Ligar aviso". Ele abre uma janela com o texto editável, a duração e "Ligar". Se o texto mudou, é preciso "Gerar prévia" e "Ouvir" antes de "Ligar" (§4).
    - Ligado: "Ligado às HH:MM por Fulano · desliga às HH:MM" e o botão "Desligar agora".
    - Os botões aparecem só para gerente e admin.
 4. **Faixa em todo o CRM:**
