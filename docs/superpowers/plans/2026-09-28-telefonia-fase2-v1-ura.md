@@ -13318,7 +13318,7 @@ Expected: PASS — a spec nova está em `SPECS_PARTE_3`.
 - [ ] **Step 5: Rodar a spec contra o ambiente local (Supabase local + build de produção)**
 
 Run: `pnpm e2e:env && pnpm e2e:build && pnpm exec playwright test tests/e2e/telefonia-ura-e-falas.spec.ts`
-Expected: `1 passed`. As capturas ficam em `.superpowers/evidence/telefonia/e2e-*.png` (inclusive `e2e-previa-da-fala.png`, a prévia ainda não salva).
+Expected: `1 passed`. As capturas ficam em `.superpowers/evidence/telefonia/e2e-*.png` (inclusive a captura da prévia ainda não salva).
 
 Se a spec falhar por seletor (não por comportamento), conserte a SPEC; se falhar por comportamento, volte à task da tela correspondente (17–22) e conserte lá, com teste de unidade que reproduza.
 
