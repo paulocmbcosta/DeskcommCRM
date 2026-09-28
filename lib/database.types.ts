@@ -3858,6 +3858,9 @@ export type Database = {
           id: string
           is_group: boolean
           espera_desde: string | null
+          espera_dispensada_ate: string | null
+          espera_dispensada_desde: string | null
+          espera_mantida_em: string | null
           sentimento_atual: number | null
           sentimento_em: string | null
           sentimento_minimo: number | null
@@ -3907,6 +3910,9 @@ export type Database = {
           id?: string
           is_group?: boolean
           espera_desde?: string | null
+          espera_dispensada_ate?: string | null
+          espera_dispensada_desde?: string | null
+          espera_mantida_em?: string | null
           sentimento_atual?: number | null
           sentimento_em?: string | null
           sentimento_minimo?: number | null
@@ -3956,6 +3962,9 @@ export type Database = {
           id?: string
           is_group?: boolean
           espera_desde?: string | null
+          espera_dispensada_ate?: string | null
+          espera_dispensada_desde?: string | null
+          espera_mantida_em?: string | null
           sentimento_atual?: number | null
           sentimento_em?: string | null
           sentimento_minimo?: number | null
@@ -8396,6 +8405,17 @@ export type Database = {
           p_type: string
         }
         Returns: string
+      }
+      fn_dispensar_espera: {
+        Args: {
+          p_conversation: string
+          p_espera_desde: string
+          p_last_inbound_at: string
+          p_mensagem: string
+          p_org: string
+          p_payload: Json
+        }
+        Returns: boolean
       }
       fn_proximo_protocolo: {
         Args: { p_org: string; p_quando: string }

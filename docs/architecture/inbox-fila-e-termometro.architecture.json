@@ -24,7 +24,14 @@
     { "id": "mensagem", "lane": "banco", "col": 1, "type": "database", "label": "fn_mark_conversation_message — last_inbound_at / last_outbound_at" },
     { "id": "trigger", "lane": "banco", "col": 2, "type": "database", "label": "trg_conversations_espera_desde — a PRIMEIRA mensagem sem resposta (0279)" },
     { "id": "settings", "lane": "banco", "col": 3, "type": "database", "label": "organizations.settings.inbox.regua_de_espera" },
-    { "id": "setteam", "lane": "banco", "col": 4, "type": "database", "label": "fn_conversation_set_team — grava o time e cala a IA (bot_silenced_until = infinity)" }
+    { "id": "setteam", "lane": "banco", "col": 4, "type": "database", "label": "fn_conversation_set_team — grava o time e cala a IA (bot_silenced_until = infinity)" },
+    { "id": "assistente", "lane": "banco", "col": 5, "type": "worker", "label": "workers/espera-da-assistente.ts — consumidor de message.received; pergunta ao Jev se a fala pede resposta" },
+    { "id": "dispensar", "lane": "banco", "col": 6, "type": "database", "label": "fn_dispensar_espera (0285) — UPDATE condicional + evento, dispensa ≤0,15" },
+    { "id": "manterespera", "lane": "api", "col": 5, "type": "backend", "label": "POST /conversations/[id]/manter-espera — 'Contar mesmo assim' (agent+)" },
+    { "id": "faixa", "lane": "tela", "col": 5, "type": "frontend", "label": "FaixaDaEspera — 'Não pede resposta' / botão Contar mesmo assim; selo no card" },
+    { "id": "llmcalls", "lane": "banco", "col": 5, "type": "table", "label": "llm_calls (purpose=wait_classify) — custo/latência em IA › Execuções" },
+    { "id": "eventosconversa", "lane": "banco", "col": 6, "type": "table", "label": "conversation_events — espera_dispensada / espera_mantida (linha do tempo)" },
+    { "id": "auditlog", "lane": "banco", "col": 7, "type": "table", "label": "api_audit_log — conversation.espera_mantida" }
   ],
   "edges": [
     { "from": "mensagem", "to": "trigger", "label": "toda entrada/saída passa pelo trigger BEFORE" },
@@ -36,7 +43,17 @@
     { "from": "setteam", "to": "contagens", "label": "a conversa entra na fila do time" },
     { "from": "contagens", "to": "chips", "label": "total por time + 'N na fila'" },
     { "from": "motivo", "to": "chips", "label": "a dica do chip: fechado, sem membros, ninguém disponível, todos ocupados" },
-    { "from": "chips", "to": "lista", "label": "team_id, na_fila, ordem=espera" }
+    { "from": "chips", "to": "lista", "label": "team_id, na_fila, ordem=espera" },
+    { "from": "mensagem", "to": "assistente", "label": "event_log: message.received (entrada, com chave da OpenRouter)" },
+    { "from": "assistente", "to": "dispensar", "label": "P(pede resposta) ≤ 0,15 → RPC" },
+    { "from": "dispensar", "to": "trigger", "label": "espera_desde nulo; espera_dispensada_ate/desde gravados" },
+    { "from": "dispensar", "to": "eventosconversa", "label": "espera_dispensada, na mesma transação da RPC" },
+    { "from": "assistente", "to": "llmcalls", "label": "toda chamada ao Jev vira linha, dispensada ou não" },
+    { "from": "trigger", "to": "faixa", "label": "espera_dispensada_ate não-nulo → faixa 'Não pede resposta' + selo no card" },
+    { "from": "faixa", "to": "manterespera", "label": "botão 'Contar mesmo assim' (agent+)" },
+    { "from": "manterespera", "to": "trigger", "label": "devolve espera_desde original; espera_mantida_em trava a Assistente no ciclo" },
+    { "from": "manterespera", "to": "eventosconversa", "label": "espera_mantida" },
+    { "from": "manterespera", "to": "auditlog", "label": "conversation.espera_mantida — o laço de retorno medido" }
   ],
   "cards": [
     {

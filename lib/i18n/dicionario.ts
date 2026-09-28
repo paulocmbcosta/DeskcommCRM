@@ -9387,6 +9387,31 @@ export const DICIONARIO: Traducoes = {
   "Peça a transferência para chamar por aqui.": { es: "Pide la transferencia para contactarlo desde aquí." },
   "Este cliente já está em atendimento com outra pessoa. Peça a transferência para chamar por aqui.": { es: "Este cliente ya está siendo atendido por otra persona. Pide la transferencia para contactarlo desde aquí." },
   "Não foi possível iniciar a conversa. Tente novamente.": { es: "No fue posible iniciar la conversación. Inténtalo de nuevo." },
+  // ── Espera que pede resposta (migration 0285) ──
+  "Assistente: a mensagem do cliente não pede resposta": { es: "Asistente: el mensaje del cliente no requiere respuesta" },
+  "A espera deixou de ser contada.": { es: "La espera dejó de contarse." },
+  "Espera contada mesmo assim": { es: "Espera contada de todos modos" },
+  "A espera desta conversa já está sendo contada.": { es: "La espera de esta conversación ya se está contando." },
+  "A conversa mudou enquanto você clicava. Atualize e veja de novo.": { es: "La conversación cambió mientras hacías clic. Actualiza y vuelve a ver." },
+  "Não pede resposta": { es: "No requiere respuesta" },
+  "A Assistente viu que a mensagem do cliente não pede resposta.": {
+    es: "La Asistente vio que el mensaje del cliente no requiere respuesta.",
+  },
+  "Cliente aguardando resposta há": { es: "Cliente esperando respuesta hace" },
+  "Assistente: o cliente só confirmou ou agradeceu — não pede resposta.": {
+    es: "Asistente: el cliente solo confirmó o agradeció — no requiere respuesta.",
+  },
+  "Contar mesmo assim": { es: "Contar de todos modos" },
+  "Decidir se a espera do cliente conta": { es: "Decidir si la espera del cliente cuenta" },
+  "Quando o cliente escreve numa conversa atendida por pessoas, lê as últimas mensagens e decide se ele pediu alguma coisa ou só confirmou ou agradeceu (\"ok, obrigado\"). No segundo caso, o tempo de espera do card deixa de contar. Na dúvida, a espera conta.": {
+    es: "Cuando el cliente escribe en una conversación atendida por personas, lee los últimos mensajes y decide si pidió algo o solo confirmó o agradeció (\"ok, gracias\"). En el segundo caso, el tiempo de espera de la tarjeta deja de contarse. Ante la duda, la espera cuenta.",
+  },
+  "O tempo de espera volta a contar em toda conversa, inclusive quando o cliente só agradeceu — como antes desta função existir.": {
+    es: "El tiempo de espera vuelve a contarse en toda conversación, incluso cuando el cliente solo agradeció — como antes de que existiera esta función.",
+  },
+  "Quando a mensagem do cliente só confirma ou agradece, a Assistente deixa de contar a espera. Com uma chave da OpenRouter, ela usa o Jev, da TypeSafe: as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe. Sem a chave, a espera é sempre contada.": {
+    es: "Cuando el mensaje del cliente solo confirma o agradece, la Asistente deja de contar la espera. Con una clave de OpenRouter usa Jev, de TypeSafe: los últimos mensajes de la conversación se envían a OpenRouter y a TypeSafe. Sin la clave, la espera siempre se cuenta.",
+  },
 };
 
 /**

@@ -86,6 +86,22 @@ export function esperaDaConversa(
 }
 
 /**
+ * A Assistente julgou que a fala do cliente não pede resposta (migration 0285):
+ * não há termômetro, e a tela diz por quê. Mesmo recorte de `esperaDaConversa`
+ * — encerrada ou no automático não é assunto da espera, dispensada ou não.
+ */
+export function esperaDispensada(conversa: {
+  status: string;
+  espera_desde?: string | null;
+  espera_dispensada_ate?: string | null;
+  comando_da_conversa?: string | null;
+}): boolean {
+  if (TERMINAIS.has(conversa.status)) return false;
+  if (conversa.comando_da_conversa && !COMANDOS_QUE_ESPERAM_GENTE.has(conversa.comando_da_conversa)) return false;
+  return !conversa.espera_desde && Boolean(conversa.espera_dispensada_ate);
+}
+
+/**
  * NA FILA DO TIME: foi para um setor, ninguém pegou, e a IA saiu do comando — o
  * cliente depende de uma pessoa que ainda não apareceu. É o gargalo que o selo
  * "Na fila · <time>" e o chip "Só na fila" mostram.

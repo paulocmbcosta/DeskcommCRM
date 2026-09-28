@@ -2951,3 +2951,47 @@ conversa com o contato embutido).
 (headless nega `Notification`; push depende de FCM — ver J12). O título da bandeja e do
 push ("Maria Souza · Financeiro") está coberto em unidade (`push_payload.test.ts`,
 `deliver.test.ts`), não na tela.
+
+## J34 — Espera dispensada pela Assistente e religada pelo atendente `[P1]` (2026-09-26)
+
+O termômetro do card contava o "ok, obrigado" do cliente como espera, e a conversa
+ficava laranja/vermelha sem ninguém ter o que responder. Agora a Assistente (o Jev, pela
+chave OpenRouter da organização) pergunta se a fala sem resposta pede resposta; com
+P ≤ 0,15 ela DISPENSA a espera (`fn_dispensar_espera`, migration 0285): o card troca o
+termômetro pelo selo **Não pede resposta** e o chat mostra por quê, com o único gesto
+humano — **Contar mesmo assim**, que devolve a espera com a hora ORIGINAL e trava a
+Assistente até a empresa responder.
+
+| Caso | O que prova | Onde | Estado |
+|---|---|---|---|
+| J34.1 | Conversa com a atendente, entrada há 6 min: card `data-nivel="laranja"`, title "Cliente sem resposta desde HH:mm", faixa do chat laranja | `tests/e2e/espera-que-pede-resposta.spec.ts` (teste 1) | PASS |
+| J34.2 | A dispensa pela MESMA RPC do worker chega à tela pelo realtime, sem recarregar: selo "Não pede resposta", termômetro some, faixa dispensada, e a linha do tempo diz "Assistente: a mensagem do cliente não pede resposta" | e2e acima | PASS |
+| J34.3 | "Contar mesmo assim" devolve o termômetro com a hora ORIGINAL (title e `espera_desde` iguais aos de antes), grava `espera_mantida_em`, e a linha do tempo mostra "Espera contada mesmo assim — Por Ana Atendente." | e2e acima | PASS |
+| J34.4 | Worker de verdade: mensagens pelo webhook WAHA (inclusive a resposta da atendente pelo celular, `fromMe`), o dreno da requisição ADIA a Assistente (15 s) e o dreno de cron a roda; o Jev falso (`noul` 0,05) recebe a chave decifrada da organização, o modelo fixo e "ok obrigado" em `sem_resposta`; o card vira "Não pede resposta" | e2e acima (teste 2) | PASS |
+| J34.5 | O cliente pergunta "e o horário de sábado?" (Jev falso a 0,9): a dispensa se desfaz e a espera conta DESTA mensagem — `espera_desde` = carimbo da mensagem nova, maior que o do "ok obrigado"; 2 linhas `llm_calls` com `purpose = 'wait_classify'` | e2e acima | PASS |
+
+Evidência: `.superpowers/evidence/espera-que-pede-resposta/01…06-*.png` (local, fora do git).
+Rodado em 2026-09-26 contra o Supabase local pg15 (baseline até a 0284 + a 0285 aplicada
+por cima, como o `update.sh` faria), `next build` + `next start`, sem `OPENROUTER_API_KEY`
+nem Redis — a chave é a credencial da organização, cifrada como o produto cifra.
+
+**Achados desta execução (nenhum defeito da feature):**
+- A ingestão marca a saída digitada no celular (`fromMe`) com a hora de CHEGADA do webhook,
+  e a entrada com o carimbo do WhatsApp (`lib/waha/ingest.ts`, `markConversation`). Uma
+  entrada que chegue atrasada, com carimbo anterior a uma saída recém-ingerida, não abre
+  espera. Anterior a esta feature; a spec usa carimbos atuais por isso.
+- O dreno reagenda o evento pelo PRIMEIRO `retry` da lista de handlers
+  (`lib/event-log/drain.ts`), não pelo mais cedo. Quando o sentimento (registrado antes)
+  pede `retry` por falha temporária do Jev (+60 s), o adiamento da Assistente (+15 s)
+  vira 60 s. Medido com o Jev falso respondendo 503 ao sentimento; a spec responde 400 às
+  perguntas que não são dela.
+
+**Não medido aqui:** o Jev real (calibração em português com conversas reais), mensagem
+de áudio aguardando transcrição, e a corrida "o cliente escreve enquanto o Jev pensa"
+(coberta em `tests/invariants/espera-dispensada-pela-assistente.test.ts` e nos testes do
+worker, não na tela). Também não medida: a corrida estreita entre o INSERT de `messages`
+(que emite `message.received` no MESMO trigger) e `fn_mark_conversation_message`, que só
+carimba `espera_desde` depois — se o dreno pegar o evento nesse intervalo, o worker lê
+`espera_desde` nulo e termina `sem_espera` sem nunca chamar o Jev, e aquela mensagem do
+cliente nunca é julgada pela Assistente. O lado seguro: a espera continua contando (o
+termômetro não pára por causa disso), só a dispensa é que não acontece para essa mensagem.

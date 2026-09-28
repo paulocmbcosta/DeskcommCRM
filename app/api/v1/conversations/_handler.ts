@@ -132,7 +132,7 @@ const SELECT_COLS = `
   last_outbound_at, last_message_at, last_message_preview,
   unread_count_for_assignee, is_group, group_chat_id, tags, metadata,
   snooze_until, created_at, updated_at, team_id, protocol,
-  bot_silenced_until, last_handoff_at, espera_desde, sentimento_atual, sentimento_minimo,
+  bot_silenced_until, last_handoff_at, espera_desde, espera_dispensada_ate, sentimento_atual, sentimento_minimo,
   comando_da_conversa,
   contacts:contact_id (id, display_name, name, phone_number, email, is_anonymized, tags, is_blocked, avatar_storage_path, force_human),
   channel_sessions:channel_session_id (phone_number, display_name, provider)

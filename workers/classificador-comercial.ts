@@ -131,15 +131,23 @@ export function codigoDeErroDaFalha(falha: FalhaDoJev): string {
   return falha.status === 404 ? "modelo_inexistente" : "erro_desconhecido";
 }
 
-/** Fire-and-forget: a telemetria não derruba a decisão que ela descreve. */
-export function registrarNoLlmCalls(admin: SupabaseClient) {
+/**
+ * Fire-and-forget: a telemetria não derruba a decisão que ela descreve.
+ *
+ * `purpose` vem num OBJETO e é obrigatório de propósito: cada chamador escreve
+ * `{ purpose: "..." }` LITERAL, e é essa propriedade que
+ * `tests/unit/pontos-de-ia-completude.test.ts` varre para provar que o ponto
+ * está no registro de IA. Um parâmetro com default escondia o literal da
+ * varredura — o ponto existia e o teste não o via.
+ */
+export function registrarNoLlmCalls(admin: SupabaseClient, { purpose }: { purpose: string }) {
   return (l: LinhaDeChamada): void => {
     void (async () => {
       try {
         const { error } = await admin.from("llm_calls").insert({
           organization_id: l.organizationId,
           contact_id: l.contactId,
-          purpose: "commercial_classify",
+          purpose,
           provider: "openrouter",
           model: l.modelo,
           // `input_tokens` é NOT NULL (default 0); quem diz "não sei" é `cost_cents`,
@@ -157,14 +165,14 @@ export function registrarNoLlmCalls(admin: SupabaseClient) {
           http_status: l.falha?.status ?? null,
         });
         if (error) {
-          logger.warn("classificador-comercial: llm_calls não gravou", {
+          logger.warn(`${purpose}: llm_calls não gravou`, {
             organization_id: l.organizationId,
             codigo: error.code || "rede",
             error: error.message.slice(0, 120),
           });
         }
       } catch (erro) {
-        logger.warn("classificador-comercial: llm_calls não gravou", {
+        logger.warn(`${purpose}: llm_calls não gravou`, {
           organization_id: l.organizationId,
           erro: erro instanceof Error ? erro.name : typeof erro,
         });
@@ -233,7 +241,7 @@ function dependenciasReais(): DependenciasDoClassificador {
     chave: chaveDaOpenRouter,
     perguntar: perguntarAoJev,
     garantir: garantirLeadDaConversa,
-    registrarChamada: registrarNoLlmCalls(admin),
+    registrarChamada: registrarNoLlmCalls(admin, { purpose: "commercial_classify" }),
     agora: () => new Date(),
     baseUrl: process.env.CLASSIFICADOR_COMERCIAL_BASE_URL?.trim() || undefined,
   };

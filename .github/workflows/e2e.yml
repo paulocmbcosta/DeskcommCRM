@@ -472,6 +472,15 @@ jobs:
         agenda-google-volta-do-consentimento.spec.ts
         agenda-google-volta-nao-desloga.spec.ts
         conector-ixc-no-painel.spec.ts
+        espera-que-pede-resposta.spec.ts
+      # `espera-que-pede-resposta` entrou na PARTE_2 em 2026-09-26 por ser a parte
+      # mais leve no run 36263627693 da main (parte 1 23,4 min, parte 2 20,4 min,
+      # parte 3 32,1 min de job). Ela cria a PRÓPRIA organização, sobe o Jev falso
+      # na porta de `CLASSIFICADOR_COMERCIAL_BASE_URL` (a mesma de
+      # `card-pelo-classificador`, que está em outro processo, na PARTE_1) e chama
+      # o dreno global do `event_log` — como `followup-journey`, `gatilho-de-*` e
+      # `automacao-diz-a-verdade`, que já moram aqui.
+      #
       # `moeda-da-organizacao` entrou na PARTE_2 em 2026-09-04, ao lado de
       # `navegacao` — mesmo domínio (Configurações) e a mesma ausência de
       # dependência: sem WAHA, Resend, Nuvemshop ou Redis. Toca a organização

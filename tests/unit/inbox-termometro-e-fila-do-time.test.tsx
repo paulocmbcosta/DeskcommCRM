@@ -153,3 +153,24 @@ describe("o selo do tom do cliente no card (migration 0280)", () => {
   });
 });
 
+
+describe("o selo 'Não pede resposta' (migration 0285)", () => {
+  it("a Assistente dispensou: sem termômetro, com o selo e o porquê na dica", () => {
+    pintar({ espera_desde: null, espera_dispensada_ate: ha(3) });
+    expect(screen.queryByTestId("espera-da-conversa")).toBeNull();
+    const selo = screen.getByTestId("espera-dispensada");
+    expect(selo).toHaveTextContent("Não pede resposta");
+    expect(selo).toHaveAttribute("title", "A Assistente viu que a mensagem do cliente não pede resposta.");
+  });
+
+  it("a espera voltou a contar: termômetro, sem selo", () => {
+    pintar({ espera_desde: ha(3), espera_dispensada_ate: ha(5) });
+    expect(screen.getByTestId("espera-da-conversa")).toBeInTheDocument();
+    expect(screen.queryByTestId("espera-dispensada")).toBeNull();
+  });
+
+  it("encerrada: sem selo", () => {
+    pintar({ status: "closed", espera_desde: null, espera_dispensada_ate: ha(3) });
+    expect(screen.queryByTestId("espera-dispensada")).toBeNull();
+  });
+});

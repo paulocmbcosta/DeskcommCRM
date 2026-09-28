@@ -279,6 +279,23 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     registraEm: "llm_calls",
   },
   {
+    id: "wait_classify",
+    rotulo: "Decidir se a espera do cliente conta",
+    oQueFaz:
+      "Quando o cliente escreve numa conversa atendida por pessoas, lê as últimas mensagens e decide se ele pediu alguma coisa ou só confirmou ou agradeceu (\"ok, obrigado\"). No segundo caso, o tempo de espera do card deixa de contar. Na dúvida, a espera conta.",
+    papel: "entender",
+    exige: {},
+    emissor: "workers/espera-da-assistente.ts",
+    fixo: {
+      razao:
+        "Usa o Jev, da TypeSafe: um modelo que devolve decisões com probabilidade em vez de texto. Ele não é um modelo de conversa e fala outra API (System One), por isso não entra na troca de modelos deste painel. Paga com a chave da OpenRouter cadastrada aqui, ou com a da instalação.",
+      usa: { provider: "openrouter", modelId: "typesafe/jev-1.13" },
+    },
+    sintomaDeFalha:
+      "O tempo de espera volta a contar em toda conversa, inclusive quando o cliente só agradeceu — como antes desta função existir.",
+    registraEm: "llm_calls",
+  },
+  {
     id: "sentiment_classify",
     rotulo: "Medir o clima do atendimento",
     oQueFaz:

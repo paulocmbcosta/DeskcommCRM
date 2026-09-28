@@ -156,14 +156,16 @@ describe("o classificador não roda dentro de uma requisição — mas só de qu
 });
 
 describe("registro — o classificador roda DEPOIS dos outros consumidores de message.received", () => {
-  it("é o último handler de message.received: a push e as automações não esperam o Jev", async () => {
+  it("roda antes só da espera da Assistente (a única que também espera o Jev): a push e as automações não esperam nenhum dos dois", async () => {
     const { ensureHandlersRegistered } = await import("@/lib/event-log/register-handlers");
     const { getRegisteredHandlers } = await import("@/lib/event-log/dispatcher");
+    const { ESPERA_DA_ASSISTENTE_HANDLER_KEY } = await import("@/workers/espera-da-assistente.handler");
     ensureHandlersRegistered();
     const deMensagem = getRegisteredHandlers()
       .filter((h) => h.events.includes("message.received"))
       .map((h) => h.key);
-    expect(deMensagem.length, "há outros consumidores de message.received").toBeGreaterThan(1);
-    expect(deMensagem.at(-1)).toBe(CLASSIFICADOR_COMERCIAL_HANDLER_KEY);
+    expect(deMensagem.length, "há outros consumidores de message.received").toBeGreaterThan(2);
+    expect(deMensagem.at(-2)).toBe(CLASSIFICADOR_COMERCIAL_HANDLER_KEY);
+    expect(deMensagem.at(-1)).toBe(ESPERA_DA_ASSISTENTE_HANDLER_KEY);
   });
 });

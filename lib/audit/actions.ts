@@ -625,6 +625,10 @@ export const AUDIT_ACTIONS = [
   // Quem chamou o cliente ("Chamar no WhatsApp") abriu a conversa num time e
   // ficou como dono dela (migration 0284). `metadata` traz o time e o dono.
   "conversation.started_in_team",
+  // "Contar mesmo assim": um humano religou a espera que a Assistente dispensou
+  // (migration 0285). metadata: { espera_desde, dispensada_ate }. É o erro
+  // medido da Assistente — o laço de retorno da feature.
+  "conversation.espera_mantida",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

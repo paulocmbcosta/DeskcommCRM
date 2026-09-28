@@ -22,6 +22,7 @@ import { mediaDeriveHandler } from "@/workers/media-derive-worker.handler";
 import { webPushInboundHandler } from "@/lib/notifications/push.handler";
 import { conversaoDeVendaHandler } from "@/lib/conversoes/envio.handler";
 import { registerHandler } from "@/lib/event-log/dispatcher";
+import { esperaDaAssistenteHandler } from "@/workers/espera-da-assistente.handler";
 
 let _registered = false;
 
@@ -50,6 +51,9 @@ export function ensureHandlersRegistered(): void {
   // `ja_tem_card`, em vez de um segundo card. (O de sentimento, acima, também
   // devolve `retry` — áudio sem transcrição ou falha temporária do Jev.)
   registerHandler(classificadorComercialHandler);
+  // A espera da Assistente também espera o Jev (até 5 s): fica no fim dos
+  // consumidores de `message.received`, pela mesma razão do classificador.
+  registerHandler(esperaDaAssistenteHandler);
   // Por último: reportar a venda ao anúncio é o consumidor mais externo do
   // fechamento — depende de rede de terceiro e não pode atrasar quem escreve
   // no banco. Falha dele nunca segura os handlers acima.
