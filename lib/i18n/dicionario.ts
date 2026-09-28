@@ -9593,6 +9593,12 @@ export const DICIONARIO: Traducoes = {
   "Este menu atende um número. Troque o destino do número antes de arquivar.": {
     es: "Este menú atiende un número. Cambia el destino del número antes de archivar.",
   },
+  "Este menu está em uso pelo número {numero}. Troque o destino do número antes de arquivar.": {
+    es: "Este menú está en uso por el número {numero}. Cambia el destino del número antes de archivar.",
+  },
+  "Este menu está em uso pelos números {numeros}. Troque o destino dos números antes de arquivar.": {
+    es: "Este menú está en uso por los números {numeros}. Cambia el destino de los números antes de archivar.",
+  },
   "Outra gravação deste menu está em andamento. Tente de novo em instantes.": {
     es: "Hay otra grabación de este menú en curso. Inténtalo de nuevo en unos instantes.",
   },

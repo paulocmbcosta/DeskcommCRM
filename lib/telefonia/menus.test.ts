@@ -24,12 +24,14 @@ import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { caminhoDaFala, hashDaFala, type ConexaoDaTransacao, type LinhaDaFala } from "./falas";
 import {
   arquivarMenu,
+  mensagemDoMenuEmUso,
   menuSchema,
   menusDaOrg,
   salvarMenuDaOrg,
   situacaoDoMenuParaNumero,
   teclaRepetida,
   timesValidos,
+  travarMenuAtivo,
   type EntradaDoMenu,
 } from "./menus";
 
@@ -105,6 +107,8 @@ class Banco {
     [TIME_DE_FORA, { org: OUTRA, arquivado: false }],
   ]);
   vozes = new Map<string, { voice_id: string; model_id: string }>([[ORG, VOZ]]);
+  /** Os números (channel_sessions) e o menu que cada um toca. */
+  numeros: Array<{ org: string; menu_id: string; nome: string; arquivado: boolean }> = [];
   estado: Estado = { menus: new Map(), opcoes: [], falas: new Map() };
   eventos: string[] = [];
   naTransacao: Array<{ sql: string; params: unknown[] }> = [];
@@ -154,13 +158,17 @@ class Banco {
       return linhas([{ n }]);
     }
     if (s.startsWith("select id, prompt_id, invalid_prompt_id from phone_menus")) {
-      const m = e.menus.get(p[0] as string);
+      if (s.endsWith("for update")) this.antesDaTrava?.(this.estado);
+      const m = this.estado.menus.get(p[0] as string);
       return linhas(m && m.organization_id === p[1] && !m.archived ? [{ id: m.id, prompt_id: m.prompt_id, invalid_prompt_id: m.invalid_prompt_id }] : []);
     }
-    if (s.startsWith("select prompt_id, invalid_prompt_id from phone_menus") && s.endsWith("for update")) {
-      this.antesDaTrava?.(e);
+    if (s.startsWith("select coalesce(c.display_name, c.phone_number) as nome from channel_sessions")) {
+      return linhas(this.numeros.filter((n) => n.org === p[0] && n.menu_id === p[1] && !n.arquivado).map((n) => ({ nome: n.nome })));
+    }
+    if (s.startsWith("update phone_menus set archived_at")) {
       const m = e.menus.get(p[0] as string);
-      return linhas(m && m.organization_id === p[1] && !m.archived ? [{ prompt_id: m.prompt_id, invalid_prompt_id: m.invalid_prompt_id }] : []);
+      if (m && m.organization_id === p[1]) m.archived = true;
+      return vazio;
     }
     if (s.startsWith("select voice_id, model_id from phone_settings")) {
       const v = this.vozes.get(p[0] as string);
@@ -589,18 +597,101 @@ describe("menusDaOrg", () => {
   });
 });
 
-describe("arquivarMenu", () => {
-  it("menu livre é arquivado num comando só, que confere o uso no mesmo comando", async () => {
-    const { db, consultas } = dbCom([[{ id: "m" }]]);
-    expect(await arquivarMenu(db, ORG, "m")).toBe("ok");
-    expect(consultas).toHaveLength(1);
-    expect(consultas[0]!.sql).toMatch(/^update phone_menus .* not exists \(select 1 from channel_sessions/);
-    expect(consultas[0]!.params).toEqual(["m", ORG]);
+describe("travarMenuAtivo", () => {
+  it("trava a linha do menu ativo DESTA organização (for update) e o devolve; de fora, arquivado ou inexistente: null", async () => {
+    const { db, consultas } = dbCom([[{ id: "m", prompt_id: "f1", invalid_prompt_id: null }], []]);
+    expect(await travarMenuAtivo(db, ORG, "m")).toEqual({ id: "m", prompt_id: "f1", invalid_prompt_id: null });
+    expect(await travarMenuAtivo(db, OUTRA, "m")).toBeNull();
+    expect(consultas[0]!.sql).toMatch(/where id = \$1 and organization_id = \$2 and archived_at is null for update$/);
+    expect(consultas.map((c) => c.params)).toEqual([
+      ["m", ORG],
+      ["m", OUTRA],
+    ]);
+  });
+});
+
+describe("arquivarMenu — em transação: trava, confere o uso num comando SEPARADO, arquiva", () => {
+  const criar = async () => {
+    const r = await salvar();
+    if (!r.ok) throw new Error("criar o menu devia passar");
+    banco.naTransacao = [];
+    banco.eventos = [];
+    return r.id;
+  };
+
+  it("menu livre: prazo de trava, for update, o uso conferido DEPOIS num comando próprio, e só então arquiva", async () => {
+    const id = await criar();
+    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: true });
+    expect(comandosDaTransacao()).toEqual([
+      "begin",
+      "set local lock_timeout",
+      "select id, prompt_id,",
+      "select coalesce(c.display_name, c.phone_number)",
+      "update phone_menus set",
+      "commit",
+    ]);
+    expect(banco.naTransacao[2]!.sql).toMatch(/for update$/);
+    expect(banco.naTransacao[3]!.params).toEqual([ORG, id]);
+    expect(banco.naTransacao[4]!.params).toEqual([id, ORG]);
+    expect(banco.estado.menus.get(id)!.archived).toBe(true);
+    expect(banco.eventos.slice(-2)).toEqual(["commit", "release"]);
   });
 
-  it("menu que atende um número não é arquivado; o inexistente é 'nao_encontrado'", async () => {
-    expect(await arquivarMenu(dbCom([[], [{ em_uso: true }]]).db, ORG, "m")).toBe("menu_em_uso");
-    expect(await arquivarMenu(dbCom([[], []]).db, ORG, "m")).toBe("nao_encontrado");
+  it("menu que atende número: menu_em_uso com os NOMES dos números, desfeito e nada arquivado", async () => {
+    const id = await criar();
+    banco.numeros.push(
+      { org: ORG, menu_id: id, nome: "Recepção", arquivado: false },
+      { org: ORG, menu_id: id, nome: "Antigo", arquivado: true },
+      { org: OUTRA, menu_id: id, nome: "De fora", arquivado: false },
+    );
+    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: false, motivo: "menu_em_uso", numeros: ["Recepção"] });
+    expect(comandosDaTransacao().at(-1)).toBe("rollback");
+    expect(banco.estado.menus.get(id)!.archived).toBe(false);
+  });
+
+  it("de outra organização, já arquivado ou inexistente: nao_encontrado, desfeito, sem conferir uso", async () => {
+    const id = await criar();
+    expect(await arquivarMenu(banco.pool, OUTRA, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
+    expect(comandosDaTransacao().slice(-2)).toEqual(["select id, prompt_id,", "rollback"]);
+    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: true });
+    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
+  });
+
+  it("a trava está com outra gravação além do prazo (55P03): gravacao_em_andamento, desfeito e a conexão devolvida", async () => {
+    const id = await criar();
+    banco.falhar = { quando: /for update$/, erro: erroDoBanco("55P03") };
+    expect(await arquivarMenu(banco.pool, ORG, id)).toEqual({ ok: false, motivo: "gravacao_em_andamento" });
+    expect(banco.eventos.slice(-2)).toEqual(["rollback", "release"]);
+    expect(banco.liberacoes.at(-1)).toBeUndefined();
+  });
+
+  it("o rollback também falhou: a conexão é DESCARTADA e o erro original sobe", async () => {
+    const id = await criar();
+    banco.falhar = { quando: /^update phone_menus set archived_at/, erro: erroDoBanco("08006") };
+    banco.falharRollback = true;
+    await expect(arquivarMenu(banco.pool, ORG, id)).rejects.toThrow("erro 08006");
+    expect(banco.liberacoes.at(-1)).toBeInstanceOf(Error);
+  });
+});
+
+describe("mensagemDoMenuEmUso", () => {
+  it("nomeia o número (ou os números) que usam o menu", () => {
+    expect(mensagemDoMenuEmUso(["Recepção"])).toBe(
+      "Este menu está em uso pelo número Recepção. Troque o destino do número antes de arquivar.",
+    );
+    expect(mensagemDoMenuEmUso(["Recepção", "+556130000000"])).toBe(
+      "Este menu está em uso pelos números Recepção, +556130000000. Troque o destino dos números antes de arquivar.",
+    );
+  });
+
+  it("traduz o MODELO antes de pôr o nome: a chave do dicionário é o texto com o marcador", () => {
+    const vistos: string[] = [];
+    const t = (texto: string) => {
+      vistos.push(texto);
+      return texto.replace("Este menu está em uso pelo número", "Este menú está en uso por el número");
+    };
+    expect(mensagemDoMenuEmUso(["Recepción"], t)).toMatch(/^Este menú está en uso por el número Recepción\./);
+    expect(vistos).toEqual(["Este menu está em uso pelo número {numero}. Troque o destino do número antes de arquivar."]);
   });
 });
 

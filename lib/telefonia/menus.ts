@@ -8,6 +8,11 @@
  * com a fala pronta (`situacaoDoMenuParaNumero`), e um menu que atende um número
  * não é arquivado.
  *
+ * Toda escrita que depende de o menu estar ATIVO — salvar, arquivar, apontar um
+ * número para ele — trava a linha dele com `travarMenuAtivo` dentro da própria
+ * transação. É o que impede um número de terminar tocando um menu arquivado
+ * (o contrato está no comentário da função).
+ *
  * SALVAR (`salvarMenuDaOrg`) é em duas fases, a forma de `salvarFalaGeral`:
  *  1. FORA da transação, sem conexão do pool na mão: as recusas baratas (tecla
  *     repetida, time de fora, menu de outra organização) e a conferência das DUAS
@@ -45,6 +50,7 @@ import {
   gravarFalaConferida,
   reconferirFala,
   vozDaOrganizacao,
+  type ConexaoDaTransacao,
   type FalaConferida,
   type PedidoDeSalvar,
   type PoolDeTransacao,
@@ -104,6 +110,22 @@ export const MENSAGEM_DO_AUDIO_DA_FALA_DO_MENU: Record<"previa_ausente" | "armaz
   },
 };
 
+/** O menu em uso por um número (ou vários), NOMEANDO-os. `{numero}`/`{numeros}` entram depois da tradução. */
+export const MENSAGEM_DO_MENU_EM_USO = {
+  um: "Este menu está em uso pelo número {numero}. Troque o destino do número antes de arquivar.",
+  varios: "Este menu está em uso pelos números {numeros}. Troque o destino dos números antes de arquivar.",
+} as const;
+
+/**
+ * A recusa de arquivar, com os números que usam o menu. `t` traduz o MODELO (a
+ * chave do dicionário é o texto com o marcador) e o nome entra depois.
+ */
+export function mensagemDoMenuEmUso(numeros: readonly string[], t: (texto: string) => string = (x) => x): string {
+  if (numeros.length === 0) return t(MENSAGEM_DA_FALHA_DO_MENU.menu_em_uso);
+  if (numeros.length === 1) return t(MENSAGEM_DO_MENU_EM_USO.um).replaceAll("{numero}", numeros[0]!);
+  return t(MENSAGEM_DO_MENU_EM_USO.varios).replaceAll("{numeros}", numeros.join(", "));
+}
+
 export function teclaRepetida(opcoes: ReadonlyArray<{ tecla: string }>): boolean {
   return new Set(opcoes.map((o) => o.tecla)).size !== opcoes.length;
 }
@@ -127,6 +149,51 @@ export async function menuDaOrg(
   const { rows } = await db.query<{ id: string; prompt_id: string | null; invalid_prompt_id: string | null }>(
     "select id, prompt_id, invalid_prompt_id from phone_menus where id = $1 and organization_id = $2 and archived_at is null",
     [id, organizationId],
+  );
+  return rows[0] ?? null;
+}
+
+/** A linha do menu travada por `travarMenuAtivo`. */
+export interface MenuTravado {
+  id: string;
+  prompt_id: string | null;
+  invalid_prompt_id: string | null;
+}
+
+/**
+ * TRAVA a linha de um menu ATIVO desta organização (`select … for update`) e o
+ * devolve — ou `null` se ele não existe, é de outra organização ou está arquivado.
+ *
+ * CONTRATO de quem chama:
+ *  - `cliente` é UMA conexão com a transação JÁ aberta (`begin`), com
+ *    `set local lock_timeout` — esperar a trava para sempre não é opção. Pelo pool
+ *    solto a trava acaba com o comando e não protege nada;
+ *  - a escrita que depende de o menu estar ativo vem DEPOIS, na MESMA transação,
+ *    num comando SEPARADO (em READ COMMITTED cada comando tem snapshot novo: é o
+ *    comando seguinte que enxerga o que a transação que segurava a trava confirmou);
+ *  - `null` = recusar e desfazer (`rollback`), sem escrever.
+ *
+ * É a catraca comum das três escritas que dependem do menu ativo — salvar o menu
+ * (`salvarMenuDaOrg`), arquivá-lo (`arquivarMenu`) e apontar um número para ele
+ * (`lib/channels/telefonia/numeros.ts`, na transação da troca do destino). As três
+ * travam a MESMA linha em `for update` e por isso se serializam:
+ *  - arquivar primeiro: quem aponta o número espera a trava; quando o arquivamento
+ *    confirma, o Postgres reconfere `archived_at is null` na versão nova da linha e
+ *    devolve `null` — nenhum número passa a tocar um menu arquivado;
+ *  - apontar primeiro: o arquivamento espera; o comando seguinte dele já vê o
+ *    número e recusa com `menu_em_uso`.
+ * A FK composta `channel_sessions → phone_menus` sozinha NÃO serializa: ela trava o
+ * menu em `key share`, que não conflita com o UPDATE de `archived_at` — e o
+ * `not exists` de um comando só é avaliado com o snapshot do início dele, sem ver
+ * o número recém-apontado (tests/invariants/telefonia-menus-no-banco.test.ts
+ * mede as duas coisas, com o controle).
+ */
+export async function travarMenuAtivo(cliente: Queryable, organizationId: string, menuId: string): Promise<MenuTravado | null> {
+  const { rows } = await cliente.query<MenuTravado>(
+    `select id, prompt_id, invalid_prompt_id from phone_menus
+      where id = $1 and organization_id = $2 and archived_at is null
+      for update`,
+    [menuId, organizationId],
   );
   return rows[0] ?? null;
 }
@@ -185,6 +252,41 @@ function falhaDoErro(e: unknown): Exclude<FalhaDoMenu, "menu_em_uso"> | null {
 }
 
 /**
+ * Uma transação numa conexão só, com `lock_timeout`: `corpo` devolve o resultado e
+ * se é para confirmar (`commit`) ou desfazer (`rollback`). Erro desfaz; `seErro`
+ * traduz o que é recusa conhecida e o resto sobe. Se até o rollback falhar, a
+ * conexão é DESCARTADA (`release(erro)`), e não devolvida ao pool para a próxima
+ * rota herdar uma transação quebrada.
+ */
+async function naTransacao<T>(
+  pool: PoolDeTransacao,
+  corpo: (c: ConexaoDaTransacao) => Promise<{ confirmar: boolean; valor: T }>,
+  seErro: (e: unknown) => T | null,
+): Promise<T> {
+  const conexao = await pool.connect();
+  let descartar: Error | undefined;
+  try {
+    await conexao.query("begin");
+    await conexao.query(`set local lock_timeout = '${PRAZO_DA_TRAVA}'`);
+    const r = await corpo(conexao);
+    await conexao.query(r.confirmar ? "commit" : "rollback");
+    return r.valor;
+  } catch (erro) {
+    try {
+      await conexao.query("rollback");
+    } catch (falha) {
+      // A conexão morreu: devolvê-la ao pool entregaria a próxima rota a um socket quebrado.
+      descartar = falha instanceof Error ? falha : new Error("rollback falhou");
+    }
+    const traduzido = seErro(erro);
+    if (traduzido !== null) return traduzido;
+    throw erro;
+  } finally {
+    conexao.release(descartar);
+  }
+}
+
+/**
  * Salva o menu (novo ou editado), com as falas e as opções — as duas fases do
  * cabeçalho. Não audita: a rota tem o ator e o request id, e sabe o que `mudou`.
  */
@@ -221,86 +323,62 @@ export async function salvarMenuDaOrg(p: PedidoDeSalvarMenu): Promise<ResultadoD
   }
 
   // ── Fase 2: a transação, sob a trava do menu ─────────────────────────────
-  const conexao = await pool.connect();
-  let descartar: Error | undefined;
-  try {
-    await conexao.query("begin");
-    await conexao.query(`set local lock_timeout = '${PRAZO_DA_TRAVA}'`);
+  type Resultado = ResultadoDoSalvarMenu;
+  const desfazer = (valor: Resultado) => ({ confirmar: false, valor });
+  return naTransacao<Resultado>(
+    pool,
+    async (conexao) => {
+      const travado = p.id ? await travarMenuAtivo(conexao, org, p.id) : null;
+      if (p.id && !travado) return desfazer({ ok: false, motivo: "nao_encontrado" });
 
-    let travado: { prompt_id: string | null; invalid_prompt_id: string | null } | null = null;
-    if (p.id) {
-      const { rows } = await conexao.query<{ prompt_id: string | null; invalid_prompt_id: string | null }>(
-        `select prompt_id, invalid_prompt_id from phone_menus
-          where id = $1 and organization_id = $2 and archived_at is null
-          for update`,
-        [p.id, org],
-      );
-      travado = rows[0] ?? null;
-      if (!travado) {
-        await conexao.query("rollback");
-        return { ok: false, motivo: "nao_encontrado" };
+      const gravadas: Partial<Record<QualFala, FalaGravada>> = {};
+      for (const qual of ["menu", "invalida"] as const) {
+        const aprovada = aprovadas[qual];
+        const idAtual = (qual === "menu" ? travado?.prompt_id : travado?.invalid_prompt_id) ?? null;
+        const pedido = pedidoDaFala(qual, conexao, SEM_STORAGE_SOB_A_TRAVA, idAtual);
+        if (!aprovada || !pedido) continue;
+        const lida = idAtual ? await falaPorId(conexao, org, idAtual) : null;
+        const c = reconferirFala(pedido, lida, aprovada);
+        if (!c.ok) return desfazer({ ok: false, motivo: c.motivo, fala: qual });
+        gravadas[qual] = await gravarFalaConferida(pedido, c);
       }
-    }
+      const fala = gravadas.menu!;
+      const falaInvalida = gravadas.invalida ?? null;
 
-    const gravadas: Partial<Record<QualFala, FalaGravada>> = {};
-    for (const qual of ["menu", "invalida"] as const) {
-      const aprovada = aprovadas[qual];
-      const idAtual = (qual === "menu" ? travado?.prompt_id : travado?.invalid_prompt_id) ?? null;
-      const pedido = pedidoDaFala(qual, conexao, SEM_STORAGE_SOB_A_TRAVA, idAtual);
-      if (!aprovada || !pedido) continue;
-      const lida = idAtual ? await falaPorId(conexao, org, idAtual) : null;
-      const c = reconferirFala(pedido, lida, aprovada);
-      if (!c.ok) {
-        await conexao.query("rollback");
-        return { ok: false, motivo: c.motivo, fala: qual };
+      let id = p.id;
+      if (id) {
+        await conexao.query(
+          `update phone_menus
+              set name = $3, default_team_id = $4, prompt_id = $5, invalid_prompt_id = $6, updated_at = now()
+            where id = $1 and organization_id = $2 and archived_at is null`,
+          [id, org, e.nome, e.time_padrao_id, fala.fala.id, falaInvalida?.fala.id ?? null],
+        );
+        await conexao.query("delete from phone_menu_options where menu_id = $1 and organization_id = $2", [id, org]);
+      } else {
+        const { rows } = await conexao.query<{ id: string }>(
+          `insert into phone_menus (organization_id, name, default_team_id, prompt_id, invalid_prompt_id)
+           values ($1, $2, $3, $4, $5) returning id`,
+          [org, e.nome, e.time_padrao_id, fala.fala.id, falaInvalida?.fala.id ?? null],
+        );
+        id = rows[0]!.id;
       }
-      gravadas[qual] = await gravarFalaConferida(pedido, c);
-    }
-    const fala = gravadas.menu!;
-    const falaInvalida = gravadas.invalida ?? null;
-
-    let id = p.id;
-    if (id) {
       await conexao.query(
-        `update phone_menus
-            set name = $3, default_team_id = $4, prompt_id = $5, invalid_prompt_id = $6, updated_at = now()
-          where id = $1 and organization_id = $2 and archived_at is null`,
-        [id, org, e.nome, e.time_padrao_id, fala.fala.id, falaInvalida?.fala.id ?? null],
+        `insert into phone_menu_options (organization_id, menu_id, digit, team_id)
+         select $1, $2, x.tecla, x.time_id from jsonb_to_recordset($3::jsonb) as x(tecla text, time_id uuid)`,
+        [org, id, JSON.stringify(e.opcoes)],
       );
-      await conexao.query("delete from phone_menu_options where menu_id = $1 and organization_id = $2", [id, org]);
-    } else {
-      const { rows } = await conexao.query<{ id: string }>(
-        `insert into phone_menus (organization_id, name, default_team_id, prompt_id, invalid_prompt_id)
-         values ($1, $2, $3, $4, $5) returning id`,
-        [org, e.nome, e.time_padrao_id, fala.fala.id, falaInvalida?.fala.id ?? null],
-      );
-      id = rows[0]!.id;
-    }
-    await conexao.query(
-      `insert into phone_menu_options (organization_id, menu_id, digit, team_id)
-       select $1, $2, x.tecla, x.time_id from jsonb_to_recordset($3::jsonb) as x(tecla text, time_id uuid)`,
-      [org, id, JSON.stringify(e.opcoes)],
-    );
 
-    // A fala de tecla inválida que o menu deixou de ter sai junto, DEPOIS de o menu soltá-la.
-    const falaInvalidaDescartada = !e.fala_invalida && travado?.invalid_prompt_id ? travado.invalid_prompt_id : null;
-    if (falaInvalidaDescartada) await descartarFala(conexao, org, falaInvalidaDescartada);
+      // A fala de tecla inválida que o menu deixou de ter sai junto, DEPOIS de o menu soltá-la.
+      const falaInvalidaDescartada = !e.fala_invalida && travado?.invalid_prompt_id ? travado.invalid_prompt_id : null;
+      if (falaInvalidaDescartada) await descartarFala(conexao, org, falaInvalidaDescartada);
 
-    await conexao.query("commit");
-    return { ok: true, id, fala, falaInvalida, falaInvalidaDescartada };
-  } catch (erro) {
-    try {
-      await conexao.query("rollback");
-    } catch (falha) {
-      // A conexão morreu: devolvê-la ao pool entregaria a próxima rota a um socket quebrado.
-      descartar = falha instanceof Error ? falha : new Error("rollback falhou");
-    }
-    const motivo = falhaDoErro(erro);
-    if (motivo) return { ok: false, motivo };
-    throw erro;
-  } finally {
-    conexao.release(descartar);
-  }
+      return { confirmar: true, valor: { ok: true, id, fala, falaInvalida, falaInvalidaDescartada } };
+    },
+    (erro) => {
+      const motivo = falhaDoErro(erro);
+      return motivo ? { ok: false, motivo } : null;
+    },
+  );
 }
 
 const falaJson = (a: string) => `case when ${a}.id is null then null else jsonb_build_object(
@@ -379,38 +457,42 @@ export async function menusDaOrg(db: Queryable, organizationId: string): Promise
   });
 }
 
+export type ResultadoDoArquivar =
+  | { ok: true }
+  | { ok: false; motivo: "nao_encontrado" | "gravacao_em_andamento" }
+  /** `numeros` = os nomes (ou, sem nome, os números) que tocam o menu — a tela os mostra. */
+  | { ok: false; motivo: "menu_em_uso"; numeros: string[] };
+
 /**
- * Arquiva o menu, se nenhum número o toca. Arquivar um menu em uso calaria a URA
- * daquele número. O uso é conferido no MESMO comando que arquiva, e não numa
- * leitura antes dele — o que fecha a janela entre "conferi" e "arquivei", mas não
- * serializa com uma troca de destino do número ainda não confirmada: essa troca
- * só trava a linha do menu em `key share` (a FK), que não conflita com este
- * UPDATE. Quem aponta o número para o menu confere `archived_at` do lado dele
- * (`situacaoDoMenuParaNumero`).
+ * Arquiva o menu, se nenhum número o toca: arquivar um menu em uso calaria a URA
+ * daquele número. Numa transação, em comandos SEPARADOS: trava a linha do menu
+ * (`travarMenuAtivo`); DEPOIS, num comando próprio (snapshot novo), confere os
+ * números ativos que apontam para ele; só então arquiva. Num comando só
+ * (`update … where not exists`), a subconsulta usaria o snapshot do início do
+ * comando e não veria um número apontado por uma transação que acabou de
+ * confirmar — nem esperaria por uma que ainda não confirmou.
  */
-export async function arquivarMenu(
-  db: Queryable,
-  organizationId: string,
-  id: string,
-): Promise<"ok" | "nao_encontrado" | "menu_em_uso"> {
-  const { rows } = await db.query<{ id: string }>(
-    `update phone_menus m
-        set archived_at = now(), updated_at = now()
-      where m.id = $1 and m.organization_id = $2 and m.archived_at is null
-        and not exists (select 1 from channel_sessions c
-                         where c.organization_id = m.organization_id and c.sip_menu_id = m.id and c.archived_at is null)
-      returning m.id`,
-    [id, organizationId],
+export async function arquivarMenu(pool: PoolDeTransacao, organizationId: string, id: string): Promise<ResultadoDoArquivar> {
+  const desfazer = (valor: ResultadoDoArquivar) => ({ confirmar: false, valor });
+  return naTransacao<ResultadoDoArquivar>(
+    pool,
+    async (conexao) => {
+      if (!(await travarMenuAtivo(conexao, organizationId, id))) return desfazer({ ok: false, motivo: "nao_encontrado" });
+      const { rows } = await conexao.query<{ nome: string }>(
+        `select coalesce(c.display_name, c.phone_number) as nome from channel_sessions c
+          where c.organization_id = $1 and c.sip_menu_id = $2 and c.archived_at is null
+          order by c.created_at`,
+        [organizationId, id],
+      );
+      if (rows.length > 0) return desfazer({ ok: false, motivo: "menu_em_uso", numeros: rows.map((r) => r.nome) });
+      await conexao.query(
+        "update phone_menus set archived_at = now(), updated_at = now() where id = $1 and organization_id = $2",
+        [id, organizationId],
+      );
+      return { confirmar: true, valor: { ok: true } };
+    },
+    (erro) => (falhaDoErro(erro) === "gravacao_em_andamento" ? { ok: false, motivo: "gravacao_em_andamento" } : null),
   );
-  if (rows[0]) return "ok";
-  const { rows: motivo } = await db.query<{ em_uso: boolean }>(
-    `select exists (select 1 from channel_sessions c
-                     where c.organization_id = m.organization_id and c.sip_menu_id = m.id and c.archived_at is null) as em_uso
-       from phone_menus m
-      where m.id = $1 and m.organization_id = $2 and m.archived_at is null`,
-    [id, organizationId],
-  );
-  return motivo[0]?.em_uso ? "menu_em_uso" : "nao_encontrado";
 }
 
 /** Um número só toca um menu desta organização, não arquivado, com a fala (e a de inválida, se houver) pronta. */

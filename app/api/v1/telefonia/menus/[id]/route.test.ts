@@ -16,7 +16,7 @@ const TIME = "44444444-4444-4444-8444-444444444444";
 const MENU = "55555555-5555-4555-8555-555555555555";
 const HASH = "a".repeat(64);
 const POOL = vi.hoisted(() => ({ marca: "pool-da-rota" }));
-const estado = vi.hoisted(() => ({ resultado: null as unknown, arquivar: "ok" as string }));
+const estado = vi.hoisted(() => ({ resultado: null as unknown, arquivar: { ok: true } as unknown }));
 
 vi.mock("@/lib/auth/require-role", () => ({
   requireRole: vi.fn(async () => ({
@@ -73,7 +73,7 @@ const fetchContado = vi.fn(async () => new Response(null, { status: 599 }));
 
 beforeEach(() => {
   estado.resultado = { ok: true, id: MENU, fala: { fala: FALA, mudou: false }, falaInvalida: null, falaInvalidaDescartada: null };
-  estado.arquivar = "ok";
+  estado.arquivar = { ok: true };
   fetchContado.mockClear();
   vi.stubGlobal("fetch", fetchContado);
   vi.mocked(audit).mockClear();
@@ -141,16 +141,42 @@ describe("DELETE /api/v1/telefonia/menus/[id]", () => {
     });
   });
 
-  it("menu que atende um número: 409 menu_em_uso, sem auditar", async () => {
-    estado.arquivar = "menu_em_uso";
+  it("menu que atende um número: 409 menu_em_uso NOMEANDO o número, com a lista em details, sem auditar", async () => {
+    estado.arquivar = { ok: false, motivo: "menu_em_uso", numeros: ["Recepção"] };
     const r = await apagar(MENU);
     expect(r.status).toBe(409);
-    expect(await codigo(r)).toBe("menu_em_uso");
+    const { error } = (await r.json()) as { error: { code: string; message: string; details: unknown } };
+    expect(error).toEqual({
+      code: "menu_em_uso",
+      message: "Este menu está em uso pelo número Recepção. Troque o destino do número antes de arquivar.",
+      details: { numeros: ["Recepção"] },
+    });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("em espanhol, a mesma recusa traduzida, com os números no lugar", async () => {
+    vi.mocked(requireRole).mockResolvedValueOnce({
+      ok: true,
+      user: { id: "11111111-1111-4111-8111-111111111111", email: "ana@exemplo.com", full_name: "Ana", idioma: "es" },
+      org: { orgId: ORG, name: "Org", role: "admin" },
+    } as never);
+    estado.arquivar = { ok: false, motivo: "menu_em_uso", numeros: ["Recepción", "Ventas"] };
+    const { error } = (await (await apagar(MENU)).json()) as { error: { message: string } };
+    expect(error.message).toBe(
+      "Este menú está en uso por los números Recepción, Ventas. Cambia el destino de los números antes de archivar.",
+    );
+  });
+
+  it("a trava do menu está com outra gravação além do prazo: 409 gravacao_em_andamento, sem auditar", async () => {
+    estado.arquivar = { ok: false, motivo: "gravacao_em_andamento" };
+    const r = await apagar(MENU);
+    expect(r.status).toBe(409);
+    expect(await codigo(r)).toBe("gravacao_em_andamento");
     expect(audit).not.toHaveBeenCalled();
   });
 
   it("inexistente ou id inválido: 404, sem auditar", async () => {
-    estado.arquivar = "nao_encontrado";
+    estado.arquivar = { ok: false, motivo: "nao_encontrado" };
     expect((await apagar(MENU)).status).toBe(404);
     expect((await apagar("nao-e-uuid")).status).toBe(404);
     expect(vi.mocked(arquivarMenu)).toHaveBeenCalledTimes(1);

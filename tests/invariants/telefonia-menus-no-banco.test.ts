@@ -18,19 +18,25 @@
  *     (e faz o menu "confundir"), a ligação em curso não, um `chosen` sem tecla
  *     conta como escolha mas em tecla nenhuma, a de 8 dias atrás não — e a
  *     consulta alcança o índice `idx_voice_calls_menu_recentes`;
- *  6. menu que atende um número não é arquivado; arquivado some da lista, não
- *     serve a número e não é editado.
+ *  6. menu que atende um número não é arquivado (`menu_em_uso`, com o nome do
+ *     número); arquivado some da lista, não serve a número e não é editado;
+ *  7. arquivar e apontar um número ao menu AO MESMO TEMPO nunca terminam com o
+ *     número tocando um menu arquivado — nas duas ordens e com o encontro forçado,
+ *     porque as duas escritas travam a linha do menu (`travarMenuAtivo`) e o
+ *     arquivamento confere o uso num comando SEPARADO. O CONTROLE (arquivar num
+ *     comando só + apontar só com a FK) mostra o defeito que o teste diz prender.
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { caminhoDaFala, hashDaFala, type ConexaoDaTransacao } from "@/lib/telefonia/falas";
+import { caminhoDaFala, hashDaFala, type ConexaoDaTransacao, type PoolDeTransacao } from "@/lib/telefonia/falas";
 import {
   CONSULTA_DA_SEMANA,
   arquivarMenu,
   menusDaOrg,
   salvarMenuDaOrg,
   situacaoDoMenuParaNumero,
+  travarMenuAtivo,
   type EntradaDoMenu,
   type PedidoDeSalvarMenu,
 } from "@/lib/telefonia/menus";
@@ -401,13 +407,13 @@ describe("arquivarMenu e o destino do número", () => {
     sql(`update public.channel_sessions set sip_team_id = null, sip_menu_id = '${id}' where id = '${NUMERO_A}';`);
     expect((await menusDaOrg(pool, ORG_A))[0]!.numeros).toEqual(["Recepção"]);
 
-    expect(await arquivarMenu(pool, ORG_A, id)).toBe("menu_em_uso");
-    expect(await arquivarMenu(pool, ORG_B, id)).toBe("nao_encontrado");
+    expect(await arquivarMenu(pool, ORG_A, id)).toEqual({ ok: false, motivo: "menu_em_uso", numeros: ["Recepção"] });
+    expect(await arquivarMenu(pool, ORG_B, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
     expect(await menusDaOrg(pool, ORG_A)).toHaveLength(1);
 
     sql(`update public.channel_sessions set sip_menu_id = null where id = '${NUMERO_A}';`);
-    expect(await arquivarMenu(pool, ORG_A, id)).toBe("ok");
-    expect(await arquivarMenu(pool, ORG_A, id)).toBe("nao_encontrado");
+    expect(await arquivarMenu(pool, ORG_A, id)).toEqual({ ok: true });
+    expect(await arquivarMenu(pool, ORG_A, id)).toEqual({ ok: false, motivo: "nao_encontrado" });
     expect(await menusDaOrg(pool, ORG_A)).toEqual([]);
     expect(await situacaoDoMenuParaNumero(pool, ORG_A, id)).toBe("inexistente");
     expect(await salvarMenuDaOrg(pedido({ nome: "Ressuscitado" }, id))).toEqual({ ok: false, motivo: "nao_encontrado" });
@@ -418,5 +424,156 @@ describe("arquivarMenu e o destino do número", () => {
     sql(`update public.phone_prompts set status = 'failed', error = 'erro_do_provedor' where id = '${fala.fala.id}';`);
     expect(await situacaoDoMenuParaNumero(pool, ORG_A, id)).toBe("pendente");
     expect((await menusDaOrg(pool, ORG_A))[0]!.pronto).toBe(false);
+  });
+});
+
+/**
+ * Apontar o número para o menu na forma que `lib/channels/telefonia/numeros.ts`
+ * usa (contrato de `travarMenuAtivo`): transação com prazo, trava do menu ativo,
+ * e a troca do destino num comando SEPARADO depois dela.
+ */
+async function apontarNumero(p: PoolDeTransacao, numeroId: string, menuId: string): Promise<"ok" | "menu_inativo"> {
+  const c = await p.connect();
+  try {
+    await c.query("begin");
+    await c.query("set local lock_timeout = '4s'");
+    if (!(await travarMenuAtivo(c, ORG_A, menuId))) {
+      await c.query("rollback");
+      return "menu_inativo";
+    }
+    await c.query(
+      "update channel_sessions set sip_team_id = null, sip_menu_id = $3 where id = $1 and organization_id = $2",
+      [numeroId, ORG_A, menuId],
+    );
+    await c.query("commit");
+    return "ok";
+  } catch (e) {
+    await c.query("rollback").catch(() => undefined);
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
+/** O pool de verdade com um PORTÃO logo depois da trava do menu: a transação para ali até `abrir()`. */
+function poolComPortao() {
+  let abrir: () => void = () => undefined;
+  const portao = new Promise<void>((r) => (abrir = r));
+  let avisar: () => void = () => undefined;
+  const travou = new Promise<void>((r) => (avisar = r));
+  const embrulhado: PoolDeTransacao = {
+    connect: async (): Promise<ConexaoDaTransacao> => {
+      const c = await pool.connect();
+      return {
+        release: (erro?: Error) => c.release(erro),
+        query: (async (texto: string, valores?: unknown[]) => {
+          const r = await c.query(texto, valores);
+          if (TRAVA_DO_MENU.test(texto)) {
+            avisar();
+            await portao;
+          }
+          return r;
+        }) as ConexaoDaTransacao["query"],
+      };
+    },
+  };
+  return { pool: embrulhado, travou, abrir };
+}
+
+/** Se a promessa já terminou — para provar que ela está PARADA na trava. */
+function acompanhar<T>(p: Promise<T>) {
+  let terminou = false;
+  void p.then(
+    () => (terminou = true),
+    () => (terminou = true),
+  );
+  return () => terminou;
+}
+const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const destinoDoNumero = async () =>
+  (await pool.query<{ sip_menu_id: string | null }>("select sip_menu_id from channel_sessions where id = $1", [NUMERO_A]))
+    .rows[0]!.sip_menu_id;
+const arquivado = async (id: string) =>
+  (await pool.query<{ a: boolean }>("select archived_at is not null as a from phone_menus where id = $1", [id])).rows[0]!.a;
+
+describe("arquivar × apontar um número ao menu, ao mesmo tempo (Postgres real)", () => {
+  it("arquivar trava primeiro: quem aponta espera e, quando o arquivamento confirma, recebe null — o número não toca o menu arquivado", async () => {
+    const { id } = await criar();
+    const portao = poolComPortao();
+    const arquivando = arquivarMenu(portao.pool, ORG_A, id);
+    await portao.travou;
+
+    const apontando = apontarNumero(pool, NUMERO_A, id);
+    const apontou = acompanhar(apontando);
+    await esperar(300);
+    expect(apontou()).toBe(false); // parado na trava do menu
+
+    portao.abrir();
+    expect(await arquivando).toEqual({ ok: true });
+    expect(await apontando).toBe("menu_inativo");
+    expect(await arquivado(id)).toBe(true);
+    expect(await destinoDoNumero()).toBeNull();
+  });
+
+  it("apontar trava primeiro: o arquivamento espera e, no comando seguinte, vê o número — menu_em_uso, e o menu segue ativo", async () => {
+    const { id } = await criar();
+    const portao = poolComPortao();
+    const apontando = apontarNumero(portao.pool, NUMERO_A, id);
+    await portao.travou;
+
+    const arquivando = arquivarMenu(pool, ORG_A, id);
+    const arquivou = acompanhar(arquivando);
+    await esperar(300);
+    expect(arquivou()).toBe(false); // parado na trava do menu
+
+    portao.abrir();
+    expect(await apontando).toBe("ok");
+    expect(await arquivando).toEqual({ ok: false, motivo: "menu_em_uso", numeros: ["Recepção"] });
+    expect(await arquivado(id)).toBe(false);
+    expect(await destinoDoNumero()).toBe(id);
+  });
+
+  it("os dois juntos, com o encontro forçado: um só vence, e nunca sobra número tocando menu arquivado", async () => {
+    const { id } = await criar();
+    const e = poolComEncontro();
+
+    const [a, n] = await Promise.all([arquivarMenu(e.pool, ORG_A, id), apontarNumero(e.pool, NUMERO_A, id)]);
+
+    const fim = { arquivado: await arquivado(id), destino: await destinoDoNumero() };
+    expect(fim.arquivado && fim.destino === id, JSON.stringify({ a, n, fim })).toBe(false);
+    const venceuArquivar = a.ok && n === "menu_inativo" && fim.arquivado && fim.destino === null;
+    const venceuApontar = !a.ok && a.motivo === "menu_em_uso" && n === "ok" && !fim.arquivado && fim.destino === id;
+    expect(venceuArquivar !== venceuApontar, JSON.stringify({ a, n, fim })).toBe(true);
+    // A trava serializou: os dois passaram por ela, mas nunca juntos.
+    expect(e.chegadas).toBe(2);
+    expect(e.simultaneas).toBe(1);
+  });
+
+  it("CONTROLE — arquivar num comando só (not exists) e apontar só com a FK: o número termina tocando o menu ARQUIVADO", async () => {
+    const { id } = await criar();
+    const dono = await pool.connect();
+    try {
+      await dono.query("begin");
+      // Aponta o número sem travar o menu: a FK só pega `key share` na linha dele.
+      await dono.query("update channel_sessions set sip_team_id = null, sip_menu_id = $2 where id = $1", [NUMERO_A, id]);
+      // O arquivamento antigo não espera (key share × no key update não conflitam) e o
+      // `not exists` não vê o número ainda não confirmado.
+      const antigo = pool.query(
+        `update phone_menus m set archived_at = now()
+          where m.id = $1 and m.organization_id = $2 and m.archived_at is null
+            and not exists (select 1 from channel_sessions c
+                             where c.organization_id = m.organization_id and c.sip_menu_id = m.id and c.archived_at is null)
+          returning m.id`,
+        [id, ORG_A],
+      );
+      const r = await Promise.race([antigo, esperar(2_000).then(() => "esperou" as const)]);
+      expect(r === "esperou" ? r : r.rowCount).toBe(1);
+      await dono.query("commit");
+    } finally {
+      dono.release();
+    }
+    expect(await arquivado(id)).toBe(true);
+    expect(await destinoDoNumero()).toBe(id);
   });
 });
