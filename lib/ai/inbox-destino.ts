@@ -70,6 +70,18 @@ export const POLITICAS_DE_AVISO = {
   // cai em "sem destino" com a orientação abaixo: o telefone está no corpo do
   // aviso, escrito pelo worker.
   voice_call_missed: { refs: ["contact"], orientacao: "Retorne a ligação quando puder — quem ligou não foi atendido." },
+  // Sem referência de propósito (`ref_kind`/`ref_id` nulos): o aviso é da fala,
+  // e a fala se conserta na aba do telefone — o contexto geral é a porta certa.
+  phone_prompt_unplayable: {
+    refs: [],
+    orientacao: "Gere a fala de novo em Conexões › Telefone. Enquanto isso, as ligações seguem sem ela.",
+    geral: { papel: "admin", href: "/app/connections?aba=telefone&sub=falas", rotulo: "Revisar as falas do telefone" },
+  },
+  phone_emergency_expired: {
+    refs: [],
+    orientacao: "Se a instabilidade continua, ligue o aviso de novo no time.",
+    geral: { papel: "manager", href: "/app/settings/teams", rotulo: "Abrir os times" },
+  },
   other: { refs: ["lead", "channel_session", "appointment", "ai_agent"], orientacao: "Confira a situação descrita neste aviso com a pessoa responsável." },
 } satisfies Record<InboxKind, Politica>;
 

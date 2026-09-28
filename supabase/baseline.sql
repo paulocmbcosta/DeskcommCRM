@@ -10131,6 +10131,11 @@ alter table public.agent_inbox_items
     -- lista, não em bloco novo (#159, bloco único por constraint).
     'voice_call_missed',
     'case_stale',
+    -- (migration 0288) Telefonia, fase 2: a fala do telefone não tocou (a ligação
+    -- seguiu sem ela) e o aviso de instabilidade de um time venceu e desligou
+    -- sozinho. Entram NESTA lista, no fim, pela mesma razão das de cima.
+    'phone_prompt_unplayable',
+    'phone_emergency_expired',
     'other'
   ));
 
@@ -29328,6 +29333,223 @@ alter table public.channel_sessions
 
 comment on column public.channel_sessions.sip_dial_prefix is
   'Prefixo de discagem do número SIP: dígitos (1 a 4) que o worker põe ANTES do DDD na ligação de saída — ex.: 0, ou 0 + código da operadora (015). NULL = DDD + número. Por número porque cada operadora tem a sua regra (medido na Totus: sem o 0, 404). Lido por lib/channels/telefonia/repositorio.ts; colado no destino por enderecoDeSaida (pjsip.ts), que confere a régua de novo.';
+
+notify pgrst, 'reload schema';
+
+-- ---- telefonia fase 2: URA e falas (migration 0288) ----
+-- Racional completo no cabeçalho de supabase/migrations/20260928230000_0288_telefonia_ura_e_falas.sql
+-- e no desenho docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md.
+-- agent_inbox_items_kind_check: bloco único (acima), não aqui.
+
+-- 1. phone_prompts ----------------------------------------------------------
+create table if not exists public.phone_prompts (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  kind            text not null,
+  "text"          text not null,
+  voice_id        text not null,
+  model_id        text not null,
+  content_hash    text not null,
+  storage_path    text,
+  duration_ms     integer,
+  status          text not null,
+  error           text,
+  created_by      uuid references auth.users(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  unique (organization_id, id)
+);
+
+-- Cura antes dos CHECKs: a tabela é nova, e só uma linha gravada por fora os violaria.
+update public.phone_prompts
+   set status = 'failed', error = coalesce(error, 'erro_do_provedor'), storage_path = null, duration_ms = null
+ where storage_path is not null
+   and storage_path <> organization_id::text || '/' || content_hash || '.ulaw';
+update public.phone_prompts
+   set status = 'failed', error = coalesce(error, 'erro_do_provedor')
+ where status = 'ready' and (storage_path is null or duration_ms is null or duration_ms <= 0);
+
+alter table public.phone_prompts drop constraint if exists phone_prompts_kind_check;
+alter table public.phone_prompts add constraint phone_prompts_kind_check
+  check (kind in ('menu', 'invalid', 'waiting', 'nobody', 'after_hours', 'emergency'));
+alter table public.phone_prompts drop constraint if exists phone_prompts_status_check;
+alter table public.phone_prompts add constraint phone_prompts_status_check
+  check (status in ('ready', 'failed'));
+alter table public.phone_prompts drop constraint if exists phone_prompts_text_check;
+alter table public.phone_prompts add constraint phone_prompts_text_check
+  check (char_length("text") between 1 and 1000);
+alter table public.phone_prompts drop constraint if exists phone_prompts_hash_check;
+alter table public.phone_prompts add constraint phone_prompts_hash_check
+  check (content_hash ~ '^[0-9a-f]{64}$');
+alter table public.phone_prompts drop constraint if exists phone_prompts_storage_path_check;
+alter table public.phone_prompts add constraint phone_prompts_storage_path_check
+  check (storage_path is null or storage_path = organization_id::text || '/' || content_hash || '.ulaw');
+alter table public.phone_prompts drop constraint if exists phone_prompts_ready_check;
+alter table public.phone_prompts add constraint phone_prompts_ready_check
+  check (status <> 'ready' or (storage_path is not null and duration_ms is not null and duration_ms > 0));
+
+create index if not exists phone_prompts_org on public.phone_prompts (organization_id);
+create index if not exists phone_prompts_caminho_pronto on public.phone_prompts (storage_path) where status = 'ready';
+
+-- 2. phone_settings -----------------------------------------------------------
+create table if not exists public.phone_settings (
+  organization_id       uuid primary key references public.organizations(id) on delete cascade,
+  voice_id              text,
+  model_id              text not null default 'eleven_multilingual_v2',
+  waiting_prompt_id     uuid references public.phone_prompts(id) on delete set null,
+  nobody_prompt_id      uuid references public.phone_prompts(id) on delete set null,
+  after_hours_prompt_id uuid references public.phone_prompts(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
+);
+
+-- 3. phone_menus + phone_menu_options ----------------------------------------
+create table if not exists public.phone_menus (
+  id                uuid primary key default gen_random_uuid(),
+  organization_id   uuid not null references public.organizations(id) on delete cascade,
+  name              text not null,
+  prompt_id         uuid references public.phone_prompts(id) on delete set null,
+  invalid_prompt_id uuid references public.phone_prompts(id) on delete set null,
+  default_team_id   uuid not null,
+  accepts_extension boolean not null default false,
+  archived_at       timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  unique (organization_id, id),
+  foreign key (organization_id, default_team_id) references public.attendance_teams(organization_id, id)
+);
+alter table public.phone_menus drop constraint if exists phone_menus_name_check;
+alter table public.phone_menus add constraint phone_menus_name_check
+  check (char_length(btrim(name)) between 1 and 80);
+
+create table if not exists public.phone_menu_options (
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  menu_id         uuid not null,
+  digit           text not null,
+  team_id         uuid not null,
+  created_at      timestamptz not null default now(),
+  primary key (menu_id, digit),
+  foreign key (organization_id, menu_id) references public.phone_menus(organization_id, id) on delete cascade,
+  foreign key (organization_id, team_id) references public.attendance_teams(organization_id, id)
+);
+delete from public.phone_menu_options where digit !~ '^[0-9]$';
+alter table public.phone_menu_options drop constraint if exists phone_menu_options_digit_check;
+alter table public.phone_menu_options add constraint phone_menu_options_digit_check
+  check (digit ~ '^[0-9]$');
+
+create index if not exists phone_menus_org on public.phone_menus (organization_id) where archived_at is null;
+create index if not exists phone_menu_options_team on public.phone_menu_options (organization_id, team_id);
+
+-- 4. channel_sessions.sip_menu_id ---------------------------------------------
+alter table public.channel_sessions
+  add column if not exists sip_menu_id uuid references public.phone_menus(id) on delete set null;
+update public.channel_sessions
+   set sip_menu_id = null
+ where sip_team_id is not null and sip_menu_id is not null;
+alter table public.channel_sessions drop constraint if exists channel_sessions_sip_destino_check;
+alter table public.channel_sessions add constraint channel_sessions_sip_destino_check
+  check (not (sip_team_id is not null and sip_menu_id is not null));
+create index if not exists idx_channel_sessions_sip_menu
+  on public.channel_sessions (sip_menu_id) where sip_menu_id is not null;
+
+-- 5. attendance_teams.phone_emergency_* -----------------------------------------
+alter table public.attendance_teams
+  add column if not exists phone_emergency_prompt_id uuid references public.phone_prompts(id) on delete set null,
+  add column if not exists phone_emergency_active_since timestamptz,
+  add column if not exists phone_emergency_expires_at timestamptz,
+  add column if not exists phone_emergency_activated_by uuid references auth.users(id) on delete set null;
+update public.attendance_teams
+   set phone_emergency_active_since = null, phone_emergency_expires_at = null, phone_emergency_activated_by = null
+ where (phone_emergency_active_since is null and phone_emergency_expires_at is not null)
+    or (phone_emergency_expires_at is not null and phone_emergency_expires_at <= phone_emergency_active_since);
+alter table public.attendance_teams drop constraint if exists attendance_teams_phone_emergency_check;
+alter table public.attendance_teams add constraint attendance_teams_phone_emergency_check check (
+  (phone_emergency_active_since is null and phone_emergency_expires_at is null)
+  or (phone_emergency_active_since is not null
+      and (phone_emergency_expires_at is null or phone_emergency_expires_at > phone_emergency_active_since))
+);
+create index if not exists attendance_teams_aviso_com_prazo
+  on public.attendance_teams (phone_emergency_expires_at) where phone_emergency_expires_at is not null;
+
+-- 6. voice_calls ----------------------------------------------------------------
+alter table public.voice_calls
+  add column if not exists menu_id uuid references public.phone_menus(id) on delete set null,
+  add column if not exists menu_digit text,
+  add column if not exists menu_outcome text,
+  add column if not exists emergency_heard_at timestamptz;
+update public.voice_calls set menu_digit = null where menu_digit is not null and menu_digit !~ '^[0-9]$';
+update public.voice_calls set menu_outcome = null
+ where menu_outcome is not null and menu_outcome not in ('chosen', 'default_no_input', 'default_invalid');
+alter table public.voice_calls drop constraint if exists voice_calls_menu_digit_check;
+alter table public.voice_calls add constraint voice_calls_menu_digit_check
+  check (menu_digit is null or menu_digit ~ '^[0-9]$');
+alter table public.voice_calls drop constraint if exists voice_calls_menu_outcome_check;
+alter table public.voice_calls add constraint voice_calls_menu_outcome_check
+  check (menu_outcome is null or menu_outcome in ('chosen', 'default_no_input', 'default_invalid'));
+create index if not exists idx_voice_calls_menu_recentes
+  on public.voice_calls (menu_id, started_at) where menu_id is not null;
+
+-- 7. RLS, GRANT e policies ------------------------------------------------------
+alter table public.phone_prompts      enable row level security;
+alter table public.phone_settings     enable row level security;
+alter table public.phone_menus        enable row level security;
+alter table public.phone_menu_options enable row level security;
+
+revoke all on public.phone_prompts, public.phone_settings, public.phone_menus, public.phone_menu_options
+  from public, anon, authenticated, service_role;
+grant select on public.phone_prompts, public.phone_settings, public.phone_menus, public.phone_menu_options
+  to authenticated, service_role;
+
+-- `_all` sai por nome: um clone que tenha aplicado um rascunho com a policy ALL
+-- não fica com as duas.
+drop policy if exists tenant_isolation_phone_prompts_all on public.phone_prompts;
+drop policy if exists tenant_isolation_phone_prompts_select on public.phone_prompts;
+create policy tenant_isolation_phone_prompts_select on public.phone_prompts for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+drop policy if exists tenant_isolation_phone_settings_all on public.phone_settings;
+drop policy if exists tenant_isolation_phone_settings_select on public.phone_settings;
+create policy tenant_isolation_phone_settings_select on public.phone_settings for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+drop policy if exists tenant_isolation_phone_menus_all on public.phone_menus;
+drop policy if exists tenant_isolation_phone_menus_select on public.phone_menus;
+create policy tenant_isolation_phone_menus_select on public.phone_menus for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+drop policy if exists tenant_isolation_phone_menu_options_all on public.phone_menu_options;
+drop policy if exists tenant_isolation_phone_menu_options_select on public.phone_menu_options;
+create policy tenant_isolation_phone_menu_options_select on public.phone_menu_options for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+
+-- 8. updated_at ------------------------------------------------------------------
+create or replace trigger trg_phone_prompts_updated_at
+  before update on public.phone_prompts for each row execute function public.fn_set_updated_at();
+create or replace trigger trg_phone_settings_updated_at
+  before update on public.phone_settings for each row execute function public.fn_set_updated_at();
+create or replace trigger trg_phone_menus_updated_at
+  before update on public.phone_menus for each row execute function public.fn_set_updated_at();
+
+-- 9. Bucket privado --------------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('phone-prompts', 'phone-prompts', false, 2097152, array['audio/basic'])
+on conflict (id) do update
+  set public             = excluded.public,
+      file_size_limit    = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+-- 10. Comentários ----------------------------------------------------------------
+comment on table public.phone_prompts is
+  'Uma fala SALVA do telefone (URA, aguarde, ninguém atendeu, fora do horário, aviso de instabilidade). Áudio μ-law 8 kHz no bucket privado phone-prompts: gerado pela ElevenLabs SÓ na prévia da tela (a prévia é só objeto no Storage, sem linha), passa a valer no "Salvar e usar" (a linha aponta para o hash) e é copiado pelo worker para o volume telefonia-falas, que o Asterisk lê. Escrita só pela API/worker (GRANT só de SELECT). status failed está reservado: a v1 só grava ready.';
+comment on column public.phone_prompts.storage_path is
+  '<organization_id>/<content_hash>.ulaw no bucket phone-prompts — amarrado por CHECK, porque o worker escreve este caminho no disco. NULL só numa linha failed.';
+comment on table public.phone_menus is
+  'Menu de voz (URA) da organização: serve a vários números (channel_sessions.sip_menu_id). Tecla → time em phone_menu_options; quem não escolhe vai ao default_team_id. accepts_extension é da versão 3 (ramais).';
+comment on column public.channel_sessions.sip_menu_id is
+  'Menu de voz que atende as ligações deste número. Excludente com sip_team_id (channel_sessions_sip_destino_check). A API só aceita menu com a fala pronta.';
+comment on column public.attendance_teams.phone_emergency_expires_at is
+  'Quando o aviso de instabilidade do telefone desliga sozinho. NULL com active_since preenchido = até alguém desligar. O worker lê a cada ligação e desliga os vencidos a cada 60 s (auditoria phone.emergency_expired + aviso na Central).';
+comment on column public.voice_calls.menu_outcome is
+  'O que o menu de voz fez: chosen (tecla de uma opção), default_no_input (ninguém escolheu), default_invalid (houve tecla errada). NULL com menu_id = desligou no menu. Fonte do "últimos 7 dias" do menu.';
+comment on column public.voice_calls.emergency_heard_at is
+  'Quando o cliente ouviu até o fim o aviso de instabilidade do time. NULL = não havia aviso ou a ligação caiu antes. Fonte do "ouviu o aviso de instabilidade" no cartão da ligação.';
 
 notify pgrst, 'reload schema';
 

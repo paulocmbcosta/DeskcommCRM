@@ -294,6 +294,26 @@ const PARES: Array<{
     arquivo: "lib/schemas/team.ts",
     simbolo: "ROLES",
   },
+  {
+    tabela: "phone_prompts",
+    coluna: "kind",
+    // migration 0288 — as falas do telefone. Nasce com o par no mesmo commit.
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "TIPOS_DE_FALA",
+  },
+  {
+    tabela: "phone_prompts",
+    coluna: "status",
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "ESTADOS_DA_FALA",
+  },
+  {
+    tabela: "voice_calls",
+    coluna: "menu_outcome",
+    // O que o menu de voz fez com a ligação: é a fonte do "últimos 7 dias".
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "DESFECHOS_DO_MENU",
+  },
 ];
 
 /** Tira um nível de parênteses externos, se ele envolver a expressão inteira. */

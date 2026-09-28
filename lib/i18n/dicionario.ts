@@ -9494,6 +9494,17 @@ export const DICIONARIO: Traducoes = {
   "Quando a mensagem do cliente só confirma ou agradece, a Assistente deixa de contar a espera. Com uma chave da OpenRouter, ela usa o Jev, da TypeSafe: as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe. Sem a chave, a espera é sempre contada.": {
     es: "Cuando el mensaje del cliente solo confirma o agradece, la Asistente deja de contar la espera. Con una clave de OpenRouter usa Jev, de TypeSafe: los últimos mensajes de la conversación se envían a OpenRouter y a TypeSafe. Sin la clave, la espera siempre se cuenta.",
   },
+  // Telefonia, fase 2 — avisos da Central (migration 0288)
+  "Uma fala do telefone não tocou": { es: "Una locución del teléfono no se reprodujo" },
+  "O aviso de instabilidade do telefone desligou sozinho": { es: "El aviso de inestabilidad del teléfono se desactivó solo" },
+  "Gere a fala de novo em Conexões › Telefone. Enquanto isso, as ligações seguem sem ela.": {
+    es: "Genera la locución de nuevo en Conexiones › Teléfono. Mientras tanto, las llamadas siguen sin ella.",
+  },
+  "Revisar as falas do telefone": { es: "Revisar las locuciones del teléfono" },
+  "Se a instabilidade continua, ligue o aviso de novo no time.": {
+    es: "Si la inestabilidad continúa, vuelve a activar el aviso en el equipo.",
+  },
+  "Abrir os times": { es: "Abrir los equipos" },
 };
 
 /**

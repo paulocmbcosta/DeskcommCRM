@@ -72,6 +72,11 @@ export type InboxKind =
   // não distingue "tocou e ninguém pegou" de "o operador recusou", e para quem
   // lê a Central os dois pedem a mesma coisa: alguém precisa ligar de volta.
   | 'voice_call_missed'
+  // (migration 0288) Telefonia, URA e falas: a fala do telefone não tocou (a
+  // ligação seguiu sem ela) e o aviso de instabilidade de um time venceu e
+  // desligou sozinho.
+  | 'phone_prompt_unplayable'
+  | 'phone_emergency_expired'
   | 'other';
 
 export interface InboxItemRow {

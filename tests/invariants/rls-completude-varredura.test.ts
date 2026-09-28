@@ -75,6 +75,10 @@ interface Excecao {
  * linhas da OUTRA organização, não uma leitura como superusuário.
  */
 const PROVA_PROPRIA: readonly Excecao[] = [
+  { tabela: "phone_prompts", razao: "tests/invariants/telefonia-ura-e-falas.test.ts — JWT do membro de A lê as de A e zero de B (e o de B, zero de A); anon/authenticated/service_role sem escrita (GRANT só de SELECT, reprovado também sob o default ACL do Supabase) e anon sem leitura (migration 0288)" },
+  { tabela: "phone_settings", razao: "tests/invariants/telefonia-ura-e-falas.test.ts — mesma prova da linha acima" },
+  { tabela: "phone_menus", razao: "tests/invariants/telefonia-ura-e-falas.test.ts — mesma prova, mais a FK composta que recusa time padrão de outra organização" },
+  { tabela: "phone_menu_options", razao: "tests/invariants/telefonia-ura-e-falas.test.ts — mesma prova, mais a FK composta que recusa opção com time ou menu de outra organização e a tecla fora de 0–9" },
   { tabela: "conector_conexoes", razao: "tests/invariants/conectores-sao-server-side.test.ts — server-side only (token de ERP de terceiro): RLS ligada SEM policy, anon/authenticated sem privilégio nenhum e `permission denied` medido na leitura e na escrita; service_role como controle positivo; cascade com a organização" },
   { tabela: "contato_vinculos_externos", razao: "tests/invariants/conectores-sao-server-side.test.ts — mesma prova da linha acima, mais as duas catracas do banco: trigger recusa vínculo da organização A com contato de B (quem grava é o service_role, que ignora RLS) e a anonimização do contato apaga o vínculo" },
   { tabela: "atendimentos", razao: "tests/invariants/atendimentos-protocolo-e-linha-do-tempo.test.ts — JWT do tenant B lê zero e o de A lê as suas (controle positivo); anon/authenticated/service_role sem escrita; escopo herdado da conversa" },
