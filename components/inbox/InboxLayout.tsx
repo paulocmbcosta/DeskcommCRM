@@ -23,6 +23,7 @@ import { InboxFilters, type InboxFiltersValue } from "./InboxFilters";
 import { INBOX_TABS, type InboxTab } from "@/lib/inbox/abas";
 import { InboxAbas } from "./InboxAbas";
 import { ChatThread } from "./ChatThread";
+import { BotaoLigar } from "@/components/telefonia/BotaoLigar";
 import { Composer, type ComposerHandle } from "./Composer";
 import { ConversationHeader } from "./ConversationHeader";
 import { FaixaDaEspera } from "./FaixaDaEspera";
@@ -425,6 +426,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         : `${t("A janela de 24h fechou há")} ${formatarDecorrido(janela.fechadaHaMs)}. ${t("Só um modelo aprovado sai daqui — texto livre é recusado pela plataforma.")}`
       : null;
 
+  // Telefonia SIP (spec 20): a conversa de telefone registra ligações, não
+  // troca texto — o compositor fica só em nota interna.
+  const porTelefone = selectedConversation?.channel === "phone";
+
   const blockedReason = selectedConversation?.contacts?.is_blocked
     ? t("Contato bloqueado — envio de mensagens desabilitado.")
     : selectedConversation?.contacts?.is_anonymized
@@ -741,6 +746,18 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
               somenteLeitura={vendoAtendimentoAntigo}
             />
             <RetentionNotice conversationId={selectedConversation.id} />
+            {porTelefone && (
+              <div className="flex items-center justify-between gap-3 border-t bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+                <span>{t("Conversa de telefone: as ligações ficam registradas aqui. Para falar com o cliente, ligue.")}</span>
+                {selectedConversation.contact_id && (
+                  <BotaoLigar
+                    contatoId={selectedConversation.contact_id}
+                    nome={selectedConversation.contacts?.name ?? null}
+                    temTelefone={Boolean(selectedConversation.contacts?.phone_number)}
+                  />
+                )}
+              </div>
+            )}
             {motivoDaJanela && (
               <JanelaFechadaAviso
                 conversationId={selectedConversation.id}
@@ -759,6 +776,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                     : blockedReason
               }
               janelaFechada={motivoDaJanela}
+              somenteNota={porTelefone}
               disabled={selectedConversation.status === "closed"}
               contactName={selectedConversation.contacts?.name ?? null}
               respondendo={respondendo}

@@ -39,6 +39,31 @@
 			}
 		}
 
+		# Telefonia SIP (spec 20): o WebSocket do ramal do navegador. Só este
+		# caminho do Asterisk sai para fora — a ARI (/ari) nunca. Sem o profile
+		# `telefonia` o destino não existe e o caminho responde 502, que é o
+		# estado certo de "esta instalação não tem telefone".
+		@ramal path /telefonia/ws
+		handle @ramal {
+			# Só abre o WebSocket para quem tem sessão de atendente (agent+) e
+			# vem deste mesmo site. Sem isto, qualquer anônimo da internet
+			# conversava SIP direto com o Asterisk. O app decide
+			# (app/api/v1/telefonia/ws/autorizar) com o cookie e o Origin que o
+			# forward_auth repassa; 2xx segue, qualquer outra resposta volta
+			# ao navegador e o WebSocket não abre.
+			forward_auth app:3000 {
+				uri /api/v1/telefonia/ws/autorizar
+				# O pedido de autorização NÃO pode ir como handshake de
+				# WebSocket: o forward_auth repassa o Upgrade do navegador, e o
+				# servidor do Next trata pedido com Upgrade como WebSocket — casa
+				# a rota e fecha o socket sem resposta, e o ramal nunca abriria.
+				header_up -Connection
+				header_up -Upgrade
+			}
+			rewrite * /ws
+			reverse_proxy asterisk:8088
+		}
+
 		# Todo o resto do app.
 		reverse_proxy app:3000
 	}

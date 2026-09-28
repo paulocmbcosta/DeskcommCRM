@@ -13,6 +13,7 @@
  * lib/routing/decide.ts; aqui só há I/O.
  */
 import { z } from "zod";
+import { MEIO_TELEFONE } from "@/lib/channels/capabilities";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logger } from "@/lib/logger";
 import { decideRouting } from "@/lib/routing/decide";
@@ -33,6 +34,8 @@ export type RoutingOutcome =
   /** A IA automática do canal vai atender a conversa — quem a tirar da IA pede o rodízio de novo. */
   | "skipped_ai_attending"
   | "skipped_unsupported_mode"
+  /** Conversa de telefone: quem a recebe é a distribuição da ligação, não o rodízio de texto. */
+  | "skipped_voice_channel"
   | "requeued_no_eligible"
   | "skipped_invalid_channel"
   | "skipped_conv_missing"
@@ -62,6 +65,7 @@ const EMPTY_OUTCOMES = (): Record<RoutingOutcome, number> => ({
   skipped_already_assigned: 0,
   skipped_ai_attending: 0,
   skipped_unsupported_mode: 0,
+  skipped_voice_channel: 0,
   requeued_no_eligible: 0,
   skipped_invalid_channel: 0,
   skipped_conv_missing: 0,
@@ -148,7 +152,7 @@ async function processEvent(event: EventRow, now: Date): Promise<RoutingOutcome>
 
   const { data: conv, error: convError } = await admin
     .from("conversations")
-    .select("id, organization_id, contact_id, channel_session_id, assigned_to_user_id, status, team_id, service_started_at")
+    .select("id, organization_id, contact_id, channel_session_id, channel, assigned_to_user_id, status, team_id, service_started_at")
     .eq("id", conversationId)
     .eq("organization_id", orgId)
     .maybeSingle();
@@ -157,6 +161,22 @@ async function processEvent(event: EventRow, now: Date): Promise<RoutingOutcome>
   if (!conv || !["open", "pending", "claimed", "ai_handling"].includes(conv.status)) {
     await markDone(event, "skipped_conv_missing");
     return "skipped_conv_missing";
+  }
+
+  // A CONVERSA DE UMA LIGAÇÃO NÃO ENTRA NO RODÍZIO DE TEXTO. A telefonia cria a
+  // conversa `phone` sem dono na hora em que a ligação chega
+  // (`acharOuCriarConversa`), e o trigger da 0040 pede o rodízio como para
+  // qualquer conversa. Numa organização em `round_robin`, este worker a
+  // entregava a um atendente em até um minuto — antes de a ligação ser
+  // atendida, e sem relação com quem o telefone escolheu tocar —, contando no
+  // teto de conversas dele e, na perdida, deixando-a com quem nunca ouviu o
+  // telefone. Quem recebe a ligação é a distribuição da própria telefonia
+  // (`lib/telefonia/distribuicao.ts`); quem atende faz o `claim`, e quem liga
+  // já nasce dono. Pergunta pelo MEIO (a coluna `channel`), nunca pelo
+  // transporte — a feature não sabe qual provider está por trás.
+  if ((conv as { channel?: string | null }).channel === MEIO_TELEFONE) {
+    await markDone(event, "skipped_voice_channel");
+    return "skipped_voice_channel";
   }
 
   // organizations.settings.routing → Zod (default manual; knobs = config, não hardcode).

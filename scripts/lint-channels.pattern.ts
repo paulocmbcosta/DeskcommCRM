@@ -56,7 +56,10 @@
 // de propósito: não é palavra que um cliente diga numa conversa, então o
 // guardrail de vocabulário interno — que deriva desta mesma lista de providers —
 // não tem como barrar uma resposta legítima do agente por causa dele.
-const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|site_widget|graph\.facebook\.com)(?![a-zA-Z0-9])/i;
+//
+// O QUINTO, `sip_trunk` (spec 20): o tronco da operadora de telefonia. Mesma
+// regra do quarto — o meio (`phone`) a feature diz à vontade; o transporte não.
+const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|site_widget|sip_trunk|graph\.facebook\.com)(?![a-zA-Z0-9])/i;
 
 /**
  * Grafia PascalCase dentro de identificador: `WahaClient`,
@@ -66,7 +69,7 @@ const SEPARADO = /(?<![a-zA-Z0-9])(waha|meta_cloud|zernio|site_widget|graph\.fac
  * segmento. Não seguido de minúscula/dígito exclui `Wahalla` — onde `Waha` é
  * começo de outra palavra, não segmento próprio.
  */
-const PASCAL = /(Waha|Zernio|SiteWidget)(?![a-z0-9])/;
+const PASCAL = /(Waha|Zernio|SiteWidget|SipTrunk)(?![a-z0-9])/;
 
 /** Um trecho de código/prosa nomeia um provider de canal? */
 export function nomeiaProvider(texto: string): boolean {

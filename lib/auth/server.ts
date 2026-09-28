@@ -8,6 +8,7 @@ import { lerInterface } from "@/lib/navigation/interface";
  * intentional here because we resolve the user from the validated JWT first
  * and then filter by `user_id` (a trusted source).
  */
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { readSupportContext } from "@/lib/impersonate/support";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -18,7 +19,7 @@ import { empresaExigeMfa, exigeCadastroDeMfa } from "@/lib/auth/politica-mfa";
 import { normalizarIdioma } from "@/lib/i18n/idiomas";
 import type { AuthUser, Role, UserOrgMembership, ActiveOrg } from "./types";
 
-const ACTIVE_ORG_COOKIE = "active_org";
+export const ACTIVE_ORG_COOKIE = "active_org";
 
 interface RawMembershipRow {
   interface_settings?: unknown;
@@ -57,7 +58,7 @@ async function localeDaOrgAtiva(memberships: UserOrgMembership[]): Promise<strin
  * da organização ativa, o sorteio decide TAMBÉM em que língua o sistema abre.
  * As duas coisas andam juntas: não tire a ordenação de lá sem resolver isto.
  */
-function escolherMembroAtivo(
+export function escolherMembroAtivo(
   memberships: UserOrgMembership[],
   cookieOrg: string | undefined,
 ): UserOrgMembership | null {
@@ -67,6 +68,41 @@ function escolherMembroAtivo(
     if (achado) return achado;
   }
   return memberships[0] ?? null;
+}
+
+/**
+ * Os vínculos ativos da pessoa, na ORDEM que decide a organização ativa de quem
+ * não tem o cookie `active_org` (ver `escolherMembroAtivo`).
+ *
+ * Extraída de `loadAuthUser` para que o porteiro do WebSocket do ramal
+ * (`lib/auth/sessao-sem-renovar.ts`), que autoriza com o token de acesso e sem
+ * sessão, escolha a organização pela MESMA consulta e a MESMA ordem — uma cópia
+ * dela divergiria na primeira edição. Recebe o cliente de quem chama: aqui, o
+ * da sessão do cookie; lá, um cliente só com o token, que não sabe renovar.
+ */
+export function consultaDeMembros(supabase: Pick<SupabaseClient, "from">, userId: string) {
+  return supabase
+    .from("user_organizations")
+    .select("organization_id, role, interface_settings, accepted_at, organizations(display_name, locale)")
+    .eq("user_id", userId)
+    .is("revoked_at", null)
+    .order("accepted_at", { ascending: true, nullsFirst: true })
+    .order("organization_id", { ascending: true });
+}
+
+/** As linhas de `consultaDeMembros` no formato que o resto do auth usa. */
+export function lerMembros(linhas: unknown[] | null | undefined): UserOrgMembership[] {
+  return ((linhas ?? []) as RawMembershipRow[]).map((row) => {
+    const orgs = row.organizations;
+    const org = Array.isArray(orgs) ? (orgs[0] ?? null) : orgs;
+    return {
+      organization_id: row.organization_id,
+      organization_name: org?.display_name ?? "—",
+      role: row.role as Role,
+      interface_settings: lerInterface(row.interface_settings).settings,
+      locale: org?.locale ?? null,
+    };
+  });
 }
 
 /**
@@ -152,9 +188,10 @@ export const loadAuthUser = cache(async (): Promise<AuthUser | null> => {
 
   // Platform admin e Org memberships consultados em paralelo no Supabase:
   // elimina round-trip sequencial a cada requisição.
-  // ⚠️ `ORDER BY` NÃO É ENFEITE AQUI: esta lista decide QUAL ORGANIZAÇÃO FICA
-  // ATIVA para quem não tem o cookie `active_org` — `resolveActiveOrg` pega
-  // `organizations[0]`. Sem ordenação, "a primeira" é o que o Postgres devolver.
+  // ⚠️ `ORDER BY` NÃO É ENFEITE (mora em `consultaDeMembros`): esta lista decide
+  // QUAL ORGANIZAÇÃO FICA ATIVA para quem não tem o cookie `active_org` —
+  // `resolveActiveOrg` pega `organizations[0]`. Sem ordenação, "a primeira" é o
+  // que o Postgres devolver.
   const [{ data: paRow, error: paErro }, { data: rawMemberships, error: membErro }] =
     await Promise.all([
       supabase
@@ -163,15 +200,7 @@ export const loadAuthUser = cache(async (): Promise<AuthUser | null> => {
         .eq("user_id", user.id)
         .is("revoked_at", null)
         .maybeSingle(),
-      supabase
-        .from("user_organizations")
-        .select(
-          "organization_id, role, interface_settings, accepted_at, organizations(display_name, locale)",
-        )
-        .eq("user_id", user.id)
-        .is("revoked_at", null)
-        .order("accepted_at", { ascending: true, nullsFirst: true })
-        .order("organization_id", { ascending: true }),
+      consultaDeMembros(supabase, user.id),
     ]);
 
   /**
@@ -206,18 +235,7 @@ export const loadAuthUser = cache(async (): Promise<AuthUser | null> => {
     );
   }
 
-  const rows = (rawMemberships ?? []) as RawMembershipRow[];
-  const memberships: UserOrgMembership[] = rows.map((row) => {
-    const orgs = row.organizations;
-    const org = Array.isArray(orgs) ? (orgs[0] ?? null) : orgs;
-    return {
-      organization_id: row.organization_id,
-      organization_name: org?.display_name ?? "—",
-      role: row.role as Role,
-      interface_settings: lerInterface(row.interface_settings).settings,
-      locale: org?.locale ?? null,
-    };
-  });
+  const memberships = lerMembros(rawMemberships);
 
   const support = await readSupportContext(supabase);
   const fullName = (user.user_metadata?.full_name as string | undefined) ?? null;

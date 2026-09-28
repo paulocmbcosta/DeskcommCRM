@@ -1,0 +1,443 @@
+---
+title: Spec Técnica 20 — Telefonia SIP (PABX no CRM)
+parent: 00-prd-master.md
+depends_on: 01-spec-platform-base.md, 07-spec-events-workers.md, 18-spec-voice-calls-wacalls.md
+version: 0.1
+status: em implementação
+date: 2026-09-28
+owner: Paulo Cesar
+related_rules: Linear DYD-10 (requisitos do dono do produto e decisões do §8)
+---
+
+# Spec Técnica 20 — Telefonia SIP (PABX no CRM)
+
+> O atendente faz e recebe ligações telefônicas pelo próprio CRM, pelos números SIP que o
+> cliente já contratou de uma operadora. Contexto completo, requisitos e o estudo que
+> descartou o Zernio: issue **DYD-10** no Linear. Esta spec registra o que foi MEDIDO na
+> prova de conceito, as decisões fechadas e o desenho que o código segue.
+
+---
+
+## 1. O que a prova de conceito mediu (F0, 2026-09-28)
+
+Tronco de teste da Totus (`voip.totussistema.com.br`), Asterisk 20.11.1 em contêiner
+(Alpine 3.22, `docker/asterisk/`), Docker Desktop num Mac atrás de NAT duplo.
+
+| Medida | Resultado |
+|---|---|
+| Servidor da operadora | FreeSWITCH. SIP em UDP e TCP 5060 (e 5080). **Sem TLS** (5061 recusa) |
+| Registro com usuário/senha | `Registered` na primeira tentativa, expiração 300 s |
+| Ligação de saída | `407` → reenvio autenticado → `200 OK` |
+| Codec negociado | **G.711 A-law (PCMA)** e `telephone-event/8000`. A operadora não ofereceu µ-law nem Opus |
+| Áudio operadora → nós | Chegou limpo. A transcrição do anúncio da operadora saiu palavra por palavra |
+| NAT | Funciona SEM publicar a porta SIP: o `qualify` a cada 25 s mantém o mapeamento do NAT, e a operadora ajusta o RTP para o endereço de onde os pacotes vêm |
+| Latência | VPS de produção (HostGator) → operadora: **20 ms**. O Mac de desenvolvimento, em Portugal: 254 ms |
+| Configuração em tempo de execução | Pela ARI (`PUT /asterisk/config/dynamic/res_pjsip/{auth,aor,endpoint,registration}/…`), com o `sorcery.conf` mapeando esses tipos para `memory`. O registro de saída criado pela API passa a mandar `REGISTER` sozinho, sem reload |
+| Áudio nós → operadora | **Prova indireta:** a operadora passou a mandar RTP para o endereço de origem dos nossos pacotes, o que só acontece se os recebe. A caixa postal não reagiu ao DTMF RFC 4733. A prova direta é o teste de eco (§9) |
+
+**Recursos da VPS de produção:** 2 núcleos, 3,9 GB (2 GB disponíveis), carga ~0. UFW ativo,
+permitindo só 22022, 80 e 443. Cada porta publicada pelo Docker custa um `docker-proxy` de 2 a 5 MB,
+por isso a faixa de RTP é pequena e só IPv4 (§4.3).
+
+## 2. Decisões fechadas
+
+Recomendações do §8 da DYD-10, aprovadas pelo dono em 2026-09-28, mais o que ele acrescentou.
+
+1. **As credenciais SIP são cadastradas pela tela, e cada organização pode conectar vários
+   números.** Nada de `.env` por número. A senha fica cifrada no banco e nunca volta para o
+   navegador.
+2. **"Menos ligações no dia" conta ligações RECEBIDAS e ATENDIDAS**, no fuso da
+   organização — quem liga muito para fora não passa a receber menos por isso. Empate: vai
+   para quem está há mais tempo sem atender.
+3. **Toque de 20 s por atendente e 2 voltas** pela lista de disponíveis.
+4. **Ninguém disponível dentro do horário:** fila com música, conferindo a disponibilidade de
+   novo a cada poucos segundos, por até 2 min. Esgotado o prazo, a ligação é encerrada e vira
+   chamada perdida na Central. A mensagem falada apontando o WhatsApp entra com a URA (F2),
+   porque exige áudio em português configurado pela organização.
+5. **Uma conversa de telefone por contato e por número.** Cada ligação é um registro dentro
+   dela.
+6. **Conversa de texto aberta não impede receber ligação.** Só impedem: pausa, offline, fora
+   do horário do time e já estar em outra ligação.
+7. **Imagem do Asterisk própria, publicada pelo CI** (`deskcomm-asterisk`), a partir do pacote
+   do Alpine, que é GPL e tem o código-fonte disponível no próprio Alpine. Nenhum binário
+   compilado por nós.
+
+## 3. Vocabulário (doutrina de canal)
+
+| | Valor | Onde |
+|---|---|---|
+| Provider (transporte) | `sip_trunk` | `channel_sessions.provider`. Só se escreve dentro de `lib/channels/` |
+| Meio | `phone` | `conversations.channel`. A feature lê por `meioDoCanal()` |
+| Capacidade | `sip_trunk` entra em `PROVIDERS_SEM_MENSAGEM` | `lib/channels/capabilities.ts` |
+
+O `_` no nome do provider segue a regra do chat do site: o guardrail de vocabulário interno
+barra todo nome de provider na fala do agente, e "sip" solto barraria uma palavra comum.
+
+## 4. Arquitetura
+
+```
+Operadora SIP ◄──SIP/UDP (registro de saída, sem porta aberta)──► Asterisk ◄──ARI (HTTP+WS, rede interna)──► worker do CRM
+                ◄──RTP (G.711)───────────────────────────────────►    ▲                                          │
+                                                                        │ WSS /telefonia/ws (Caddy → asterisk:8088) │ Supabase (voice_calls,
+Navegador do atendente (JsSIP) ─────────────────────────────────────────┘                                          │ conversas, Central)
+                ◄──DTLS-SRTP (Opus/G.711), UDP na faixa publicada────► Asterisk                                    ▼
+```
+
+### 4.1 Quem manda em quê
+
+- **O CRM é a fonte da verdade da configuração.** Números (troncos) moram em
+  `channel_sessions` com a senha cifrada. Três caminhos levam o tronco ao Asterisk, do mais
+  rápido ao mais garantido (`lib/channels/telefonia/sincronizacao.ts`): a rota que salva o
+  número o empurra pela ARI na mesma requisição (`empurrar.ts`, que nunca lança); o worker
+  reconcilia a cada 60 s; e a cada (re)conexão à ARI faz a sincronização completa. Não há
+  evento no `event_log` para isso — a primeira versão desta spec previa um
+  (`telefonia.tronco_alterado`), e o código não o usa. Editar RECRIA o tronco (apaga e grava):
+  um registro de saída que só recebe PUT por cima seguia registrando com a configuração
+  antiga. O Asterisk guarda tudo em memória: se ele reinicia, o worker percebe a queda do
+  WebSocket e sincroniza de novo, e o navegador, com a credencial do ramal recusada, pede
+  outra.
+- **O worker não confia na linha do banco.** `channel_sessions` também é gravável pela REST,
+  fora do Zod da rota, e o valor vira campo PJSIP cru (o `contact` da AOR é uma lista: uma
+  vírgula no servidor injetaria um segundo contato). Antes de empurrar, o tronco passa por
+  `problemaDoTronco` (`pjsip.ts`), com a MESMA régua da rota (`conta-sip.ts`); o que não
+  passa não vai para o Asterisk, a linha fica `FAILED` / `configuracao_invalida` e, se uma
+  versão válida anterior ainda estava registrada, ela é retirada.
+- **O CRM decide quem toca.** Distribuição, horário, pausa e registro são do worker, que é
+  uma aplicação Stasis (`crm`). O Asterisk só carrega o áudio.
+- **O ramal do navegador não disca nada sozinho.** A credencial é temporária, emitida pelo
+  CRM a cada sessão do atendente e empurrada pela ARI. O contexto do ramal só entrega a
+  ligação ao Stasis, e o worker só liga para fora quando existe uma `voice_calls` de saída
+  criada pela API para AQUELE atendente, há menos de 60 s. Isso vale como antifraude: uma
+  senha de ramal vazada não disca para número nenhum.
+
+### 4.2 Fluxos
+
+**Recebida**
+1. A INVITE da operadora chega no endpoint `tronco-<channel_session_id>`, que tem
+   `context=de-tronco` e `Stasis(crm,entrada)`. Ela casa esse endpoint pelo parâmetro `line`
+   que o próprio registro anunciou (`line=yes` + `endpoint` na registration), e SÓ por ele: o
+   endpoint do tronco tem `identify_by=ip` e nenhum objeto `identify`. Medido em 2026-09-28
+   num Asterisk 20 com os objetos de `objetosDoTronco`: com o padrão `identify_by=username,ip`,
+   uma INVITE forjada com `From: <sip:tronco-<id>@…>` casava o tronco pelo nome, era atendida
+   sem senha e o `P-Asserted-Identity` inventado virava o número do cliente
+   (`trust_id_inbound=yes`); com `identify_by=ip`, a mesma INVITE leva 401, e uma recebida
+   real da operadora (R-URI `sip:…;line=aqsytoa`) continua caindo em `tronco-<id>`.
+2. O worker resolve o tronco, e com ele a organização e o time de destino. Depois acha ou
+   cria o contato (`phoneLookupVariants`), acha ou cria a conversa `phone`, e cria a
+   `voice_calls` (`provider=sip_trunk`, `direction=inbound`, `status=ringing`).
+3. **Escolhe o atendente**, funções puras `ordemDeToque` / `proximoToque` em
+   `lib/telefonia/distribuicao.ts`. Candidatos: `disponiveisNoTime`
+   (`lib/channels/telefonia/repositorio.ts`), com as mesmas peças do rodízio de conversas —
+   membro do time com papel de atendimento, `is_available` (pausa e heartbeat vencido o
+   zeram), horário do time e o próprio — menos o teto de conversas (§2.6), menos quem está em
+   outra ligação de qualquer canal de voz, e só quem tem o ramal registrado agora. Ordem:
+   menos RECEBIDAS atendidas hoje no fuso da organização, e no empate quem está há mais tempo
+   sem atender.
+4. Toca um ramal por vez (`POST /channels` para `PJSIP/ramal-<userId>`, 20 s). Se o
+   atendente atende, entra numa ponte com a perna da operadora. Se não atende, recusa ou cai,
+   passa para o próximo. São 2 voltas.
+5. Ninguém disponível: `answer` + música em espera, reavaliando a cada 5 s, até 2 min.
+6. Fim: `ended`, duração, registro na conversa, atividade no lead. Perdida vira
+   `agent_inbox_items` `voice_call_missed`.
+
+**Feita**
+1. `POST /api/v1/telefonia/chamadas` com `{ contact_id | numero, numero_da_empresa_id? }`. A
+   rota valida papel, número (§6) e tronco, cria a `voice_calls` (`outbound`, `starting`,
+   `owner_user_id` = quem ligou), atribui a conversa `phone` a quem ligou e devolve
+   `{ id, destino: "c-<id>", contact_id }`.
+2. O navegador disca `c-<id>` pelo JsSIP. O endpoint do ramal entra no Stasis com esse
+   ramal, e o worker confere dono, idade e estado.
+3. O worker cria a perna da operadora (`PJSIP/<numero>@tronco-<id>`, bina = número do
+   tronco), põe as duas pernas numa ponte ANTES de discar (o atendente ouve o chamar e os
+   anúncios da operadora) e disca.
+
+### 4.3 Rede e empacotamento
+
+- Serviço `asterisk` no `docker-compose.prod.yml`, `profiles: ["telefonia"]` (desligado por
+  padrão), imagem `ghcr.io/paulocmbcosta/deskcomm-asterisk`, rede `internal`.
+- **Nenhuma porta SIP publicada.** Só troncos com registro, cuja sinalização entra pelo
+  mapeamento de NAT do próprio registro. Tronco por IP (sem registro) fica fora desta versão.
+- **Faixa RTP publicada**: `TELEFONIA_RTP_INICIO`–`TELEFONIA_RTP_FIM`, padrão
+  `20000-20039/udp`, só IPv4. Com rtcp-mux no ramal, dá ~10 ligações simultâneas. A porta
+  publicada pelo Docker não passa pelo UFW, como a 7881 do WaCalls.
+- ICE do navegador: o `rtp.conf` anuncia o IP público no lugar do IP do contêiner, pelo
+  `ice_host_candidates`. O IP vem de `TELEFONIA_IP_PUBLICO` e, vazio, é detectado pelo
+  `docker/asterisk/entrypoint.sh` do próprio contêiner (ipify) a cada partida — o kit não
+  grava essa variável. Venha de onde vier, o valor tem de ser um IPv4 canônico, ou o contêiner
+  não sobe e diz por quê: ele vai cru para o `pjsip.conf` e o `rtp.conf`
+  (`tests/shell/asterisk-entrypoint.test.sh`).
+- WSS do ramal: o proxy só entrega `/telefonia/ws` a `asterisk:8088/ws` depois de perguntar
+  ao app — `forward_auth` no Caddyfile, middleware `forwardAuth` no
+  `docker-compose.traefik.yml` — em `GET /api/v1/telefonia/ws/autorizar`. A rota responde 204
+  só para sessão de papel `agent` ou acima vinda do próprio site (`Origin`), e 401/403 no
+  resto. Antes disso, qualquer anônimo da internet abria um WebSocket SIP com o Asterisk
+  (medido com Caddy 2.11.4 e o Caddyfile do repo: sem o `forward_auth`, o anônimo recebia 101;
+  com ele, 401, e a sessão válida segue recebendo 101). A ARI (`/ari`) nunca é roteada para
+  fora.
+- **A rota de autorização NUNCA renova a sessão.** A resposta dela volta para o proxy, que não
+  repassa `Set-Cookie` ao navegador: uma renovação ali trocaria o refresh token no GoTrue e
+  perderia o novo, e o reúso do velho revogaria a sessão do atendente. Por isso ela não usa
+  `requireRole` e está em `PUBLIC_PATHS` (o `proxy.ts` também renovaria): lê o token de acesso
+  do cookie como dado, recusa com 401 só a sessão já vencida (o app renova pelo caminho
+  normal e o JsSIP reconecta; token perto de vencer é aceito, porque nada ali renova e o GoTrue
+  confere o `exp`) e valida o token com `getUser(token)`, num cliente sem
+  refresh token. A regra de papel é a de `requireRole` — mesma consulta e ordem de vínculos,
+  mesmo cookie `active_org`, `fn_user_role_in_org`, dívida de MFA — e acompanhamento de
+  suporte é recusado (`lib/auth/sessao-sem-renovar.ts`). No Traefik o endereço é o domínio
+  público, não `app:3000`: em modo host o nome não resolve, e numa rede compartilhada outra
+  stack pode ter um serviço `app`.
+- Segredo da ARI: `TELEFONIA_ARI_PASSWORD`, gerado pelo kit como os segredos da voz.
+  Variável ausente = telefonia desligada, sem erro.
+
+## 5. Dados (migration 0286)
+
+- `channel_sessions`: `provider` aceita `sip_trunk`. Colunas `sip_server`, `sip_port`
+  (padrão 5060), `sip_transport` (`udp` | `tcp`), `sip_username`,
+  `sip_password_encrypted` (pgcrypto, via `fn_encrypt_oauth`, como o token da Meta) e
+  `sip_team_id` (time que recebe as ligações). `provider_ref_check`: `sip_trunk` exige
+  servidor e usuário. O número exibido é o `phone_number` de sempre, o que dá unicidade por
+  organização. E `(lower(sip_server), sip_username)` é único entre os ativos da instalação
+  inteira: duas linhas registrando a mesma conta disputariam as ligações recebidas.
+- `voice_calls`: ganha `provider` (`wacalls` | `sip_trunk`, padrão `wacalls`),
+  `sip_call_ref` (id da ligação no Asterisk), `conversation_id`, `team_id` e
+  `ringing_user_id` (para quem a recebida está tocando agora). O `wacalls_call_id` passa a
+  aceitar nulo, e um CHECK exige a referência certa por provider. Unique
+  `(organization_id, sip_call_ref)`.
+- `conversations.channel` aceita `phone`.
+- O registro da ligação na conversa é uma `messages` `type=system`, `sent_via=system`,
+  `direction=outbound`, `status=sent`, `external_id = ligacao:<voice_call_id>` (entra uma
+  vez só), com `metadata.voice_call` (`id`, `direcao`, `desfecho`, `duracao_ms`,
+  `atendente_id`, `atendente_nome`). Não é `inbound` de propósito: `inbound` emite
+  `message.received`, que acorda o agente de IA e o termômetro de espera.
+
+## 6. Política de número (antifraude)
+
+`lib/telefonia/numero.ts`, função pura e testada:
+- Normaliza para E.164 brasileiro (`+55` + DDD + número). Aceita as grafias locais
+  (`(61) 3686-1503`, `061…`, `0xx61…`).
+- **Bloqueia por padrão:** internacional (tudo que não é `+55`), `0300`, `0500`, `0900`,
+  `0800` e `400x` (sem DDD; os dois últimos valem para CADASTRAR o número da empresa, que é
+  onde se recebe, mas não para discar), serviços de 3 e 4 dígitos (`190`, `192`, `193`,
+  `100`, `102`…) e números com menos de 10 dígitos.
+- A regra é conferida duas vezes: na rota que cria o pedido e, de novo, no controlador, antes
+  de discar.
+- Limite de ligações de saída simultâneas por organização (padrão 5) e uma por atendente,
+  conferidos na rota (`lib/channels/telefonia/saida.ts`). Pedido que o navegador nunca
+  discou expira em 60 s e não prende o atendente.
+
+## 7. Telas
+
+- **Conexões › Telefone** (aba nova em `ConexoesShell`): lista de números com status ao vivo
+  (Conectando / Conectado / Falhou + motivo), botão "Adicionar número" (servidor, porta,
+  transporte, usuário, senha, número, time que recebe), editar e remover. O botão "Testar"
+  previsto aqui não existe ainda: o teste é o próprio estado do registro, que aparece em
+  segundos. A senha só é escrita, nunca lida — e editar sem digitá-la só vale enquanto a CONTA
+  é a mesma: trocar servidor, porta, transporte ou usuário exige a senha de novo (422
+  `senha_obrigatoria_na_troca`), senão editar seria o jeito de mandar a senha guardada para
+  outro host. O servidor tem de ser o endereço público da operadora: loopback, faixas privadas
+  (10/8, 172.16/12, 192.168/16), link-local (169.254/16), `0.0.0.0`, nome sem domínio e IP em
+  grafia não canônica são recusados (`lib/channels/telefonia/conta-sip.ts`). Instalação sem
+  telefonia: a aba diz que ela está desligada e o que quem administra o servidor precisa
+  fazer.
+- **Ramal**: `TelefoniaProvider` no layout do app. Registra o JsSIP quando a organização tem
+  número conectado e o usuário é agent ou acima. Mostra o banner de chamada recebida e o
+  painel de chamada ativa, com as peças visuais de `components/voice/`.
+- **Botão Ligar** no cabeçalho da conversa (qualquer meio, se o contato tem telefone) e na
+  ficha do contato. **Discador** para número avulso.
+- **Conversa `phone`** no inbox: ícone de telefone, compositor só em nota interna (a nota é
+  onde o atendente registra o que foi falado), faixa "Para falar com o cliente, ligue" com o
+  Botão Ligar, e o cartão da ligação (sentido, quem atendeu, duração, desfecho). Uma resposta
+  de texto que escape do compositor é recusada pela API com 422 antes de gravar.
+
+## 8. Fases
+
+| Fase | Conteúdo | Estado |
+|---|---|---|
+| F0 | Prova de conceito | medida (§1) |
+| **F1 + distribuição** (release A) | §4–§7 | em implementação |
+| F2 | URA configurável, horário do time e mensagem de fora do horário com WhatsApp, anúncio de "ninguém disponível", transferência | a fazer |
+| F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada | a fazer |
+| F4 | Transcrição em português dentro da conversa | a fazer |
+| F5 | Relatórios por time | a fazer |
+
+## 9. O que não foi medido
+
+- ~~Áudio nosso → operadora, de forma direta.~~ Provado em 2026-09-28 pela tela: ligação
+  FEITA pelo discador, com áudio nos dois sentidos (jornada J35 de
+  `docs/testing/user-journey-map.md`).
+- ~~Chamada RECEBIDA de fora (a infraestrutura).~~ Provado em 2026-09-28 na VPS de produção,
+  com um Asterisk de teste descartável: a recebida chegou e teve áudio nos dois sentidos (o
+  NAT do Docker preserva a 5060 do registro — a operadora vê `rport=5060` —, e a faixa UDP
+  20000–20039 passa o firewall). Atrás do NAT duplo do Mac de desenvolvimento a operadora não
+  entregava a INVITE.
+- **O fluxo do PRODUTO na recebida** — o Stasis escolhe quem toca, o atendente atende no
+  navegador — segue sem prova em produção.
+- CPU por ligação na VPS (com e sem transcodificação Opus ↔ A-law).
+- Comportamento com mais de um registro da mesma conta ao mesmo tempo (dev + produção).
+
+## 10. Living System Checklist — F1 + distribuição
+
+Lei em [`docs/doctrine/sistema-vivo.md`](../doctrine/sistema-vivo.md); mapa vivo em
+[`docs/architecture/telefonia.architecture.json`](../architecture/telefonia.architecture.json).
+Respondido conferindo o código em 2026-09-28, não o desenho acima. Onde a resposta é **não
+existe ainda**, é dívida declarada — não ausência de defeito.
+
+**Quem me alimenta?**
+- A operadora: a INVITE chega em `tronco-<id>` → `Stasis(crm,entrada)` →
+  `ControladorDeChamadas` (`lib/channels/telefonia/controle.ts`), pelo laço do worker
+  (`lib/channels/telefonia/laco.ts`, chamado em `workers/agent-worker/main.ts`).
+- O atendente: `BotaoLigar` (cabeçalho da conversa, faixa da conversa `phone`, ficha do
+  contato) e o discador `BotaoDoTelefone` → `POST /api/v1/telefonia/chamadas` → pedido em
+  `voice_calls` → o ramal disca `c-<id>`.
+- O admin: Conexões › Telefone (`components/connections/CanalTelefoneClient.tsx`) →
+  `/api/v1/telefonia/numeros` → `channel_sessions` com provider `sip_trunk`.
+- A disponibilidade: `attendance_team_members`, `attendant_availability.is_available` (pausa
+  e heartbeat), horário do time e do atendente — as peças do rodízio de conversas.
+
+**Quem eu alimento?**
+- `conversations` (`channel = 'phone'`) e `messages` (o registro da ligação) → Inbox.
+- `voice_calls` → o painel do telefone (`GET /api/v1/telefonia/chamadas/[id]`) e a
+  distribuição da ligação seguinte (a contagem de atendidas do dia).
+- `agent_inbox_items` `voice_call_missed` → Central.
+- `crm_lead_activities` (`voice_call`, `voice_call_missed`, `voice_call_unanswered`) → linha do
+  tempo do negócio; `voice_call` carimba `last_activity_at` → Radar de Risco.
+- `fn_conversation_assign` (`claim`) → a conversa passa a ser de quem atendeu ou de quem ligou.
+- `api_audit_log`.
+- `event_log` `voice_call.ended` — nasce `done` e **não tem consumidor**: é registro, como na
+  ponte do WaCalls.
+
+**Que atividade/log eu emito?**
+- Auditoria (`lib/audit/actions.ts`): `channel.phone_trunk_created`, `channel.phone_trunk_updated`
+  (com `trocou_senha`, nunca a senha), `channel.phone_trunk_archived`, `phone_call.started` e
+  `phone_extension.credential_issued` (a credencial do ramal entregue a um navegador: ramal e
+  se foi criado agora ou reaproveitado, nunca a senha).
+- `crm_lead_activities` por `emitAgentActivityForContact`; negócio ambíguo ou inexistente vira
+  `agent.activity_unrouted` no `event_log`, sem adivinhar.
+- `messages` `type=system` com `metadata.voice_call`; `event_log` `voice_call.ended`.
+- Log estruturado do worker: ligação recebida / atendida / encerrada, tronco enviado / retirado,
+  tronco com configuração inválida não enviado, estado do número mudou, conexão com o Asterisk
+  caiu.
+- **Não existe ainda:** trilha de auditoria da ligação RECEBIDA e do desfecho de qualquer
+  ligação. Da ligação, só o PEDIDO de saída audita (além da entrega da credencial do ramal); o
+  resto fica em `voice_calls`, `event_log` e na atividade do negócio.
+
+**Onde eu apareço na tela?**
+- Conexões › Telefone: cada número, o time que recebe (ou "Nenhum time recebe as ligações
+  deste número") e o estado ao vivo com o motivo da falha.
+- Cabeçalho de toda tela: `BotaoDoTelefone` (o ponto diz se o ramal deste navegador está
+  pronto) e `PainelDoTelefone` (banner da recebida, ligação ativa com mudo, teclado e desligar).
+- Inbox: card com ícone `PhoneCall`, faixa da conversa `phone` e `CartaoDaLigacao` no chat.
+- Central (`/app/ai/inbox`): "Alguém ligou e ninguém atendeu", com "Ligar de volta".
+- Linha do tempo do negócio e Audit Log (`/app/audit`).
+- **Não existe ainda:** o rótulo da linha do tempo ("Chamada de voz", "… perdida", "… sem
+  resposta") é o MESMO da voz do WhatsApp — `payload.canal = "telefone"` é gravado e nenhuma
+  tela o lê. Não há lista nem relatório de ligações (F5).
+
+**Por qual porta se chega até mim?**
+- `/app/connections` (Conexões, no `NAV_CATALOG` de `lib/navigation/catalogo.ts`, admin) → aba
+  "Telefone" (`?aba=telefone`). Nenhuma `page.tsx` nova: nada a declarar em
+  `tests/unit/navegacao-completude.test.ts`.
+- O discador está no cabeçalho de toda tela; o Botão Ligar, na conversa e na ficha; a Central
+  leva à ficha pelo "Ligar de volta".
+- **Não existe ainda:** a descrição de Conexões no catálogo ("Seus números de WhatsApp…") não
+  cita telefone, e a busca ⌘K varre rótulo e descrição — procurar "telefone" não acha a aba.
+
+**Qual meu mecanismo anti-morte?**
+- Recebida sem ninguém disponível: fila com música por até 2 min, reavaliada a cada 5 s;
+  esgotada (ou esgotadas as 2 voltas), vira `voice_call_missed` na Central, atividade
+  `voice_call_missed` no negócio e a conversa `phone` aberta no time do número.
+- Worker reiniciado no meio: `recuperar()` retoma a ponte viva e encerra o resto como perdido,
+  e a recebida perdida também vira aviso.
+- Pedido de saída que o navegador nunca discou expira em 60 s e não prende o atendente.
+- **Não existe ainda:** o aviso de perdida não fecha sozinho quando alguém retorna a ligação, e
+  nada lembra ninguém se ninguém retornar. Ligação com a bina oculta vira aviso sem contato e
+  sem conversa (só o número, ou "desconhecido", no corpo). Número sem time faz toda recebida
+  virar perdida depois de 2 min — a aba mostra, nada impede.
+
+**Onde se CONFIGURA o que eu uso?**
+- Conexões › Telefone: servidor, porta, transporte, usuário, senha (só escrita), número e time
+  que recebe — ver e mudar na mesma tela.
+- Times: membros e horário; `StatusDoAtendente`: pausa e disponível; o fuso da organização.
+- Instalação (`.env`, não organização): `COMPOSE_PROFILES=telefonia`, `TELEFONIA_ARI_URL`,
+  `TELEFONIA_ARI_PASSWORD` (o kit gera), `TELEFONIA_IP_PUBLICO`, faixa RTP. Desligada, a aba
+  Telefone diz como ligar; sem número, o ramal não registra e os botões não aparecem.
+- Falta de configuração que vira sinal: registro recusado, operadora sem resposta, senha
+  ilegível ou linha com servidor/usuário/porta fora da régua (gravada por fora da tela) →
+  `FAILED` + motivo na aba.
+- **Não existe ainda:** esse `FAILED` não vira item da Central nem a faixa de conexão caída do
+  app — `listarConexoesCaidas` e `sincronizarSaudeDaConexao` (`lib/channels/health.ts`) só olham
+  `PROVIDERS_DE_MENSAGEM`. E, pelo código, com a ARI fora do ar o worker para de ler os
+  registros: o último estado gravado (inclusive "Conectado") fica na tela. Não medido.
+- **Constantes sem tela** (decisões do §2, não estado configurável, mas nenhuma tela as mostra):
+  20 s de toque, 2 voltas, 2 min de fila, reavaliação a cada 5 s
+  (`lib/telefonia/distribuicao.ts`); atender e segurar após 45 s, prazo de 60 s da saída
+  (`controle.ts`); 5 saídas simultâneas (`saida.ts`); a lista de números bloqueados
+  (`lib/telefonia/numero.ts`).
+
+**Qual a continuidade IA↔humano?**
+- A IA não participa da ligação: não há agente de voz (transcrição é a F4). O registro da
+  ligação é `outbound`/`system` de propósito, para não acordar turno nem termômetro.
+- IA → humano: não se aplica.
+- Humano → IA: **não existe ainda.** O contexto do agente
+  (`lib/agent-engine/edge/crm/get-lead-context.ts`) não lê ligação nem a nota interna da
+  conversa `phone`. O único efeito indireto é `last_activity_at`: a ligação atendida tira o
+  negócio do "frio", e a IA não propõe retomar contato com quem acabou de falar ao telefone.
+- **Resolvido: o rodízio de texto não distribui a conversa de uma ligação.** A conversa `phone`
+  nova nasce sem dono e dispara `trg_conversation_routing_requested` (0040); o worker de
+  rodízio (`lib/routing/worker.ts`) lê o MEIO da conversa (`conversations.channel` =
+  `MEIO_TELEFONE`, nunca o provider) e fecha o evento como `skipped_voice_channel` sem
+  atribuir, antes de perguntar pela IA ou pelos elegíveis. Quem recebe a ligação é a
+  distribuição da telefonia; a atendida passa a ser de quem atendeu (`claim`), a feita já nasce
+  de quem ligou, e a perdida fica sem dono, no time do número. Vigiado por
+  `lib/routing/worker-nao-distribui-a-ligacao.test.ts`.
+
+**Qual meu LAÇO DE RETORNO? (invariante 7 — o que muda quando a telefonia erra)**
+- **Quem toca.** Cada ligação ATENDIDA entra na contagem do dia (`disponiveisNoTime`) e manda
+  aquele atendente para o fim da fila da próxima: o laço fecha dentro do dia. **Não existe
+  ainda:** sinal para quem deixa tocar sem atender (não pausa, não conta, não aparece em
+  métrica nenhuma) e taxa de perdidas por time (F5).
+- **Estado do número.** A AMI lida a cada 15 s volta para `channel_sessions.status` e para a
+  aba; o admin corrige senha ou transporte, e a edição RECRIA o tronco. **Não existe ainda:** o
+  aviso na Central (acima).
+- **Recebida sem atendente.** Volta como `voice_call_missed` na Central e como atividade no
+  negócio; o humano liga de volta. **Não existe ainda:** fechar o aviso com o retorno e medir o
+  tempo até ele.
+- **Autorização da saída (antifraude).** Recusa na rota volta como 422 com o motivo na tela; no
+  controlador, como `end_reason` (`pedido_expirado`, `numero_<motivo>`, `tronco_indisponivel`)
+  e log `saída recusada`. **Não existe ainda:** nada agrega recusas — sinal de ramal
+  comprometido ou de política apertada demais fica no log, que ninguém lê.
+- **Asterisk ou worker reiniciado.** A queda do WebSocket dispara a sincronização completa e o
+  re-registro (provado na J35); o ramal com credencial recusada pede outra em 1 s;
+  `recuperar()` fecha as ligações órfãs.
+
+**Atualizei o mapa vivo?** Sim — `docs/architecture/telefonia.architecture.json`, com os laços
+e as não-ligações nos `cards`, e a linha correspondente em `docs/architecture/README.md`.
+
+### 10.1 O que esta revisão corrigiu no corpo da spec (DoD 16)
+
+Afirmações que divergiam do código em 2026-09-28, trocadas pelo que o código faz: a aplicação
+Stasis é `crm`, não `deskcomm`; o tronco chega ao Asterisk por empurrão da rota + reconciliação
+de 60 s + sincronização na reconexão, sem o evento `telefonia.tronco_alterado`; as funções da
+distribuição e a consulta de candidatos têm outros nomes; o corpo e a resposta de
+`POST /telefonia/chamadas`; `ringing_user_id` e a forma de `metadata.voice_call`; `0800` e
+`400x` também são bloqueados para discar; o IP público é detectado pelo contêiner, não pelo
+kit; o botão "Testar" da aba não existe; e o áudio nosso → operadora saiu de "não medido".
+
+### 10.2 Revisão de segurança de 2026-09-28
+
+O que a revisão achou e o que mudou. Cada item tem um teste que, com a correção arrancada, fica
+vermelho (provado uma vez para cada).
+
+| Achado | Correção | Teste |
+|---|---|---|
+| **Alto** — INVITE forjada com `From: tronco-<id>` casava o tronco pelo nome e era atendida sem senha | `identify_by=ip` no endpoint do tronco, sem objeto `identify` (§4.2) | `lib/channels/telefonia/pjsip.test.ts` |
+| **Médio** — `/telefonia/ws` entregue ao Asterisk para qualquer anônimo | `forward_auth` / `forwardAuth` para `GET /api/v1/telefonia/ws/autorizar`, que confere `Origin` e papel sem renovar a sessão (§4.3) | `app/api/v1/telefonia/ws/autorizar/route.test.ts`, `lib/auth/sessao-sem-renovar.test.ts`, `tests/unit/portas-do-compose.test.ts`, `lib/auth/public-paths.test.ts` |
+| PATCH trocava o servidor mantendo a senha guardada | senha obrigatória ao trocar a conta (§7) | `lib/channels/telefonia/numeros.test.ts` |
+| Servidor aceitava host interno | régua de `conta-sip.ts` (§7) | `lib/channels/telefonia/conta-sip.test.ts` |
+| A REST contornava o Zod e o worker empurrava o valor cru | `problemaDoTronco` antes de qualquer chamada à ARI (§4.1) | `lib/channels/telefonia/sincronizacao.test.ts` |
+| IP do ipify cru no `pjsip.conf` | IPv4 validado no entrypoint (§4.3); a crase num comentário do heredoc, que rodava `line` a cada partida, saiu junto | `tests/shell/asterisk-entrypoint.test.sh` |
+| O rodízio de texto atribuía a conversa da ligação | `skipped_voice_channel` (§10) | `lib/routing/worker-nao-distribui-a-ligacao.test.ts` |
+| `POST /telefonia/ramal` sem auditoria | `phone_extension.credential_issued` (§10) | `app/api/v1/telefonia/ramal/route.test.ts` |
+
+**Não coberto:** a régua do servidor olha o texto; um nome público que resolve para IP interno
+(rebinding de DNS) passa. O `forwardAuth` do Traefik não foi medido — só o Caddy.

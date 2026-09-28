@@ -9,6 +9,7 @@ import { format, isToday, isYesterday } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MessageBubble } from "./MessageBubble";
+import { CartaoDaLigacao, ligacaoDaMensagem } from "@/components/telefonia/CartaoDaLigacao";
 import { NoteCard } from "./NoteCard";
 import { useMessagesRealtime } from "@/hooks/inbox/useMessagesRealtime";
 import { useConversationNotes } from "@/hooks/inbox/useConversationNotes";
@@ -251,6 +252,12 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
                       ? () => deleteNote.mutate(item.data.id)
                       : undefined
                   }
+                />
+              ) : ligacaoDaMensagem(item.data.metadata) ? (
+                <CartaoDaLigacao
+                  key={`msg-${item.data.id}`}
+                  ligacao={ligacaoDaMensagem(item.data.metadata)!}
+                  em={item.data.created_at}
                 />
               ) : (
                 <MessageBubble

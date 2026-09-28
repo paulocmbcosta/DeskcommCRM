@@ -96,7 +96,7 @@ function imgNs(): string {
 
 /** Os três repositórios de imagem, na ordem em que `_common.sh` os declara. */
 function reposDoKit(): string[] {
-  return ["IMG_APP", "IMG_WORKER", "IMG_SCHEDULER"].map((chave) => {
+  return ["IMG_APP", "IMG_WORKER", "IMG_SCHEDULER", "IMG_ASTERISK"].map((chave) => {
     const m = COMUM.match(new RegExp(`^${chave}="\\$\\{IMG_NS\\}/([^"]+)"$`, "m"));
     if (!m?.[1]) {
       throw new Error(
@@ -136,7 +136,7 @@ describe("o default do compose diz o mesmo que o kit", () => {
   // A leitura acontece DENTRO de cada `it`, não no corpo do describe: lá, um
   // `_common.sh` fora de forma derrubava a coleta do arquivo inteiro, e o que
   // chegava ao resumo era "no tests" em vez do caso que reprovou.
-  const CHAVES = ["APP_IMAGE", "WORKER_IMAGE", "SCHEDULER_IMAGE"] as const;
+  const CHAVES = ["APP_IMAGE", "WORKER_IMAGE", "SCHEDULER_IMAGE", "ASTERISK_IMAGE"] as const;
 
   CHAVES.forEach((chave, i) => {
     it(`o default de ${chave} usa o namespace de IMG_NS`, () => {
@@ -166,7 +166,7 @@ describe("o kit aponta para o que o CI realmente publica", () => {
       expect(texto).toContain(`REPO_URL="\${REPO_URL:-${repo}.git}"`);
     }
     expect(COMUM).toContain(`local url="\${1:-${repo}.git}" ref`);
-    for (const dockerfile of ["Dockerfile", "Dockerfile.worker", "Dockerfile.scheduler"]) {
+    for (const dockerfile of ["Dockerfile", "Dockerfile.worker", "Dockerfile.scheduler", "Dockerfile.asterisk"]) {
       expect(fs.readFileSync(path.join(RAIZ, dockerfile), "utf8")).toContain(
         `org.opencontainers.image.source="${repo}"`,
       );
@@ -229,9 +229,11 @@ describe("o kit aponta para o que o CI realmente publica", () => {
     );
   });
 
-  it("as três imagens do kit são exatamente as três que o workflow constrói", () => {
+  // A quarta é a da telefonia SIP (spec 20): serviço de profile opcional, mas
+  // publicado e fixado junto com as outras — quem liga puxa a MESMA versão.
+  it("as quatro imagens do kit são exatamente as quatro que o workflow constrói", () => {
     const naMatriz = [...PUBLICA.matchAll(/^\s{10}- name: (\S+)$/gm)].map((m) => m[1]);
-    expect(naMatriz.length, "a matriz de publish-image.yml não tem mais três imagens").toBe(3);
+    expect(naMatriz.length, "a matriz de publish-image.yml não tem mais quatro imagens").toBe(4);
     expect([...naMatriz].sort()).toEqual([...reposDoKit()].sort());
   });
 });

@@ -60,13 +60,23 @@ const PROXY = ["caddy"] as const;
  * serviço à internet, e foi exatamente esse o risco que este arquivo nasceu
  * para vigiar.
  */
-const PODE_PUBLICAR_UDP = ["wacalls"] as const;
+const PODE_PUBLICAR_UDP = ["wacalls", "asterisk"] as const;
+// `asterisk` (telefonia SIP, spec 20): o mesmo argumento, com uma FAIXA em vez
+// de uma porta — o Asterisk abre um par RTP por perna de ligação e não
+// multiplexa como o WaCalls. Nenhuma porta SIP: a sinalização da operadora
+// entra pelo NAT do próprio registro, e a ARI fica na rede interna.
 
 /**
  * Serviço que pode ganhar label de roteamento. Só o `app` — é o único com uma
  * superfície HTTP feita para o público.
  */
-const ROTEAVEL = ["app"] as const;
+const ROTEAVEL = ["app", "asterisk"] as const;
+/**
+ * `asterisk` entra aqui com uma rota SÓ: o WebSocket do ramal do navegador
+ * (`/telefonia/ws`). O caso abaixo ("o asterisk só roteia o WebSocket do
+ * ramal") cobra isso — a ARI do Asterisk atrás de uma label seria o painel de
+ * controle do PABX na internet.
+ */
 
 /**
  * Parser dos blocos de serviço, no molde de
@@ -134,7 +144,7 @@ describe("a fronteira de rede do que o cliente instala", () => {
     // todos os casos abaixo verdes por não terem medido nada — que é a forma
     // mais silenciosa de um gate morrer.
     expect([...SERVICOS.get("docker-compose.prod.yml")!.keys()].sort()).toEqual(
-      ["app", "caddy", "redis", "scheduler", "srh", "wacalls", "waha", "worker"].sort(),
+      ["app", "asterisk", "caddy", "redis", "scheduler", "srh", "wacalls", "waha", "worker"].sort(),
     );
     // O override do proxy externo declara um subconjunto (só o que ele muda).
     const traefik = [...SERVICOS.get("docker-compose.traefik.yml")!.keys()];
@@ -167,7 +177,10 @@ describe("a fronteira de rede do que o cliente instala", () => {
           const linhas = [...trecho.matchAll(/^\s{6}-\s*"?([^"\n]+)"?\s*$/gm)]
             .map((m) => m[1]!.trim())
             .map((l) => l.replace(/\$\{[^}]*:-([^}]*)\}/g, "$1"));
-          for (const linha of linhas) {
+          for (const linhaCrua of linhas) {
+            // `0.0.0.0:` na frente é o endereço de escuta no host (só IPv4, para
+            // não dobrar os `docker-proxy` da faixa), não parte do mapeamento.
+            const linha = linhaCrua.replace(/^\d+\.\d+\.\d+\.\d+:/, "");
             if (!linha.endsWith("/udp")) {
               publicando.push(`${arquivo} → ${nome}: "${linha}" não é /udp`);
               continue;
@@ -219,7 +232,55 @@ describe("a fronteira de rede do que o cliente instala", () => {
     ).toEqual([]);
   });
 
-  it("só o app recebe label de roteamento do proxy externo", () => {
+  it("o asterisk só roteia o WebSocket do ramal — nunca a ARI", () => {
+    const bloco = semComentarios(SERVICOS.get("docker-compose.traefik.yml")!.get("asterisk") ?? "");
+    const regras = [...bloco.matchAll(/routers\.[^.]+\.rule:\s*"([^"]+)"/g)].map((m) => m[1]!);
+    expect(regras.length, "o asterisk sumiu do override do Traefik").toBeGreaterThan(0);
+    for (const regra of regras) expect(regra).toContain("Path(`/telefonia/ws`)");
+    const caddy = fs.readFileSync(path.join(RAIZ, "Caddyfile"), "utf8");
+    expect(caddy).not.toMatch(/asterisk:8088[\s\S]{0,40}\/ari/);
+    expect(caddy).toMatch(/@ramal path \/telefonia\/ws/);
+  });
+
+  it("o WebSocket do ramal só abre com sessão de atendente — nos dois proxies", () => {
+    // Revisão de segurança de 2026-09-28: os dois proxies entregavam
+    // `/telefonia/ws` ao Asterisk para qualquer anônimo da internet. O porteiro
+    // é a rota do app; aqui se cobra que os DOIS proxies perguntem a ela antes,
+    // e que ela exista (um endereço para rota inexistente fecharia tudo com 404
+    // — seguro, mas o ramal nunca abriria).
+    const ROTA = "/api/v1/telefonia/ws/autorizar";
+    expect(
+      fs.existsSync(path.join(RAIZ, "app", ...ROTA.split("/").filter(Boolean), "route.ts")),
+      `a rota ${ROTA} sumiu — os proxies perguntam a ela antes de abrir o WebSocket`,
+    ).toBe(true);
+
+    // Caddy: `forward_auth` para o app DENTRO do `handle @ramal`, sem os
+    // cabeçalhos de Upgrade no pedido de autorização (o Next fecha o socket de
+    // um pedido com Upgrade que casa uma rota, e o ramal nunca abriria).
+    const caddy = fs
+      .readFileSync(path.join(RAIZ, "Caddyfile"), "utf8")
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    const ramal = /handle @ramal \{([\s\S]*?)\n\t\t\}/.exec(caddy)?.[1] ?? "";
+    expect(ramal, "o bloco `handle @ramal` sumiu do Caddyfile").toContain("reverse_proxy asterisk:8088");
+    const auth = /forward_auth app:3000 \{([\s\S]*?)\}/.exec(ramal)?.[1] ?? "";
+    expect(auth, "`/telefonia/ws` sem forward_auth: o Asterisk fica aberto à internet").toContain(`uri ${ROTA}`);
+    expect(auth).toMatch(/header_up -Connection/);
+    expect(auth).toMatch(/header_up -Upgrade/);
+
+    // Traefik: o roteador do ramal passa por um forwardAuth que aponta para a
+    // mesma rota, e ele vem ANTES da reescrita para `/ws`.
+    const traefik = semComentarios(SERVICOS.get("docker-compose.traefik.yml")!.get("asterisk") ?? "");
+    const middlewares = /routers\.deskcomm-ramal\.middlewares:\s*"([^"]+)"/.exec(traefik)?.[1]?.split(",") ?? [];
+    const comAuth = middlewares.filter((m) =>
+      new RegExp(`middlewares\\.${m}\\.forwardauth\\.address:\\s*"[^"]*${ROTA.replace(/\//g, "\\/")}"`).test(traefik),
+    );
+    expect(comAuth, "o roteador do ramal no Traefik não passa por forwardAuth").toHaveLength(1);
+    expect(middlewares.indexOf(comAuth[0]!)).toBe(0);
+  });
+
+  it("só o app (e o ramal) recebe label de roteamento do proxy externo", () => {
     const roteados: string[] = [];
 
     for (const [arquivo, servicos] of SERVICOS) {

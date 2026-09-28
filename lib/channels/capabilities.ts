@@ -145,6 +145,9 @@ export const CHANNEL_PROVIDER_META: ChannelProvider = "meta_cloud";
 export const CHANNEL_PROVIDER_ZERNIO: ChannelProvider = "zernio";
 /** Chat do site (migration 0272) — o widget embutido no site do cliente. */
 export const CHANNEL_PROVIDER_SITE_WIDGET: ChannelProvider = "site_widget";
+
+/** O tronco da operadora de telefonia (spec 20). Constante pelo mesmo motivo da de cima. */
+export const CHANNEL_PROVIDER_SIP_TRUNK: ChannelProvider = "sip_trunk";
 /** Chamada de voz WhatsApp (spec 18). Não transporta mensagem — ver abaixo. */
 export const CHANNEL_PROVIDER_WACALLS: ChannelProvider = "wacalls";
 
@@ -229,8 +232,16 @@ export function transportaMensagem(provider: string | null | undefined): boolean
  * um site. Ela pergunta o meio — que é o mesmo valor de `conversations.channel`
  * — e continua sem saber o provider.
  */
-export const MEIOS_DE_CANAL = ["whatsapp", "site_chat"] as const;
+export const MEIOS_DE_CANAL = ["whatsapp", "site_chat", "phone"] as const;
 export type MeioDeCanal = (typeof MEIOS_DE_CANAL)[number];
+
+/**
+ * O meio da conversa de telefone (`conversations.channel`). Mora aqui, e não só
+ * na telefonia, porque quem precisa perguntar "esta conversa é de telefone?"
+ * fica FORA de `lib/channels/` — o rodízio de conversas, por exemplo, que não
+ * pode distribuir a conversa de uma ligação (quem a atende é a telefonia).
+ */
+export const MEIO_TELEFONE = "phone" satisfies MeioDeCanal;
 
 const MEIO_DO_PROVIDER: Record<ProviderDeMensagem, MeioDeCanal> = {
   waha: "whatsapp",
@@ -239,9 +250,19 @@ const MEIO_DO_PROVIDER: Record<ProviderDeMensagem, MeioDeCanal> = {
   site_widget: "site_chat",
 };
 
-/** `null` para quem não transporta mensagem (voz) ou para provider que esta imagem não conhece. */
+/**
+ * O meio dos providers de voz que TÊM conversa própria. A telefonia SIP (spec
+ * 20) registra cada ligação numa conversa `phone`; a voz do WhatsApp não tem
+ * conversa própria — a ligação acontece à margem da conversa de WhatsApp do
+ * contato — e por isso fica de fora e responde `null`.
+ */
+const MEIO_DA_VOZ: Partial<Record<string, MeioDeCanal>> = {
+  sip_trunk: "phone",
+};
+
+/** `null` para voz sem conversa própria (WhatsApp) ou para provider que esta imagem não conhece. */
 export function meioDoCanal(provider: string | null | undefined): MeioDeCanal | null {
-  return MEIO_DO_PROVIDER[provider as ProviderDeMensagem] ?? null;
+  return MEIO_DO_PROVIDER[provider as ProviderDeMensagem] ?? MEIO_DA_VOZ[provider ?? ""] ?? null;
 }
 
 /**
@@ -261,7 +282,7 @@ export function meioDoCanal(provider: string | null | undefined): MeioDeCanal | 
  * hora de escolher por onde mandar recado, o desconhecido é tão inútil quanto a
  * voz. Aqui a pergunta é outra.
  */
-export const PROVIDERS_SEM_MENSAGEM = ["wacalls"] as const;
+export const PROVIDERS_SEM_MENSAGEM = ["wacalls", "sip_trunk"] as const;
 
 /**
  * Erro de COMPILAÇÃO enquanto sobrar provider fora das duas listas. Provider

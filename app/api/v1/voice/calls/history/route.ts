@@ -5,6 +5,7 @@
  * worker — §4.2 da spec), não faz proxy pro `/history` do WaCalls: nossa
  * tabela já tem `contact_id`/`end_reason` que o upstream não devolve.
  */
+import { PROVIDER_DA_LIGACAO_WACALLS } from "@/lib/wacalls/calls";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
@@ -37,7 +38,10 @@ export async function GET(req: Request): Promise<Response> {
     .select(
       "id, contact_id, direction, peer_phone, status, end_reason, started_at, answered_at, ended_at, duration_ms, owner_user_id, created_by",
     )
-    .eq("organization_id", activeOrg.orgId);
+    .eq("organization_id", activeOrg.orgId)
+    // Só as chamadas de voz do WhatsApp: as de telefone (spec 20) moram na
+    // mesma tabela e têm painel próprio.
+    .eq("provider", PROVIDER_DA_LIGACAO_WACALLS);
   if (id) consulta = consulta.eq("id", id);
   const { data, error } = await consulta.order("started_at", { ascending: false }).limit(limit);
 

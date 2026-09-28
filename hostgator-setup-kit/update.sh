@@ -270,6 +270,10 @@ gravar_imagens .env "$VERSAO_ALVO"
 # packaging proíbe.
 VOZ_CRIADA="$(completar_segredos_da_voz .env)" || VOZ_CRIADA=""
 [ -n "$VOZ_CRIADA" ] && c_ylw "  (preparei as credenciais da chamada de voz no .env — ela segue DESLIGADA)"
+# Idem para a telefonia SIP (spec 20): a senha da ARI, e nada mais. Ligar é
+# `COMPOSE_PROFILES=telefonia` + `TELEFONIA_ARI_URL=http://asterisk:8088`.
+TEL_CRIADA="$(completar_segredos_da_telefonia .env)" || TEL_CRIADA=""
+[ -n "$TEL_CRIADA" ] && c_ylw "  (preparei a senha da telefonia no .env — ela segue DESLIGADA)"
 
 # `dc pull` falha se alguma das três imagens ainda não existir no registro — o
 # que acontece numa instalação atualizando para a primeira versão publicada

@@ -122,6 +122,41 @@ services:
   # (`docker compose up -d caddy`) ATIVA o profile dele automaticamente e o
   # contêiner sobe assim mesmo, indo bater de frente com o Traefik. Por isso o
   # update.sh checa REVERSE_PROXY antes de recriar o proxy.
+  # Telefonia SIP (spec 20): o WebSocket do ramal do navegador — equivalente
+  # ao `handle @ramal` do Caddyfile. Só `/telefonia/ws`, reescrito para `/ws`;
+  # a ARI do Asterisk nunca ganha rota. Só vale com o profile `telefonia`
+  # ligado (sem ele, o serviço nem existe e estes rótulos não pesam nada).
+  #
+  # `deskcomm-ramal-auth` é o `forward_auth` do Caddyfile: o Traefik pergunta ao
+  # app (GET /api/v1/telefonia/ws/autorizar, com o cookie e o Origin do
+  # navegador) antes de abrir o WebSocket, e só um 2xx deixa passar — sem isto,
+  # qualquer anônimo da internet conversava SIP com o Asterisk. O Traefik já
+  # tira `Connection`/`Upgrade` do pedido de autorização (são cabeçalhos
+  # hop-by-hop), então aqui não é preciso o `header_up` que o Caddyfile tem.
+  #
+  # O endereço é o DOMÍNIO PÚBLICO, não `http://app:3000`, e é de propósito:
+  # com o Traefik em `--network host` (Hostinger) o nome `app` nem resolve, e
+  # na rede compartilhada de um Coolify/Dokploy outra stack pode ter um serviço
+  # chamado `app` — o DNS do Docker sortearia entre os dois, e a pergunta
+  # "este cookie é de um atendente?" iria para o app de outra pessoa. Pelo
+  # domínio, a pergunta volta ao próprio Traefik e cai no roteador `deskcomm`.
+  asterisk:
+    networks:
+      - internal
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:-traefik}"
+      traefik.http.routers.deskcomm-ramal.rule: "Host(`${DOMAIN}`) && Path(`/telefonia/ws`)"
+      traefik.http.routers.deskcomm-ramal.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
+      traefik.http.routers.deskcomm-ramal.tls.certresolver: "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      traefik.http.routers.deskcomm-ramal.priority: "900"
+      traefik.http.routers.deskcomm-ramal.middlewares: "deskcomm-ramal-auth,deskcomm-ramal-ws"
+      traefik.http.routers.deskcomm-ramal.service: "deskcomm-ramal"
+      traefik.http.middlewares.deskcomm-ramal-auth.forwardauth.address: "https://${DOMAIN}/api/v1/telefonia/ws/autorizar"
+      traefik.http.middlewares.deskcomm-ramal-ws.replacepath.path: "/ws"
+      traefik.http.services.deskcomm-ramal.loadbalancer.server.port: "8088"
+
   caddy:
     profiles: ["caddy-nao-usado-com-proxy-externo"]
 

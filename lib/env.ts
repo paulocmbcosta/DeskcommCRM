@@ -175,6 +175,18 @@ const schema = z.object({
   // devolve 401 em toda chamada — por isso `getWacallsClient()` exige os dois.
   WACALLS_API_TOKEN: z.string().optional().default(""),
 
+  // Telefonia SIP (spec 20). Mesmo princípio do WaCalls: o serviço `asterisk`
+  // vive no profile `telefonia`, desligado por padrão, então vazio é o estado
+  // normal e significa "esta instalação não oferece telefone". O app usa a ARI
+  // para empurrar o número na hora em que ele é salvo e para emitir o ramal do
+  // navegador; quem atende as ligações é o worker.
+  TELEFONIA_ARI_URL: z.string().optional().default(""),
+  TELEFONIA_ARI_PASSWORD: z.string().optional().default(""),
+  // Endereço WSS do ramal visto pelo NAVEGADOR. Vazio = `wss://<host da
+  // requisição>/telefonia/ws`, que é o caminho que o Caddy roteia. Só em
+  // desenvolvimento (sem Caddy) é preciso apontar direto para o Asterisk.
+  TELEFONIA_WS_URL_PUBLICA: z.string().optional().default(""),
+
   // Upstash Redis
   UPSTASH_REDIS_REST_URL: required("UPSTASH_REDIS_REST_URL"),
   UPSTASH_REDIS_REST_TOKEN: required("UPSTASH_REDIS_REST_TOKEN"),

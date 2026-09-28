@@ -90,6 +90,7 @@ import { runEventLogDrainLoop } from "@/lib/event-log/drain-loop";
 import { crmEdgeConfigFromEnv } from "@/lib/agent-engine/edge/crm/mcp-client";
 import { enforceHolds, sessionHealthMetrics } from "@/lib/agent-engine/edge/crm/session-watchdog";
 import { runVoiceCallsBridgeLoop } from "@/lib/wacalls/events-bridge";
+import { runTelefoniaLoop } from "@/lib/channels/telefonia/laco";
 import { runSessionWatchdogLoop } from "@/lib/agent-engine/edge/crm/session-reconciler";
 import { runHealthLoop } from "@/lib/agent-engine/health/circuit";
 import { runFlywheelLoop } from "@/lib/agent-engine/flywheel/live";
@@ -363,6 +364,11 @@ export async function startWorker(
         )
       : (log.info('ponte WaCalls OFF — endereço ou credencial ausente no env', {}), Promise.resolve());
 
+  // Telefonia SIP (spec 20): este worker é a aplicação Stasis que decide quem
+  // atende cada ligação. Sem TELEFONIA_ARI_URL/_PASSWORD o laço sai na hora
+  // (a instalação não ligou o profile `telefonia`).
+  const telefoniaLoop = runTelefoniaLoop({ pool, signal: loopsAbort.signal, log });
+
   // Circuito de saúde do número (block/response rate → hold).
   const healthLoop = runHealthLoop(
     pool,
@@ -543,6 +549,7 @@ export async function startWorker(
       sessionWatchdogLoop,
       flywheelLoop,
       voiceCallsBridgeLoop,
+      telefoniaLoop,
     ]);
     await workerLoop;
     let graceTimer: NodeJS.Timeout | undefined;

@@ -2995,3 +2995,72 @@ carimba `espera_desde` depois — se o dreno pegar o evento nesse intervalo, o w
 `espera_desde` nulo e termina `sem_espera` sem nunca chamar o Jev, e aquela mensagem do
 cliente nunca é julgada pela Assistente. O lado seguro: a espera continua contando (o
 termômetro não pára por causa disso), só a dispensa é que não acontece para essa mensagem.
+
+## J35 — Telefone no CRM: cadastrar o número da operadora, ligar e atender pelo navegador `[P0]` (2026-09-28)
+
+Pedido do dono (DYD-10): o atendente faz e recebe ligação pelo próprio CRM, pelos números SIP
+que a empresa já contratou, com os números cadastrados **pela tela** e vários por organização.
+Spec `docs/specs/20-spec-telefonia-sip.md` (o checklist do sistema vivo está no §10); mapa em
+`docs/architecture/telefonia.architecture.json`; migration 0286.
+
+`[P0]` porque é primeira impressão duas vezes: a do admin, que cola usuário e senha da
+operadora e espera ver "Conectado"; e a de quem liga para a empresa, que é o cliente final.
+
+**Como foi provado — e o que isso NÃO é.** Pela tela, à mão, com a operadora real (o tronco de
+teste da Totus, FreeSWITCH, G.711), no Mac de desenvolvimento atrás de NAT duplo, Asterisk em
+contêiner. **Não existe spec Playwright desta jornada** em `tests/e2e/`: nenhum caso abaixo é
+repetível pelo CI, e a prova depende de uma conta SIP real que o CI não tem. O que é
+automatizado é unidade: `lib/channels/telefonia/controle.test.ts` (a máquina de estados da
+recebida e da feita, com dublês da ARI e do banco), `lib/telefonia/distribuicao.test.ts` (a
+ordem do toque) e `lib/telefonia/numero.test.ts` (a política de número).
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J35.1 O admin cadastra o número em Conexões › Telefone (nome, número, servidor, porta, transporte, usuário, senha, time que recebe) e a linha passa de "Conectando" a **Conectado** | `[P0]` | **PASS** (pela tela, operadora real) |
+| J35.2 Ligação FEITA pelo discador do cabeçalho: a operadora chama, a pessoa atende, **áudio nos dois sentidos**, desliga — e o **cartão da ligação** aparece na conversa de telefone do contato | `[P0]` | **PASS** (pela tela, operadora real) |
+| J35.3 Reiniciar o contêiner do Asterisk: o worker reconecta, sincroniza de novo e o número **volta a registrar** sozinho | `[P1]` | **PASS** (pela tela, operadora real) |
+| J35.4 Editar o número de UDP para **TCP**: o tronco é recriado e passa a registrar por TCP | `[P1]` | **PASS** (pela tela, operadora real) — ver o defeito 1 abaixo |
+| J35.5 Ligação RECEBIDA: toca no navegador de um atendente disponível do time, ele atende, áudio nos dois sentidos, cartão na conversa, e a conversa passa a ser dele | `[P0]` | **infra PROVADA, produto pendente.** Ligação RECEBIDA chega à VPS de produção com áudio nos 2 sentidos — PROVADO em 2026-09-28 com Asterisk de teste descartável (infra: NAT do Docker preserva a 5060, faixa UDP 20000–20039 passa o firewall). O fluxo do PRODUTO (Stasis escolhe quem toca, atendente atende no navegador) segue pendente de prova em produção. Atrás do NAT duplo do Mac a operadora não entregava a INVITE |
+| J35.14 Só o registro identifica o tronco: com `identify_by=ip` no endpoint (sem objeto `identify`), uma INVITE forjada com `From: tronco-<id>` é recusada, e a recebida real continua casando pelo `line` do registro | `[P0]` | **PASS (medido, 2026-09-28)** — Asterisk 20 com os objetos de `objetosDoTronco`: forjada → "No matching endpoint found" / 401 (antes: atendida sem senha, com o `P-Asserted-Identity` falso virando o número do cliente); real da operadora, R-URI `sip:…;line=aqsytoa` → `tronco-<id>`. Vigiado por `lib/channels/telefonia/pjsip.test.ts` |
+| J35.15 O WebSocket do ramal só abre para atendente com sessão do próprio site | `[P0]` | **PASS no proxy (Caddy 2.11.4 real, Caddyfile do repo, app e Asterisk dublados)** — anônimo 401, sessão válida 101; sem o `forward_auth`, o anônimo recebia 101. Rota em `app/api/v1/telefonia/ws/autorizar/route.test.ts`, que também prova que ela não renova a sessão. **Não medido:** o `forwardAuth` do Traefik; pela tela, com o app de verdade |
+| J35.6 Recebida sem ninguém disponível: quem liga ouve música; em 2 min a ligação cai e vira "Ligar de volta" na Central | `[P0]` | pendente de prova (máquina de estados em unidade) |
+| J35.7 Recebida com mais de um atendente: um por vez, 20 s cada, duas voltas, quem atendeu menos RECEBIDAS hoje primeiro | `[P1]` | pendente de prova (ordem em unidade) |
+| J35.8 Ligar pelo botão **Ligar** do cabeçalho da conversa e da ficha do contato | `[P0]` | pendente de prova |
+| J35.9 Número fora da política (internacional, 0800, 190, sem DDD) é recusado **na tela**, com o motivo, antes de discar | `[P1]` | pendente de prova pela tela (regra em unidade) |
+| J35.10 Senha errada ou operadora muda: a linha mostra **Falhou** com o motivo ("recusou o usuário ou a senha" / sem resposta) | `[P0]` | pendente de prova |
+| J35.11 A conversa de telefone só aceita nota interna; uma resposta de texto é recusada (422) antes de gravar | `[P1]` | pendente de prova |
+| J35.12 Instalação com a telefonia DESLIGADA (o estado de toda VPS nova): a aba Telefone diz que está desligada e como ligar, e nenhum botão de ligar aparece em lugar nenhum | `[P0]` | pendente de prova |
+| J35.13 Remover o número: some da lista, o registro na operadora é solto, e as conversas e ligações antigas continuam no Inbox | `[P1]` | pendente de prova |
+
+**Defeitos que a prova pela tela achou, e que já estão consertados no código** (cada um está
+anotado "medido na prova pela tela" no arquivo do conserto):
+
+1. Editar o número para TCP seguia mandando REGISTER por UDP — o PUT por cima troca a
+   configuração e o registro continua com a antiga. Agora editar RECRIA o tronco
+   (`lib/channels/telefonia/sincronizacao.ts`, `empurrarTronco`).
+2. O fim da ligação caía inteiro: `ON CONFLICT` não aceita a trava única deferível de
+   `messages (organization_id, external_id)`. Agora confere antes e trata o 23505
+   (`lib/channels/telefonia/repositorio.ts`, `registrarNaConversa`).
+3. A conversa de uma ligação FEITA nascia na fila como "aguardando", com cara de cliente
+   esperando atendimento. Agora fica com quem ligou (`lib/channels/telefonia/saida.ts`).
+4. O painel da voz do WhatsApp adotava a ligação de telefone, abria o "Ouvir aqui" por cima do
+   painel do telefone e disputava o microfone. Agora filtra `provider = wacalls`
+   (`hooks/voice/useVoiceCallSession.ts`).
+5. Aba fechada no meio da ligação deixou o cliente 4 min pendurado numa ponte com ninguém.
+   Agora o ramal tem `rtp_timeout` de 30 s (`lib/channels/telefonia/pjsip.ts`).
+6. Quem estava com o app aberto quando o primeiro número foi conectado ficava sem telefone até
+   recarregar a página. Agora o navegador pergunta de novo a cada minuto e quando a aba volta
+   ao foco (`components/telefonia/TelefoniaContext.tsx`).
+
+**Revisão de segurança de 2026-09-28** (lista completa e testes no §10.2 da spec): tronco
+identificado só pelo registro (J35.14); `/telefonia/ws` atrás de autorização que não renova a
+sessão (J35.15); trocar a conta SIP exige a senha de novo; servidor interno recusado; o worker
+não empurra linha fora da régua; IP público validado no entrypoint; credencial do ramal
+auditada; e a conversa de telefone deixou de entrar no rodízio de conversas — o worker de
+rodízio a fecha como `skipped_voice_channel` sem atribuir
+(`lib/routing/worker-nao-distribui-a-ligacao.test.ts`).
+
+**Não medido:** CPU por ligação na VPS; mais de um registro da mesma conta ao mesmo tempo
+(desenvolvimento e produção); o estado do número com o Asterisk fora do ar (pelo código, o
+último estado gravado fica na tela); outros navegadores além do usado na prova (o ramal é
+WebRTC pelo JsSIP).

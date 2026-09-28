@@ -311,6 +311,53 @@ services:
     logging: *default-logging
     networks: [internal]
 
+  # ── Telefonia SIP (spec 20) — DESLIGADA POR PADRÃO ─────────────────────────
+  #
+  # Fazer e receber ligações pelos números SIP que a organização contratou de
+  # uma operadora. O Asterisk só carrega o áudio; quem decide quem atende é o
+  # worker (aplicação Stasis, pela ARI). Os NÚMEROS não moram aqui nem no
+  # .env: são cadastrados pela tela (Conexões › Telefone) e empurrados pelo
+  # worker para a memória do Asterisk.
+  #
+  # Profile `telefonia`, pelos mesmos motivos e com as mesmas duas armadilhas
+  # do `voz` acima: nada de `depends_on: asterisk` em app/worker, e nomear o
+  # serviço num `up -d` ativa o profile.
+  #
+  # ═══ IMAGEM PRÓPRIA, PUBLICADA PELO CI ═══
+  #
+  # Não existe imagem oficial do Asterisk. `deskcomm-asterisk` é o pacote do
+  # Alpine (GPL, fonte no aports) + a nossa configuração, construída pelo
+  # `publish-image.yml` como as outras três e fixada por versão pelo kit
+  # (`gravar_imagens`). Nenhum binário compilado por nós.
+  #
+  # ═══ PORTAS: SÓ A FAIXA DE ÁUDIO ═══
+  #
+  # Nenhuma porta SIP publicada: o tronco registra NA operadora, e a ligação
+  # recebida entra pelo mesmo mapeamento de NAT do registro (medido na prova
+  # de conceito, spec 20 §1) — não há porta de sinalização para robô varrer.
+  # A faixa UDP é o áudio (RTP), ~4 portas por ligação simultânea; só IPv4
+  # porque cada porta publicada custa um `docker-proxy` (2 a 5 MB, medido na
+  # VPS). A ARI e o WebSocket do ramal ficam na rede interna: o navegador
+  # chega pelo Caddy (`/telefonia/ws`), e a ARI nunca é roteada para fora.
+  asterisk:
+    profiles: ["telefonia"]
+    mem_limit: 256m
+    image: ${ASTERISK_IMAGE:-ghcr.io/paulocmbcosta/deskcomm-asterisk:stable}
+    pull_policy: ${ASTERISK_PULL_POLICY:-always}
+    build:
+      context: .
+      dockerfile: Dockerfile.asterisk
+    restart: unless-stopped
+    environment:
+      TELEFONIA_ARI_PASSWORD: ${TELEFONIA_ARI_PASSWORD:-}
+      TELEFONIA_IP_PUBLICO: ${TELEFONIA_IP_PUBLICO:-}
+      TELEFONIA_RTP_INICIO: ${TELEFONIA_RTP_INICIO:-20000}
+      TELEFONIA_RTP_FIM: ${TELEFONIA_RTP_FIM:-20039}
+    ports:
+      - "0.0.0.0:${TELEFONIA_RTP_INICIO:-20000}-${TELEFONIA_RTP_FIM:-20039}:${TELEFONIA_RTP_INICIO:-20000}-${TELEFONIA_RTP_FIM:-20039}/udp"
+    logging: *default-logging
+    networks: [internal]
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
