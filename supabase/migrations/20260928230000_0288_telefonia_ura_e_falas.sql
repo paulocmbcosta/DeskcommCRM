@@ -18,9 +18,7 @@
 -- 2. `phone_settings` — uma linha por organização: a voz da ElevenLabs e as três
 --    falas gerais (aguarde, ninguém atendeu, fora do horário).
 -- 3. `phone_menus` + `phone_menu_options` — o menu é da ORGANIZAÇÃO (D2) e serve a
---    vários números. FK COMPOSTA para `attendance_teams(organization_id, id)`: é o
---    que torna impossível, e não só improvável, uma opção levar ao time de outra
---    organização. `accepts_extension` nasce aqui e só é usada na versão 3.
+--    vários números. `accepts_extension` nasce aqui e só é usada na versão 3.
 -- 4. `channel_sessions.sip_menu_id` — o número aponta para um time OU um menu,
 --    nunca os dois (CHECK). Linha com os dois (impossível até aqui) mantém o time.
 -- 5. `attendance_teams.phone_emergency_*` — o aviso de instabilidade é do TIME
@@ -36,6 +34,32 @@
 -- 8. Bucket PRIVADO `phone-prompts`, sem policy em `storage.objects`: só o
 --    cliente de serviço (API e worker) lê e grava.
 --
+-- FK COMPOSTA em TODA referência nova entre tabelas da organização:
+-- `(organization_id, <coluna>) → <alvo>(organization_id, id)`. É o que torna
+-- impossível, e não só improvável, um número tocar o menu de outra organização,
+-- uma opção levar ao time de outra, ou um menu tocar a fala de outra — mesmo
+-- pela REST, que escreve `channel_sessions` (admin) e `voice_calls` (agent) com
+-- o JWT do usuário. A leitura já filtra a organização; a FK faz o BANCO recusar.
+--
+--   referência                                   alvo              on delete
+--   channel_sessions.sip_menu_id                 phone_menus       set null (sip_menu_id)
+--   voice_calls.menu_id                          phone_menus       set null (menu_id)
+--   phone_menus.prompt_id / invalid_prompt_id    phone_prompts     set null (a coluna)
+--   phone_settings.{waiting,nobody,after_hours}_prompt_id
+--                                                phone_prompts     set null (a coluna)
+--   attendance_teams.phone_emergency_prompt_id   phone_prompts     set null (a coluna)
+--   phone_menus.default_team_id                  attendance_teams  no action
+--   phone_menu_options.team_id                   attendance_teams  no action
+--   phone_menu_options.menu_id                   phone_menus       cascade
+--
+-- `set null (coluna)` (pg15+, o piso) e não `set null`: numa FK composta o
+-- `set null` puro anularia TAMBÉM o `organization_id`, que é `not null` — o
+-- apagamento do alvo estouraria em vez de soltar o ponteiro. `no action` onde a
+-- coluna é `not null`: time é arquivado, não apagado, e na exclusão da
+-- organização as duas pontas saem no MESMO comando, que é quando o `no action`
+-- confere. `cascade` na opção: ela não existe sem o menu. `MATCH SIMPLE` (o
+-- padrão) deixa passar a coluna nula, que é o "sem menu"/"sem fala".
+--
 -- Segurança: as quatro tabelas novas têm RLS com UMA policy,
 -- `tenant_isolation_<tabela>_select` (`for select`, leitura para membros da
 -- organização), e GRANT só de SELECT — a escrita é da API, com a organização
@@ -49,8 +73,11 @@
 -- Nenhuma função nova.
 --
 -- Idempotente e auto-curativa: `if not exists` em tabela, coluna e índice;
--- CHECKs com drop + add depois de corrigir o dado que os violaria; policies com
--- drop + create; gatilhos com `create or replace`; bucket com `on conflict`.
+-- CHECKs com drop + add depois de corrigir o dado que os violaria; FKs compostas
+-- por um bloco `do` que confere o catálogo (um clone que já tenha a FK SIMPLES de
+-- um rascunho desta migration sai com a composta, e o ponteiro para outra
+-- organização vira nulo antes); policies com drop + create; gatilhos com
+-- `create or replace`; bucket com `on conflict`.
 -- O trecho entre os marcadores `[apêndice 0288]` é copiado, sem mudança, para o
 -- apêndice do baseline.sql.
 
@@ -110,9 +137,10 @@ create table if not exists public.phone_settings (
   organization_id       uuid primary key references public.organizations(id) on delete cascade,
   voice_id              text,
   model_id              text not null default 'eleven_multilingual_v2',
-  waiting_prompt_id     uuid references public.phone_prompts(id) on delete set null,
-  nobody_prompt_id      uuid references public.phone_prompts(id) on delete set null,
-  after_hours_prompt_id uuid references public.phone_prompts(id) on delete set null,
+  -- As três falas gerais: FK composta para phone_prompts no bloco 7.
+  waiting_prompt_id     uuid,
+  nobody_prompt_id      uuid,
+  after_hours_prompt_id uuid,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now()
 );
@@ -122,14 +150,16 @@ create table if not exists public.phone_menus (
   id                uuid primary key default gen_random_uuid(),
   organization_id   uuid not null references public.organizations(id) on delete cascade,
   name              text not null,
-  prompt_id         uuid references public.phone_prompts(id) on delete set null,
-  invalid_prompt_id uuid references public.phone_prompts(id) on delete set null,
+  -- As duas falas: FK composta para phone_prompts no bloco 7.
+  prompt_id         uuid,
+  invalid_prompt_id uuid,
   default_team_id   uuid not null,
   accepts_extension boolean not null default false,
   archived_at       timestamptz,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   unique (organization_id, id),
+  -- no action: a coluna é not null (set null não cabe) e time é arquivado, não apagado.
   foreign key (organization_id, default_team_id) references public.attendance_teams(organization_id, id)
 );
 alter table public.phone_menus drop constraint if exists phone_menus_name_check;
@@ -155,8 +185,9 @@ create index if not exists phone_menus_org on public.phone_menus (organization_i
 create index if not exists phone_menu_options_team on public.phone_menu_options (organization_id, team_id);
 
 -- 4. channel_sessions.sip_menu_id ---------------------------------------------
+-- FK composta para phone_menus no bloco 7.
 alter table public.channel_sessions
-  add column if not exists sip_menu_id uuid references public.phone_menus(id) on delete set null;
+  add column if not exists sip_menu_id uuid;
 update public.channel_sessions
    set sip_menu_id = null
  where sip_team_id is not null and sip_menu_id is not null;
@@ -167,8 +198,9 @@ create index if not exists idx_channel_sessions_sip_menu
   on public.channel_sessions (sip_menu_id) where sip_menu_id is not null;
 
 -- 5. attendance_teams.phone_emergency_* -----------------------------------------
+-- FK composta de phone_emergency_prompt_id para phone_prompts no bloco 7.
 alter table public.attendance_teams
-  add column if not exists phone_emergency_prompt_id uuid references public.phone_prompts(id) on delete set null,
+  add column if not exists phone_emergency_prompt_id uuid,
   add column if not exists phone_emergency_active_since timestamptz,
   add column if not exists phone_emergency_expires_at timestamptz,
   add column if not exists phone_emergency_activated_by uuid references auth.users(id) on delete set null;
@@ -186,8 +218,9 @@ create index if not exists attendance_teams_aviso_com_prazo
   on public.attendance_teams (phone_emergency_expires_at) where phone_emergency_expires_at is not null;
 
 -- 6. voice_calls ----------------------------------------------------------------
+-- FK composta de menu_id para phone_menus no bloco 7.
 alter table public.voice_calls
-  add column if not exists menu_id uuid references public.phone_menus(id) on delete set null,
+  add column if not exists menu_id uuid,
   add column if not exists menu_digit text,
   add column if not exists menu_outcome text,
   add column if not exists emergency_heard_at timestamptz;
@@ -203,7 +236,91 @@ alter table public.voice_calls add constraint voice_calls_menu_outcome_check
 create index if not exists idx_voice_calls_menu_recentes
   on public.voice_calls (menu_id, started_at) where menu_id is not null;
 
--- 7. RLS, GRANT e policies ------------------------------------------------------
+-- 7. FKs compostas (organization_id, coluna) ------------------------------------
+-- O alvo precisa de `unique (organization_id, id)`. phone_prompts e phone_menus
+-- nascem com ela (acima); attendance_teams já a tem desde a 0263 — a guarda
+-- abaixo só a cria num clone que não a tenha (id é PK, então nenhum dado viola).
+do $unico$
+begin
+  if not exists (
+    select 1 from pg_constraint k
+     where k.conrelid = 'public.attendance_teams'::regclass
+       and k.contype in ('u', 'p')
+       and array_length(k.conkey, 1) = 2
+       and k.conkey @> array[
+             (select attnum from pg_attribute where attrelid = 'public.attendance_teams'::regclass and attname = 'organization_id'),
+             (select attnum from pg_attribute where attrelid = 'public.attendance_teams'::regclass and attname = 'id')]
+  ) then
+    alter table public.attendance_teams
+      add constraint attendance_teams_organization_id_id_key unique (organization_id, id);
+  end if;
+end $unico$;
+
+-- Uma FK por referência anulável, sempre `on delete set null (coluna)`. Para cada
+-- uma: se a FK certa (nome, alvo, as duas colunas, set null só da coluna) já está
+-- no catálogo, nada acontece — é o caminho de todo `update.sh` depois do
+-- primeiro. Senão: sai toda outra FK que envolva a coluna (a simples de um
+-- rascunho, ou uma torta), o ponteiro para outra organização (ou para linha que
+-- não existe) vira nulo, e a composta entra.
+do $fk$
+declare
+  r      record;
+  c      record;
+  v_rel  regclass;
+  v_org  int2;
+  v_col  int2;
+  v_ok   boolean;
+begin
+  for r in
+    select * from (values
+      ('channel_sessions', 'sip_menu_id',               'phone_menus',   'channel_sessions_sip_menu_id_org_fkey'),
+      ('voice_calls',      'menu_id',                   'phone_menus',   'voice_calls_menu_id_org_fkey'),
+      ('phone_menus',      'prompt_id',                 'phone_prompts', 'phone_menus_prompt_id_org_fkey'),
+      ('phone_menus',      'invalid_prompt_id',         'phone_prompts', 'phone_menus_invalid_prompt_id_org_fkey'),
+      ('phone_settings',   'waiting_prompt_id',         'phone_prompts', 'phone_settings_waiting_prompt_id_org_fkey'),
+      ('phone_settings',   'nobody_prompt_id',          'phone_prompts', 'phone_settings_nobody_prompt_id_org_fkey'),
+      ('phone_settings',   'after_hours_prompt_id',     'phone_prompts', 'phone_settings_after_hours_prompt_id_org_fkey'),
+      ('attendance_teams', 'phone_emergency_prompt_id', 'phone_prompts', 'attendance_teams_phone_emergency_prompt_id_org_fkey')
+    ) as t(tabela, coluna, alvo, nome)
+  loop
+    v_rel := format('public.%I', r.tabela)::regclass;
+    select attnum into v_org from pg_attribute where attrelid = v_rel and attname = 'organization_id';
+    select attnum into v_col from pg_attribute where attrelid = v_rel and attname = r.coluna;
+
+    select exists (
+      select 1 from pg_constraint k
+       where k.conrelid = v_rel
+         and k.conname = r.nome
+         and k.contype = 'f'
+         and k.confrelid = format('public.%I', r.alvo)::regclass
+         and k.conkey = array[v_org, v_col]
+         and k.confdeltype = 'n'
+         and k.confdelsetcols = array[v_col]
+    ) into v_ok;
+
+    for c in
+      select k.conname from pg_constraint k
+       where k.conrelid = v_rel and k.contype = 'f' and v_col = any (k.conkey)
+         and not (v_ok and k.conname = r.nome)
+    loop
+      execute format('alter table public.%I drop constraint %I', r.tabela, c.conname);
+    end loop;
+
+    if not v_ok then
+      execute format(
+        'update public.%1$I t set %2$I = null
+          where t.%2$I is not null
+            and not exists (select 1 from public.%3$I x where x.id = t.%2$I and x.organization_id = t.organization_id)',
+        r.tabela, r.coluna, r.alvo);
+      execute format(
+        'alter table public.%1$I add constraint %2$I foreign key (organization_id, %3$I)
+           references public.%4$I (organization_id, id) on delete set null (%3$I)',
+        r.tabela, r.nome, r.coluna, r.alvo);
+    end if;
+  end loop;
+end $fk$;
+
+-- 8. RLS, GRANT e policies ------------------------------------------------------
 alter table public.phone_prompts      enable row level security;
 alter table public.phone_settings     enable row level security;
 alter table public.phone_menus        enable row level security;
@@ -233,7 +350,7 @@ drop policy if exists tenant_isolation_phone_menu_options_select on public.phone
 create policy tenant_isolation_phone_menu_options_select on public.phone_menu_options for select to authenticated
   using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
 
--- 8. updated_at ------------------------------------------------------------------
+-- 9. updated_at ------------------------------------------------------------------
 create or replace trigger trg_phone_prompts_updated_at
   before update on public.phone_prompts for each row execute function public.fn_set_updated_at();
 create or replace trigger trg_phone_settings_updated_at
@@ -241,7 +358,7 @@ create or replace trigger trg_phone_settings_updated_at
 create or replace trigger trg_phone_menus_updated_at
   before update on public.phone_menus for each row execute function public.fn_set_updated_at();
 
--- 9. Bucket privado --------------------------------------------------------------
+-- 10. Bucket privado --------------------------------------------------------------
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('phone-prompts', 'phone-prompts', false, 2097152, array['audio/basic'])
 on conflict (id) do update
@@ -249,7 +366,7 @@ on conflict (id) do update
       file_size_limit    = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
 
--- 10. Comentários ----------------------------------------------------------------
+-- 11. Comentários ----------------------------------------------------------------
 comment on table public.phone_prompts is
   'Uma fala SALVA do telefone (URA, aguarde, ninguém atendeu, fora do horário, aviso de instabilidade). Áudio μ-law 8 kHz no bucket privado phone-prompts: gerado pela ElevenLabs SÓ na prévia da tela (a prévia é só objeto no Storage, sem linha), passa a valer no "Salvar e usar" (a linha aponta para o hash) e é copiado pelo worker para o volume telefonia-falas, que o Asterisk lê. Escrita só pela API/worker (GRANT só de SELECT). status failed está reservado: a v1 só grava ready.';
 comment on column public.phone_prompts.storage_path is
@@ -257,7 +374,7 @@ comment on column public.phone_prompts.storage_path is
 comment on table public.phone_menus is
   'Menu de voz (URA) da organização: serve a vários números (channel_sessions.sip_menu_id). Tecla → time em phone_menu_options; quem não escolhe vai ao default_team_id. accepts_extension é da versão 3 (ramais).';
 comment on column public.channel_sessions.sip_menu_id is
-  'Menu de voz que atende as ligações deste número. Excludente com sip_team_id (channel_sessions_sip_destino_check). A API só aceita menu com a fala pronta.';
+  'Menu de voz que atende as ligações deste número. Excludente com sip_team_id (channel_sessions_sip_destino_check). FK composta (organization_id, sip_menu_id): o banco recusa menu de outra organização, também pela REST. A API só aceita menu com a fala pronta.';
 comment on column public.attendance_teams.phone_emergency_expires_at is
   'Quando o aviso de instabilidade do telefone desliga sozinho. NULL com active_since preenchido = até alguém desligar. O worker lê a cada ligação e desliga os vencidos a cada 60 s (auditoria phone.emergency_expired + aviso na Central).';
 comment on column public.voice_calls.menu_outcome is
@@ -266,7 +383,7 @@ comment on column public.voice_calls.emergency_heard_at is
   'Quando o cliente ouviu até o fim o aviso de instabilidade do time. NULL = não havia aviso ou a ligação caiu antes. Fonte do "ouviu o aviso de instabilidade" no cartão da ligação.';
 -- [apêndice 0288: fim]
 
--- 11. agent_inbox_items.kind — a LISTA INTEIRA: a última migration que reconstrói
+-- 12. agent_inbox_items.kind — a LISTA INTEIRA: a última migration que reconstrói
 --     a constraint termina igual ao baseline (tests/unit/kind-check-migration-x-baseline.test.ts).
 alter table public.agent_inbox_items drop constraint if exists agent_inbox_items_kind_check;
 alter table public.agent_inbox_items add constraint agent_inbox_items_kind_check check (kind in (

@@ -13,11 +13,17 @@
  *     gravam nem na própria organização — `permission denied`, não "zero linhas".
  *  3. AS CATRACAS DO SCHEMA. O caminho do áudio amarrado a organização + hash (o
  *     worker escreve esse caminho no disco); tecla só 0–9; número aponta para time
- *     OU menu; opção e time padrão só levam a time da MESMA organização (FK
- *     composta); aviso de instabilidade coerente.
- *  4. O bucket é privado.
- *  5. O bloco do apêndice — lido do `baseline.sql` pelo rótulo, não copiado à mão
- *     — reaplica sem erro, CURA cada linha que violaria um CHECK novo e, sob o
+ *     OU menu; aviso de instabilidade coerente.
+ *  4. NENHUM PONTEIRO ATRAVESSA ORGANIZAÇÃO. Toda referência nova entre tabelas da
+ *     organização é FK COMPOSTA `(organization_id, coluna)`: o BANCO recusa o
+ *     número que aponta para o menu de outra organização — também pela REST, com o
+ *     JWT de um admin —, e não só a leitura o ignora. Apagar o alvo solta só a
+ *     coluna (`on delete set null (coluna)`), nunca o `organization_id`.
+ *  5. O bucket é privado.
+ *  6. O bloco do apêndice — lido do `baseline.sql` pelo rótulo, não copiado à mão
+ *     — reaplica sem erro, CURA cada linha que violaria um CHECK novo, troca a FK
+ *     SIMPLES de um rascunho pela composta (anulando antes o ponteiro para outra
+ *     organização) e, sob o
  *     default ACL do Supabase (GRANT ALL aos três papéis da REST), devolve as
  *     tabelas a só-leitura. O `pnpm test:db` reproduz o default ACL para FUNÇÕES
  *     e não para TABELAS: sem simular o grant aqui, a prova do `revoke` passaria
@@ -34,6 +40,7 @@ const ORG_A = "c0de0288-0000-4000-8000-00000000000a";
 const ORG_B = "c0de0288-0000-4000-8000-00000000000b";
 const USER_A = "c0de0288-1111-4000-8000-00000000000a";
 const USER_B = "c0de0288-1111-4000-8000-00000000000b";
+const ADMIN_A = "c0de0288-1111-4000-8000-0000000000aa";
 const TIME_A = "c0de0288-2222-4000-8000-00000000000a";
 const TIME_B = "c0de0288-2222-4000-8000-00000000000b";
 const FALA_A = "c0de0288-3333-4000-8000-00000000000a";
@@ -41,6 +48,8 @@ const FALA_B = "c0de0288-3333-4000-8000-00000000000b";
 const MENU_A = "c0de0288-4444-4000-8000-00000000000a";
 const MENU_B = "c0de0288-4444-4000-8000-00000000000b";
 const NUMERO_A = "c0de0288-5555-4000-8000-00000000000a";
+const FALA_EXTRA = "c0de0288-3333-4000-8000-0000000000ee";
+const MENU_EXTRA = "c0de0288-4444-4000-8000-0000000000ee";
 const HASH = "a".repeat(64);
 const TABELAS = ["phone_prompts", "phone_settings", "phone_menus", "phone_menu_options"] as const;
 const LISTA_SQL = TABELAS.map((t) => `'${t}'`).join(", ");
@@ -94,18 +103,65 @@ function privilegiosDaRest(): string[] {
     .sort();
 }
 
+/** Toda referência nova e a FK que a guarda: `tabela.coluna:chaves:on delete:colunas anuladas`. */
+const FKS_ESPERADAS = [
+  "attendance_teams.phone_emergency_prompt_id:2:n:phone_emergency_prompt_id",
+  "channel_sessions.sip_menu_id:2:n:sip_menu_id",
+  "phone_menu_options.menu_id:2:c:-",
+  "phone_menu_options.team_id:2:a:-",
+  "phone_menus.default_team_id:2:a:-",
+  "phone_menus.invalid_prompt_id:2:n:invalid_prompt_id",
+  "phone_menus.prompt_id:2:n:prompt_id",
+  "phone_settings.after_hours_prompt_id:2:n:after_hours_prompt_id",
+  "phone_settings.nobody_prompt_id:2:n:nobody_prompt_id",
+  "phone_settings.waiting_prompt_id:2:n:waiting_prompt_id",
+  "voice_calls.menu_id:2:n:menu_id",
+].sort();
+
+/** As FKs que o catálogo tem nessas colunas — UMA por coluna, se o bloco fez o serviço. */
+function fksDasReferencias(): string[] {
+  const pares = FKS_ESPERADAS.map((l) => l.split(":")[0]!.split("."))
+    .map(([t, c]) => `('${t}', '${c}')`)
+    .join(", ");
+  return sql(`
+    select c.relname || '.' || a.attname || ':' || array_length(k.conkey, 1) || ':' || k.confdeltype::text || ':' ||
+           coalesce((select string_agg(a2.attname, ',' order by a2.attname)
+                       from unnest(k.confdelsetcols) as s(n)
+                       join pg_attribute a2 on a2.attrelid = k.conrelid and a2.attnum = s.n), '-')
+      from pg_constraint k
+      join pg_class c on c.oid = k.conrelid and c.relnamespace = 'public'::regnamespace
+      join pg_attribute a on a.attrelid = k.conrelid and a.attnum = any (k.conkey) and a.attname <> 'organization_id'
+     where k.contype = 'f' and (c.relname::text, a.attname::text) in (${pares});`)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .sort();
+}
+
+/** Roda a DML como membro (`authenticated` + JWT) e desfaz; `preparo` roda antes, como dono. */
+function comoMembro(user: string, dml: string, preparo = ""): string | null {
+  return tenta(`begin;
+    ${preparo}
+    set local role authenticated;
+    select set_config('request.jwt.claims', '{"sub":"${user}"}', true);
+    ${dml};
+    rollback;`);
+}
+
 const SO_LEITURA = TABELAS.flatMap((t) => [`${t}:authenticated:SELECT`, `${t}:service_role:SELECT`]).sort();
 
 beforeAll(() => {
   sql(`
     insert into auth.users (id, email) values
-      ('${USER_A}', 'ura-0288-a@invariant.test'), ('${USER_B}', 'ura-0288-b@invariant.test')
+      ('${USER_A}', 'ura-0288-a@invariant.test'), ('${USER_B}', 'ura-0288-b@invariant.test'),
+      ('${ADMIN_A}', 'ura-0288-admin-a@invariant.test')
       on conflict (id) do nothing;
     insert into public.organizations (id, slug, legal_name, display_name) values
       ('${ORG_A}', 'ura-0288-a', 'URA 0288 A', 'URA A'), ('${ORG_B}', 'ura-0288-b', 'URA 0288 B', 'URA B')
       on conflict (id) do nothing;
     insert into public.user_organizations (user_id, organization_id, role, accepted_at) values
-      ('${USER_A}', '${ORG_A}', 'agent', now()), ('${USER_B}', '${ORG_B}', 'agent', now())
+      ('${USER_A}', '${ORG_A}', 'agent', now()), ('${USER_B}', '${ORG_B}', 'agent', now()),
+      ('${ADMIN_A}', '${ORG_A}', 'admin', now())
       on conflict do nothing;
     insert into public.attendance_teams (id, organization_id, name, slug) values
       ('${TIME_A}', '${ORG_A}', 'Suporte', 'suporte-0288'), ('${TIME_B}', '${ORG_B}', 'Suporte', 'suporte-0288')
@@ -237,7 +293,7 @@ describe("as catracas do schema", () => {
     ).toContain("phone_menu_options_digit_check");
   });
 
-  it("a opção e o time padrão só levam a time da MESMA organização (FK composta)", () => {
+  it("a opção e o time padrão só levam a time da MESMA organização (FK composta, recusa do banco)", () => {
     expect(
       tenta(`insert into public.phone_menu_options (organization_id, menu_id, digit, team_id)
              values ('${ORG_A}', '${MENU_A}', '2', '${TIME_B}');`),
@@ -250,6 +306,84 @@ describe("as catracas do schema", () => {
       tenta(`insert into public.phone_menu_options (organization_id, menu_id, digit, team_id)
              values ('${ORG_A}', '${MENU_B}', '3', '${TIME_A}');`),
     ).toMatch(/foreign key/);
+  });
+
+  it("toda referência nova é FK composta, uma por coluna, com o on delete certo", () => {
+    expect(fksDasReferencias()).toEqual(FKS_ESPERADAS);
+  });
+
+  it("o BANCO recusa todo ponteiro para linha de outra organização", () => {
+    const recusa = (comando: string, fk: string) =>
+      expect(tenta(comando)).toMatch(new RegExp(`violates foreign key constraint "${fk}"`));
+    recusa(`update public.channel_sessions set sip_team_id = null, sip_menu_id = '${MENU_B}' where id = '${NUMERO_A}';`,
+      "channel_sessions_sip_menu_id_org_fkey");
+    recusa(`insert into public.voice_calls
+              (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_id)
+            values ('${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'ref-0288-cruzada', 'inbound', '+5561999990288', 'ended', '${MENU_B}');`,
+      "voice_calls_menu_id_org_fkey");
+    recusa(`update public.phone_menus set prompt_id = '${FALA_B}' where id = '${MENU_A}';`, "phone_menus_prompt_id_org_fkey");
+    recusa(`update public.phone_menus set invalid_prompt_id = '${FALA_B}' where id = '${MENU_A}';`,
+      "phone_menus_invalid_prompt_id_org_fkey");
+    for (const coluna of ["waiting", "nobody", "after_hours"]) {
+      recusa(`update public.phone_settings set ${coluna}_prompt_id = '${FALA_B}' where organization_id = '${ORG_A}';`,
+        `phone_settings_${coluna}_prompt_id_org_fkey`);
+    }
+    recusa(`update public.attendance_teams set phone_emergency_prompt_id = '${FALA_B}' where id = '${TIME_A}';`,
+      "attendance_teams_phone_emergency_prompt_id_org_fkey");
+    recusa(`update public.phone_menus set default_team_id = '${TIME_B}' where id = '${MENU_A}';`,
+      "phone_menus_organization_id_default_team_id_fkey");
+    recusa(`update public.phone_menu_options set team_id = '${TIME_B}' where menu_id = '${MENU_A}' and digit = '1';`,
+      "phone_menu_options_organization_id_team_id_fkey");
+  });
+
+  it("…e pela REST também: o admin de A não aponta o número para o menu de B (controle: o de A passa)", () => {
+    // channel_sessions é gravável pela REST por admin (channel_sessions_tenant_write).
+    expect(
+      comoMembro(ADMIN_A, `update public.channel_sessions set sip_team_id = null, sip_menu_id = '${MENU_A}' where id = '${NUMERO_A}'`),
+    ).toBeNull();
+    expect(
+      comoMembro(ADMIN_A, `update public.channel_sessions set sip_team_id = null, sip_menu_id = '${MENU_B}' where id = '${NUMERO_A}'`),
+    ).toMatch(/violates foreign key constraint "channel_sessions_sip_menu_id_org_fkey"/);
+    // voice_calls é gravável por agent; o GRANT é o do default ACL do Supabase, que o test:db não reproduz.
+    const ligacao = (menu: string) =>
+      comoMembro(
+        USER_A,
+        `insert into public.voice_calls
+           (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_id)
+         values ('${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'ref-0288-rest-' || gen_random_uuid(), 'inbound',
+                 '+5561999990288', 'ended', '${menu}')`,
+        "grant insert on public.voice_calls to authenticated;",
+      );
+    expect(ligacao(MENU_A)).toBeNull();
+    expect(ligacao(MENU_B)).toMatch(/violates foreign key constraint "voice_calls_menu_id_org_fkey"/);
+  });
+
+  it("apagar o alvo solta só a coluna: o organization_id fica (on delete set null (coluna))", () => {
+    sql(`
+      insert into public.phone_prompts
+        (id, organization_id, kind, "text", voice_id, model_id, content_hash, storage_path, duration_ms, status)
+      values ('${FALA_EXTRA}', '${ORG_A}', 'invalid', 'Opção inválida.', 'voz', 'm', '${"b".repeat(64)}',
+              '${ORG_A}/${"b".repeat(64)}.ulaw', 500, 'ready');
+      insert into public.phone_menus (id, organization_id, name, prompt_id, invalid_prompt_id, default_team_id)
+      values ('${MENU_EXTRA}', '${ORG_A}', 'Extra', '${FALA_A}', '${FALA_EXTRA}', '${TIME_A}');
+      update public.phone_settings set nobody_prompt_id = '${FALA_EXTRA}' where organization_id = '${ORG_A}';
+      update public.attendance_teams set phone_emergency_prompt_id = '${FALA_EXTRA}' where id = '${TIME_A}';
+      insert into public.voice_calls
+        (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_id)
+      values ('${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'ref-0288-extra', 'inbound', '+5561999990288', 'ended', '${MENU_EXTRA}');
+    `);
+    expect(tenta(`delete from public.phone_prompts where id = '${FALA_EXTRA}';`)).toBeNull();
+    expect(
+      sql(`select coalesce(invalid_prompt_id::text, '-') || '|' || organization_id from public.phone_menus where id = '${MENU_EXTRA}';`),
+    ).toBe(`-|${ORG_A}`);
+    expect(sql(`select coalesce(nobody_prompt_id::text, '-') from public.phone_settings where organization_id = '${ORG_A}';`)).toBe("-");
+    expect(
+      sql(`select coalesce(phone_emergency_prompt_id::text, '-') || '|' || organization_id from public.attendance_teams where id = '${TIME_A}';`),
+    ).toBe(`-|${ORG_A}`);
+    expect(tenta(`delete from public.phone_menus where id = '${MENU_EXTRA}';`)).toBeNull();
+    expect(
+      sql(`select coalesce(menu_id::text, '-') || '|' || organization_id from public.voice_calls where sip_call_ref = 'ref-0288-extra';`),
+    ).toBe(`-|${ORG_A}`);
   });
 
   it("o nome do menu não é vazio", () => {
@@ -336,6 +470,21 @@ describe("o bucket e o apêndice", () => {
       insert into public.phone_menu_options (organization_id, menu_id, digit, team_id)
       values ('${ORG_A}', '${MENU_A}', '#', '${TIME_A}');
 
+      -- Um clone que rodou um rascunho com FK SIMPLES, e um ponteiro cruzado que ela deixou entrar.
+      alter table public.channel_sessions drop constraint channel_sessions_sip_menu_id_org_fkey;
+      alter table public.channel_sessions add constraint channel_sessions_sip_menu_id_fkey
+        foreign key (sip_menu_id) references public.phone_menus(id) on delete set null;
+      alter table public.phone_settings drop constraint phone_settings_waiting_prompt_id_org_fkey;
+      alter table public.phone_settings add constraint phone_settings_waiting_prompt_id_fkey
+        foreign key (waiting_prompt_id) references public.phone_prompts(id) on delete set null;
+      update public.phone_settings set waiting_prompt_id = '${FALA_B}' where organization_id = '${ORG_A}';
+      alter table public.voice_calls drop constraint voice_calls_menu_id_org_fkey;
+      alter table public.voice_calls add constraint voice_calls_menu_id_fkey
+        foreign key (menu_id) references public.phone_menus(id) on delete set null;
+      insert into public.voice_calls
+        (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_id)
+      values ('${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'ref-0288-cruzada-clone', 'inbound', '+5561999990288', 'ended', '${MENU_B}');
+
       alter table public.voice_calls drop constraint voice_calls_menu_outcome_check;
       insert into public.voice_calls
         (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_outcome)
@@ -357,6 +506,12 @@ describe("o bucket e o apêndice", () => {
     ).toBe("failed|-");
     expect(sql(`select count(*) from public.phone_menu_options where digit = '#';`)).toBe("0");
     expect(sql(`select count(*) from public.voice_calls where menu_outcome = 'talvez';`)).toBe("0");
+    // A FK simples saiu, a composta entrou, e o ponteiro cruzado virou nulo antes dela.
+    expect(fksDasReferencias()).toEqual(FKS_ESPERADAS);
+    expect(sql(`select coalesce(waiting_prompt_id::text, '-') from public.phone_settings where organization_id = '${ORG_A}';`)).toBe("-");
+    expect(
+      sql(`select coalesce(menu_id::text, '-') || '|' || organization_id from public.voice_calls where sip_call_ref = 'ref-0288-cruzada-clone';`),
+    ).toBe(`-|${ORG_A}`);
 
     // As constraints voltaram — e UMA de cada, não duas.
     expect(
