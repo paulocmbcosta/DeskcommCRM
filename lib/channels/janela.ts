@@ -26,7 +26,7 @@
  * `last_inbound_at`, e guardá-la criaria uma segunda verdade que envelhece
  * sozinha — parecendo autoritativa justamente quando já está errada.
  */
-import { capabilitiesOf } from "./capabilities";
+import { capabilitiesOf, transportaMensagem } from "./capabilities";
 import { WINDOW_MS, windowRemainingMs } from "@/lib/agent-engine/guardrails/messaging-window";
 import type { ChannelProvider } from "./types";
 
@@ -59,6 +59,12 @@ export function estadoDaJanela(
   agora: Date,
 ): EstadoDaJanela {
   if (!provider) return { tipo: "sem_restricao" };
+  // Canal de voz (a conversa de telefone da spec 20) não tem janela de
+  // mensagem: nada sai por ele como texto. `capabilitiesOf` lança para esses
+  // providers (fail-closed da matriz), e lançar AQUI derrubava o inbox inteiro
+  // ao abrir uma conversa de telefone. O compositor dessa conversa é barrado
+  // por outro caminho (só nota interna), não pela janela.
+  if (!transportaMensagem(provider)) return { tipo: "sem_restricao" };
 
   const caps = capabilitiesOf(provider as ChannelProvider);
   // `freeformOutsideWindow: true` = o canal aceita texto livre a qualquer hora.

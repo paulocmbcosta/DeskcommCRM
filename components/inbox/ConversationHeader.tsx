@@ -4,6 +4,7 @@ import { useT } from "@/hooks/i18n/useT";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge, badgeVariants } from "@/components/ui/badge";
+import { BotaoLigar } from "@/components/telefonia/BotaoLigar";
 import { cn } from "@/lib/utils";
 import { JanelaSelo } from "@/components/inbox/JanelaSelo";
 import { SeloDeSentimento } from "@/components/inbox/SeloDeSentimento";
@@ -299,6 +300,14 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
           barra pode encolher e quebrar internamente, e os botões continuam
           todos visíveis e clicáveis — só que em duas linhas quando preciso. */}
       <div className={cn("flex min-w-0 flex-wrap items-center gap-1.5", somenteLeitura && "hidden")} data-testid="acoes-da-conversa">
+        {conversation.contact_id && (
+          <BotaoLigar
+            contatoId={conversation.contact_id}
+            nome={displayName}
+            temTelefone={Boolean(c?.phone_number) && !c?.is_anonymized}
+            variante="icone"
+          />
+        )}
         {isOpen && (
           <Button
             size="sm"

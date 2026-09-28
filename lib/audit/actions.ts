@@ -629,6 +629,14 @@ export const AUDIT_ACTIONS = [
   // (migration 0285). metadata: { espera_desde, dispensada_ate }. É o erro
   // medido da Assistente — o laço de retorno da feature.
   "conversation.espera_mantida",
+  // Telefonia SIP (spec 20). Número da operadora cadastrado, alterado ou
+  // removido pela tela (metadata: servidor, usuário e time — NUNCA a senha), e
+  // a ligação de saída pedida por um atendente (metadata: tronco e contato; o
+  // número discado fica em voice_calls, não na trilha).
+  "channel.phone_trunk_created",
+  "channel.phone_trunk_updated",
+  "channel.phone_trunk_archived",
+  "phone_call.started",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

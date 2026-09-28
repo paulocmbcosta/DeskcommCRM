@@ -105,6 +105,10 @@ export {
   PhoneIncoming,
   PhoneOutgoing,
   PhoneX,
+  // telefonia SIP (spec 20): o teclado do discador e o apagar dígito
+  DotsNine,
+  Backspace,
+  PhoneCall,
   Paperclip,
   Microphone,
   MicrophoneSlash,

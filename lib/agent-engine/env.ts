@@ -86,6 +86,10 @@ const envSchema = z.object({
   WACALLS_API_BASE_URL: z.string().url().optional(),
   WACALLS_API_TOKEN: z.string().trim().min(1).optional(),
   WACALLS_BRIDGE_MAX_BACKOFF_MS: z.coerce.number().int().positive().default(30_000),
+  // Telefonia SIP (spec 20) — o worker é a aplicação Stasis que decide quem
+  // atende. Sem os dois, o laço fica OFF (info), mesmo princípio do WaCalls.
+  TELEFONIA_ARI_URL: z.string().url().optional(),
+  TELEFONIA_ARI_PASSWORD: z.string().trim().min(1).optional(),
   // Dono ÚNICO dos eventos ai_agent.dispatch_requested (mesma chave do app):
   // 'engine' (default) = o drain deste worker consome; 'native' = o dispatcher
   // EPIC-13 consome e o drain daqui NÃO liga. Nunca os dois.

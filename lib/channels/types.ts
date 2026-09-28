@@ -9,7 +9,7 @@ import type { OutboundMedia } from "@/lib/waha/media-send";
 
 export type { OutboundMedia };
 
-export type ChannelProvider = "waha" | "meta_cloud" | "zernio" | "wacalls" | "site_widget";
+export type ChannelProvider = "waha" | "meta_cloud" | "zernio" | "wacalls" | "site_widget" | "sip_trunk";
 
 /**
  * Os providers que transportam MENSAGEM — o subconjunto sobre o qual a matriz
@@ -26,7 +26,15 @@ export type ChannelProvider = "waha" | "meta_cloud" | "zernio" | "wacalls" | "si
  * banco já aceitava `'wacalls'` enquanto este union não — e uma organização que
  * pareasse voz derrubava `getAdapter` com `unknown_channel_provider`.
  */
-export type ProviderDeMensagem = Exclude<ChannelProvider, "wacalls">;
+export type ProviderDeMensagem = Exclude<ChannelProvider, ProviderDeVoz>;
+
+/**
+ * Os providers que carregam VOZ, não texto: a chamada de voz do WhatsApp
+ * (`wacalls`, spec 18) e o tronco da operadora de telefonia (`sip_trunk`,
+ * spec 20). Os dois moram em `channel_sessions` pelos mesmos motivos — status,
+ * arquivamento, uma linha por número — e nenhum dos dois manda recado.
+ */
+export type ProviderDeVoz = "wacalls" | "sip_trunk";
 
 export interface ChannelCapabilities {
   /** Pode enviar texto livre a qualquer momento? false = exige template fora da janela. */

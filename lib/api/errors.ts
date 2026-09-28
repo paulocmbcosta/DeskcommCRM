@@ -150,6 +150,30 @@ export const ApiErrorCodes = {
   // 422: a fatura existe mas não tem linha digitável nem link — o boleto ainda
   // não foi registrado no gateway. Enviar "segue a fatura" sem nada seria pior.
   fatura_nao_enviavel: "fatura_nao_enviavel",
+
+  // Telefonia SIP (docs/specs/20-spec-telefonia-sip.md).
+  // 422: mensagem pedida numa conversa de canal que não transporta texto.
+  channel_cannot_send_messages: "channel_cannot_send_messages",
+  // 409/503: a instalação não ligou a telefonia, ou o Asterisk não respondeu.
+  telefonia_indisponivel: "telefonia_indisponivel",
+  // 422: cadastro do número (numeros.ts) e pedido de ligação (saida.ts).
+  numero_invalido: "numero_invalido",
+  time_invalido: "time_invalido",
+  senha_obrigatoria: "senha_obrigatoria",
+  numero_ja_existe: "numero_ja_existe",
+  conta_ja_usada: "conta_ja_usada",
+  nao_encontrado: "nao_encontrado",
+  numero_vazio: "numero_vazio",
+  numero_internacional: "numero_internacional",
+  numero_nao_geografico: "numero_nao_geografico",
+  numero_sem_ddd: "numero_sem_ddd",
+  numero_ddd_invalido: "numero_ddd_invalido",
+  sem_numero_da_empresa: "sem_numero_da_empresa",
+  numero_da_empresa_desconectado: "numero_da_empresa_desconectado",
+  contato_sem_telefone: "contato_sem_telefone",
+  // 409: teto de saídas simultâneas da organização, ou o atendente já está numa ligação.
+  limite_simultaneo: "limite_simultaneo",
+  ja_em_ligacao: "ja_em_ligacao",
 } as const;
 
 export type ApiErrorCode = (typeof ApiErrorCodes)[keyof typeof ApiErrorCodes];

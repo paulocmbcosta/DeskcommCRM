@@ -4,6 +4,7 @@ import {
   forwardRef,
   useImperativeHandle,
   useRef,
+  useEffect,
   useState,
   type ClipboardEvent,
   type KeyboardEvent,
@@ -45,6 +46,13 @@ interface Props {
    */
   janelaFechada?: string | null;
   /**
+   * Conversa de canal que não transporta texto (a de telefone, spec 20): só
+   * nota interna. Separado de `janelaFechada` porque não é janela nenhuma — não
+   * reabre, não tem modelo aprovado que resolva — e de `blockedReason` pelo
+   * mesmo motivo da janela: a nota é onde o atendente registra o que foi falado.
+   */
+  somenteNota?: boolean;
+  /**
    * A mensagem que esta resposta CITA, quando o atendente escolheu responder
    * "em cima" de uma. `null` = envio solto, o caso comum.
    *
@@ -66,6 +74,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     disabled,
     blockedReason,
     janelaFechada,
+    somenteNota = false,
     contactName,
     currentContactId,
     respondendo,
@@ -78,7 +87,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [contactPickerOpen, setContactPickerOpen] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
-  const [mode, setMode] = useState<"reply" | "note">("reply");
+  const [mode, setMode] = useState<"reply" | "note">(somenteNota ? "note" : "reply");
+  useEffect(() => {
+    if (somenteNota) setMode("note");
+  }, [somenteNota, conversationId]);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const send = useSendMessage();
   const upload = useUploadMedia();
@@ -97,7 +109,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // A janela só alcança o que SAI. Em modo nota o composer segue liberado: a
   // nota interna nunca chega ao cliente, e é onde o atendente registra por que
   // a conversa esfriou — barrá-la tira exatamente o que ainda dá para fazer.
-  const respostaBarrada = isDisabled || (mode === "reply" && !!janelaFechada);
+  const respostaBarrada =
+    isDisabled || (mode === "reply" && !!janelaFechada) || (mode === "reply" && somenteNota);
 
   function autoresize() {
     const ta = taRef.current;

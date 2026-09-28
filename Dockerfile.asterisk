@@ -1,0 +1,35 @@
+# Asterisk da telefonia SIP (spec 20). Motor de áudio: registro nos troncos das
+# operadoras, ponte entre a perna da operadora e o ramal do navegador, música em
+# espera. Quem DECIDE (quem toca, se pode discar, o que vira conversa) é o worker
+# do CRM, pela ARI — este contêiner não tem regra de negócio.
+#
+# Pacote do Alpine, não compilação nossa: o Asterisk é GPL, e o código-fonte
+# correspondente a cada binário está no aports do próprio Alpine. Imagem própria
+# (e não uma da comunidade) porque não existe imagem oficial do Asterisk, e a
+# doutrina de packaging proíbe depender de republicação alheia sem digest.
+FROM alpine:3.22
+
+LABEL org.opencontainers.image.source="https://github.com/paulocmbcosta/DeskcommCRM" \
+      org.opencontainers.image.licenses="GPL-2.0-only" \
+      org.opencontainers.image.title="DeskcommCRM asterisk" \
+      org.opencontainers.image.description="Asterisk (pacote do Alpine) configurado para a telefonia SIP do DeskcommCRM"
+
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION \
+    TZ=UTC
+
+RUN apk add --no-cache asterisk asterisk-srtp asterisk-opus asterisk-sounds-moh curl tzdata \
+ && rm -rf /etc/asterisk/* \
+ && mkdir -p /var/spool/asterisk /var/run/asterisk /var/log/asterisk /var/lib/asterisk \
+ && chown -R asterisk:asterisk /var/spool/asterisk /var/run/asterisk /var/log/asterisk /var/lib/asterisk /etc/asterisk
+
+COPY docker/asterisk/conf/ /usr/share/deskcomm-asterisk/conf/
+COPY docker/asterisk/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Prova de vida pela própria ARI (o que o worker usa). Um Asterisk de pé com a
+# ARI morta é, para o CRM, um Asterisk morto.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS -o /dev/null -u "crm:${TELEFONIA_ARI_PASSWORD}" http://127.0.0.1:8088/ari/asterisk/ping || exit 1
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

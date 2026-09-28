@@ -21,6 +21,8 @@ import { ConexaoCaidaBanner } from "@/components/app/ConexaoCaidaBanner";
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
+import { TelefoniaProvider } from "@/components/telefonia/TelefoniaContext";
+import { PainelDoTelefone } from "@/components/telefonia/PainelDoTelefone";
 import { acessoFoiRevogado } from "@/lib/auth/vinculo-revogado";
 import { barraLateralRecolhida, COOKIE_BARRA_RECOLHIDA } from "@/lib/navigation/barra-lateral";
 
@@ -211,7 +213,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const shell = (
     <VoiceCallProvider>
-      <AppShell sidebarCollapsed={collapsed}>{children}</AppShell>
+      <TelefoniaProvider>
+        <AppShell sidebarCollapsed={collapsed}>{children}</AppShell>
+        <PainelDoTelefone />
+      </TelefoniaProvider>
     </VoiceCallProvider>
   );
 

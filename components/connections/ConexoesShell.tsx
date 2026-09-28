@@ -7,6 +7,7 @@ import { CanalOficialClient } from "./CanalOficialClient";
 import { CanalParceiroClient } from "./CanalParceiroClient";
 import { CanalVozClient } from "./CanalVozClient";
 import { ChatDoSiteClient } from "./ChatDoSiteClient";
+import { CanalTelefoneClient } from "./CanalTelefoneClient";
 import { ConnectionsClient } from "./ConnectionsClient";
 import { TemplatesClient } from "./TemplatesClient";
 import { TemplatesParceiroClient } from "./TemplatesParceiroClient";
@@ -55,7 +56,9 @@ export function ConexoesShell({
           ? "voz"
           : abaParam === "site"
             ? "site"
-            : "numeros";
+            : abaParam === "telefone"
+              ? "telefone"
+              : "numeros";
   const sub = params.get("sub") === "templates" ? "templates" : "conexao";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
@@ -93,7 +96,15 @@ export function ConexoesShell({
             mais novo, não o menos importante: a ordem das abas é a ordem em que
             quem instala costuma chegar a cada uma. */}
         <TabsTrigger value="site">{t("Chat do site")}</TabsTrigger>
+        {/* Telefonia SIP (spec 20): o número de telefone fixo/VoIP que a empresa
+            contratou de uma operadora. "Telefone", e não o nome do protocolo:
+            quem instala conhece a conta da operadora, não a sigla. */}
+        <TabsTrigger value="telefone">{t("Telefone")}</TabsTrigger>
       </TabsList>
+
+      <TabsContent value="telefone" className="mt-0">
+        <CanalTelefoneClient />
+      </TabsContent>
 
       <TabsContent value="site" className="mt-0">
         <ChatDoSiteClient />

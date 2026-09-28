@@ -40,6 +40,16 @@
 		}
 
 		# Todo o resto do app.
+		# Telefonia SIP (spec 20): o WebSocket do ramal do navegador. Só este
+		# caminho do Asterisk sai para fora — a ARI (/ari) nunca. Sem o profile
+		# `telefonia` o destino não existe e o caminho responde 502, que é o
+		# estado certo de "esta instalação não tem telefone".
+		@ramal path /telefonia/ws
+		handle @ramal {
+			rewrite * /ws
+			reverse_proxy asterisk:8088
+		}
+
 		reverse_proxy app:3000
 	}
 }

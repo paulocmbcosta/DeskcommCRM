@@ -1359,6 +1359,7 @@ gen_b64() { openssl rand -base64 32; }
 : "${WACALLS_ADMIN_USER:=deskcomm}"
 : "${WACALLS_ADMIN_PASSWORD:=$(gen_hex)}"
 : "${WACALLS_API_TOKEN:=$(gen_hex)}"
+: "${TELEFONIA_ARI_PASSWORD:=$(gen_hex)}"
 # O container WAHA espera o HASH SHA512 hex; o app envia o plaintext no X-Api-Key.
 WAHA_API_KEY_SHA512="$(printf '%s' "$WAHA_API_KEY" | openssl dgst -sha512 -hex | awk '{print $NF}')"
 UPSTASH_REDIS_REST_TOKEN="$SRH_TOKEN"
@@ -1559,6 +1560,10 @@ esac
   envq WORKER_PULL_POLICY "$PULL_POLICY_ALVO"
   envq SCHEDULER_IMAGE "${IMG_SCHEDULER}:${TAG_ALVO}"
   envq SCHEDULER_PULL_POLICY "$PULL_POLICY_ALVO"
+  # Telefonia SIP (spec 20): fixada na mesma versão, pronta para o dia em que o
+  # profile `telefonia` for ligado. Desligada, o compose nem a puxa.
+  envq ASTERISK_IMAGE "${IMG_ASTERISK}:${TAG_ALVO}"
+  envq ASTERISK_PULL_POLICY "$PULL_POLICY_ALVO"
   envq DOMAIN "$DOMAIN"
   envq ACME_EMAIL "$ACME_EMAIL"
   printf '# Proxy reverso: "caddy" (o kit sobe o dele nas portas 80/443), "traefik"\n'
@@ -1693,6 +1698,14 @@ esac
   envq WACALLS_ADMIN_USER "$WACALLS_ADMIN_USER"
   envq WACALLS_ADMIN_PASSWORD "$WACALLS_ADMIN_PASSWORD"
   envq WACALLS_API_TOKEN "$WACALLS_API_TOKEN"
+  printf '# Telefonia SIP (spec 20) — DESLIGADA. Fazer e receber ligações pelos números\n'
+  printf '# SIP da empresa. Para ligar: acrescente telefonia a COMPOSE_PROFILES e\n'
+  printf '# TELEFONIA_ARI_URL=http://asterisk:8088, depois ./update.sh; os números são\n'
+  printf '# cadastrados na tela (Conexões › Telefone). O áudio usa a faixa UDP abaixo.\n'
+  envq TELEFONIA_ARI_URL "${TELEFONIA_ARI_URL:-}"
+  envq TELEFONIA_ARI_PASSWORD "$TELEFONIA_ARI_PASSWORD"
+  envq TELEFONIA_RTP_INICIO "${TELEFONIA_RTP_INICIO:-20000}"
+  envq TELEFONIA_RTP_FIM "${TELEFONIA_RTP_FIM:-20039}"
   printf '# "true" exige assinatura em todo webhook do WAHA. O WAHA Core NÃO assina,\n'
   printf '# então ligar isto sem um WAHA Plus (ou proxy que assine) para a ingestão\n'
   printf '# de mensagens. A rota global já não é publicada na internet (ver Caddyfile).\n'

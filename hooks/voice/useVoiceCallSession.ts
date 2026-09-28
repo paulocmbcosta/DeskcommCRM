@@ -85,6 +85,13 @@ export interface VoiceCallRow {
   owner_user_id?: string | null;
   /** Quem discou pelo CRM. `null` em toda ligação recebida. */
   created_by?: string | null;
+  /**
+   * De que serviço é a ligação (migration 0286). O Realtime entrega a linha
+   * inteira, e desde a telefonia SIP a mesma tabela traz as ligações de
+   * telefone, que têm painel próprio (`components/telefonia/`). Ausente = linha
+   * anterior à 0286, que é do WhatsApp.
+   */
+  provider?: string | null;
 }
 
 interface VoiceCallsListResponse {
@@ -210,6 +217,10 @@ export const RECONCILIAR_CHAMADA_MS = 10_000;
 
 /** Chamada que a UI mostra AGORA: a mais recente ainda não `ended`. */
 function ehRelevante(row: VoiceCallRow): boolean {
+  // Ligação de telefone (spec 20) não é deste painel: adotá-la aqui abria o
+  // "Ouvir aqui" do WhatsApp por cima do painel do telefone e disputava o
+  // microfone com ele (medido na prova pela tela).
+  if (row.provider && row.provider !== "wacalls") return false;
   return row.status !== "ended";
 }
 

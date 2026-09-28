@@ -35,6 +35,7 @@ import {
   type ChannelSessionRef,
 } from "@/lib/channels";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
+import { canalConhecidoSemMensagem } from "@/lib/channels/capabilities";
 import { conferirDefinicao } from "@/lib/channels/conferir-definicao";
 import { isMediaPathOwnedBy } from "@/lib/messaging/media/upload-validation";
 import {
@@ -420,6 +421,21 @@ export async function sendMessageHandler(
       undefined,
       ctx.requestId,
       traduzir("Contato bloqueou o atendimento.", ctx.idioma ?? "pt-BR"),
+    );
+  }
+
+  // Conversa de canal que sabidamente não transporta texto (a de telefone, spec
+  // 20): não há por onde a mensagem sair. Só o CONHECIDO — provider que esta
+  // imagem não conhece segue para o `getAdapter`, que falha fechado. Recusar ANTES de gravar — depois, o
+  // `getAdapter` lança, a rota responde 500 e a mensagem fica em `sending`
+  // para sempre no chat.
+  if (c.channel_sessions && canalConhecidoSemMensagem(c.channel_sessions.provider)) {
+    throw new ApiError(
+      422,
+      "channel_cannot_send_messages",
+      undefined,
+      ctx.requestId,
+      traduzir("Esta conversa é de telefone: não dá para mandar mensagem por ela.", ctx.idioma ?? "pt-BR"),
     );
   }
 
