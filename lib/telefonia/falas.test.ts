@@ -21,6 +21,16 @@ import {
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
+/**
+ * D15 NO PRÓPRIO MÓDULO: `falas.ts` não CARREGA o cliente da ElevenLabs, nem por um
+ * módulo no meio. `menus.ts` importa este arquivo e `lib/channels/telefonia/numeros.ts`
+ * importa `menus.ts`; se o cliente viesse junto, o caminho da ligação o alcançaria.
+ * A fábrica LANÇA ao ser carregada: se `falas.ts` (ou algo que ele importe) passar a
+ * importar `elevenlabs.ts`, este arquivo inteiro deixa de carregar e fica vermelho.
+ */
+vi.mock("@/lib/telefonia/elevenlabs", () => {
+  throw new Error("lib/telefonia/falas.ts carregou o cliente da ElevenLabs (D15)");
+});
 
 const ORG = "00000000-0000-4000-8000-00000000000a";
 const OUTRA = "00000000-0000-4000-8000-00000000000b";
@@ -89,7 +99,10 @@ class ArmazemFalso implements Pick<PortaDoArmazem, "baixar"> {
   objetos = new Map<string, Uint8Array>();
   /** O Storage fora do ar: `baixar` lança, como a porta de verdade faz em falha que não é "não existe". */
   falharBaixar = false;
+  /** Quantas vezes o Storage foi lido. */
+  leituras = 0;
   baixar = async (caminho: string) => {
+    this.leituras++;
     if (this.falharBaixar) throw new Error("armazem_download: StorageApiError 500");
     const b = this.objetos.get(caminho);
     return b ? new Uint8Array(b) : null;
@@ -306,6 +319,33 @@ describe("salvarFala — o 'Salvar e usar' (nunca chama a ElevenLabs)", () => {
     expect(r).toMatchObject({ ok: true, mudou: true, fala: { tipo: "waiting" } });
     expect(r.ok && doMenu.ok && r.fala.id !== doMenu.fala.id).toBe(true);
     expect(banco.linhas.size).toBe(2);
+  });
+
+  it("o cliente da ElevenLabs não foi carregado: o módulo de verdade está aqui, e a fábrica que lança não rodou", () => {
+    // Se `falas.ts` importasse `elevenlabs.ts`, este arquivo nem teria carregado.
+    expect(salvarFala).toBeTypeOf("function");
+    expect(conferirFala).toBeTypeOf("function");
+  });
+
+  it("sem_voz ou previa_desatualizada: decidido ANTES do Storage — nenhuma leitura, nem log de erro falso com o Storage fora", async () => {
+    previaNoStorage(ORG, HASH);
+    armazem.falharBaixar = true;
+    expect(await conferirFala(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz" });
+    expect(await conferirFala(pedido({ texto: "Outro texto." }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(await conferirFala(pedido({ hash: "../x" }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(armazem.leituras).toBe(0);
+    expect(vi.mocked(logger).error).not.toHaveBeenCalled();
+  });
+
+  it("CONTROLE — a prévia que passa nas exigências vai ao Storage uma vez só", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await conferirFala(pedido())).toMatchObject({ ok: true });
+    expect(armazem.leituras).toBe(1);
+  });
+
+  it("a ordem dos motivos não muda: sem voz E sem prévia no Storage continua sem_voz", async () => {
+    expect(await conferirFala(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz" });
+    expect(await salvarFala(pedido({ texto: "Outro texto." }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
   });
 
   it("conferirFala não escreve nada: só diz o que salvarFala gravaria", async () => {

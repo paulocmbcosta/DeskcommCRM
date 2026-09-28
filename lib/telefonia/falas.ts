@@ -306,27 +306,47 @@ async function medirObjeto(
 }
 
 /**
- * A DECISÃO do "Salvar e usar", pura: com a fala atual (já lida) e o objeto (já
- * medido), o que a prévia pedida passa a ser — ou por que não. Não lê banco nem
- * Storage, então pode rodar com a trava segura sem esperar rede nenhuma. As
- * falhas saem na mesma ordem de sempre: `sem_voz` e `previa_desatualizada` vêm
- * antes do que o Storage disse.
+ * O que a prévia pedida exige, decidido SÓ com a fala atual e a voz — sem Storage:
+ *  - `manter`: é a fala em uso (mesmo tipo, mesmo hash, mesmo texto, pronta); falta
+ *    conferir que o áudio dela ainda está lá;
+ *  - `nova`: o hash é o do texto com a voz atual; falta conferir que a prévia está lá;
+ *  - `recusa`: `sem_voz` ou `previa_desatualizada` — o Storage não muda a resposta,
+ *    então nem se vai a ele.
  */
-function decidirFala(
-  p: Pick<PedidoDeSalvar, "organizationId" | "tipo" | "texto" | "hash" | "voz">,
-  lida: LinhaDaFala | null,
-  objeto: MedidaDoObjeto,
-): FalaConferida {
+type ExigenciaDaFala =
+  | { tipo: "manter"; atual: LinhaDaFala }
+  | { tipo: "nova"; atual: LinhaDaFala | null; hash: string; voiceId: string; modelId: string }
+  | { tipo: "recusa"; motivo: FalhaDaFala };
+
+type PedidoDaDecisao = Pick<PedidoDeSalvar, "organizationId" | "tipo" | "texto" | "hash" | "voz">;
+
+function exigenciaDaFala(p: PedidoDaDecisao, lida: LinhaDaFala | null): ExigenciaDaFala {
   const texto = p.texto.trim();
   // Uma fala de OUTRO tipo não é "a atual" desta: nem vale como "nada mudou", nem
   // é regravada (a coluna `kind` não muda no UPDATE) — nasce uma linha do tipo pedido.
   const atual = lida && lida.tipo === p.tipo ? lida : null;
   if (atual && atual.status === "ready" && atual.content_hash === p.hash && atual.texto === texto) {
+    return { tipo: "manter", atual };
+  }
+  if (!p.voz) return { tipo: "recusa", motivo: "sem_voz" };
+  const { voiceId, modelId } = p.voz;
+  if (p.hash !== hashDaFala(texto, voiceId, modelId)) return { tipo: "recusa", motivo: "previa_desatualizada" };
+  return { tipo: "nova", atual, hash: p.hash, voiceId, modelId };
+}
+
+/** A exigência atendida (ou não) pelo que o Storage disse do objeto. Pura. */
+function concluirFala(
+  organizationId: string,
+  e: Exclude<ExigenciaDaFala, { tipo: "recusa" }>,
+  objeto: MedidaDoObjeto,
+): FalaConferida {
+  if (!objeto.ok) return objeto;
+  if (e.tipo === "manter") {
     // "Nada mudou" só vale se o áudio em uso ainda existe: uma linha `ready` que
     // aponta para objeto sumido faz a ligação pular a fala, e o "Salvar" diria
     // que está tudo certo. A voz e o modelo são os DA FALA, não os atuais da
     // organização: é o áudio em uso que se confere (e se conserta).
-    if (!objeto.ok) return objeto;
+    const { atual } = e;
     if (objeto.duracaoMs === atual.duracao_ms) return { ok: true, atual, nova: null };
     // O objeto foi regravado por uma prévia nova do mesmo texto: outra síntese,
     // outra duração. A linha passa a dizer a duração do áudio que está guardado.
@@ -335,33 +355,45 @@ function decidirFala(
       atual,
       nova: {
         hash: atual.content_hash,
-        caminho: caminhoDaFala(p.organizationId, atual.content_hash),
+        caminho: caminhoDaFala(organizationId, atual.content_hash),
         duracaoMs: objeto.duracaoMs,
         voiceId: atual.voice_id,
         modelId: atual.model_id,
       },
     };
   }
-  if (!p.voz) return { ok: false, motivo: "sem_voz" };
-  const { voiceId, modelId } = p.voz;
-  if (p.hash !== hashDaFala(texto, voiceId, modelId)) return { ok: false, motivo: "previa_desatualizada" };
-  if (!objeto.ok) return objeto;
   return {
     ok: true,
-    atual,
-    nova: { hash: p.hash, caminho: caminhoDaFala(p.organizationId, p.hash), duracaoMs: objeto.duracaoMs, voiceId, modelId },
+    atual: e.atual,
+    nova: { hash: e.hash, caminho: caminhoDaFala(organizationId, e.hash), duracaoMs: objeto.duracaoMs, voiceId: e.voiceId, modelId: e.modelId },
   };
+}
+
+/**
+ * A DECISÃO inteira do "Salvar e usar", pura, com o objeto JÁ medido — a forma da
+ * fala geral, que mede o Storage fora da trava e decide sob ela. As falhas saem na
+ * ordem de sempre: `sem_voz` e `previa_desatualizada` antes do que o Storage disse.
+ */
+function decidirFala(p: PedidoDaDecisao, lida: LinhaDaFala | null, objeto: MedidaDoObjeto): FalaConferida {
+  const e = exigenciaDaFala(p, lida);
+  if (e.tipo === "recusa") return { ok: false, motivo: e.motivo };
+  return concluirFala(p.organizationId, e, objeto);
 }
 
 /**
  * A prévia pedida pode virar a fala? NÃO grava nada — o menu confere as duas falas
  * (a dele e a de tecla inválida) antes de gravar a primeira.
+ *
+ * Sem trava, então na ordem mais barata: a fala atual e as exigências primeiro, e
+ * o Storage só quando a resposta depende dele — `sem_voz` e `previa_desatualizada`
+ * não leem o Storage (nem registram falha dele no log).
  */
 export async function conferirFala(p: PedidoDeSalvar): Promise<FalaConferida> {
   if (!textoDaFalaValido(p.texto)) return { ok: false, motivo: "texto_recusado" };
-  const objeto = await medirObjeto(p.armazem, p.organizationId, p.hash);
   const lida = p.falaAtualId ? await falaPorId(p.db, p.organizationId, p.falaAtualId) : null;
-  return decidirFala(p, lida, objeto);
+  const e = exigenciaDaFala(p, lida);
+  if (e.tipo === "recusa") return { ok: false, motivo: e.motivo };
+  return concluirFala(p.organizationId, e, await medirObjeto(p.armazem, p.organizationId, p.hash));
 }
 
 /** Grava o que `conferirFala` aprovou: a MESMA linha passa a apontar para o hash novo (ou nasce uma). */

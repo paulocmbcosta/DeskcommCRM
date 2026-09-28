@@ -10,14 +10,20 @@
  *    `storage_path` gravado na linha só vale se for IGUAL a esse; se não for, a
  *    rota responde 404 e não baixa nada (o CHECK do banco já exige a igualdade:
  *    isto é a segunda camada, não a única);
- *  - devolve `audio/basic` (μ-law 8 kHz, RFC 2046) com `ETag` = o `content_hash`
- *    da fala e `Cache-Control: private, no-cache`: o navegador guarda, mas pergunta
- *    SEMPRE antes de usar. O mesmo id passa a tocar outro áudio quando a fala é
- *    salva com texto novo — e aí o hash muda, e o ETag com ele. Quando o
- *    `If-None-Match` bate, a resposta é 304 e o Storage nem é lido: ouvir de novo
- *    não baixa de novo (até 2 MB). O mesmo hash é sempre o mesmo texto na mesma
- *    voz e no mesmo modelo, então o áudio guardado no navegador é o que as
- *    ligações tocam.
+ *  - devolve `audio/basic` (μ-law 8 kHz, RFC 2046) com `ETag` =
+ *    `"<content_hash>-<duration_ms>"` e `Cache-Control: private, no-cache`: o
+ *    navegador guarda, mas pergunta SEMPRE antes de usar. Quando o `If-None-Match`
+ *    bate, a resposta é 304 e o Storage nem é lido: ouvir de novo não baixa de novo
+ *    (até 2 MB).
+ *
+ * Por que hash E duração, e não só o hash: o mesmo id passa a tocar outro áudio de
+ * dois jeitos. Texto (ou voz) novo muda o hash. Mas o objeto também pode sumir e
+ * uma prévia nova do MESMO texto ser salva: mesmo hash, outra síntese, outra
+ * duração — e o "Salvar" regrava a linha com a duração nova (`concluirFala`, em
+ * falas.ts). Só o hash deixaria o navegador tocando a síntese antiga. As duas
+ * colunas são as que definem o áudio guardado, e não dependem de todo escritor
+ * lembrar de tocar `updated_at`. (Outra síntese com exatamente o mesmo número de
+ * bytes nem regrava a linha; aí o áudio antigo é o mesmo texto, voz e duração.)
  * O navegador converte em WAV (`ulawParaWav`). Sem custo na ElevenLabs. A prévia
  * (ainda não salva) não passa por aqui: ela chega no corpo da própria resposta da
  * rota da prévia. Leitura não audita.
@@ -85,8 +91,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return naoEncontrada();
   }
 
-  // O hash já passou pela régua de sha256 em `caminhoConferido`: vai cru dentro das aspas.
-  const etag = `"${fala.content_hash}"`;
+  // O hash já passou pela régua de sha256 em `caminhoConferido`, e a duração é um
+  // inteiro: os dois vão crus dentro das aspas.
+  const etag = `"${fala.content_hash}-${fala.duracao_ms ?? 0}"`;
   if (jaTemEsteAudio(req.headers.get("If-None-Match"), etag)) {
     return new Response(null, {
       status: 304,

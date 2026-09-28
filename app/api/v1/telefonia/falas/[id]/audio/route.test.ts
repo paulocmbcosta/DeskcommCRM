@@ -13,6 +13,8 @@ const ORG = "22222222-2222-4222-8222-222222222222";
 const OUTRA = "99999999-9999-4999-8999-999999999999";
 const ID = "33333333-3333-4333-8333-333333333333";
 const HASH = "c".repeat(64);
+/** O ETag da fala da linha padrão (`duracao_ms: 200`): o hash E a duração do áudio guardado. */
+const ETAG = `"${HASH}-200"`;
 const estado = vi.hoisted(() => ({
   fala: null as null | Record<string, unknown>,
   bytes: null as Uint8Array | null,
@@ -85,14 +87,14 @@ beforeEach(() => {
 });
 
 describe("GET /api/v1/telefonia/falas/[id]/audio", () => {
-  it("qualquer membro: os bytes μ-law do objeto <org da sessão>/<hash>.ulaw, com audio/basic, cache privado e ETag do hash", async () => {
+  it("qualquer membro: os bytes μ-law do objeto <org da sessão>/<hash>.ulaw, com audio/basic, cache privado e ETag do hash e da duração", async () => {
     const r = await ouvir(ID);
     expect(vi.mocked(requireRole).mock.calls[0]![0]).toBe("viewer");
     expect(r.status).toBe(200);
     expect(r.headers.get("Content-Type")).toBe("audio/basic");
     // Privado e SEMPRE revalidado pelo ETag: o mesmo id toca outro áudio quando a fala é salva de novo.
     expect(r.headers.get("Cache-Control")).toBe("private, no-cache");
-    expect(r.headers.get("ETag")).toBe(`"${HASH}"`);
+    expect(r.headers.get("ETag")).toBe(ETAG);
     expect(r.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(r.headers.get("X-Request-Id")).toBeTruthy();
     expect(new Uint8Array(await r.arrayBuffer())).toEqual(new Uint8Array([0xff, 0x7f, 0x00]));
@@ -101,10 +103,10 @@ describe("GET /api/v1/telefonia/falas/[id]/audio", () => {
   });
 
   it("If-None-Match com o hash da fala → 304 sem corpo e SEM baixar do Storage (ouvir de novo não baixa de novo)", async () => {
-    for (const valor of [`"${HASH}"`, `W/"${HASH}"`, `"outro", "${HASH}"`, "*"]) {
+    for (const valor of [ETAG, `W/${ETAG}`, `"outro", ${ETAG}`, "*"]) {
       const r = await ouvir(ID, { "If-None-Match": valor });
       expect(r.status, valor).toBe(304);
-      expect(r.headers.get("ETag")).toBe(`"${HASH}"`);
+      expect(r.headers.get("ETag")).toBe(ETAG);
       expect(r.headers.get("Cache-Control")).toBe("private, no-cache");
       expect(r.headers.get("X-Request-Id")).toBeTruthy();
       expect((await r.arrayBuffer()).byteLength).toBe(0);
@@ -119,9 +121,22 @@ describe("GET /api/v1/telefonia/falas/[id]/audio", () => {
     expect(estado.baixados).toEqual([`${ORG}/${HASH}.ulaw`]);
   });
 
+  it("o objeto sumiu e foi salvo de novo com o MESMO hash (outra síntese, outra duração): ETag diferente, e o navegador baixa o áudio novo", async () => {
+    // O navegador guardou o áudio de quando a fala durava 200 ms.
+    const guardado = ETAG;
+    estado.fala = linha({ duracao_ms: 300 });
+    estado.bytes = new Uint8Array([0x01, 0x02]);
+    const r = await ouvir(ID, { "If-None-Match": guardado });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("ETag")).toBe(`"${HASH}-300"`);
+    expect(new Uint8Array(await r.arrayBuffer())).toEqual(new Uint8Array([0x01, 0x02]));
+    // E o ETag só do hash (o formato de antes) também não serve mais.
+    expect((await ouvir(ID, { "If-None-Match": `"${HASH}"` })).status).toBe(200);
+  });
+
   it("CONTROLE — o 304 não fura a organização: If-None-Match certo sobre a fala de OUTRA organização continua 404", async () => {
     estado.fala = linha({ organization_id: OUTRA, storage_path: `${OUTRA}/${HASH}.ulaw` });
-    expect((await ouvir(ID, { "If-None-Match": `"${HASH}"` })).status).toBe(404);
+    expect((await ouvir(ID, { "If-None-Match": ETAG })).status).toBe(404);
   });
 
   it("id que não é UUID (inclusive tentativa de caminho) → 404 sem ler nada", async () => {
