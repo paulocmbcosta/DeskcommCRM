@@ -8,6 +8,50 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.49.0] — 2026-09-28
+
+### Adicionado
+
+- **Prefixo de discagem por número de telefone, e a ligação que a operadora recusa aparece para o atendente** Cada número em **Conexões › Telefone** ganha o campo **Prefixo de discagem (opcional)**: os
+  dígitos que a operadora pede antes do DDD nas ligações de saída — um `0`, ou `0` + código da
+  operadora (como `015`). Há operadora que só completa a ligação com ele: na medida que motivou
+  esta mudança, a mesma chamada para um celular foi recusada sem o `0` e tocou com ele. Vazio, o
+  CRM disca como antes (DDD + número). O prefixo aparece no cartão do número, e mudá-lo não pede
+  a senha da conta de novo. Se as ligações de saída de um número estão falhando, pergunte à
+  operadora qual prefixo ela usa e preencha o campo.
+
+  Quando a ligação que o atendente faz acaba sem ninguém atender, a tela passa a dizer por quê,
+  no mesmo canto do painel da ligação: "A operadora não completou a ligação. Confira o número e
+  o prefixo de discagem do número SIP.", "O número chamado está ocupado." ou "Ninguém atendeu."
+  Antes, a recusa da operadora fazia o painel sumir sem explicação e a conversa registrava
+  "sem resposta"; agora registra "Ligação não completada".
+
+  A atualização acrescenta a coluna do prefixo ao banco sozinha; nenhum número muda de
+  comportamento até alguém preencher o campo.
+
+### Corrigido
+
+- **Ligar a telefonia e rodar a atualização passa a subir o Asterisk, mesmo sem versão nova** O caminho para ligar a telefonia — acrescentar `telefonia` a `COMPOSE_PROFILES`,
+  preencher `TELEFONIA_ARI_URL=http://asterisk:8088` e rodar
+  `bash hostgator-setup-kit/update.sh` — não funcionava em quem já estava na
+  versão mais recente. O script respondia "Você já está na versão mais recente.
+  Nada a atualizar." e o serviço de telefonia nunca subia: ele conferia o app, o
+  worker e o agendador, e não o Asterisk.
+
+  Agora, com a telefonia ligada, a atualização confere também o Asterisk. Se ele
+  não está rodando a versão instalada — ou se o `.env` ainda não diz qual versão
+  usar, o que acontecia com quem chegou à versão da telefonia pela atualização
+  anterior —, o script segue em frente, grava a versão do Asterisk e a senha da
+  telefonia no `.env` e sobe o serviço, dizendo na tela que é a telefonia. Numa
+  atualização normal, o Asterisk também passa a subir na versão nova junto com o
+  resto, em vez de ficar na anterior.
+
+  Quem não ligou a telefonia não percebe diferença nenhuma, e quem parou o
+  servidor de propósito não é incomodado.
+
+  Nada a fazer para receber a correção. Até receber, quem ligar a telefonia numa
+  instalação já em dia usa `bash hostgator-setup-kit/update.sh --force`.
+
 ## [1.48.0] — 2026-09-28
 
 ### Adicionado
@@ -5657,7 +5701,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.48.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.49.0...HEAD
+[1.49.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.48.0...v1.49.0
 [1.48.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.47.0...v1.48.0
 [1.47.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.46.0...v1.47.0
 [1.46.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.45.4...v1.46.0
