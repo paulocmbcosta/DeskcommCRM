@@ -1,10 +1,18 @@
 /**
  * A FIAÇÃO DA INSTALAÇÃO para as rotas do telefone — o único lugar que lê o env
- * da ElevenLabs e decide o status HTTP de cada falha. Server-only.
+ * da ElevenLabs, monta o armazém com o cliente de serviço e decide o status HTTP
+ * de cada falha. Server-only. Nada do caminho da ligação importa este arquivo
+ * (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts).
  */
+import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { env } from "@/lib/env";
+import { createAdminClient } from "@/lib/supabase/admin";
 
-import { ErroDaElevenLabs, listarVozes, type OpcoesDoCliente } from "./elevenlabs";
+import { armazemDoSupabase, type PortaDoArmazem } from "./armazem";
+import { chaveDeVoz } from "./chave-elevenlabs";
+import { ErroDaElevenLabs, listarVozes, sintetizar, type OpcoesDoCliente } from "./elevenlabs";
+import { vozDaOrganizacao, type VozDaOrganizacao } from "./falas";
+import type { Sintetizador } from "./previa";
 import type { FalhaDaFala } from "./vocabulario";
 
 /** A URL base só muda no e2e (a ElevenLabs falsa de tests/e2e/telefonia-ura-e-falas.spec.ts). */
@@ -60,3 +68,26 @@ export const STATUS_DA_FALHA: Record<FalhaDaFala, 422 | 429 | 502> = {
   sem_resposta: 502,
   erro_do_provedor: 502,
 };
+
+/** A síntese com a URL base da instalação. Só a rota da PRÉVIA a entrega a `gerarPrevia`. */
+export function sintetizadorDaInstalacao(): Sintetizador {
+  const opcoes = opcoesDaElevenLabs();
+  return (p) => sintetizar(p, opcoes);
+}
+
+/** O Storage das falas pelo cliente de serviço — o mesmo dos outros buckets privados. */
+export function armazemDaInstalacao(): PortaDoArmazem {
+  return armazemDoSupabase(createAdminClient());
+}
+
+/**
+ * A chave (decifrada) e a voz da organização — o que a PRÉVIA precisa. Salvar não
+ * precisa de chave. `organizationId` é o da SESSÃO: as duas leituras filtram por ele.
+ */
+export async function contextoDeFala(
+  db: Queryable,
+  organizationId: string,
+): Promise<{ chave: string | null; voz: VozDaOrganizacao | null }> {
+  const [chave, voz] = await Promise.all([chaveDeVoz(db, organizationId), vozDaOrganizacao(db, organizationId)]);
+  return { chave, voz };
+}
