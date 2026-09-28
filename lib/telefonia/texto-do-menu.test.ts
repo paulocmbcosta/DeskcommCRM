@@ -48,6 +48,14 @@ describe("montarTextoDoMenu", () => {
     expect(FRASE_DA_OPCAO).toContain("{tecla}");
     for (const texto of Object.values(TEXTO_SUGERIDO)) expect(texto.trim().length).toBeGreaterThan(5);
   });
+
+  it("o nome do time entra literal: sem interpretar padrão de substituição ($$, $&) e sem repetir a troca de {tecla} quando o nome do time contém o próprio marcador", () => {
+    expect(montarTextoDoMenu([{ tecla: "1", nomeDoTime: "Cobrança $$" }])).toBe("Para Cobrança $$, digite 1.");
+    expect(montarTextoDoMenu([{ tecla: "1", nomeDoTime: "Vendas $&" }])).toBe("Para Vendas $&, digite 1.");
+    expect(montarTextoDoMenu([{ tecla: "3", nomeDoTime: "Suporte {tecla}" }])).toBe(
+      "Para Suporte {tecla}, digite 3.",
+    );
+  });
 });
 
 describe("o 'fora do horário' sugerido com o WhatsApp da organização (desenho §4)", () => {

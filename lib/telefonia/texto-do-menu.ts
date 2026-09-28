@@ -17,11 +17,21 @@ export const FRASE_DA_OPCAO = "Para {time}, digite {tecla}.";
 /** O 0 por último: é, por costume, a tecla de "falar com alguém". */
 const ordemDaTecla = (tecla: string) => (tecla === "0" ? 10 : Number(tecla));
 
+/** Os dois marcadores da frase, numa única passada — ver o comentário de `montarTextoDoMenu`. */
+const MARCADORES_DA_FRASE = /\{time\}|\{tecla\}/g;
+
 export function montarTextoDoMenu(opcoes: readonly OpcaoParaTexto[], frase: string = FRASE_DA_OPCAO): string {
   return [...opcoes]
     .filter((o) => /^[0-9]$/.test(o.tecla) && o.nomeDoTime.trim() !== "")
     .sort((a, b) => ordemDaTecla(a.tecla) - ordemDaTecla(b.tecla))
-    .map((o) => frase.replaceAll("{time}", o.nomeDoTime.trim()).replaceAll("{tecla}", o.tecla))
+    .map((o) => {
+      const nome = o.nomeDoTime.trim();
+      // Uma função como substituto, nunca uma string: `replaceAll` com string
+      // interpreta `$$`/`$&` no VALOR (um time "Cobrança $$" viraria "Cobrança
+      // $"), e uma única passada de regex sobre a frase ORIGINAL evita que um
+      // nome de time que contenha "{tecla}" seja pego pela troca seguinte.
+      return frase.replace(MARCADORES_DA_FRASE, (marcador) => (marcador === "{time}" ? nome : o.tecla));
+    })
     .join(" ");
 }
 

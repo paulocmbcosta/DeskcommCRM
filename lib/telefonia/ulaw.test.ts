@@ -34,6 +34,21 @@ describe("G.711 μ-law", () => {
     expect(ulawParaPcm16(0x80)).toBe(32124);
   });
 
+  it("decodifica a linha inteira da tabela G.711 de 0x00 a 0x0F (padrão ITU-T, conferido fora desta implementação)", () => {
+    const REFERENCIA_0X00_A_0X0F = [
+      -32124, -31100, -30076, -29052, -28028, -27004, -25980, -24956, -23932, -22908, -21884, -20860, -19836,
+      -18812, -17788, -16764,
+    ];
+    for (let byte = 0x00; byte <= 0x0f; byte++) expect(ulawParaPcm16(byte)).toBe(REFERENCIA_0X00_A_0X0F[byte]);
+  });
+
+  it("ida e volta ulaw → pcm → ulaw devolve o mesmo byte nos 256 valores possíveis, exceto 0x7F → 0xFF (os dois são zero)", () => {
+    for (let byte = 0x00; byte <= 0xff; byte++) {
+      const volta = pcm16ParaUlaw(ulawParaPcm16(byte));
+      expect(volta).toBe(byte === 0x7f ? 0xff : byte);
+    }
+  });
+
   it("codificar e decodificar volta perto do original (erro de quantização ≤ 4%)", () => {
     for (const s of [-30000, -1000, -100, 0, 100, 1000, 30000]) {
       const volta = ulawParaPcm16(pcm16ParaUlaw(s));
@@ -43,6 +58,12 @@ describe("G.711 μ-law", () => {
 
   it("silêncio codifica em 0xFF", () => {
     expect(pcm16ParaUlaw(0)).toBe(0xff);
+  });
+
+  it("entrada fora da faixa de 16 bits é limitada a −32768..32767 ANTES de codificar", () => {
+    expect(pcm16ParaUlaw(32768)).toBe(pcm16ParaUlaw(32767));
+    expect(pcm16ParaUlaw(40000)).toBe(pcm16ParaUlaw(32767));
+    expect(pcm16ParaUlaw(-40000)).toBe(pcm16ParaUlaw(-32768));
   });
 
   it("1 byte por amostra a 8 kHz: 8000 bytes = 1000 ms", () => {
@@ -84,5 +105,14 @@ describe("lerWav", () => {
     const lido = lerWav(wavMuLaw(new Uint8Array([0xff, 0x7f, 0x00])));
     expect(lido).toMatchObject({ formato: 7, canais: 1, taxa: 8000 });
     expect([...lido!.dados]).toEqual([0xff, 0x7f, 0x00]);
+  });
+
+  it("buffer truncado no meio do cabeçalho nunca lança — devolve null (a Task 3 chama fora de try)", () => {
+    const completo = wavMuLaw(new Uint8Array(6)); // 50 bytes: RIFF+fmt+cabeçalho de data+6 bytes de áudio
+    for (const tamanho of [0, 12, 20, 27, 43]) {
+      const truncado = completo.subarray(0, tamanho);
+      expect(() => lerWav(truncado)).not.toThrow();
+      expect(lerWav(truncado)).toBeNull();
+    }
   });
 });

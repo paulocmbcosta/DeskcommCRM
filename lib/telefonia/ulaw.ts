@@ -9,9 +9,23 @@
 
 export const AMOSTRAS_POR_SEGUNDO = 8000;
 
-/** 1 byte por amostra a 8 kHz: 8 bytes = 1 ms. */
+/** Faixa de uma amostra PCM assinada de 16 bits — o que `pcm16ParaUlaw` aceita. */
+const MAXIMO_PCM16 = 32767;
+const MINIMO_PCM16 = -32768;
+
+/** O cabeçalho `fmt ` do WAV que `ulawParaWav` escreve: PCM, mono, 16 bits por amostra. */
+const FORMATO_PCM = 1;
+const CANAIS_MONO = 1;
+const BITS_POR_AMOSTRA = 16;
+/** `block align`: bytes de um quadro (todos os canais de uma amostra). Mono de 16 bits = 2. */
+const BYTES_POR_QUADRO = CANAIS_MONO * (BITS_POR_AMOSTRA / 8);
+/** `byte rate`: quantos bytes de áudio o WAV tem por segundo. */
+const BYTES_POR_SEGUNDO = AMOSTRAS_POR_SEGUNDO * BYTES_POR_QUADRO;
+
+/** 1 byte por amostra a 8 kHz: `AMOSTRAS_POR_SEGUNDO / 1000` bytes por ms (8 a 8 kHz). */
+const BYTES_POR_MS = AMOSTRAS_POR_SEGUNDO / 1000;
 export function duracaoDoUlawMs(bytes: number): number {
-  return Math.round(bytes / 8);
+  return Math.round(bytes / BYTES_POR_MS);
 }
 
 /** Um byte μ-law → uma amostra PCM de 16 bits. */
@@ -30,6 +44,12 @@ export function pcm16ParaUlaw(amostra: number): number {
   const BIAS = 0x84;
   const TETO = 32635;
   let s = Math.trunc(amostra);
+  // O truque de sinal abaixo (`(s >> 8) & 0x80`) só vale dentro da faixa de 16
+  // bits: fora dela ele lê o bit 15 de um número que não é mais um int16, e
+  // troca o sinal (32768 vira "negativo", −40000 vira "positivo"). Limitar
+  // ANTES fecha a entrada na faixa que o resto da função pressupõe.
+  if (s > MAXIMO_PCM16) s = MAXIMO_PCM16;
+  if (s < MINIMO_PCM16) s = MINIMO_PCM16;
   const sinal = (s >> 8) & 0x80;
   if (sinal) s = -s;
   if (s > TETO) s = TETO;
@@ -53,12 +73,12 @@ export function ulawParaWav(ulaw: Uint8Array): Uint8Array<ArrayBuffer> {
   escrever(8, "WAVE");
   escrever(12, "fmt ");
   v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true);
-  v.setUint16(22, 1, true);
+  v.setUint16(20, FORMATO_PCM, true);
+  v.setUint16(22, CANAIS_MONO, true);
   v.setUint32(24, AMOSTRAS_POR_SEGUNDO, true);
-  v.setUint32(28, AMOSTRAS_POR_SEGUNDO * 2, true);
-  v.setUint16(32, 2, true);
-  v.setUint16(34, 16, true);
+  v.setUint32(28, BYTES_POR_SEGUNDO, true);
+  v.setUint16(32, BYTES_POR_QUADRO, true);
+  v.setUint16(34, BITS_POR_AMOSTRA, true);
   escrever(36, "data");
   v.setUint32(40, tamanhoDosDados, true);
   for (let i = 0; i < ulaw.length; i++) v.setInt16(44 + i * 2, ulawParaPcm16(ulaw[i]!), true);
@@ -81,7 +101,10 @@ export function lerWav(
     const id = txt(i);
     const tamanho = v.getUint32(i + 4, true);
     const inicio = i + 8;
-    if (id === "fmt " && tamanho >= 8) {
+    // O bloco pode declarar um `tamanho` que o buffer truncado não tem: sem este
+    // limite, ler os campos abaixo do chunk `fmt ` lança RangeError em vez de
+    // devolver null — foi medido com buffers de 20 e 27 bytes.
+    if (id === "fmt " && tamanho >= 8 && inicio + 8 <= bytes.length) {
       formato = v.getUint16(inicio, true);
       canais = v.getUint16(inicio + 2, true);
       taxa = v.getUint32(inicio + 4, true);
