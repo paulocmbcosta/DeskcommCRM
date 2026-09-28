@@ -75,6 +75,7 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
 - **`voice_calls`**:
   - `menu_id`, `menu_digit`;
   - `menu_outcome`: `chosen`, `default_no_input` ou `default_invalid`, com CHECK;
+  - `emergency_heard_at timestamptz`, quando o cliente ouviu o aviso de emergência. É a fonte do "ouviu o aviso de instabilidade" no cartão;
   - `end_reason` ganha o valor `after_hours`. A coluna é de vocabulário aberto e não tem CHECK.
 - **Bucket privado `phone-prompts`**.
 
