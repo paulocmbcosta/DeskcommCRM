@@ -10,11 +10,18 @@
  * próprio, para que a limitação esteja presa por teste e não só por
  * comentário: no dia em que o schema ganhar estado de "em curso", o caso (8)
  * fica vermelho e obriga a quem mexeu a ler o porquê.
+ *
+ * `request_hash` é `bytea`: o dublê grava e devolve o valor como o PostgREST
+ * (`byteaComoPostgrest`) — entrada de `bytea` na escrita, `"\x" + hex` na
+ * leitura. Um dublê que devolvesse a string gravada escondeu que o hash nunca
+ * casava (todo replay virava 409). O caminho real está em
+ * tests/invariants/idempotencia-recibo-no-banco.test.ts.
  */
 
 import { describe, expect, it, vi } from "vitest";
 
-import { comIdempotencia, hashDoCorpo, TTL_MS } from "@/lib/api/idempotency";
+import { comIdempotencia, hashDoCorpo, hashGuardado, TTL_MS } from "@/lib/api/idempotency";
+import { byteaComoPostgrest } from "@/tests/helpers/bytea-do-postgrest";
 
 const ORG = "a1b20000-0000-4000-8000-000000000001";
 const CHAVE = "a1b20000-0000-4000-8000-000000000002";
@@ -76,7 +83,7 @@ function duble(opcoes: OpcoesDoDuble = {}) {
         return { error: opcoes.erroNoInsert };
       }
       inseridos.push(linha);
-      linhas.push(linha);
+      linhas.push({ ...linha, request_hash: byteaComoPostgrest(linha.request_hash) });
       return { error: null };
     },
   };
@@ -100,12 +107,13 @@ const VENCIDO = new Date(RELOGIO().getTime() - 1).toISOString();
 const CORPO = { title: "Boas-vindas" };
 const hashDoCorpoPadrao = hashDoCorpo(CORPO);
 
+/** Um recibo como a LEITURA o devolve: o `bytea` do digest em `"\x" + hex`. */
 function recibo(over: Partial<Linha> = {}): Linha {
   return {
     organization_id: ORG,
     key: CHAVE,
     endpoint: ENDPOINT,
-    request_hash: hashDoCorpoPadrao,
+    request_hash: byteaComoPostgrest(`\\x${hashDoCorpoPadrao}`),
     status_code: 201,
     response_body: { id: "t1" },
     expires_at: DAQUI_A_UM_MINUTO,
@@ -135,7 +143,8 @@ describe("comIdempotencia", () => {
       organization_id: ORG,
       key: CHAVE,
       endpoint: ENDPOINT,
-      request_hash: hashDoCorpoPadrao,
+      // `\x` + hex: a entrada de bytea grava os 32 bytes do digest.
+      request_hash: `\\x${hashDoCorpoPadrao}`,
       status_code: 201,
       expires_at: new Date(RELOGIO().getTime() + TTL_MS).toISOString(),
     });
@@ -281,5 +290,50 @@ describe("comIdempotencia", () => {
     await Promise.all([comIdempotencia(entrada), comIdempotencia(entrada)]);
 
     expect(executar).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("o hash guardado, como a leitura o devolve (bytea)", () => {
+  it("(9) recibo gravado ANTES do conserto (hex sem `\\x` = 64 bytes ASCII) ainda casa: replay, não 409", async () => {
+    const d = duble({ linhas: [recibo({ request_hash: byteaComoPostgrest(hashDoCorpoPadrao) })] });
+    const executar = vi.fn(async () => ({ resposta: { id: "DUPLICADO" }, status: 201 }));
+
+    const desfecho = await comIdempotencia({
+      db: d.db as never,
+      organizationId: ORG,
+      endpoint: ENDPOINT,
+      chave: CHAVE,
+      corpo: CORPO,
+      executar,
+      agora: RELOGIO,
+    });
+
+    expect(desfecho).toEqual({ tipo: "replay", resposta: { id: "t1" }, status: 201 });
+    expect(executar).not.toHaveBeenCalled();
+  });
+
+  it("(10) hashGuardado lê os dois formatos que existem na tabela, e nada mais", () => {
+    const digest = hashDoCorpoPadrao;
+    expect(hashGuardado(byteaComoPostgrest(`\\x${digest}`))).toBe(digest); // 32 bytes (atual e RPC de tenant)
+    expect(hashGuardado(byteaComoPostgrest(digest))).toBe(digest); // 64 bytes ASCII (antes do conserto)
+    // Qualquer outra coisa não é um hash reconhecível: o chamador responde 409, nunca 500.
+    expect(hashGuardado(byteaComoPostgrest("\\xabcd"))).toBeNull();
+    expect(hashGuardado("\\xzz")).toBeNull();
+    expect(hashGuardado(null)).toBeNull();
+    expect(hashGuardado({ type: "Buffer" })).toBeNull();
+  });
+
+  it("(11) recibo ilegível (bytea que não é hash) vira conflito, não exceção", async () => {
+    const d = duble({ linhas: [recibo({ request_hash: byteaComoPostgrest("\\xabcd") })] });
+    const desfecho = await comIdempotencia({
+      db: d.db as never,
+      organizationId: ORG,
+      endpoint: ENDPOINT,
+      chave: CHAVE,
+      corpo: CORPO,
+      executar: async () => ({ resposta: {}, status: 201 }),
+      agora: RELOGIO,
+    });
+    expect(desfecho).toEqual({ tipo: "conflito" });
   });
 });

@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { enderecoDeSaida, objetosDoTronco, problemaDoTronco, type ObjetoPjsip, type TroncoSip } from "./pjsip";
+import { enderecoDeSaida, objetosDoRamal, objetosDoTronco, problemaDoTronco, type ObjetoPjsip, type TroncoSip } from "./pjsip";
 
 const tronco: TroncoSip = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -95,5 +95,12 @@ describe("o destino da ligação de saída: prefixo do tronco + DDD + número", 
 
   it.each(["", "0061995140098", "61995140098@x", "123"])("número %j fora da grafia DDD + número não vira destino", (n) => {
     expect(enderecoDeSaida({ id, prefixo: null }, n)).toEqual({ ok: false, problema: "numero_invalido" });
+  });
+});
+
+describe("o ramal do navegador não transfere por REFER (rede de proteção da fase 2, §5.3)", () => {
+  it("allow_transfer=no no endpoint do ramal", () => {
+    const endpoint = objetosDoRamal({ userId: "u1", senha: "s".repeat(32), nome: "Ana" }).find((o) => o.tipo === "endpoint");
+    expect(campo(endpoint, "allow_transfer")).toEqual(["no"]);
   });
 });

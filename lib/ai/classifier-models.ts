@@ -22,6 +22,8 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { credenciaisDeModelo } from "@/lib/ai/pontos/provedores";
+
 /** Um modelo oferecível, já com o provedor que precisa viajar junto dele. */
 export interface ClassifierModelOption {
   provider: string;
@@ -54,7 +56,9 @@ export async function listClassifierModels(
   if (credErr) throw new Error(`classifier_models_credentials_failed: ${credErr.message}`);
 
   const origemPorProvider = new Map<string, "org" | "plataforma">();
-  for (const c of (creds ?? []) as Array<{ provider: string }>) {
+  // A chave de voz do telefone (ElevenLabs) mora na mesma tabela e não é
+  // provedor de modelo — não conta como "a organização tem chave".
+  for (const c of credenciaisDeModelo((creds ?? []) as Array<{ provider: string }>)) {
     origemPorProvider.set(c.provider, "org");
   }
   if (platformKeys.anthropic && !origemPorProvider.has("anthropic")) {

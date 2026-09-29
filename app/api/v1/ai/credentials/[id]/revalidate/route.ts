@@ -13,9 +13,12 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { PROVEDOR_DE_VOZ } from "@/lib/ai/pontos/provedores";
 import { validateProviderKey } from "@/lib/ai/provider-validators";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
+import { validarChaveDeVoz } from "@/lib/telefonia/servico-de-falas";
 
 export const dynamic = "force-dynamic";
 
@@ -69,8 +72,52 @@ export async function POST(
       tag: byteaToBuffer(row.api_key_tag),
     });
   } catch (err) {
-    console.error("[ai.credentials] decrypt failed during revalidate", err);
+    // Só a CLASSE do erro: a mensagem e o objeto de uma falha de decifragem
+    // podem carregar material da credencial.
+    logger.error("[ai.credentials] decrypt failed during revalidate", {
+      organization_id: activeOrg.orgId,
+      request_id: requestId,
+      classe: err instanceof Error ? err.name : "desconhecida",
+    });
     return fail("decrypt_failed", t("Falha ao decifrar credential."), 500, { requestId });
+  }
+
+  // A chave de voz do telefone (ElevenLabs) não é de modelo de linguagem:
+  // `validateProviderKey` devolveria `unknown_provider` e marcaria inválida uma
+  // chave boa. Ela é conferida pela MESMA régua do cadastro — listar as vozes da
+  // conta. A resposta é a do ramo de modelo (200 com `validation_error`), para a
+  // tela tratar os dois iguais.
+  if (row.provider === PROVEDOR_DE_VOZ) {
+    const voz = await validarChaveDeVoz(apiKey);
+    // Só a RECUSA da chave a desvalida. ElevenLabs fora do ar, erro dela ou
+    // conta sem crédito registram o motivo e mantêm `validated_at`: a chave
+    // continua sendo a certa, e desvalidá-la por uma queda do provedor seria
+    // punir o cliente pelo problema de outro.
+    const patchDeVoz = voz.ok
+      ? { validated_at: new Date().toISOString(), validation_error: null }
+      : voz.motivo === "chave_invalida"
+        ? { validated_at: null, validation_error: voz.motivo }
+        : { validation_error: voz.motivo };
+    const { data: atualizada, error: erroDeVoz } = await admin
+      .from("ai_provider_credentials")
+      .update(patchDeVoz)
+      .eq("id", id)
+      .eq("organization_id", activeOrg.orgId)
+      .select(SAFE_COLUMNS)
+      .single();
+    if (erroDeVoz || !atualizada) {
+      return fail("internal_error", "Erro ao atualizar credential.", 500, { requestId });
+    }
+    await audit({
+      action: "ai.credential_revalidated",
+      actorUserId: authUser.id,
+      organizationId: activeOrg.orgId,
+      resourceType: "ai_provider_credential",
+      resourceId: id,
+      requestId,
+      metadata: { provider: row.provider, label: row.label, ok: voz.ok, error: voz.ok ? null : voz.motivo },
+    });
+    return ok(atualizada, { requestId });
   }
 
   const result = await validateProviderKey(row.provider, apiKey);

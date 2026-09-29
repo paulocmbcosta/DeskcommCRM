@@ -46,6 +46,13 @@ describe("destinos da Central", () => {
     expect(l.queries).toHaveLength(0);
   });
   it("toda categoria possui política", () => expect(Object.keys(POLITICAS_DE_AVISO).sort()).toEqual(Object.keys(KIND_LABEL).sort()));
+  it("menu do telefone com time padrão arquivado: rótulo de telefone e a aba dos menus, só para quem administra", async () => {
+    expect(KIND_LABEL.phone_menu_team_archived).toBe("Menu do telefone manda para time arquivado");
+    const [admin] = await resolverDestinosDosAvisos(leitor().client, ORG, "admin", [aviso("phone_menu_team_archived", null, null)]);
+    expect(admin?.destination).toMatchObject({ estado: "disponivel", href: "/app/connections?aba=telefone&sub=menus" });
+    const [agente] = await resolverDestinosDosAvisos(leitor().client, ORG, "agent", [aviso("phone_menu_team_archived", null, null)]);
+    expect(agente?.destination.estado).toBe("sem_permissao");
+  });
   it.each([
     ["handoff", "conversation", `/app/inbox/${ID}`], ["job_dead", "conversation", `/app/inbox/${ID}`],
     ["handoff", "contact", `/app/contacts/${ID}`], ["other", "lead", `/app/pipelines/${PIPELINE}?lead=${ID}`],

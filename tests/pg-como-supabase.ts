@@ -17,7 +17,12 @@
  * 1. **RLS.** `pg` conecta como `postgres` e passa por cima. Isolamento entre
  *    organizações é medido pelos invariantes que usam papel restrito — não aqui.
  * 2. **Rede.** Timeout, retry e erro de transporte não existem neste caminho.
- * 3. **A superfície inteira do PostgREST.** Só o que está implementado abaixo:
+ * 3. **Os tipos que o JSON do PostgREST muda** — datas, numéricos — voltam como
+ *    o driver `pg` os entrega. A exceção é `bytea`: o PostgREST o devolve como
+ *    texto `"\x" + hex`, e o `pg` como `Buffer`. Um recibo de idempotência lido
+ *    como `Buffer` escondeu por meses que o hash gravado nunca casava com o
+ *    lido — por isso `bytea` é convertido (`comoOPostgrestDevolve`).
+ * 4. **A superfície inteira do PostgREST.** Só o que está implementado abaixo:
  *    `select/insert` com `eq`, `order`, `limit`, `maybeSingle`, `single` e
  *    embed to-one (`alias:coluna_fk(colunas)`, traduzido para subquery). Um
  *    método não implementado **estoura** em vez de ser ignorado em silêncio —
@@ -49,6 +54,22 @@ function naoImplementado(metodo: string): never {
       "Implemente-o (com caso no teste do adaptador) em vez de contornar — " +
       "método ausente que devolvesse vazio faria o teste passar medindo nada.",
   );
+}
+
+/**
+ * A linha como o JSON do PostgREST a entregaria, no que importa: `bytea` vira
+ * `"\x" + hex` (a saída padrão do Postgres, `bytea_output = hex`, que o
+ * `to_json` usa) em vez do `Buffer` do driver. A ESCRITA já é a do PostgREST: a
+ * string vai como parâmetro de texto e passa pela entrada de `bytea` — sem o
+ * prefixo `\x`, o texto vira os bytes dos próprios caracteres.
+ */
+function comoOPostgrestDevolve<T>(linha: T): T {
+  if (linha === null || typeof linha !== "object") return linha;
+  const saida: Record<string, unknown> = {};
+  for (const [coluna, valor] of Object.entries(linha as Record<string, unknown>)) {
+    saida[coluna] = Buffer.isBuffer(valor) ? `\\x${valor.toString("hex")}` : valor;
+  }
+  return saida as T;
 }
 
 function erroDe(e: unknown): ErroPg {
@@ -257,7 +278,7 @@ class ConsultaPg<T> implements PromiseLike<RespostaFalsa<T[]>> {
     const { texto, valores } = this.montar();
     try {
       const r = await this.pool.query(texto, valores);
-      return { rows: r.rows as T[], error: null };
+      return { rows: (r.rows as T[]).map(comoOPostgrestDevolve), error: null };
     } catch (e) {
       return { rows: [], error: erroDe(e) };
     }
@@ -331,7 +352,7 @@ class InsercaoPg<T> implements PromiseLike<RespostaFalsa<null>> {
     const { texto, valores } = this.montar();
     try {
       const r = await this.pool.query(texto, valores);
-      return { data: (r.rows[0] ?? null) as T, error: null };
+      return { data: comoOPostgrestDevolve((r.rows[0] ?? null) as T), error: null };
     } catch (e) {
       return { data: null, error: erroDe(e) };
     }
@@ -411,7 +432,7 @@ class AtualizacaoPg<T> implements PromiseLike<RespostaFalsa<unknown>> {
       if (r.rows.length > 1) {
         return { data: null, error: { message: "multiple rows returned", code: "PGRST116" } };
       }
-      return { data: (r.rows[0] ?? null) as T, error: null };
+      return { data: comoOPostgrestDevolve((r.rows[0] ?? null) as T), error: null };
     } catch (e) {
       return { data: null, error: erroDe(e) };
     }
@@ -448,7 +469,7 @@ class AtualizacaoPg<T> implements PromiseLike<RespostaFalsa<unknown>> {
       .query(texto, valores)
       .then(
         (r) =>
-          ({ data: pediuRetorno ? r.rows : null, error: null }) as RespostaFalsa<unknown>,
+          ({ data: pediuRetorno ? r.rows.map(comoOPostgrestDevolve) : null, error: null }) as RespostaFalsa<unknown>,
       )
       .catch((e: unknown) => ({ data: null, error: erroDe(e) }) as RespostaFalsa<unknown>)
       .then(aoResolver, aoRejeitar);

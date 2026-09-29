@@ -28,6 +28,22 @@ CHAVE_CPF=""; CHAVE_WAHA=""; CHAVE_AI=""
 
 cd "$(dirname "$0")/.."
 
+# A telefonia na suíte: `1` (padrão, para quem roda local) ou `0`. Com `0` o
+# `.env.e2e` sai SEM `TELEFONIA_ARI_URL`/`_PASSWORD` — o estado de primeiro
+# deploy, que a doutrina de QA manda testar com os opcionais ausentes. O CI
+# liga só na parte que roda `telefonia-ura-e-falas.spec.ts` (a 3) e desliga nas
+# outras duas; quem prende isso é `tests/unit/e2e-telefonia-so-na-parte-3.test.ts`.
+# Valor fora de 0/1 falha aqui, antes de tudo: um typo que desligasse a
+# telefonia em silêncio viraria "a aba do Telefone sumiu" três passos depois.
+E2E_TELEFONIA="${E2E_TELEFONIA:-1}"
+case "$E2E_TELEFONIA" in
+  0|1) ;;
+  *)
+    echo "==> E2E_TELEFONIA tem de ser 0 ou 1 (recebido: '$E2E_TELEFONIA')." >&2
+    exit 1
+    ;;
+esac
+
 # `supabase` do PATH quando existe (é o que o CI instala, via supabase/setup-cli),
 # `npx supabase` como plano B para a máquina do dev. Insistir no `npx` custaria um
 # download do registry a cada uma das três chamadas abaixo — a CLI não é
@@ -130,6 +146,11 @@ UPSTASH_REDIS_REST_TOKEN=e2e-placeholder-nao-e-segredo
 # porta NÃO é a 3998: essa é do UPSTASH acima, e um receiver ali atenderia as
 # chamadas do rate limit. A spec lê a porta DAQUI — uma fonte só.
 CLASSIFICADOR_COMERCIAL_BASE_URL=http://127.0.0.1:3997
+# A ElevenLabs FALSA de \`tests/e2e/telefonia-ura-e-falas.spec.ts\` (receiver HTTP
+# que a própria spec sobe, nesta porta — ela a lê DAQUI). Sem esta linha a
+# prévia das falas do telefone chamaria a ElevenLabs DE VERDADE
+# (\`lib/telefonia/servico-de-falas.ts\` → \`opcoesDaElevenLabs\`).
+ELEVENLABS_API_BASE_URL=http://127.0.0.1:3996
 NEXT_TELEMETRY_DISABLED=1
 # Telemetria DESLIGADA na suíte, e não é preferência: sem isto o SDK do browser
 # assume o DSN da comunidade (\`lib/sentry/dsn.ts\` → DEFAULT_SENTRY_DSN) e a suíte
@@ -145,5 +166,21 @@ NEXT_TELEMETRY_DISABLED=1
 SENTRY_DSN=off
 EOF
 
-echo "==> .env.e2e gerado, apontando para $API_URL"
+# A telefonia "oferecida": a PRESENÇA destas duas liga as abas do Telefone, a
+# faixa do aviso de instabilidade e o cartão da ElevenLabs
+# (`configAriDoAmbiente`, lib/channels/telefonia/ari.ts). Só com
+# E2E_TELEFONIA=1 (ver o topo). Nada escuta a 3995, de propósito: empurrar o
+# tronco falha rápido e é engolido (lib/channels/telefonia/empurrar.ts), e o
+# ramal do navegador só é pedido ao Asterisk numa organização que TEM número —
+# sem ele a rota responde `ativo: false` sem sair do servidor. A ligação de
+# verdade é provada na VPS.
+if [ "$E2E_TELEFONIA" = "1" ]; then
+  cat >> .env.e2e <<EOF
+# Telefonia oferecida (E2E_TELEFONIA=1) — ver scripts/gerar-env-e2e.sh.
+TELEFONIA_ARI_URL=http://127.0.0.1:3995
+TELEFONIA_ARI_PASSWORD=e2e-placeholder-nao-e-segredo
+EOF
+fi
+
+echo "==> .env.e2e gerado, apontando para $API_URL (telefonia: E2E_TELEFONIA=$E2E_TELEFONIA)"
 echo "==> Próximo: pnpm e2e:build && pnpm test:e2e"

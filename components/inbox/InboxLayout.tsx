@@ -48,6 +48,7 @@ import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import { useFilaDosTimes } from "@/hooks/inbox/useFilaDosTimes";
 import { AlternanciasDaLista, ChipsDosTimes } from "./ChipsDosTimes";
+import { ALTURA_ABAIXO_DA_TOPBAR } from "@/lib/ui/faixas-do-topo";
 
 /**
  * QUAL COLUNA APARECE NO CELULAR — as duas saem da MESMA pergunta.
@@ -453,11 +454,15 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // jogados fora. `-m-6` cancela o `p-6` — a mesma técnica de Desempenho e Meta
   // Ads, e pelo MESMO token, então não existe uma segunda medida para discordar.
   //
-  // Cancelado o respiro, a única coisa acima da grade é a TopBar (`h-14` = 3.5rem,
-  // em components/shell/TopBar.tsx): a altura é `100dvh - 3.5rem`, sem descontar
-  // mais nada. A conta fecha porque a margem negativa faz a caixa ocupar `H - 48px`
-  // no fluxo e o padding do `<main>` devolve os 48px — o `<main>` mede exatamente
-  // `100dvh - 3.5rem`, e a página não rola.
+  // Cancelado o respiro, acima da grade ficam a TopBar (`h-14` = 3.5rem, em
+  // components/shell/TopBar.tsx) e as faixas de estado do topo (conexão caída,
+  // aviso de instabilidade, acompanhamento), que publicam a altura delas em
+  // `--altura-das-faixas` — 0 sem faixa nenhuma. A altura é
+  // `100dvh - 3.5rem - var(--altura-das-faixas)` (`ALTURA_ABAIXO_DA_TOPBAR`, em
+  // lib/ui/faixas-do-topo.ts): sem descontar as faixas, a página rolava pela
+  // altura delas e o composer nascia fora da dobra. A conta fecha porque a
+  // margem negativa faz a caixa ocupar `H - 48px` no fluxo e o padding do
+  // `<main>` devolve os 48px.
   //
   // ⚠️ Se o `-m-6` sair e a altura ficar, a grade passa a medir 48px a MAIS que a
   // tela e quem paga é o composer, que fica no rodapé: nasce abaixo da borda,
@@ -505,7 +510,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       // regra do breakpoint arbitrário ANTES da do `xl` no CSS final, então em
       // 1440px o `xl` vencia e a lista ficava nos 248px para sempre. Sem
       // sobreposição não há ordem para errar.
-      className="-m-6 grid h-[calc(100dvh-3.5rem)] grid-cols-1 md:max-xl:grid-cols-[300px_1fr] xl:max-[1399px]:grid-cols-[292px_minmax(0,1fr)_auto] min-[1400px]:grid-cols-[344px_minmax(0,1fr)_auto]"
+      className="-m-6 grid grid-cols-1 md:max-xl:grid-cols-[300px_1fr] xl:max-[1399px]:grid-cols-[292px_minmax(0,1fr)_auto] min-[1400px]:grid-cols-[344px_minmax(0,1fr)_auto]"
+      // A altura: a janela menos a TopBar menos as faixas do topo (ver o bloco "A
+      // grade ENCOSTA" acima e lib/ui/faixas-do-topo.ts).
+      style={{ height: ALTURA_ABAIXO_DA_TOPBAR }}
       /*
        * O ESTADO DO TEMPO REAL, LEGÍVEL DE FORA — mesmo par que o dossiê do lead
        * já publica (`LeadDossier`), e pela mesma razão: quando a entrega morre,

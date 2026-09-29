@@ -16,6 +16,7 @@ import type { FunilDaResposta } from "@/hooks/pipelines/usePipelines";
 import { coberturaDoFunil, type EtapaDoMapa } from "@/lib/leads/agent-mapping";
 import type { CoberturaPorFunil } from "./_components/FunisDoAgente";
 import { lerAmbiente } from "@/lib/instalacao/ambiente";
+import { credenciaisDeModelo } from "@/lib/ai/pontos/provedores";
 import { escolherVersoesDaTela } from "@/lib/ai/agents/versoes-da-tela";
 
 export const dynamic = "force-dynamic";
@@ -130,7 +131,11 @@ export default async function AgentEditorPage({ params }: { params: Promise<{ id
     const c = coberturaDoFunil(etapasPorFunil.get(f.id) ?? []);
     cobertura[f.id] = { traduzidos: c.traduzidos, total: c.total, mudo: c.mudo };
   }
-  const credentials = (credentialsRes.data ?? []) as unknown as CredentialRow[];
+  // Só chave de PROVEDOR DE MODELO. A de voz do telefone (ElevenLabs) mora na
+  // mesma tabela, e o `LegacyRecovery` aceita o provedor em texto livre: sem
+  // este filtro, quem digitasse `elevenlabs` via a chave de voz oferecida como
+  // credencial do modelo.
+  const credentials = credenciaisDeModelo((credentialsRes.data ?? []) as unknown as CredentialRow[]);
   const routerMemberRow = routerMemberRes.data as {
     router_id: string;
     ai_routers: { name: string } | null;

@@ -211,6 +211,11 @@ const schema = z.object({
   // (https://openrouter.ai/api/v1). Existe para o e2e apontar para um Jev falso
   // local sem mexer no roteamento do chat (OPENROUTER_BASE_URL).
   CLASSIFICADOR_COMERCIAL_BASE_URL: z.string().optional().default(""),
+  // Base da API da ElevenLabs (a voz da URA do telefone). Vazio = a pública
+  // (https://api.elevenlabs.io). Existe SÓ para o e2e apontar para uma ElevenLabs
+  // falsa local — não é knob de produção. A CHAVE não mora aqui: é por
+  // organização, cadastrada pela tela. Lido por lib/telefonia/servico-de-falas.ts.
+  ELEVENLABS_API_BASE_URL: z.string().optional().default(""),
   VERCEL_AI_GATEWAY_URL: z.string().optional().default(""),
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   OPENAI_API_KEY: z.string().optional().default(""),

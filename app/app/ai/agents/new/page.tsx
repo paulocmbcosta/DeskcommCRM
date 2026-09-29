@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { CredentialRow } from "@/hooks/ai/useCredentials";
 
 import { lerAmbiente } from "@/lib/instalacao/ambiente";
+import { credenciaisDeModelo } from "@/lib/ai/pontos/provedores";
 
 import { AgentForm } from "../[id]/_components/AgentForm";
 
@@ -47,7 +48,9 @@ export default async function NewAgentPage() {
     listSelectableChannels(supabase, activeOrg.orgId),
   ]);
 
-  const credentials = (credentialsRes.data ?? []) as unknown as CredentialRow[];
+  // Só chave de PROVEDOR DE MODELO: a de voz do telefone (ElevenLabs) mora na
+  // mesma tabela, e o formulário escolhe aqui com o que o agente pensa.
+  const credentials = credenciaisDeModelo((credentialsRes.data ?? []) as unknown as CredentialRow[]);
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">

@@ -2,6 +2,11 @@
  * PATCH  /api/v1/telefonia/numeros/[id] — edita o número (admin). Sem `senha`
  *        no corpo, vale a que está guardada; sem `prefixo`, vale o guardado
  *        (`""`/`null` apaga). Mudar só o prefixo não pede a senha: não é conta.
+ *        O destino (fase 2) é um time OU um menu (`menu_id`; ausente = manter o
+ *        guardado; escolher um time tira o menu). A troca de destino ganha
+ *        auditoria própria (`phone.number_destination_changed`) com o antes e o
+ *        depois que a TRANSAÇÃO leu — não uma releitura depois, que contaria
+ *        outra história quando duas edições se cruzam.
  * DELETE /api/v1/telefonia/numeros/[id] — remove (arquiva) o número (admin).
  *
  * Spec 20 §7. Remover arquiva: conversas e ligações apontam para a linha e o
@@ -16,7 +21,15 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
-import { MENSAGEM_DA_FALHA, arquivarNumero, atualizarNumero, numeroSchema, numerosDaOrg } from "@/lib/channels/telefonia/numeros";
+import {
+  MENSAGEM_DA_FALHA,
+  arquivarNumero,
+  atualizarNumero,
+  destinoMudou,
+  numeroSchema,
+  numerosDaOrg,
+  statusDaFalhaDoCadastro,
+} from "@/lib/channels/telefonia/numeros";
 import { empurrarTroncoAgora, retirarTroncoAgora } from "@/lib/channels/telefonia/empurrar";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
@@ -46,7 +59,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   const pool = getRequestPool();
   const r = await atualizarNumero(pool, authz.org.orgId, numeroId, parsed.data);
   if (!r.ok) {
-    return fail(r.motivo, t(MENSAGEM_DA_FALHA[r.motivo]), r.motivo === "nao_encontrado" ? 404 : 422, { requestId });
+    return fail(r.motivo, t(MENSAGEM_DA_FALHA[r.motivo]), statusDaFalhaDoCadastro(r.motivo), { requestId });
   }
 
   void audit({
@@ -61,11 +74,28 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       time_id: parsed.data.time_id,
       // `undefined` = o formulário não mandou o campo, e o guardado ficou.
       ...(parsed.data.prefixo !== undefined ? { prefixo: parsed.data.prefixo } : {}),
+      ...(parsed.data.menu_id !== undefined ? { menu_id: parsed.data.menu_id } : {}),
       trocou_senha: Boolean(parsed.data.senha),
     },
     requestId,
   });
 
+  // A troca de destino (time ↔ menu) é o que muda o que o CLIENTE ouve ao ligar:
+  // ganha uma linha própria. Só ids — nada da conta, nunca a senha.
+  if (destinoMudou(r.destino)) {
+    void audit({
+      action: "phone.number_destination_changed",
+      actorUserId: authz.user.id,
+      organizationId: authz.org.orgId,
+      resourceType: "channel_session",
+      resourceId: numeroId,
+      metadata: { de: r.destino.de, para: r.destino.para },
+      requestId,
+    });
+  }
+
+  // O destino não precisa ir ao Asterisk (o worker o lê a cada ligação); o
+  // empurrão é pela conta, que o mesmo formulário pode ter mudado.
   await empurrarTroncoAgora(pool, id.data);
   const numeros = await numerosDaOrg(pool, authz.org.orgId);
   return ok(numeros.find((n) => n.id === id.data) ?? null, { requestId });

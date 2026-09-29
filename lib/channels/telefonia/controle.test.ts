@@ -1,8 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CanalAri } from "./ari";
-import { ControladorDeChamadas, type PortaAri, type PortaBanco } from "./controle";
-import type { LigacaoDoBanco, NovaLigacao, TroncoDoBanco } from "./repositorio";
+import { ErroAri, type CanalAri } from "./ari";
+import {
+  ControladorDeChamadas,
+  FOLGA_DO_FIM_DA_FALA_MS,
+  REPETIR_AGUARDE_MS,
+  type PortaAri,
+  type PortaBanco,
+  type PortaFalas,
+} from "./controle";
+import type {
+  EscolhaDoMenu,
+  FalaDoBanco,
+  FalasGerais,
+  LigacaoDoBanco,
+  MenuDoBanco,
+  NovaLigacao,
+  SituacaoDoTime,
+  TroncoDoBanco,
+} from "./repositorio";
 
 const ORG = "00000000-0000-0000-0000-00000000000a";
 const TRONCO = "11111111-1111-1111-1111-111111111111";
@@ -24,6 +40,9 @@ const tronco: TroncoDoBanco = {
   prefixo: null,
 };
 
+/** Uma fala pronta (3 s, se o teste não disser); o dublê do disco a entrega como `sound:/falas/<id>`. */
+const falaDe = (id: string, duracaoMs = 3_000): FalaDoBanco => ({ id, storagePath: `${ORG}/${id}.ulaw`, duracaoMs });
+
 function canal(id: string, name: string, extra: Partial<CanalAri> = {}): CanalAri {
   return {
     id,
@@ -40,7 +59,10 @@ function canal(id: string, name: string, extra: Partial<CanalAri> = {}): CanalAr
 class AriFalso implements PortaAri {
   chamadas: Array<[string, ...unknown[]]> = [];
   online = new Set<string>();
+  /** Falas que o "Asterisk" recusa tocar (a ARI responde erro), pela mídia. */
+  recusaFala = new Set<string>();
   private seq = 0;
+  private seqFala = 0;
   pontesVivas: Array<{ id: string; channels: string[] }> = [];
   canaisVivos: Array<{ id: string }> = [];
   private reg(nome: string, ...args: unknown[]) {
@@ -72,6 +94,12 @@ class AriFalso implements PortaAri {
     return { id: "tom-1" };
   };
   pararReproducao = (id: string) => this.reg("pararReproducao", id);
+  tocarFala = async (c: string, m: string) => {
+    await this.reg("tocarFala", c, m);
+    if (this.recusaFala.has(m)) throw new ErroAri(500, "Internal Server Error", `/channels/${c}/play`);
+    return `fala-${++this.seqFala}`;
+  };
+  pararFala = (id: string) => this.reg("pararFala", id);
   ramalOnline = async (u: string) => this.online.has(u);
   pontes = async () => this.pontesVivas;
   canais = async () => this.canaisVivos;
@@ -86,19 +114,88 @@ class AriFalso implements PortaAri {
     const n = this.chamadas.filter((c) => c[0] === "originar").length;
     return `ramal-canal-${n}`;
   }
+  /** As mídias pedidas ao Asterisk, em ordem (inclusive as recusadas). */
+  falas() {
+    return this.chamadas.filter((c) => c[0] === "tocarFala").map((c) => c[2]);
+  }
+  /** O id do último playback que o "Asterisk" aceitou. */
+  ultimaFala() {
+    return `fala-${this.seqFala}`;
+  }
 }
 
 class BancoFalso implements PortaBanco {
   ligacoes = new Map<string, LigacaoDoBanco>();
   disponiveis: Array<{ userId: string; atendidasHoje: number; ultimaAtendidaEm: Date | null }> = [];
   eventos: Array<[string, ...unknown[]]> = [];
+  /** O que `timeParaAFila` devolve; `falharFila` simula o banco fora do ar. */
+  situacao: SituacaoDoTime = "aberto";
+  aviso: FalaDoBanco | null = null;
+  falharFila = false;
+  gerais: FalasGerais = { aguarde: null, ninguem: null, foraDoHorario: null };
+  menus = new Map<string, MenuDoBanco>();
+  /** Com que (organização, time) a fila foi consultada. */
+  consultas: Array<[string, ...unknown[]]> = [];
   private seq = 0;
 
   troncoAtual: TroncoDoBanco = tronco;
   troncoPorId = async (id: string) => (id === TRONCO ? this.troncoAtual : null);
-  disponiveisNoTime = async () => this.disponiveis;
+  /** Quantas leituras de `disponiveisNoTime` ainda falham (banco fora do ar). */
+  falharDisponiveis = 0;
+  disponiveisNoTime = async () => {
+    if (this.falharDisponiveis > 0) {
+      this.falharDisponiveis--;
+      throw new Error("banco fora do ar");
+    }
+    return this.disponiveis;
+  };
+  timeParaAFila = async (org: string, teamId: string) => {
+    this.consultas.push(["timeParaAFila", org, teamId]);
+    // Também na linha do tempo dos efeitos: é a ENTRADA na fila, e há teste que mede o que vem antes dela.
+    this.eventos.push(["entrou_na_fila", org, teamId]);
+    if (this.falharFila) throw new Error("banco fora do ar");
+    return { situacao: this.situacao, aviso: this.aviso };
+  };
+  falasGerais = async (org: string) => {
+    this.consultas.push(["falasGerais", org]);
+    return this.gerais;
+  };
+  /** `menuPorId` lança (o banco caiu logo na entrada da ligação). */
+  falharMenu = false;
+  menuPorId = async (org: string, id: string) => {
+    this.consultas.push(["menuPorId", org, id]);
+    if (this.falharMenu) throw new Error("banco fora do ar");
+    return this.menus.get(id) ?? null;
+  };
+  avisarMenuComTimeArquivado = async (org: string, menu: Pick<MenuDoBanco, "id" | "nome">) => {
+    this.eventos.push(["menu_time_arquivado", org, menu.nome]);
+  };
+  /**
+   * A escolha do menu. O que ela faz no banco (a ligação e a conversa sem dono
+   * vão ao time escolhido) é provado no Postgres real
+   * (tests/invariants/telefonia-repositorio-da-ura.test.ts); aqui só se registra
+   * o que o controlador pediu. `falharEscolha` simula o banco que lança ou que
+   * não acha a ligação.
+   */
+  falharEscolha: "lanca" | "nao_acha" | null = null;
+  registrarEscolhaDoMenu = async (org: string, id: string, e: EscolhaDoMenu) => {
+    this.eventos.push(["escolha", org, id, e.digito, e.desfecho, e.teamId]);
+    if (!this.daOrg(org, id, "registrarEscolhaDoMenu")) return false;
+    if (this.falharEscolha === "lanca") throw new Error("banco fora do ar");
+    return this.falharEscolha !== "nao_acha";
+  };
+  registrarAvisoOuvido = async (org: string, id: string) => {
+    this.eventos.push(["ouviu_aviso", org, id]);
+    return true;
+  };
+  avisarFalaIntocavel = async (org: string, rotulo: string) => {
+    this.eventos.push(["fala_intocavel", org, rotulo]);
+  };
   acharOuCriarContato = async () => "contato-1";
-  acharOuCriarConversa = async () => "conversa-1";
+  acharOuCriarConversa = async (org: string, _c: string, _t: string, teamId: string | null) => {
+    this.eventos.push(["conversa_criada", org, teamId]);
+    return "conversa-1";
+  };
   criarLigacao = async (l: NovaLigacao) => {
     const id = `vc-${++this.seq}`;
     this.ligacoes.set(id, {
@@ -117,27 +214,48 @@ class BancoFalso implements PortaBanco {
       answered_at: null,
       provider: "sip_trunk",
       sip_call_ref: l.sipCallRef,
+      menu_id: l.menuId ?? null,
     });
     return id;
   };
-  ligacaoPorId = async (id: string) => this.ligacoes.get(id) ?? null;
+  /** Como o SQL: só o pedido do próprio atendente volta. */
+  ligacaoDoAtendente = async (userId: string, id: string) => {
+    const l = this.ligacoes.get(id);
+    return l && l.owner_user_id === userId ? l : null;
+  };
   ligacoesVivas = async () => [...this.ligacoes.values()].filter((l) => l.status !== "ended");
-  marcarTocando = async (id: string, u: string | null) => {
+  /** Toda escrita da ligação chega com a organização dela; a errada fica registrada (e o `afterEach` reprova). */
+  private daOrg(org: string, id: string, onde: string) {
+    const certa = this.ligacoes.get(id)?.organization_id === org;
+    if (!certa) this.eventos.push(["org_errada", onde, id, org]);
+    return certa;
+  }
+  marcarTocando = async (org: string, id: string, u: string | null) => {
+    if (!this.daOrg(org, id, "marcarTocando")) return;
+    if (this.falharTocando) throw new Error("banco fora do ar");
     this.eventos.push(["tocando", id, u]);
   };
-  marcarAtendida = async (id: string, u: string) => {
+  /** `marcarTocando` lança (o banco caiu no meio da ligação). */
+  falharTocando = false;
+  marcarAtendida = async (org: string, id: string, u: string) => {
+    if (!this.daOrg(org, id, "marcarAtendida")) return;
     const l = this.ligacoes.get(id)!;
     l.status = "connected";
     l.answered_at = new Date().toISOString();
     l.owner_user_id = l.owner_user_id ?? u;
     this.eventos.push(["atendida", id, u]);
   };
-  encerrarLigacao = async (id: string, motivo: string) => {
+  /** O que `encerrarLigacao` devolveu — a linha do banco, que o controlador repassa ao "Ligar de volta". */
+  devolvidasAoEncerrar: LigacaoDoBanco[] = [];
+  encerrarLigacao = async (org: string, id: string, motivo: string) => {
     const l = this.ligacoes.get(id);
-    if (!l || l.status === "ended") return null;
+    if (!l || !this.daOrg(org, id, "encerrarLigacao") || l.status === "ended") return null;
     l.status = "ended";
+    l.end_reason = motivo;
     this.eventos.push(["encerrada", id, motivo]);
-    return { ...l };
+    const linha = { ...l };
+    this.devolvidasAoEncerrar.push(linha);
+    return linha;
   };
   atribuirConversa = async (_o: string, c: string, u: string) => {
     this.eventos.push(["atribuida", c, u]);
@@ -145,8 +263,11 @@ class BancoFalso implements PortaBanco {
   registrarNaConversa = async (l: LigacaoDoBanco, d: string) => {
     this.eventos.push(["registro", l.id, d]);
   };
+  /** As ligações que viraram "Ligar de volta", inteiras (o time delas é o do aviso). */
+  perdidas: LigacaoDoBanco[] = [];
   avisarPerdida = async (l: LigacaoDoBanco) => {
     this.eventos.push(["perdida", l.id]);
+    this.perdidas.push(l);
   };
   registrarFim = async (l: LigacaoDoBanco, d: string, m: string) => {
     this.eventos.push(["fim", l.id, d, m]);
@@ -156,10 +277,21 @@ class BancoFalso implements PortaBanco {
   }
 }
 
+/** O disco das falas: tudo está lá, menos o que o teste tirar. */
+class FalasFalsas implements PortaFalas {
+  semArquivo = new Set<string>();
+  pedidas: string[] = [];
+  garantir = async (f: FalaDoBanco) => {
+    this.pedidas.push(f.id);
+    return this.semArquivo.has(f.id) ? null : `sound:/falas/${f.id}`;
+  };
+}
+
 const log = { info: () => undefined, warn: () => undefined, error: vi.fn() };
 
 let ari: AriFalso;
 let banco: BancoFalso;
+let falas: FalasFalsas;
 let ctl: ControladorDeChamadas;
 
 beforeEach(() => {
@@ -167,12 +299,14 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-09-28T13:00:00Z"));
   ari = new AriFalso();
   banco = new BancoFalso();
-  ctl = new ControladorDeChamadas(ari, banco, log);
+  falas = new FalasFalsas();
+  ctl = new ControladorDeChamadas(ari, banco, log, () => Date.now(), falas);
   log.error.mockClear();
 });
 afterEach(() => {
   vi.useRealTimers();
   expect(log.error).not.toHaveBeenCalled();
+  expect(banco.tem("org_errada")).toEqual([]);
 });
 
 const cliente = canal("cli-1", `PJSIP/tronco-${TRONCO}-00000001`);
@@ -181,6 +315,23 @@ const destruir = (id: string, cause = 16) =>
   ctl.tratar({ type: "ChannelDestroyed", channel: canal(id, "x"), cause });
 const ramalAtende = (canalId: string, vcId = "vc-1") =>
   ctl.tratar({ type: "StasisStart", channel: canal(canalId, "PJSIP/ramal-x-00000009"), args: ["oferta", vcId] });
+/** O fim de uma fala, como a ARI entrega: `done` (tocou até o fim ou foi parada) ou `failed`. */
+const terminou = (id: string, state: "done" | "failed" = "done") =>
+  ctl.tratar({
+    type: "PlaybackFinished",
+    playback: { id, media_uri: "sound:/falas/x", target_uri: "channel:cli-1", language: "en", state },
+  });
+/**
+ * O cliente desliga NO MEIO de uma fala, na ordem em que o Asterisk publica:
+ * o pedido de desligar, a fala que morre como `failed` (res_stasis_playback
+ * chama de "Playback failed" a fala cortada pela queda do canal), e o fim do canal.
+ */
+const clienteDesligaDuranteAFala = async (playbackId: string) => {
+  await ctl.tratar({ type: "ChannelHangupRequest", channel: cliente, cause: 16 });
+  await terminou(playbackId, "failed");
+  await ctl.tratar({ type: "StasisEnd", channel: cliente });
+  await destruir("cli-1");
+};
 
 describe("recebida", () => {
   it("toca primeiro quem atendeu menos hoje e faz a ponte quando atende", async () => {
@@ -286,6 +437,25 @@ describe("recebida", () => {
     await ramalAtende("ramal-canal-99");
     expect(ari.chamadas).toContainEqual(["desligar", "ramal-canal-99", undefined]);
     expect(banco.tem("atendida")).toEqual([]);
+  });
+
+  it("o banco cai ao gravar 'tocando': a fila segue, o ramal toca e a ligação é atendida mesmo assim", async () => {
+    banco.falharTocando = true;
+    await entrar();
+    // Ninguém disponível: o "tocando para ninguém" falha, e a fila arma a reavaliação mesmo assim.
+    expect(ari.chamadas).toContainEqual(["musicaDeEspera", "cli-1"]);
+    expect(vi.getTimerCount()).toBe(1);
+
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    // O "tocando para Ana" também falhou: a rede de segurança do toque está armada.
+    expect(vi.getTimerCount()).toBe(1);
+    expect(banco.tem("tocando")).toEqual([]);
+
+    await ramalAtende(ari.ultimoOriginado());
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
   });
 
   it("canal que não veio de tronco é desligado sem criar nada", async () => {
@@ -586,5 +756,1074 @@ describe("recuperar após reinício", () => {
     expect(ari.chamadas).toContainEqual(["desligar", "ramal-a", undefined]);
     expect(banco.tem("registro")).toContainEqual(["registro", "vc-1", "atendida"]);
     expect(ctl.ativas).toBe(0);
+  });
+});
+
+describe("fila do time — as falas da fase 2 (§5.2)", () => {
+  const FORA = falaDe("fora");
+  const AVISO = falaDe("aviso", 60_000); // um aviso de um minuto
+  const AGUARDE = falaDe("aguarde");
+  const NINGUEM = falaDe("ninguem");
+  const anaDisponivel = () => {
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+  };
+
+  describe("a fase 1 continua igual quando não há fala nenhuma", () => {
+    it("time sem falas: a fila é consultada com a organização e o time, e nada toca além da música", async () => {
+      await entrar();
+      expect(banco.consultas).toEqual([
+        ["timeParaAFila", ORG, TIME],
+        ["falasGerais", ORG],
+      ]);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "musicaDeEspera"]);
+
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "musicaDeEspera", "desligar"]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(falas.pedidas).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("número sem time: as falas gerais valem, mas não há time para consultar", async () => {
+      banco.troncoAtual = { ...tronco, teamId: null };
+      await entrar();
+      expect(banco.consultas).toEqual([["falasGerais", ORG]]);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "musicaDeEspera"]);
+    });
+
+    it("o banco falha ao ler a situação do time: a ligação segue a fila da fase 1, sem travar", async () => {
+      banco.falharFila = true;
+      anaDisponivel();
+      await entrar();
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      expect(ari.falas()).toEqual([]);
+    });
+  });
+
+  describe("fora do horário", () => {
+    it("COM fala: atende, toca e só desliga no fim dela — after_hours, sem aviso de perdida na Central", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: FORA };
+      await entrar();
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala"]);
+      expect(ari.falas()).toEqual(["sound:/falas/fora"]);
+      expect(banco.tem("encerrada")).toEqual([]);
+
+      await terminou("fala-1");
+      expect(ari.chamadas.at(-1)).toEqual(["desligar", "cli-1", undefined]);
+      expect(ari.originados()).toEqual([]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "after_hours"]]);
+      expect(banco.tem("registro")).toEqual([["registro", "vc-1", "perdida"]]);
+      expect(banco.tem("fim")).toEqual([["fim", "vc-1", "perdida", "after_hours"]]);
+      expect(banco.tem("perdida")).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.ativas).toBe(0);
+    });
+
+    it("vem ANTES do aviso de instabilidade: o aviso não toca", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: FORA };
+      banco.aviso = AVISO;
+      await entrar();
+      await terminou("fala-1");
+      expect(ari.falas()).toEqual(["sound:/falas/fora"]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "after_hours"]]);
+      expect(banco.tem("ouviu_aviso")).toEqual([]);
+    });
+
+    it("o cliente desliga no meio da fala: after_hours, sem aviso de perdida e sem 'fala não tocou'", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: FORA };
+      await entrar();
+      await clienteDesligaDuranteAFala("fala-1");
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "after_hours"]]);
+      expect(banco.tem("perdida")).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("SEM fala salva: segue a fase 1 — fila, e perdida com aviso", async () => {
+      banco.situacao = "fora_do_horario";
+      await entrar();
+      expect(ari.falas()).toEqual([]);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "musicaDeEspera"]);
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("fala sem arquivo no disco: pulada, avisada na Central, e a ligação segue a fase 1 (perdida com aviso)", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: FORA };
+      falas.semArquivo.add(FORA.id);
+      await entrar();
+      expect(ari.falas()).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "fora do horário"]]);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "musicaDeEspera"]);
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("o Asterisk recusa tocar (a ARI responde erro): pulada, avisada, e a ligação segue a fase 1", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: FORA };
+      ari.recusaFala.add("sound:/falas/fora");
+      await entrar();
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala", "musicaDeEspera"]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "fora do horário"]]);
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("a fala termina 'failed' sem o cliente sair: avisada, e a ligação segue a fase 1 em vez de desligar calada", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: FORA };
+      await entrar();
+      await terminou("fala-1", "failed");
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "fora do horário"]]);
+      expect(banco.tem("encerrada")).toEqual([]);
+      expect(ari.chamadas.at(-1)).toEqual(["musicaDeEspera", "cli-1"]);
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+  });
+
+  describe("aviso de instabilidade", () => {
+    it("toca INTEIRO antes dos ramais — tecla não interrompe —, grava o 'ouviu' e só então toca o ramal", async () => {
+      banco.aviso = AVISO;
+      anaDisponivel();
+      await entrar();
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala"]);
+      expect(ari.falas()).toEqual(["sound:/falas/aviso"]);
+
+      await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit: "1" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala"]);
+      expect(banco.tem("ouviu_aviso")).toEqual([]);
+
+      await terminou("fala-1");
+      expect(banco.tem("ouviu_aviso")).toEqual([["ouviu_aviso", ORG, "vc-1"]]);
+      // Já atendida pelo aviso: o cliente espera o ramal com música, não em silêncio.
+      expect(ari.nomes().slice(3)).toEqual(["musicaDeEspera", "originar"]);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    });
+
+    it("os 2 minutos da fila contam do FIM do aviso, não do início da ligação", async () => {
+      banco.aviso = AVISO;
+      await entrar();
+      await vi.advanceTimersByTimeAsync(60_000); // um aviso de um minuto
+      await terminou("fala-1");
+      await vi.advanceTimersByTimeAsync(115_000);
+      expect(banco.tem("encerrada")).toEqual([]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("depois do aviso, quem espera o ramal ouve o 'aguarde'", async () => {
+      banco.aviso = AVISO;
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      anaDisponivel();
+      await entrar();
+      await terminou("fala-1");
+      expect(ari.falas()).toEqual(["sound:/falas/aviso", "sound:/falas/aguarde"]);
+      expect(ari.nomes().slice(3)).toEqual(["tocarFala", "originar"]);
+    });
+
+    it("sem arquivo no disco: pulado e avisado, sem 'ouviu', e a fila da fase 1 segue (o cliente ouve o chamar)", async () => {
+      banco.aviso = AVISO;
+      falas.semArquivo.add(AVISO.id);
+      anaDisponivel();
+      await entrar();
+      expect(ari.falas()).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aviso de instabilidade"]]);
+      expect(ari.nomes()).toEqual(["indicarChamando", "originar"]);
+      expect(banco.tem("ouviu_aviso")).toEqual([]);
+    });
+
+    it("o Asterisk não tocou (PlaybackFinished failed): avisado, sem 'ouviu', e segue para os ramais", async () => {
+      banco.aviso = AVISO;
+      anaDisponivel();
+      await entrar();
+      await terminou("fala-1", "failed");
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aviso de instabilidade"]]);
+      expect(banco.tem("ouviu_aviso")).toEqual([]);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    });
+
+    it("o cliente desliga no meio do aviso: nenhum ramal toca, sem 'ouviu', sem 'fala não tocou', perdida com aviso", async () => {
+      banco.aviso = AVISO;
+      anaDisponivel();
+      await entrar();
+      await clienteDesligaDuranteAFala("fala-1");
+      expect(ari.originados()).toEqual([]);
+      expect(banco.tem("ouviu_aviso")).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.ativas).toBe(0);
+    });
+  });
+
+  describe("quem espera: 'aguarde' e música", () => {
+    it("ouve 'aguarde', depois a música, e o 'aguarde' volta a cada 40 s (para a música, fala, volta a música)", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala"]);
+      expect(ari.falas()).toEqual(["sound:/falas/aguarde"]);
+
+      await terminou("fala-1");
+      expect(ari.chamadas.at(-1)).toEqual(["musicaDeEspera", "cli-1"]);
+
+      let n = ari.chamadas.length;
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS - 1);
+      expect(ari.chamadas.slice(n)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ari.chamadas.slice(n)).toEqual([
+        ["pararMusica", "cli-1"],
+        ["tocarFala", "cli-1", "sound:/falas/aguarde"],
+      ]);
+      await terminou("fala-2");
+      expect(ari.chamadas.at(-1)).toEqual(["musicaDeEspera", "cli-1"]);
+
+      n = ari.chamadas.length;
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS);
+      expect(ari.chamadas.slice(n)).toEqual([
+        ["pararMusica", "cli-1"],
+        ["tocarFala", "cli-1", "sound:/falas/aguarde"],
+      ]);
+      await terminou("fala-3");
+      expect(ari.chamadas.at(-1)).toEqual(["musicaDeEspera", "cli-1"]);
+    });
+
+    it("'aguarde' sem arquivo: música direto, avisado UMA vez, e o relógio da repetição não é armado", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      falas.semArquivo.add(AGUARDE.id);
+      await entrar();
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "musicaDeEspera"]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aguarde"]]);
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS * 2);
+      expect(falas.pedidas).toEqual([AGUARDE.id]);
+      expect(ari.falas()).toEqual([]);
+    });
+
+    it("'aguarde' que termina 'failed': avisado, a música entra, e não se repete", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      await terminou("fala-1", "failed");
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aguarde"]]);
+      expect(ari.chamadas.at(-1)).toEqual(["musicaDeEspera", "cli-1"]);
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS * 2);
+      expect(ari.falas()).toEqual(["sound:/falas/aguarde"]);
+    });
+
+    it("o arquivo some antes da repetição: a música segue SEM parar, avisado, e o 'aguarde' não se repete mais", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      await terminou("fala-1");
+      falas.semArquivo.add(AGUARDE.id);
+      const n = ari.chamadas.length;
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS);
+      expect(ari.chamadas.slice(n)).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aguarde"]]);
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS);
+      expect(falas.pedidas).toEqual([AGUARDE.id, AGUARDE.id]);
+    });
+
+    it("o canal do cliente saiu do Stasis (409) ao pedir o 'aguarde': encerra na hora — sem ramal, sem 'tocando', sem relógio", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      ari.tocarFala = async (c: string, m: string) => {
+        ari.chamadas.push(["tocarFala", c, m]);
+        throw new ErroAri(409, "Conflict", `/channels/${c}/play`);
+      };
+      await entrar();
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala", "desligar"]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(banco.tem("tocando")).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.ativas).toBe(0);
+    });
+
+    it("o Asterisk recusa a repetição: a música, que tinha parado, volta, e a Central fica sabendo", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      await terminou("fala-1");
+      ari.recusaFala.add("sound:/falas/aguarde");
+      const n = ari.chamadas.length;
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS);
+      expect(ari.chamadas.slice(n)).toEqual([
+        ["pararMusica", "cli-1"],
+        ["tocarFala", "cli-1", "sound:/falas/aguarde"],
+        ["musicaDeEspera", "cli-1"],
+      ]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aguarde"]]);
+    });
+
+    it("atendente atende NO MEIO do 'aguarde': a fala para antes da ponte, e o fim atrasado dela não religa nada", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      anaDisponivel();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+
+      await ramalAtende(ari.ultimoOriginado());
+      const nomes = ari.nomes();
+      expect(ari.chamadas).toContainEqual(["pararFala", "fala-1"]);
+      expect(nomes.indexOf("pararFala")).toBeLessThan(nomes.indexOf("criarPonte"));
+      expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+      expect(vi.getTimerCount()).toBe(0);
+
+      const antes = ari.chamadas.length;
+      await terminou("fala-1");
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS * 2);
+      expect(ari.chamadas.slice(antes)).toEqual([]);
+    });
+
+    it("atendente atende durante a MÚSICA: o relógio do 'aguarde' é cancelado e ele não volta na conversa", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      await terminou("fala-1");
+      anaDisponivel();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await ramalAtende(ari.ultimoOriginado());
+      expect(ari.chamadas).toContainEqual(["pararMusica", "cli-1"]);
+      expect(ari.nomes()).not.toContain("pararFala");
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS * 2);
+      expect(ari.falas()).toEqual(["sound:/falas/aguarde"]);
+    });
+
+    it("o cliente desliga no meio do 'aguarde': sem 'fala não tocou', a música não volta, e nenhum relógio sobra", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      await clienteDesligaDuranteAFala("fala-1");
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(ari.nomes()).not.toContain("musicaDeEspera");
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("o cliente desliga durante a música: os dois relógios caem, e evento que chega depois do fim é ignorado", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      await terminou("fala-1");
+      expect(vi.getTimerCount()).toBe(2); // reavaliar a fila + repetir o "aguarde"
+
+      await destruir("cli-1");
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.ativas).toBe(0);
+
+      const antes = ari.chamadas.length;
+      await terminou("fala-1");
+      await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit: "5" });
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(ari.chamadas.slice(antes)).toEqual([]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+    });
+  });
+
+  describe("esgotou: 'ninguém atendeu'", () => {
+    it("fila esgotada: para a música, toca a fala e só desliga no fim dela (perdida com aviso)", async () => {
+      banco.gerais = { ...banco.gerais, ninguem: NINGUEM };
+      await entrar();
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "musicaDeEspera", "pararMusica", "tocarFala"]);
+      expect(ari.falas()).toEqual(["sound:/falas/ninguem"]);
+      expect(banco.tem("encerrada")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(1); // só o relógio da fala: a fila já parou
+
+      await terminou(ari.ultimaFala());
+      expect(ari.chamadas.at(-1)).toEqual(["desligar", "cli-1", undefined]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("voltas esgotadas (todos recusaram): a mesma fala, com o motivo 'ninguem_atendeu'", async () => {
+      banco.gerais = { ...banco.gerais, ninguem: NINGUEM };
+      banco.disponiveis = [
+        { userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null },
+        { userId: BIA, atendidasHoje: 1, ultimaAtendidaEm: null },
+      ];
+      ari.online.add(ANA).add(BIA);
+      await entrar();
+      for (const c of ["ramal-canal-1", "ramal-canal-2", "ramal-canal-3", "ramal-canal-4"]) await destruir(c, 19);
+      expect(ari.falas()).toEqual(["sound:/falas/ninguem"]);
+      expect(banco.tem("encerrada")).toEqual([]);
+
+      await terminou(ari.ultimaFala());
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "ninguem_atendeu"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("o cliente desliga durante o 'ninguém atendeu': vale o motivo original, sem 'fala não tocou'", async () => {
+      banco.gerais = { ...banco.gerais, ninguem: NINGUEM };
+      await entrar();
+      await vi.advanceTimersByTimeAsync(125_000);
+      await clienteDesligaDuranteAFala(ari.ultimaFala());
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("sem arquivo no disco: desliga na hora, avisado na Central", async () => {
+      banco.gerais = { ...banco.gerais, ninguem: NINGUEM };
+      falas.semArquivo.add(NINGUEM.id);
+      await entrar();
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(ari.falas()).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "ninguém atendeu"]]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("o Asterisk não tocou (failed, sem o cliente sair): avisado, e desliga com o motivo original", async () => {
+      banco.gerais = { ...banco.gerais, ninguem: NINGUEM };
+      await entrar();
+      await vi.advanceTimersByTimeAsync(125_000);
+      await terminou(ari.ultimaFala(), "failed");
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "ninguém atendeu"]]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+    });
+
+    it("'aguarde' no ar quando a fila esgota: ele para, e o 'ninguém atendeu' toca no lugar", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: falaDe("aguarde", 90_000), ninguem: NINGUEM };
+      await entrar();
+      await terminou("fala-1");
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS); // 40 s: o 2º "aguarde" (fala-2) entra no ar…
+      expect(ari.falas()).toEqual(["sound:/falas/aguarde", "sound:/falas/aguarde"]);
+      await vi.advanceTimersByTimeAsync(120_000 - REPETIR_AGUARDE_MS); // …e, com 90 s, ainda está no ar aos 120 s
+      const nomes = ari.chamadas.map((c) => `${c[0]}:${String(c[2] ?? c[1])}`);
+      expect(nomes.indexOf("pararFala:fala-2")).toBeGreaterThan(-1);
+      expect(nomes.indexOf("pararFala:fala-2")).toBeLessThan(nomes.indexOf("tocarFala:sound:/falas/ninguem"));
+      expect(banco.tem("encerrada")).toEqual([]);
+      await terminou(ari.ultimaFala());
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.falasNoAr).toBe(0);
+    });
+  });
+
+  it("time arquivado (indisponível): não quebra — fila com 'aguarde', 'ninguém atendeu' e perdida com aviso", async () => {
+    banco.situacao = "indisponivel";
+    banco.gerais = { aguarde: AGUARDE, ninguem: NINGUEM, foraDoHorario: FORA };
+    await entrar();
+    expect(ari.falas()).toEqual(["sound:/falas/aguarde"]);
+    await terminou("fala-1");
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(ari.falas().at(-1)).toBe("sound:/falas/ninguem");
+    await terminou(ari.ultimaFala());
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+    expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+  });
+
+  describe("o fim da fala que não chega (WebSocket da ARI caiu, evento perdido)", () => {
+    it("aviso: depois da duração + 5 s, a fala para e a ligação segue para os ramais, como se tivesse terminado", async () => {
+      banco.aviso = AVISO;
+      anaDisponivel();
+      await entrar();
+      expect(vi.getTimerCount()).toBe(1); // só o relógio da fala
+      await vi.advanceTimersByTimeAsync(AVISO.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS - 1);
+      expect(ari.originados()).toEqual([]);
+      expect(ari.nomes()).not.toContain("pararFala");
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ari.chamadas).toContainEqual(["pararFala", "fala-1"]);
+      expect(banco.tem("ouviu_aviso")).toEqual([["ouviu_aviso", ORG, "vc-1"]]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      expect(ctl.falasNoAr).toBe(0);
+
+      // O PlaybackFinished que chega DEPOIS do relógio não faz nada.
+      const n = ari.chamadas.length;
+      await terminou("fala-1");
+      expect(ari.chamadas.slice(n)).toEqual([]);
+      expect(banco.tem("ouviu_aviso")).toHaveLength(1);
+    });
+
+    it("'aguarde': depois da duração + 5 s, a fala para, a música entra e a repetição de 40 s é armada", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      await entrar();
+      expect(vi.getTimerCount()).toBe(2); // reavaliar a fila + o relógio da fala
+      await vi.advanceTimersByTimeAsync(AGUARDE.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
+      const nomes = ari.nomes();
+      expect(nomes.slice(-2)).toEqual(["pararFala", "musicaDeEspera"]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS);
+      expect(ari.falas()).toEqual(["sound:/falas/aguarde", "sound:/falas/aguarde"]);
+    });
+
+    it("'ninguém atendeu': depois da duração + 5 s, desliga com o motivo original (perdida com aviso)", async () => {
+      banco.gerais = { ...banco.gerais, ninguem: NINGUEM };
+      await entrar();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(ari.falas()).toEqual(["sound:/falas/ninguem"]);
+      await vi.advanceTimersByTimeAsync(NINGUEM.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS - 1);
+      expect(banco.tem("encerrada")).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(ari.chamadas.at(-1)).toEqual(["desligar", "cli-1", undefined]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("'fora do horário': depois da duração + 5 s, desliga com after_hours, sem aviso de perdida", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: FORA };
+      await entrar();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(FORA.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "after_hours"]]);
+      expect(banco.tem("perdida")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("a fala que termina normalmente derruba o próprio relógio, que não dispara depois", async () => {
+      banco.aviso = AVISO;
+      anaDisponivel();
+      await entrar();
+      expect(vi.getTimerCount()).toBe(1);
+      expect(ctl.falasNoAr).toBe(1);
+
+      await terminou("fala-1");
+      expect(ctl.falasNoAr).toBe(0);
+      expect(vi.getTimerCount()).toBe(1); // sobra só a rede de segurança do toque do ramal
+      await vi.advanceTimersByTimeAsync(AVISO.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
+      expect(ari.nomes()).not.toContain("pararFala");
+      expect(banco.tem("ouviu_aviso")).toHaveLength(1);
+      expect(ari.originados()).toHaveLength(1);
+    });
+
+    it("relógio que disparou e ficou na fila serial ATRÁS do fim de verdade não mexe na fala seguinte", async () => {
+      // A fila do laço: o que entra espera a vez, e o teste decide quando roda.
+      const pendentes: Array<() => Promise<void>> = [];
+      ctl.usarFila(async (fn) => {
+        pendentes.push(fn);
+      });
+      banco.aviso = AVISO;
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      anaDisponivel();
+      await entrar();
+      await vi.advanceTimersByTimeAsync(AVISO.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
+      expect(pendentes).toHaveLength(1); // o relógio do aviso disparou e espera a vez
+
+      // O PlaybackFinished do aviso estava na frente: a ligação segue, e o "aguarde" entra no ar.
+      await terminou("fala-1");
+      expect(ari.falas()).toEqual(["sound:/falas/aviso", "sound:/falas/aguarde"]);
+
+      const n = ari.chamadas.length;
+      await pendentes.shift()!();
+      expect(ari.chamadas.slice(n)).toEqual([]);
+      expect(banco.tem("ouviu_aviso")).toHaveLength(1);
+      expect(ctl.falasNoAr).toBe(1);
+    });
+
+    it("o banco falha ao ler os disponíveis logo depois do aviso: a ligação vai para a fila, com o relógio armado, e toca quando o banco volta", async () => {
+      banco.aviso = AVISO;
+      anaDisponivel();
+      banco.falharDisponiveis = 1;
+      await entrar();
+      await terminou("fala-1");
+      expect(ari.originados()).toEqual([]);
+      expect(ari.chamadas.at(-1)).toEqual(["musicaDeEspera", "cli-1"]);
+      expect(vi.getTimerCount()).toBe(1); // reavaliar a fila
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    });
+
+    it("a ligação que acaba com uma fala no ar tira a fala do mapa e derruba o relógio dela", async () => {
+      banco.aviso = AVISO;
+      await entrar();
+      expect(ctl.falasNoAr).toBe(1);
+      await destruir("cli-1");
+      expect(ctl.falasNoAr).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.ativas).toBe(0);
+    });
+  });
+});
+
+describe("URA (§5.1)", () => {
+  const MENU = "33333333-3333-3333-3333-333333333333";
+  const TIME2 = "44444444-4444-4444-4444-444444444444";
+  const FALA_MENU = falaDe("menu", 4_000);
+  const FALA_INVALIDA = falaDe("invalida", 2_000);
+  const AVISO = falaDe("aviso", 10_000);
+  const SOM_MENU = "sound:/falas/menu";
+  const SOM_INVALIDA = "sound:/falas/invalida";
+  const menu = (p: Partial<MenuDoBanco> = {}): MenuDoBanco => ({
+    id: MENU,
+    nome: "Atendimento",
+    defaultTeamId: TIME,
+    timePadraoAtivo: true,
+    fala: FALA_MENU,
+    falaInvalida: null,
+    opcoes: [
+      { digito: "1", teamId: TIME },
+      { digito: "2", teamId: TIME2 },
+    ],
+    ...p,
+  });
+  const tecla = (digit: string, canalId = "cli-1") =>
+    ctl.tratar({ type: "ChannelDtmfReceived", channel: canal(canalId, "x"), digit });
+  const anaDisponivel = () => {
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+  };
+  const escolhas = () => banco.tem("escolha");
+  /** O menu termina e, 5 s depois, sem tecla, toca de novo (a fala seguinte, `fala-<n>`). */
+  const semTecla = async (playbackId: string) => {
+    await terminou(playbackId);
+    await vi.advanceTimersByTimeAsync(5_000);
+  };
+
+  beforeEach(() => {
+    banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
+    banco.menus.set(MENU, menu());
+  });
+
+  it("número com menu: nasce no time padrão, atende e toca o menu; a tecla válida interrompe a fala e leva ao time da opção", async () => {
+    anaDisponivel();
+    await entrar();
+    expect(banco.consultas).toEqual([["menuPorId", ORG, MENU]]);
+    expect(banco.ligacoes.get("vc-1")).toMatchObject({ team_id: TIME, menu_id: MENU });
+    expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala"]);
+    expect(ari.falas()).toEqual([SOM_MENU]);
+    expect(ari.originados()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(1); // o relógio da fala do menu
+
+    await tecla("2");
+    const nomes = ari.nomes();
+    expect(ari.chamadas).toContainEqual(["pararFala", "fala-1"]);
+    expect(nomes.indexOf("pararFala")).toBeLessThan(nomes.indexOf("originar"));
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", "2", "chosen", TIME2]]);
+    expect(banco.consultas).toContainEqual(["timeParaAFila", ORG, TIME2]);
+    expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    expect(ctl.falasNoAr).toBe(0);
+    expect(banco.tem("menu_time_arquivado")).toEqual([]);
+  });
+
+  it("sem tecla: 5 s depois do fim do menu ele repete; na 3ª vez sem tecla → time padrão com default_no_input", async () => {
+    await entrar();
+    await terminou("fala-1");
+    expect(vi.getTimerCount()).toBe(1); // só o prazo de 5 s
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(ari.falas()).toEqual([SOM_MENU]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_MENU]);
+
+    await semTecla("fala-2");
+    expect(ari.falas()).toHaveLength(3);
+    await terminou("fala-3");
+    expect(escolhas()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
+    expect(banco.consultas).toContainEqual(["timeParaAFila", ORG, TIME]);
+    expect(ari.falas()).toHaveLength(3); // o menu não toca uma 4ª vez
+  });
+
+  it("tecla válida na espera (nada no ar): não há fala para parar, e o prazo dos 5 s é desarmado", async () => {
+    await entrar();
+    await terminou("fala-1");
+    const n = ari.chamadas.length;
+    await tecla("1");
+    expect(ari.chamadas.slice(n).map((c) => c[0])).not.toContain("pararFala");
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", "1", "chosen", TIME]]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ari.falas()).toEqual([SOM_MENU]);
+  });
+
+  it("tecla errada SEM fala de inválida: interrompe e repete o menu na hora; na 3ª errada → padrão com default_invalid", async () => {
+    await entrar(); //   fala-1: o menu
+    await tecla("9"); // interrompe; fala-2: o menu de novo (2ª vez)
+    expect(ari.chamadas).toContainEqual(["pararFala", "fala-1"]);
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_MENU]);
+    await tecla("#"); // reservada = errada; interrompe; fala-3 (3ª vez)
+    expect(ari.chamadas).toContainEqual(["pararFala", "fala-2"]);
+    await terminou("fala-3");
+    expect(escolhas()).toEqual([]);
+
+    await tecla("*"); // a 3ª errada, na espera
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_invalid", TIME]]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ari.falas()).toHaveLength(3);
+  });
+
+  it("tecla errada COM fala de inválida: toca a inválida, depois o menu; e o silêncio que vem depois dá default_invalid", async () => {
+    banco.menus.set(MENU, menu({ falaInvalida: FALA_INVALIDA }));
+    await entrar(); //         fala-1: o menu
+    await tecla("7"); //       interrompe; fala-2: a inválida
+    expect(ari.chamadas).toContainEqual(["pararFala", "fala-1"]);
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_INVALIDA]);
+    await terminou("fala-2"); // fala-3: o menu (2ª vez)
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_INVALIDA, SOM_MENU]);
+    await semTecla("fala-3"); // fala-4: o menu (3ª vez)
+    expect(ari.falas()).toHaveLength(4);
+    await terminou("fala-4");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_invalid", TIME]]);
+  });
+
+  it("a tecla também interrompe a fala de inválida", async () => {
+    banco.menus.set(MENU, menu({ falaInvalida: FALA_INVALIDA }));
+    await entrar();
+    await tecla("7"); // fala-2: a inválida
+    await tecla("2");
+    expect(ari.chamadas).toContainEqual(["pararFala", "fala-2"]);
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", "2", "chosen", TIME2]]);
+  });
+
+  it("a tecla de uma opção cujo time foi arquivado vale como errada (o banco não devolve a opção)", async () => {
+    banco.menus.set(MENU, menu({ opcoes: [{ digito: "1", teamId: TIME }] })); // o 2 era de um time arquivado
+    await entrar();
+    await tecla("2");
+    expect(escolhas()).toEqual([]);
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_MENU]);
+  });
+
+  describe("o cliente desliga no menu", () => {
+    it("no meio da fala: perdida com 'Ligar de volta' no time padrão, sem desfecho de menu e sem 'fala não tocou'", async () => {
+      await entrar();
+      await clienteDesligaDuranteAFala("fala-1");
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(escolhas()).toEqual([]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(banco.ligacoes.get("vc-1")?.team_id).toBe(TIME);
+      expect(ari.originados()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.ativas).toBe(0);
+    });
+
+    it("na espera dos 5 s: o prazo cai junto (pararRelogios), e tecla ou prazo depois do fim não fazem nada", async () => {
+      await entrar();
+      await terminou("fala-1");
+      expect(vi.getTimerCount()).toBe(1); // o prazo
+      await destruir("cli-1");
+      expect(vi.getTimerCount()).toBe(0);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+
+      const n = ari.chamadas.length;
+      await tecla("1");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(ari.chamadas.slice(n)).toEqual([]);
+      expect(escolhas()).toEqual([]);
+    });
+  });
+
+  describe("a fala do menu que não toca: direto ao time padrão, avisado na Central", () => {
+    it("sem arquivo no disco: a URA nem atende — a fila da fase 1 chama o ramal", async () => {
+      falas.semArquivo.add(FALA_MENU.id);
+      anaDisponivel();
+      await entrar();
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "menu Atendimento"]]);
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
+      expect(ari.falas()).toEqual([]);
+      expect(ari.nomes()).toEqual(["indicarChamando", "originar"]);
+    });
+
+    it("menu sem fala pronta: nem pede o arquivo, avisa e vai ao padrão", async () => {
+      banco.menus.set(MENU, menu({ fala: null }));
+      anaDisponivel();
+      await entrar();
+      expect(falas.pedidas).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "menu Atendimento"]]);
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    });
+
+    it("o Asterisk recusa tocar (a ARI responde erro): avisado, e ao padrão — atendida, com música enquanto o ramal toca", async () => {
+      ari.recusaFala.add(SOM_MENU);
+      anaDisponivel();
+      await entrar();
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "menu Atendimento"]]);
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala", "musicaDeEspera", "originar"]);
+    });
+
+    it("o playback termina 'failed' sem o cliente sair: avisado, e ao padrão", async () => {
+      await entrar();
+      await terminou("fala-1", "failed");
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "menu Atendimento"]]);
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
+      expect(ari.falas()).toEqual([SOM_MENU]);
+    });
+
+    it("a repetição depois de uma tecla errada não toca: ao padrão com default_invalid", async () => {
+      await entrar();
+      ari.recusaFala.add(SOM_MENU);
+      await tecla("9");
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_invalid", TIME]]);
+    });
+
+    it("canal do cliente que sumiu (404) no pedido da fala: encerra NA HORA pelo fim normal, mesmo se o fim do canal se perder", async () => {
+      ari.tocarFala = async (c: string, m: string) => {
+        ari.chamadas.push(["tocarFala", c, m]);
+        throw new ErroAri(404, "Not Found", `/channels/${c}/play`);
+      };
+      await entrar();
+      // Sem ChannelDestroyed nem StasisEnd: a ligação não fica viva esperando por eles.
+      expect(ctl.ativas).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      // É o cliente desligando: nem "fala não tocou", nem desfecho de menu.
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(escolhas()).toEqual([]);
+      // O fim do canal que chega atrasado não encerra de novo.
+      await destruir("cli-1");
+      expect(banco.tem("encerrada")).toHaveLength(1);
+    });
+  });
+
+  it("o 'aguarde' depois da escolha acha o canal do cliente fechado (404): a ligação acaba, e ramal nenhum toca", async () => {
+    banco.gerais = { ...banco.gerais, aguarde: falaDe("aguarde") };
+    anaDisponivel();
+    const tocar = ari.tocarFala;
+    ari.tocarFala = async (c: string, m: string) => {
+      if (m !== "sound:/falas/aguarde") return tocar(c, m);
+      ari.chamadas.push(["tocarFala", c, m]);
+      throw new ErroAri(404, "Not Found", `/channels/${c}/play`);
+    };
+    await entrar();
+    await tecla("2"); // já atendida pela URA: a fila segura com o "aguarde" antes de tocar o ramal
+    expect(ari.originados()).toEqual([]);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("fala de tecla inválida sem arquivo: pulada e avisada, e o menu repete no lugar dela", async () => {
+    banco.menus.set(MENU, menu({ falaInvalida: FALA_INVALIDA }));
+    falas.semArquivo.add(FALA_INVALIDA.id);
+    await entrar();
+    await tecla("9");
+    expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "tecla inválida do menu Atendimento"]]);
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_MENU]);
+    expect(escolhas()).toEqual([]);
+  });
+
+  it("o fim da fala do menu que não chega: depois da duração + 5 s o menu é dado por terminado e a espera começa", async () => {
+    await entrar();
+    await vi.advanceTimersByTimeAsync(FALA_MENU.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS - 1);
+    expect(ari.nomes()).not.toContain("pararFala");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ari.chamadas).toContainEqual(["pararFala", "fala-1"]);
+    expect(banco.tem("fala_intocavel")).toEqual([]);
+    expect(ctl.falasNoAr).toBe(0);
+    expect(vi.getTimerCount()).toBe(1); // o prazo dos 5 s
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_MENU]);
+    // O PlaybackFinished que chega atrasado não faz nada.
+    const n = ari.chamadas.length;
+    await terminou("fala-1");
+    expect(ari.chamadas.slice(n)).toEqual([]);
+  });
+
+  it("prazo antigo: o que disparou e esperou na fila serial atrás de uma tecla NÃO gasta repetição", async () => {
+    // A fila do laço: o que entra espera a vez, e o teste decide quando roda.
+    const pendentes: Array<() => Promise<void>> = [];
+    ctl.usarFila(async (fn) => {
+      pendentes.push(fn);
+    });
+    await entrar(); //                          fala-1: o menu (1ª vez)
+    await terminou("fala-1"); //                espera da 1ª vez
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(pendentes).toHaveLength(1); //       o prazo da 1ª vez disparou e espera a vez
+
+    // Na frente dele na fila vinha uma tecla errada: o menu repete (2ª vez) e termina.
+    await tecla("9"); //                        fala-2: o menu (2ª vez)
+    await terminou("fala-2"); //                espera da 2ª vez
+    const n = ari.chamadas.length;
+    await pendentes.shift()!(); //              o prazo velho roda agora
+    expect(ari.chamadas.slice(n)).toEqual([]); // ignorado: não tocou o menu
+
+    // O prazo certo continua valendo: 5 s depois, a 3ª vez.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await pendentes.shift()!();
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_MENU, SOM_MENU]);
+    expect(escolhas()).toEqual([]);
+
+    // E só depois da 3ª vez, o padrão: nenhuma repetição foi gasta pelo prazo velho.
+    await terminou("fala-3");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await pendentes.shift()!();
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_invalid", TIME]]);
+  });
+
+  describe("time padrão ARQUIVADO", () => {
+    beforeEach(() => {
+      banco.menus.set(MENU, menu({ timePadraoAtivo: false }));
+      banco.situacao = "indisponivel";
+    });
+
+    it("a ligação que cai nele segue a fila e acaba perdida, mas antes a Central fica sabendo do menu", async () => {
+      await entrar();
+      await semTecla("fala-1");
+      await semTecla("fala-2");
+      await terminou("fala-3");
+      expect(banco.tem("menu_time_arquivado")).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
+      expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento"]]);
+      // "Antes" da fila: a escolha, o aviso e SÓ ENTÃO a entrada na fila do time — por posição.
+      const posicao = (nome: string) => banco.eventos.findIndex((e) => e[0] === nome);
+      expect(posicao("escolha")).toBeGreaterThanOrEqual(0);
+      expect(posicao("escolha")).toBeLessThan(posicao("menu_time_arquivado"));
+      expect(posicao("menu_time_arquivado")).toBeLessThan(posicao("entrou_na_fila"));
+      expect(banco.tem("entrou_na_fila")).toEqual([["entrou_na_fila", ORG, TIME]]);
+
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+    });
+
+    it("quem escolhe uma opção de time ativo não dispara aviso nenhum", async () => {
+      banco.situacao = "aberto";
+      await entrar();
+      await tecla("2");
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", "2", "chosen", TIME2]]);
+      expect(banco.tem("menu_time_arquivado")).toEqual([]);
+    });
+
+    it("o menu sem áudio também leva ao time arquivado: avisa a fala e o time", async () => {
+      falas.semArquivo.add(FALA_MENU.id);
+      await entrar();
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "menu Atendimento"]]);
+      expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento"]]);
+    });
+  });
+
+  describe("a conversa acompanha o time escolhido (visibilidade por time)", () => {
+    // O EFEITO no banco — a ligação e a conversa sem dono no time escolhido, a de
+    // humano parada, o time arquivado recusado, o texto do aviso — é provado no
+    // Postgres real (tests/invariants/telefonia-repositorio-da-ura.test.ts). Aqui,
+    // o que é do controlador: o que ele pede, em que ordem, e o que faz quando o
+    // banco falha.
+    const posicao = (nome: string) => banco.eventos.findIndex((e) => e[0] === nome);
+
+    it("escolheu 2: a conversa nasce no time padrão, e a escolha (que a leva ao time 2) é gravada UMA vez, ANTES de a ligação entrar na fila do time 2", async () => {
+      await entrar();
+      expect(banco.tem("conversa_criada")).toEqual([["conversa_criada", ORG, TIME]]);
+      await tecla("2");
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", "2", "chosen", TIME2]]);
+      expect(banco.tem("entrou_na_fila")).toEqual([["entrou_na_fila", ORG, TIME2]]);
+      expect(posicao("escolha")).toBeLessThan(posicao("entrou_na_fila"));
+      // Ninguém atendeu: o "Ligar de volta" leva a linha que o BANCO encerrou (com o time dele), não uma montada aqui.
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.perdidas).toHaveLength(1);
+      expect(banco.perdidas[0]).toBe(banco.devolvidasAoEncerrar[0]);
+    });
+
+    it("desligou no menu: nenhuma escolha é gravada (a conversa fica no time em que nasceu), e o 'Ligar de volta' leva a linha que o banco encerrou", async () => {
+      await entrar();
+      await terminou("fala-1");
+      await destruir("cli-1");
+      expect(escolhas()).toEqual([]);
+      expect(banco.tem("entrou_na_fila")).toEqual([]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.perdidas).toHaveLength(1);
+      expect(banco.perdidas[0]).toBe(banco.devolvidasAoEncerrar[0]);
+    });
+
+    it.each(["lanca", "nao_acha"] as const)(
+      "a escolha que o banco não grava (%s) não segura a ligação: ela entra na fila do time escolhido e o ramal toca",
+      async (falha) => {
+        banco.falharEscolha = falha;
+        anaDisponivel();
+        await entrar();
+        await tecla("2");
+        expect(escolhas()).toHaveLength(1);
+        expect(banco.tem("entrou_na_fila")).toEqual([["entrou_na_fila", ORG, TIME2]]);
+        expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      },
+    );
+  });
+
+  it("fluxo completo: menu → tecla 2 → fila do time 2 → aviso INTEIRO (a tecla já não vale) → ramal → o atendente atende", async () => {
+    banco.aviso = AVISO;
+    anaDisponivel();
+    await entrar(); //   fala-1: o menu
+    await tecla("2"); // para o menu; grava a escolha; fila do time 2 → fala-2: o aviso
+    expect(ari.falas()).toEqual([SOM_MENU, "sound:/falas/aviso"]);
+    expect(escolhas()).toEqual([["escolha", ORG, "vc-1", "2", "chosen", TIME2]]);
+    expect(banco.consultas).toContainEqual(["timeParaAFila", ORG, TIME2]);
+    expect(ari.originados()).toEqual([]);
+
+    // A URA acabou: tecla no aviso (ou vinda do ramal) não interrompe nem escolhe nada.
+    const n = ari.chamadas.length;
+    await tecla("1");
+    await tecla("9");
+    await tecla("1", "ramal-canal-9");
+    expect(ari.chamadas.slice(n)).toEqual([]);
+    expect(escolhas()).toHaveLength(1);
+
+    await terminou("fala-2");
+    expect(banco.tem("ouviu_aviso")).toEqual([["ouviu_aviso", ORG, "vc-1"]]);
+    expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+
+    await ramalAtende(ari.ultimoOriginado());
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "cli-1"]);
+    expect(ari.chamadas).toContainEqual(["pararMusica", "cli-1"]);
+
+    await destruir("cli-1");
+    expect(banco.tem("registro")).toEqual([["registro", "vc-1", "atendida"]]);
+    expect(banco.tem("perdida")).toEqual([]);
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("os 2 min de fila contam da ENTRADA na fila, não do início da ligação", async () => {
+    // O cliente ouve o menu três vezes (sem os PlaybackFinished: o relógio da fala os dá por terminados)…
+    await entrar();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(ari.falas()).toHaveLength(3);
+    await tecla("1"); // …e escolhe aos 30 s de ligação.
+    await vi.advanceTimersByTimeAsync(115_000); // 145 s de ligação, 115 s de fila
+    expect(banco.tem("encerrada")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+  });
+
+  it("tecla vinda do canal do RAMAL não mexe na URA", async () => {
+    await entrar();
+    await tecla("1", "ramal-canal-9");
+    expect(escolhas()).toEqual([]);
+    expect(ari.nomes()).not.toContain("pararFala");
+  });
+
+  it.each([
+    ["não existe mais", () => banco.menus.clear()],
+    ["não pôde ser lido (banco fora do ar)", () => (banco.falharMenu = true)],
+  ])("o número aponta para um menu que %s: segue sem menu e sem time — a fila da fase 1", async (_n, preparar) => {
+    preparar();
+    await entrar();
+    expect(ari.falas()).toEqual([]);
+    expect(banco.ligacoes.get("vc-1")).toMatchObject({ team_id: null, menu_id: null });
+    expect(banco.consultas).toEqual([
+      ["menuPorId", ORG, MENU],
+      ["falasGerais", ORG],
+    ]);
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+    expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
   });
 });

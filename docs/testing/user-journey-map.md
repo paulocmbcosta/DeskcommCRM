@@ -3065,3 +3065,92 @@ rodízio a fecha como `skipped_voice_channel` sem atribuir
 (desenvolvimento e produção); o estado do número com o Asterisk fora do ar (pelo código, o
 último estado gravado fica na tela); outros navegadores além do usado na prova (o ramal é
 WebRTC pelo JsSIP).
+
+## J36 — URA e falas do telefone: o cliente escolhe o time pela tecla `[P0]` (2026-09-29)
+
+Pedido do dono (DYD-10, fase 2, versão 1): quem liga para a empresa ouve um menu gravado com a
+voz escolhida e vai para o time certo; quem espera ouve "aguarde"; fora do horário e em
+instabilidade, ouve o aviso certo. Desenho em
+`docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`; plano em
+`docs/superpowers/plans/2026-09-28-telefonia-fase2-v1-ura.md`; mapa em
+`docs/architecture/telefonia.architecture.json`; migration 0288.
+
+`[P0]` porque a URA é a PRIMEIRA coisa que o cliente final ouve da empresa — antes de qualquer
+atendente.
+
+**Como é provado.** As telas, por `tests/e2e/telefonia-ura-e-falas.spec.ts` (parte 3 do CI, a
+única com a telefonia oferecida: `E2E_TELEFONIA=1`), com um receptor HTTP que faz o papel da
+ElevenLabs — a URL base só muda em teste (`ELEVENLABS_API_BASE_URL` no `.env.e2e`). A spec cria a
+própria organização e não liga ligação nenhuma: nada escuta a porta da ARI. A ligação de verdade
+— tecla, fala tocada do volume, fila — só se prova na VPS, com a operadora real e o dono ligando
+do celular para o (61) 3686-1503 (Task 29 do plano). A máquina da URA e as falas na fila estão
+em unidade (`lib/telefonia/ura.test.ts`, `lib/channels/telefonia/controle.test.ts`), e o SQL do
+worker contra Postgres real (`tests/invariants/telefonia-repositorio-da-ura.test.ts`).
+
+**Estado da spec:** **PASSOU** na execução 36576512233 do `e2e.yml` (`workflow_dispatch` na
+branch da fase 2, commit `0fba1433`), job `e2e-parte (3)`, com `E2E_TELEFONIA=1`. Para conferir
+na fonte a linha da spec no log desse job: `gh api repos/paulocmbcosta/DeskcommCRM/actions/jobs/109450910362/logs | grep -a '✓.*telefonia-ura-e-falas'`. A spec é um teste só, com oito passos; os casos J36.1 a
+J36.6 são os passos dela, e PASS aqui vale só para eles. O job terminou vermelho por UMA outra
+spec, `inbox-rotulo-de-origem.spec.ts:224`, que também falha no último e2e da `main`
+(execução 36439395747, o merge do PR #93) — herdada, não desta versão. Nenhum caso a partir do
+J36.7 é coberto por ela.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J36.1 O admin cola a chave em Credenciais de IA › "ElevenLabs (voz da URA)": a errada volta ao lado do campo ("A ElevenLabs recusou a chave, e ela não foi salva…"); a certa é guardada e a tela mostra só os 4 últimos dígitos; a chave não aparece em URL nenhuma | `[P0]` | **PASS** (e2e, execução 36576512233, passo 1; toda URL pedida pelo navegador é conferida) |
+| J36.2 Voz escolhida numa lista vinda da conta; "Gerar prévia" da fala de aguarde toca no navegador SEM criar fala; "Salvar e usar" a cria; a mesma prévia de novo não chama a ElevenLabs | `[P0]` | **PASS** (e2e, execução 36576512233, passo 2; duração ~1 s medida no `<audio>`, sínteses contadas no receptor falso, linhas contadas no banco) |
+| J36.3 Menu novo: a fala é montada das opções ("Para X, digite 1. Para Y, digite 2.") e o menu só salva com a prévia dela; o cartão lista `1 → X` e `2 → Y` | `[P0]` | **PASS** (e2e, execução 36576512233, passo 3) |
+| J36.4 Em Números, "Quando ligarem" → "Tocar o menu": o cartão diz "Quando ligarem: menu <nome>", e o banco guarda só o menu (`sip_team_id` nulo) | `[P0]` | **PASS** (e2e, execução 36576512233, passo 4) |
+| J36.5 Aviso de instabilidade com texto novo: "Ligar" só destrava depois de "Gerar prévia" e "Ouvir"; ligado por 1 hora, o cartão diz "Ligado às …" e a faixa "Aviso de instabilidade ligado no telefone do <time>" aparece para o atendente, em outra tela, sem o botão; o gerente desliga pela faixa e ela some sem recarregar | `[P0]` | **PASS** (e2e, execução 36576512233, passos 5, 7 e 8; o prazo escolhido e as auditorias conferidos no banco) |
+| J36.6 Com a faixa à vista, a TopBar gruda logo abaixo das faixas ao rolar, e o composer da Inbox fica inteiro na janela | `[P0]` | **PASS** (e2e, execução 36576512233, passos 6 e 7, medido por `getBoundingClientRect` com a faixa visível). A barra lateral, que também desconta as faixas, só em jsdom (`components/shell/Sidebar.faixas.test.tsx`) |
+| J36.7 Ligação real, opção 1: o cliente ouve o menu, digita 1 e toca no time da opção 1; o cartão diz "No menu X, digitou 1 e foi para o time Y" | `[P0]` | pendente — prova na VPS (Task 29) |
+| J36.8 Ligação real, opção 2: toca no time da opção 2, e a conversa passa a esse time — quem é só dele a enxerga | `[P0]` | pendente — prova na VPS; a conversa no time escolhido está provada no Postgres real, com o JWT de uma atendente só do time 2 (`tests/invariants/telefonia-repositorio-da-ura.test.ts`) |
+| J36.9 Tecla errada: ouve a fala de tecla inválida (se houver) e o menu de novo; depois do terceiro toque do menu, o time padrão; o cartão diz "No menu X, digitou uma tecla que não existe e foi para o time padrão, Y" | `[P0]` | pendente — prova na VPS; a regra em `lib/telefonia/ura.test.ts`, o texto em `components/telefonia/CartaoDaLigacao.test.tsx` |
+| J36.10 Sem tecla: o menu repete e a ligação vai ao time padrão; o cartão diz "No menu X, não digitou nada e foi para o time padrão, Y" | `[P0]` | pendente — prova na VPS |
+| J36.11 Desligar no menu: vira perdida no time padrão; a Central diz "O cliente desligou no menu do telefone. Ligue de volta pela conversa." e o cartão, "Desligou no menu X, antes de escolher" | `[P1]` | pendente — prova na VPS |
+| J36.12 Aviso de instabilidade ligado: o cliente ouve o aviso inteiro (tecla não interrompe) e segue para a fila; o cartão diz "Ouviu o aviso de instabilidade"; desligado, não ouve | `[P0]` | pendente — prova na VPS |
+| J36.13 Fora do horário do time, com a fala pronta: ouve a fala e a ligação cai; o cartão diz "Ligação fora do horário", e a Central não recebe aviso. Sem a fala, a fila da fase 1 | `[P0]` | pendente — prova na VPS |
+| J36.14 Ninguém atende: "aguarde" a cada ~40 s entre a música; em 2 min, "ninguém atendeu", e a Central diz "Ninguém do time X atendeu. Ligue de volta pela conversa." | `[P1]` | pendente — prova na VPS |
+| J36.15 O "fora do horário" sugerido já traz o número do WhatsApp conectado da organização, e segue editável | `[P1]` | em unidade (`components/connections/telefone/VozEFalas.test.tsx`); pela tela, pendente |
+| J36.16 Fala que não toca (sem arquivo no disco nem no Storage): a ligação segue sem ela, o menu que não toca vai ao time padrão, e a Central recebe "Uma fala do telefone não tocou", com "Revisar as falas do telefone" | `[P1]` | em unidade (`lib/channels/telefonia/controle.test.ts`) e no Postgres real; pela tela, pendente |
+| J36.17 O aviso vence no prazo: desliga sozinho na passada de 60 s, audita `phone.emergency_expired`, e a Central diz "O aviso de instabilidade do telefone desligou sozinho", com "Abrir os times" | `[P1]` | no Postgres real (`tests/invariants/telefonia-repositorio-da-ura.test.ts`) e em `lib/channels/telefonia/laco.test.ts`; pela tela, pendente |
+| J36.18 Menu cujo time padrão foi arquivado: quem cai nele segue a fila e acaba perdido, e a Central diz "Menu do telefone manda para time arquivado", com "Revisar os menus do telefone" | `[P1]` | em unidade (`lib/channels/telefonia/controle.test.ts`); pela tela, pendente |
+
+**Achados desta execução, já consertados** (cada um no commit citado):
+
+1. **`tests/unit/branding.test.ts` ficou vermelho das Tasks 12/13 à revisão da 20.** O caminho
+   das falas era `/var/lib/deskcomm/falas` — o nome do produto no código, no `docker inspect` e
+   no endereço que a ARI manda tocar numa instalação de marca própria — e nenhum gate escolhido
+   pelas tasks rodava essa cerca; só a suíte inteira a pegou. Passou a `/var/lib/telefonia/falas`
+   nos quatro lugares juntos (`1f848e4d`), e `tests/unit/telefonia-falas-no-volume.test.ts`
+   reprova trocar de um lado só. É o "gate escolhido não é suíte" do `CLAUDE.md`, pago de novo.
+2. **A faixa do aviso não se recuperava quando a primeira leitura falhava**: o relógio de 60 s
+   dependia do dado lido e o `apiClient` não repete 500/504 — o atendente com a aba em foco o
+   dia inteiro nunca via a faixa (`6709c5c3`). E um 401 passageiro da Auth a apagava em toda aba
+   até recarregar (`98226eb6`).
+3. **O custo da leitura por minuto.** A faixa roda em toda tela e relê a cada minuto em cada
+   aba; para gerente e admin, cada leitura montava a lista completa (duas consultas) e pedia à
+   Auth o nome de quem ligou — centenas de chamadas por hora justamente durante uma
+   instabilidade. A faixa passou a ler `?so=ligados` (`281ab3a3`).
+4. **As faixas do topo cobriam a TopBar ao rolar e empurravam o composer da Inbox para fora da
+   dobra**; a barra lateral nascia com o rodapé cortado. A altura agora é publicada em
+   `--altura-das-faixas` e descontada por quem gruda ou mede a janela (`ba1d3a22`, `1733fd4f`).
+5. **Todo replay de `Idempotency-Key` virava 409 `idempotency_conflict`**, em toda rota que usa
+   `comIdempotencia` (modelos de mensagem, menus e números do telefone): o hash gravado em
+   `bytea` voltava do PostgREST em outro formato e nunca casava. Pego pela prova no Postgres real
+   (`5726bb56`; `tests/invariants/idempotencia-recibo-no-banco.test.ts`).
+6. **O `apiClient` dormia o `Retry-After` inteiro antes de repetir** — com o limite de prévias,
+   até uma hora com o botão girando. Acima de 10 s ele não espera nem repete (`9b7c481a`).
+7. **"Falhou: HTTP 504", ou uma página HTML, diante do usuário**: o erro sem corpo estruturado
+   virava frase. Sai como `ApiErrorSemCorpo`, e as telas da telefonia usam
+   `mensagemDoServidor` (`218e29f8`).
+8. **A conversa nascia no time padrão e ficava lá**: com a visibilidade por time (0281), o time
+   escolhido no menu não enxergava a conversa do "Ligar de volta" (`16bc1cf1`).
+9. **Quem desligou no menu recebia "Ninguém do time X atendeu"** — ninguém chegou a tocar
+   (`e6fddb63`).
+
+**Não medido:** a qualidade da voz no celular do cliente (G.711 da operadora); a tecla em
+outras operadoras além da da Totus (RFC 4733, medido no passo zero B do plano); o cliente que
+digita durante o aviso em aparelho que manda a tecla dentro do áudio; o fim da fala quando o
+cliente desliga chegar como `PlaybackFinished` `failed` (lido no código do Asterisk); se a
+música de espera recomeça do início a cada "aguarde"; a limpeza do Storage numa VPS real.

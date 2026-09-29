@@ -74,6 +74,13 @@ export const KIND_LABEL = {
   // conseguiu. O motivo cru do upstream (`user_ended`, `do_not_disturb`) nunca
   // chega à tela — vira frase de gente no corpo do aviso, escrito pelo worker.
   voice_call_missed: "Alguém ligou e ninguém atendeu",
+  // Diz o que aconteceu com quem ligou: a fala faltou, a ligação seguiu. Não é
+  // "erro de áudio" — quem lê precisa saber que o cliente não ouviu o menu ou o aviso.
+  phone_prompt_unplayable: "Uma fala do telefone não tocou",
+  phone_emergency_expired: "O aviso de instabilidade do telefone desligou sozinho",
+  // Fala de TELEFONE, não de assistente: quem lê precisa saber que o menu de voz
+  // manda gente para um time que ninguém atende.
+  phone_menu_team_archived: "Menu do telefone manda para time arquivado",
   other: "Aviso do assistente",
 } as const satisfies Record<InboxKind, string>;
 

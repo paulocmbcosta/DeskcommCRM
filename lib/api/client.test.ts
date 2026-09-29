@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { apiClient } from "@/lib/api/client";
-import { ApiError } from "@/lib/api/types";
+import { ApiError, ApiErrorSemCorpo, mensagemDoServidor } from "@/lib/api/types";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -220,6 +220,88 @@ describe("apiClient", () => {
   });
 
   /**
+   * UM `Retry-After` LONGO NÃO É PARA ESPERAR COM A TELA PRESA.
+   *
+   * O cliente dormia o `Retry-After` inteiro antes de repetir, em qualquer
+   * método. Com o limite de prévias do telefone (30 por hora por organização,
+   * `Retry-After` de até 3600 s), o botão "Gerar prévia" ficaria girando por até
+   * uma hora — e a repetição, no fim, seria recusada de novo. Acima de 10 s o
+   * cliente não espera nem repete: lança na hora, com o código e a mensagem do
+   * servidor (e `rate_limited` quando o corpo não traz código). Até 10 s, nada
+   * muda: é o caso do discador (t11b), em que esperar é o conserto.
+   */
+  it("t14: 429 com Retry-After acima de 10s num POST lança na hora rate_limited, sem esperar nem repetir", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        429,
+        { error: { code: "rate_limited", message: "Muitas tentativas seguidas." } },
+        { "Retry-After": "3600" },
+      ),
+    );
+
+    const desfecho = vi.fn();
+    void apiClient.post("/x", { a: 1 }).then(desfecho, desfecho);
+
+    // Nenhum relógio avançou: se o cliente estivesse dormindo, nada teria saído.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(desfecho).toHaveBeenCalledTimes(1);
+    const erro = desfecho.mock.calls[0]![0] as ApiError;
+    expect(erro).toBeInstanceOf(ApiError);
+    expect(erro).toMatchObject({ status: 429, code: "rate_limited", message: "Muitas tentativas seguidas." });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14b: o código e a mensagem próprios do servidor chegam intactos (limite de prévias do telefone)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        429,
+        { error: { code: "limite_de_previas", message: "Muitas prévias geradas na última hora." } },
+        { "Retry-After": "1200" },
+      ),
+    );
+
+    await expect(apiClient.post("/api/v1/telefonia/falas/previa", { texto: "Oi." })).rejects.toMatchObject({
+      status: 429,
+      code: "limite_de_previas",
+      message: "Muitas prévias geradas na última hora.",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14c: sem corpo de erro, o código sintetizado é rate_limited — e a leitura (GET) segue a mesma regra", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 429, headers: { "Retry-After": "11" } }));
+
+    await expect(apiClient.get("/x")).rejects.toMatchObject({ status: 429, code: "rate_limited" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14d: 503 com Retry-After acima de 10s também não prende a tela", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(503, { error: { code: "service_unavailable", message: "manutenção" } }, { "Retry-After": "120" }),
+    );
+
+    await expect(apiClient.post("/x", { a: 1 })).rejects.toMatchObject({ status: 503, code: "service_unavailable" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("t14e: CONTROLE — Retry-After de exatamente 10s continua esperando e repetindo", async () => {
+    // Sem este caso, "nunca repetir 429" passaria verde nos quatro de cima.
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(429, { error: { code: "rate_limited", message: "x" } }, { "Retry-After": "10" }))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { ok: true } }));
+
+    const pendente = apiClient.post<{ data: { ok: boolean } }>("/x", { a: 1 });
+
+    await vi.advanceTimersByTimeAsync(9_900);
+    expect(fetchMock, "repetiu antes do Retry-After").toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await pendente).toEqual({ data: { ok: true } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  /**
    * O ORÇAMENTO DE ESPERA DA ESCRITA (o vermelho de `followup-dossie:190`).
    *
    * Enquanto o método mutante era retentado, uma escrita tinha 10s + backoff +
@@ -269,6 +351,66 @@ describe("apiClient", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(desfecho).toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
+ * DE QUEM É A MENSAGEM DO ERRO. Quando a resposta de erro não traz o corpo
+ * estruturado (`{ error: { code, message } }`) — o 504 de um proxy com HTML, um
+ * 502 com "Bad Gateway" —, o cliente INVENTA o código e a mensagem: o texto cru
+ * da resposta, ou `HTTP <status>`. Uma tela que mostra `err.message` como se
+ * fosse a frase do servidor põe "Falhou: HTTP 504" (ou uma página HTML) diante
+ * do usuário. O erro sai como `ApiErrorSemCorpo` (subclasse: `instanceof
+ * ApiError` e todos os campos continuam iguais para quem já os lia), e
+ * `mensagemDoServidor` só devolve a frase que veio do corpo.
+ */
+describe("apiClient — a mensagem do erro é do servidor ou foi inventada aqui", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("504 com o HTML do proxy: ApiErrorSemCorpo, com os MESMOS campos de antes, e nenhuma mensagem do servidor", async () => {
+    const html = "<html><body><h1>504 Gateway Time-out</h1></body></html>";
+    fetchMock.mockResolvedValueOnce(new Response(html, { status: 504, headers: { "Content-Type": "text/html" } }));
+    const erro = await apiClient.post("/x", { a: 1 }).catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ApiError);
+    expect(erro).toBeInstanceOf(ApiErrorSemCorpo);
+    expect(erro).toMatchObject({ name: "ApiError", status: 504, code: "internal_error", message: html, details: undefined });
+    expect(mensagemDoServidor(erro)).toBeNull();
+  });
+
+  it("resposta de erro vazia: `HTTP <status>` segue sendo a mensagem, e não é do servidor", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 502 }));
+    const erro = await apiClient.get("/x").catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ApiErrorSemCorpo);
+    expect(erro).toMatchObject({ status: 502, message: "HTTP 502" });
+    expect(mensagemDoServidor(erro)).toBeNull();
+  });
+
+  it("CONTROLE — corpo estruturado: ApiError comum, e a frase chega intacta", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(422, { error: { code: "previa_ausente", message: "Gere a prévia de novo." } }),
+    );
+    const erro = await apiClient.put("/x", { a: 1 }).catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ApiError);
+    expect(erro).not.toBeInstanceOf(ApiErrorSemCorpo);
+    expect(mensagemDoServidor(erro)).toBe("Gere a prévia de novo.");
+  });
+
+  it("corpo estruturado SEM mensagem: o código não passa por frase", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(422, { error: { code: "sem_credito" } }));
+    const erro = await apiClient.post("/x", {}).catch((e: unknown) => e);
+    expect(erro).toMatchObject({ code: "sem_credito", message: "sem_credito" });
+    expect(mensagemDoServidor(erro)).toBeNull();
+  });
+
+  it("o que não é erro da API não tem mensagem do servidor", () => {
+    expect(mensagemDoServidor(new Error("rede"))).toBeNull();
+    expect(mensagemDoServidor(null)).toBeNull();
   });
 });
 

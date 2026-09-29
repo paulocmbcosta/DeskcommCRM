@@ -1,0 +1,642 @@
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { logger } from "@/lib/logger";
+
+import type { PortaDoArmazem } from "./armazem";
+import {
+  caminhoDaFala,
+  conferirFala,
+  descartarFala,
+  falaParaSalvarSchema,
+  hashDaFala,
+  reconferirFala,
+  salvarFala,
+  salvarFalaGeral,
+  type ConexaoDaTransacao,
+  type LinhaDaFala,
+  type PedidoDeSalvar,
+} from "./falas";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+/**
+ * D15 NO PRÓPRIO MÓDULO: `falas.ts` não CARREGA o cliente da ElevenLabs, nem por um
+ * módulo no meio. `menus.ts` importa este arquivo e `lib/channels/telefonia/numeros.ts`
+ * importa `menus.ts`; se o cliente viesse junto, o caminho da ligação o alcançaria.
+ * A fábrica LANÇA ao ser carregada: se `falas.ts` (ou algo que ele importe) passar a
+ * importar `elevenlabs.ts`, este arquivo inteiro deixa de carregar e fica vermelho.
+ */
+vi.mock("@/lib/telefonia/elevenlabs", () => {
+  throw new Error("lib/telefonia/falas.ts carregou o cliente da ElevenLabs (D15)");
+});
+
+const ORG = "00000000-0000-4000-8000-00000000000a";
+const OUTRA = "00000000-0000-4000-8000-00000000000b";
+const VOZ = { voiceId: "voz-1", modelId: "eleven_multilingual_v2" };
+const TEXTO = "Aguarde, por favor.";
+const HASH = hashDaFala(TEXTO, VOZ.voiceId, VOZ.modelId);
+
+type Linha = LinhaDaFala & { organization_id: string; model_id: string };
+
+/** O banco em memória: só as quatro consultas que `falas.ts` faz. `escritas` conta INSERT/UPDATE/DELETE. */
+class BancoDeFalas {
+  linhas = new Map<string, Linha>();
+  escritas = 0;
+  private seq = 0;
+  db: Queryable = {
+    query: (async (sqlBruto: string, p: unknown[] = []) => {
+      const sql = sqlBruto.replace(/\s+/g, " ").trim();
+      if (sql.startsWith("select") && sql.includes("from phone_prompts where id = $1")) {
+        const l = this.linhas.get(p[0] as string);
+        const rows = l && l.organization_id === p[1] ? [l] : [];
+        return { rows, rowCount: rows.length };
+      }
+      if (sql.startsWith("insert into phone_prompts")) {
+        this.escritas++;
+        const l: Linha = {
+          id: `fala-${++this.seq}`,
+          organization_id: p[0] as string,
+          tipo: p[1] as Linha["tipo"],
+          texto: p[2] as string,
+          voice_id: p[3] as string,
+          model_id: p[4] as string,
+          content_hash: p[5] as string,
+          storage_path: p[6] as string | null,
+          duracao_ms: p[7] as number | null,
+          status: p[8] as Linha["status"],
+          erro: p[9] as string | null,
+          atualizada_em: new Date("2026-09-28T13:00:00Z"),
+        };
+        this.linhas.set(l.id, l);
+        return { rows: [l], rowCount: 1 };
+      }
+      if (sql.startsWith("update phone_prompts")) {
+        this.escritas++;
+        const l = this.linhas.get(p[0] as string);
+        if (!l || l.organization_id !== p[1]) return { rows: [], rowCount: 0 };
+        Object.assign(l, {
+          texto: p[2], voice_id: p[3], model_id: p[4], content_hash: p[5],
+          storage_path: p[6], duracao_ms: p[7], status: p[8], erro: p[9],
+        });
+        return { rows: [l], rowCount: 1 };
+      }
+      if (sql.startsWith("delete from phone_prompts")) {
+        this.escritas++;
+        const l = this.linhas.get(p[0] as string);
+        if (!l || l.organization_id !== p[1]) return { rows: [], rowCount: 0 };
+        this.linhas.delete(l.id);
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`consulta inesperada: ${sql}`);
+    }) as unknown as Queryable["query"],
+  };
+}
+
+/** O Storage em memória. `baixar` é tudo o que o "Salvar e usar" usa. */
+class ArmazemFalso implements Pick<PortaDoArmazem, "baixar"> {
+  objetos = new Map<string, Uint8Array>();
+  /** O Storage fora do ar: `baixar` lança, como a porta de verdade faz em falha que não é "não existe". */
+  falharBaixar = false;
+  /** Quantas vezes o Storage foi lido. */
+  leituras = 0;
+  baixar = async (caminho: string) => {
+    this.leituras++;
+    if (this.falharBaixar) throw new Error("armazem_download: StorageApiError 500");
+    const b = this.objetos.get(caminho);
+    return b ? new Uint8Array(b) : null;
+  };
+}
+
+let banco: BancoDeFalas;
+let armazem: ArmazemFalso;
+
+const pedido = (p: Partial<PedidoDeSalvar> = {}): PedidoDeSalvar => ({
+  db: banco.db,
+  armazem,
+  organizationId: ORG,
+  userId: "user-1",
+  tipo: "waiting",
+  texto: TEXTO,
+  hash: HASH,
+  falaAtualId: null,
+  voz: VOZ,
+  ...p,
+});
+
+/** A prévia que a rota da prévia teria gravado: 1600 bytes de μ-law = 200 ms. */
+function previaNoStorage(org: string, hash: string) {
+  armazem.objetos.set(caminhoDaFala(org, hash), new Uint8Array(1600));
+}
+
+beforeEach(() => {
+  banco = new BancoDeFalas();
+  armazem = new ArmazemFalso();
+  for (const f of Object.values(vi.mocked(logger))) f.mockClear();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("hashDaFala — sha256 de texto + voz + modelo, sem ambiguidade de concatenação", () => {
+  it("é sha256 em hexadecimal minúsculo (a régua do CHECK phone_prompts_hash_check) e determinístico", () => {
+    expect(HASH).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashDaFala(TEXTO, VOZ.voiceId, VOZ.modelId)).toBe(HASH);
+  });
+
+  it("muda quando muda o texto, a voz OU o modelo", () => {
+    expect(hashDaFala("Outro.", VOZ.voiceId, VOZ.modelId)).not.toBe(HASH);
+    expect(hashDaFala(TEXTO, "voz-2", VOZ.modelId)).not.toBe(HASH);
+    expect(hashDaFala(TEXTO, VOZ.voiceId, "eleven_turbo_v2_5")).not.toBe(HASH);
+  });
+
+  it("um pedaço que muda de campo muda o hash: a fronteira entre os campos faz parte do que é resumido", () => {
+    // Com os campos colados por um separador, estes pares dariam o MESMO texto de entrada.
+    expect(hashDaFala("x\nt", "v", "m")).not.toBe(hashDaFala("t", "v\nx", "m"));
+    expect(hashDaFala("t", "v", "m\nv")).not.toBe(hashDaFala("t", "v\nv", "m"));
+    expect(hashDaFala("ab", "c", "m")).not.toBe(hashDaFala("b", "ac", "m"));
+  });
+});
+
+describe("caminhoDaFala — só monta <org>/<hash>.ulaw, nunca um caminho qualquer", () => {
+  it("monta o caminho do CHECK phone_prompts_storage_path_check", () => {
+    expect(caminhoDaFala(ORG, HASH)).toBe(`${ORG}/${HASH}.ulaw`);
+  });
+
+  it("recusa organização que não é UUID e hash que não é sha256 — nenhum pedaço vira caminho de outra pasta", () => {
+    expect(() => caminhoDaFala("../outra", HASH)).toThrow();
+    expect(() => caminhoDaFala(ORG, "../../etc/passwd")).toThrow();
+    expect(() => caminhoDaFala(ORG, `${HASH}/x`)).toThrow();
+  });
+});
+
+describe("salvarFala — o 'Salvar e usar' (nunca chama a ElevenLabs)", () => {
+  it("prévia no Storage e hash do texto com a voz atual: grava pronta, no caminho da organização, com a duração do objeto", async () => {
+    previaNoStorage(ORG, HASH);
+    const r = await salvarFala(pedido());
+    expect(r).toMatchObject({ ok: true, mudou: true, fala: { status: "ready", duracao_ms: 200, texto: TEXTO, hash: HASH } });
+    expect([...banco.linhas.values()][0]!.storage_path).toBe(`${ORG}/${HASH}.ulaw`);
+  });
+
+  it("não faz NENHUMA chamada de rede: o fetch global é contado e fica em zero", async () => {
+    const fetchContado = vi.fn(async () => new Response(null, { status: 599 }));
+    vi.stubGlobal("fetch", fetchContado);
+    previaNoStorage(ORG, HASH);
+    expect(await salvarFala(pedido())).toMatchObject({ ok: true, mudou: true });
+    expect(await salvarFala(pedido({ texto: "Sem prévia." }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(fetchContado).not.toHaveBeenCalled();
+  });
+
+  it("a mesma prévia de novo sobre a fala atual: nada muda e nada é escrito", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const escritas = banco.escritas;
+    const segunda = await salvarFala(pedido({ falaAtualId: primeira.ok ? primeira.fala.id : null }));
+    expect(segunda).toMatchObject({ ok: true, mudou: false });
+    expect(banco.escritas).toBe(escritas);
+  });
+
+  it("texto novo sobre a fala atual: regrava a MESMA linha com o hash novo — e não apaga o objeto antigo (é da limpeza do worker)", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const novo = "Só um instante.";
+    const hashNovo = hashDaFala(novo, VOZ.voiceId, VOZ.modelId);
+    previaNoStorage(ORG, hashNovo);
+    const segunda = await salvarFala(pedido({ texto: novo, hash: hashNovo, falaAtualId: primeira.ok ? primeira.fala.id : null }));
+    expect(primeira.ok && segunda.ok && segunda.fala.id === primeira.fala.id).toBe(true);
+    expect(banco.linhas.size).toBe(1);
+    expect([...banco.linhas.values()][0]!).toMatchObject({ storage_path: `${ORG}/${hashNovo}.ulaw`, status: "ready" });
+    expect(armazem.objetos.has(caminhoDaFala(ORG, HASH))).toBe(true);
+  });
+
+  it("hash que não é o do texto com a voz atual (texto editado depois da prévia, ou voz trocada): previa_desatualizada, nada gravado", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await salvarFala(pedido({ texto: "Outro texto." }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(await salvarFala(pedido({ voz: { voiceId: "voz-2", modelId: VOZ.modelId } }))).toEqual({
+      ok: false,
+      motivo: "previa_desatualizada",
+    });
+    expect(banco.escritas).toBe(0);
+  });
+
+  it("hash certo, mas o objeto só existe na pasta de OUTRA organização: previa_ausente — o caminho é sempre o da sessão", async () => {
+    previaNoStorage(OUTRA, HASH);
+    expect(await salvarFala(pedido())).toEqual({ ok: false, motivo: "previa_ausente" });
+    expect(banco.escritas).toBe(0);
+  });
+
+  it("objeto vazio no Storage: previa_ausente (uma fala pronta tem duração > 0)", async () => {
+    armazem.objetos.set(caminhoDaFala(ORG, HASH), new Uint8Array(0));
+    expect(await salvarFala(pedido())).toEqual({ ok: false, motivo: "previa_ausente" });
+    expect(banco.escritas).toBe(0);
+  });
+
+  it("Storage fora do ar: armazenamento (502), não previa_ausente — e nada gravado, com a causa no log", async () => {
+    previaNoStorage(ORG, HASH);
+    armazem.falharBaixar = true;
+    expect(await salvarFala(pedido())).toEqual({ ok: false, motivo: "armazenamento" });
+    expect(banco.escritas).toBe(0);
+    expect(vi.mocked(logger).error).toHaveBeenCalledTimes(1);
+    const [, contexto] = vi.mocked(logger).error.mock.calls[0]!;
+    expect(contexto).toMatchObject({ etapa: "conferir_storage", organization_id: ORG, causa: expect.stringContaining("StorageApiError 500") });
+    expect(JSON.stringify(contexto)).not.toContain(TEXTO);
+  });
+
+  it.each([
+    ["o caractere NUL (o Postgres recusa: seria 500)", "Aguarde\u0000, por favor."],
+    ["vazio", "   "],
+    ["mais de 1000 caracteres (o CHECK da 0288)", "a".repeat(1001)],
+  ])("texto com %s: texto_recusado, sem lançar e sem escrever", async (_caso, texto) => {
+    const hash = hashDaFala(texto.trim(), VOZ.voiceId, VOZ.modelId);
+    previaNoStorage(ORG, hash);
+    expect(await salvarFala(pedido({ texto, hash }))).toEqual({ ok: false, motivo: "texto_recusado" });
+    expect(banco.escritas).toBe(0);
+  });
+
+  it("fala em uso cujo objeto SUMIU do Storage: salvar de novo não finge que está tudo bem — previa_ausente, nada escrito", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const id = primeira.ok ? primeira.fala.id : null;
+    armazem.objetos.delete(caminhoDaFala(ORG, HASH));
+    const escritas = banco.escritas;
+    expect(await salvarFala(pedido({ falaAtualId: id }))).toEqual({ ok: false, motivo: "previa_ausente" });
+    expect(banco.escritas).toBe(escritas);
+  });
+
+  it("…e gerada a prévia de novo, salvar CONSERTA: a mesma linha, pronta, com a duração do objeto que está guardado agora", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const id = primeira.ok ? primeira.fala.id : null;
+    armazem.objetos.delete(caminhoDaFala(ORG, HASH));
+    // A nova síntese do mesmo texto não tem, necessariamente, a mesma duração: 2400 bytes = 300 ms.
+    armazem.objetos.set(caminhoDaFala(ORG, HASH), new Uint8Array(2400));
+    const conserto = await salvarFala(pedido({ falaAtualId: id }));
+    expect(conserto).toMatchObject({ ok: true, mudou: true, fala: { id, status: "ready", duracao_ms: 300, hash: HASH } });
+    expect(banco.linhas.size).toBe(1);
+    expect(await salvarFala(pedido({ falaAtualId: id }))).toMatchObject({ ok: true, mudou: false });
+  });
+
+  it("fala em uso e Storage fora do ar: armazenamento — nem 'nada mudou', nem 'gere de novo'", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    armazem.falharBaixar = true;
+    expect(await salvarFala(pedido({ falaAtualId: primeira.ok ? primeira.fala.id : null }))).toEqual({
+      ok: false,
+      motivo: "armazenamento",
+    });
+  });
+
+  it("voz trocada DEPOIS de salvar: o texto igual com o hash da fala em uso mantém a fala (em uso com a voz anterior), sem escrita", async () => {
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFala(pedido());
+    const escritas = banco.escritas;
+    const r = await salvarFala(pedido({ falaAtualId: primeira.ok ? primeira.fala.id : null, voz: { voiceId: "voz-2", modelId: VOZ.modelId } }));
+    expect(r).toMatchObject({ ok: true, mudou: false, fala: { voice_id: "voz-1", hash: HASH } });
+    expect(banco.escritas).toBe(escritas);
+  });
+
+  it("sem voz escolhida e hash novo: sem_voz", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await salvarFala(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz" });
+  });
+
+  it("falaAtualId de OUTRA organização não é regravada: nasce uma linha nova da sessão", async () => {
+    previaNoStorage(OUTRA, HASH);
+    const daOutra = await salvarFala(pedido({ organizationId: OUTRA }));
+    previaNoStorage(ORG, HASH);
+    const r = await salvarFala(pedido({ falaAtualId: daOutra.ok ? daOutra.fala.id : null }));
+    expect(r.ok && daOutra.ok && r.fala.id !== daOutra.fala.id).toBe(true);
+    const linhaDaOutra = daOutra.ok ? banco.linhas.get(daOutra.fala.id)! : null;
+    expect(linhaDaOutra).toMatchObject({ organization_id: OUTRA, storage_path: `${OUTRA}/${HASH}.ulaw` });
+  });
+
+  it("falaAtualId de OUTRO tipo não é regravada nem tomada como 'nada mudou': nasce uma linha do tipo pedido", async () => {
+    previaNoStorage(ORG, HASH);
+    const doMenu = await salvarFala(pedido({ tipo: "menu" }));
+    const r = await salvarFala(pedido({ tipo: "waiting", falaAtualId: doMenu.ok ? doMenu.fala.id : null }));
+    expect(r).toMatchObject({ ok: true, mudou: true, fala: { tipo: "waiting" } });
+    expect(r.ok && doMenu.ok && r.fala.id !== doMenu.fala.id).toBe(true);
+    expect(banco.linhas.size).toBe(2);
+  });
+
+  it("o cliente da ElevenLabs não foi carregado: o módulo de verdade está aqui, e a fábrica que lança não rodou", () => {
+    // Se `falas.ts` importasse `elevenlabs.ts`, este arquivo nem teria carregado.
+    expect(salvarFala).toBeTypeOf("function");
+    expect(conferirFala).toBeTypeOf("function");
+  });
+
+  it("sem_voz ou previa_desatualizada: decidido ANTES do Storage — nenhuma leitura, nem log de erro falso com o Storage fora", async () => {
+    previaNoStorage(ORG, HASH);
+    armazem.falharBaixar = true;
+    expect(await conferirFala(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz" });
+    expect(await conferirFala(pedido({ texto: "Outro texto." }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(await conferirFala(pedido({ hash: "../x" }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(armazem.leituras).toBe(0);
+    expect(vi.mocked(logger).error).not.toHaveBeenCalled();
+  });
+
+  it("CONTROLE — a prévia que passa nas exigências vai ao Storage uma vez só", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await conferirFala(pedido())).toMatchObject({ ok: true });
+    expect(armazem.leituras).toBe(1);
+  });
+
+  it("a ordem dos motivos não muda: sem voz E sem prévia no Storage continua sem_voz", async () => {
+    expect(await conferirFala(pedido({ voz: null }))).toEqual({ ok: false, motivo: "sem_voz" });
+    expect(await salvarFala(pedido({ texto: "Outro texto." }))).toEqual({ ok: false, motivo: "previa_desatualizada" });
+  });
+
+  it("conferirFala não escreve nada: só diz o que salvarFala gravaria", async () => {
+    previaNoStorage(ORG, HASH);
+    expect(await conferirFala(pedido())).toMatchObject({
+      ok: true,
+      atual: null,
+      nova: { hash: HASH, caminho: `${ORG}/${HASH}.ulaw`, duracaoMs: 200 },
+    });
+    expect(banco.escritas).toBe(0);
+  });
+});
+
+describe("descartarFala", () => {
+  it("apaga só a linha da organização e não toca o Storage", async () => {
+    previaNoStorage(ORG, HASH);
+    const r = await salvarFala(pedido());
+    const id = r.ok ? r.fala.id : "";
+    await descartarFala(banco.db, OUTRA, id);
+    expect(banco.linhas.size).toBe(1);
+    await descartarFala(banco.db, ORG, id);
+    expect(banco.linhas.size).toBe(0);
+    expect(armazem.objetos.has(caminhoDaFala(ORG, HASH))).toBe(true);
+  });
+});
+
+describe("reconferirFala — a decisão de novo SOB A TRAVA de quem grava, sem voltar ao Storage", () => {
+  const TEXTO_B = "Só um instante, já vamos atender.";
+  const HASH_B = hashDaFala(TEXTO_B, VOZ.voiceId, VOZ.modelId);
+  const aprovada = async (p: PedidoDeSalvar) => {
+    const c = await conferirFala(p);
+    if (!c.ok) throw new Error(`a conferência devia passar: ${c.motivo}`);
+    return c;
+  };
+
+  it("nada mudou entre a conferência e a trava: a MESMA decisão, sem ler o Storage de novo", async () => {
+    previaNoStorage(ORG, HASH);
+    const c = await aprovada(pedido());
+    armazem.falharBaixar = true;
+    const leituras = armazem.leituras;
+    expect(reconferirFala(pedido(), null, c)).toEqual(c);
+    expect(armazem.leituras).toBe(leituras);
+  });
+
+  it("outra gravação criou a fala entre as duas: a decisão sob a trava REGRAVA a linha dela (não nasce uma segunda)", async () => {
+    previaNoStorage(ORG, HASH);
+    previaNoStorage(ORG, HASH_B);
+    const c = await aprovada(pedido());
+    const outra = await salvarFala(pedido({ texto: TEXTO_B, hash: HASH_B }));
+    const lida = outra.ok ? banco.linhas.get(outra.fala.id)! : null;
+    const r = reconferirFala(pedido(), lida, c);
+    expect(r).toMatchObject({ ok: true, atual: { id: lida!.id }, nova: { hash: HASH, duracaoMs: 200 } });
+  });
+
+  it("'nada mudou' fora da trava, e sob ela a fala já é OUTRA: o hash vale como prévia nova só se for da voz atual", async () => {
+    previaNoStorage(ORG, HASH);
+    const antiga = await salvarFala(pedido());
+    const atual = antiga.ok ? banco.linhas.get(antiga.fala.id)! : null;
+    // A fala em uso tem o hash da voz ANTERIOR: fora da trava, "nada mudou" vale.
+    const c = await aprovada(pedido({ falaAtualId: atual!.id, voz: { voiceId: "voz-2", modelId: VOZ.modelId } }));
+    expect(c.nova).toBeNull();
+    // Sob a trava, outra gravação já trocou a fala: o hash antigo não é o do texto com a voz atual.
+    const trocada = { ...atual!, texto: TEXTO_B, content_hash: HASH_B };
+    expect(reconferirFala(pedido({ voz: { voiceId: "voz-2", modelId: VOZ.modelId } }), trocada, c)).toEqual({
+      ok: false,
+      motivo: "previa_desatualizada",
+    });
+  });
+
+  it("'nada mudou' com a duração do objeto: a medida da conferência é a do objeto do hash pedido", async () => {
+    previaNoStorage(ORG, HASH);
+    const salva = await salvarFala(pedido());
+    const atual = salva.ok ? banco.linhas.get(salva.fala.id)! : null;
+    const c = await aprovada(pedido({ falaAtualId: atual!.id }));
+    expect(c.nova).toBeNull();
+    // Sob a trava a linha diz outra duração (um conserto concorrente): a medida é a do objeto, 200 ms.
+    expect(reconferirFala(pedido(), { ...atual!, duracao_ms: 999 }, c)).toMatchObject({
+      ok: true,
+      nova: { hash: HASH, duracaoMs: 200 },
+    });
+  });
+});
+
+describe("falaParaSalvarSchema — o corpo traz texto e hash, nunca caminho nem organização", () => {
+  it("aceita texto e sha256; recusa hash fora da régua, texto vazio ou longo demais e campo a mais", () => {
+    expect(falaParaSalvarSchema.safeParse({ texto: " Oi. ", hash: HASH })).toMatchObject({ success: true, data: { texto: "Oi.", hash: HASH } });
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: "../../etc/passwd" }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: HASH.toUpperCase() }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "  ", hash: HASH }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "a".repeat(1001), hash: HASH }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi\u0000.", hash: HASH }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: HASH, caminho: `${OUTRA}/${HASH}.ulaw` }).success).toBe(false);
+    expect(falaParaSalvarSchema.safeParse({ texto: "Oi.", hash: HASH, organization_id: OUTRA }).success).toBe(false);
+  });
+});
+
+/**
+ * A conexão da transação da fala geral, em memória: `phone_settings` de uma linha,
+ * o resto delegado ao `BancoDeFalas`. `passos` é a ordem do que foi pedido ao
+ * banco E ao Storage; `emUso` conta as conexões fora do pool naquele instante.
+ */
+class PoolDaFalaGeral {
+  settings: Record<string, unknown> | null = null;
+  passos: string[] = [];
+  emUso = 0;
+  /** Quantas conexões estavam fora do pool enquanto o Storage era lido. */
+  conexoesDuranteOStorage: number[] = [];
+  liberacoes: Array<Error | undefined> = [];
+  /** Faz a gravação da linha de `phone_prompts` lançar (o banco caiu no meio). */
+  falharNoInsert = false;
+  /** A trava está com outra transação há mais que o `lock_timeout`: o Postgres responde 55P03. */
+  travaOcupada = false;
+  /** O próprio rollback falha (a conexão morreu). */
+  falharRollback = false;
+
+  armazemContado = {
+    baixar: async (caminho: string) => {
+      this.passos.push("storage");
+      this.conexoesDuranteOStorage.push(this.emUso);
+      return armazem.baixar(caminho);
+    },
+  };
+
+  connect = async (): Promise<ConexaoDaTransacao> => {
+    this.emUso++;
+    return {
+      release: (erro?: Error) => {
+        this.emUso--;
+        this.liberacoes.push(erro);
+      },
+      query: (async (sqlBruto: string, p: unknown[] = []) => {
+        const sql = sqlBruto.replace(/\s+/g, " ").trim();
+        if (sql === "rollback" && this.falharRollback) throw new Error("Connection terminated");
+        if (["begin", "commit", "rollback"].includes(sql)) {
+          this.passos.push(sql);
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.startsWith("set local lock_timeout")) {
+          this.passos.push(`lock_timeout:${/'([^']+)'/.exec(sql)![1]}`);
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.startsWith("insert into phone_settings")) {
+          this.passos.push("upsert");
+          expect(sql).toMatch(/on conflict \(organization_id\) do nothing/);
+          this.settings ??= { organization_id: p[0], voice_id: null, model_id: "eleven_multilingual_v2" };
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.startsWith("select") && sql.includes("from phone_settings")) {
+          this.passos.push(sql.endsWith("for update") ? "trava" : "leitura_sem_trava");
+          if (this.travaOcupada) {
+            throw Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" });
+          }
+          const coluna = /, (\w+_prompt_id) as fala_atual_id/.exec(sql)![1]!;
+          const s = this.settings;
+          const rows = s && s.organization_id === p[0] ? [{ ...s, fala_atual_id: s[coluna] ?? null }] : [];
+          return { rows, rowCount: rows.length };
+        }
+        if (sql.startsWith("update phone_settings")) {
+          const coluna = /set (\w+_prompt_id) = \$2/.exec(sql)![1]!;
+          this.passos.push(`aponta:${coluna}`);
+          if (this.settings && this.settings.organization_id === p[0]) this.settings[coluna] = p[1];
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.startsWith("insert into phone_prompts") && this.falharNoInsert) throw new Error("conexão caiu");
+        this.passos.push(sql.split(" ").slice(0, 3).join(" "));
+        return banco.db.query(sqlBruto, p);
+      }) as unknown as Queryable["query"],
+    };
+  };
+}
+
+describe("salvarFalaGeral — o Storage fora da transação, a gravação sob a trava de phone_settings", () => {
+  const pedidoGeral = (pool: PoolDaFalaGeral, tipo: "waiting" | "nobody" | "after_hours" = "waiting") => ({
+    pool,
+    armazem: pool.armazemContado,
+    organizationId: ORG,
+    userId: "user-1",
+    tipo,
+    texto: TEXTO,
+    hash: HASH,
+  });
+  const comVoz = (pool: PoolDaFalaGeral, extra: Record<string, unknown> = {}) => {
+    pool.settings = { organization_id: ORG, voice_id: VOZ.voiceId, model_id: VOZ.modelId, ...extra };
+  };
+
+  it("confere o Storage ANTES de abrir a transação, sem conexão nenhuma na mão; depois trava com prazo, grava, aponta e confirma", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool, { after_hours_prompt_id: null });
+    previaNoStorage(ORG, HASH);
+
+    const r = await salvarFalaGeral(pedidoGeral(pool, "after_hours"));
+
+    expect(r).toMatchObject({ ok: true, mudou: true, fala: { tipo: "after_hours", hash: HASH } });
+    expect(pool.passos).toEqual([
+      "storage",
+      "begin",
+      "lock_timeout:4s",
+      "upsert",
+      "trava",
+      "insert into phone_prompts",
+      "aponta:after_hours_prompt_id",
+      "commit",
+    ]);
+    // Um Storage lento não segura trava nem conexão do pool: nenhuma estava fora dele.
+    expect(pool.conexoesDuranteOStorage).toEqual([0]);
+    expect(pool.settings!.after_hours_prompt_id).toBe(r.ok ? r.fala.id : "—");
+    expect(pool.liberacoes).toEqual([undefined]);
+  });
+
+  it("a voz e a fala atual são as da linha TRAVADA: a mesma fala de novo não escreve nada", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool, { waiting_prompt_id: null });
+    previaNoStorage(ORG, HASH);
+    const primeira = await salvarFalaGeral(pedidoGeral(pool));
+    pool.passos = [];
+
+    const segunda = await salvarFalaGeral(pedidoGeral(pool));
+
+    expect(segunda).toMatchObject({ ok: true, mudou: false, fala: { id: primeira.ok ? primeira.fala.id : "—" } });
+    expect(banco.linhas.size).toBe(1);
+    expect(pool.passos[0]).toBe("storage");
+    expect(pool.passos.filter((x) => x.startsWith("aponta") || x.startsWith("insert") || x.startsWith("update"))).toEqual([]);
+    expect(pool.passos.at(-1)).toBe("commit");
+  });
+
+  it("recusa (prévia ausente): desfaz a transação — a linha que o upsert criou some junto — e nada é apontado", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+
+    const r = await salvarFalaGeral(pedidoGeral(pool));
+
+    expect(r).toEqual({ ok: false, motivo: "previa_ausente" });
+    expect(pool.passos).toEqual(["storage", "begin", "lock_timeout:4s", "upsert", "trava", "rollback"]);
+    expect(pool.liberacoes).toEqual([undefined]);
+  });
+
+  it("sem a linha de phone_settings (voz nunca escolhida): sem_voz, e o upsert é desfeito", async () => {
+    const pool = new PoolDaFalaGeral();
+    previaNoStorage(ORG, HASH);
+
+    expect(await salvarFalaGeral(pedidoGeral(pool))).toEqual({ ok: false, motivo: "sem_voz" });
+    expect(pool.passos.at(-1)).toBe("rollback");
+  });
+
+  it("texto inválido ou hash fora do formato: recusa sem tocar no Storage nem abrir transação", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+    expect(await salvarFalaGeral({ ...pedidoGeral(pool), texto: "  " })).toEqual({ ok: false, motivo: "texto_recusado" });
+    expect(pool.passos).toEqual([]);
+    // Hash fora de sha256 nunca é o de texto nenhum: nem se lê o Storage (o caminho nem se monta).
+    expect(await salvarFalaGeral({ ...pedidoGeral(pool), hash: "../x" })).toEqual({ ok: false, motivo: "previa_desatualizada" });
+    expect(pool.passos).not.toContain("storage");
+  });
+
+  it("a trava está com outra gravação há mais que o prazo (55P03): gravacao_em_andamento, desfeito e a conexão devolvida", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+    previaNoStorage(ORG, HASH);
+    pool.travaOcupada = true;
+
+    const r = await salvarFalaGeral(pedidoGeral(pool));
+
+    expect(r).toEqual({ ok: false, motivo: "gravacao_em_andamento" });
+    expect(pool.passos.at(-1)).toBe("rollback");
+    expect(banco.escritas).toBe(0);
+    expect(pool.liberacoes).toEqual([undefined]);
+  });
+
+  it("o banco caiu no meio: desfaz, devolve a conexão ao pool e deixa o erro subir", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+    pool.falharNoInsert = true;
+    previaNoStorage(ORG, HASH);
+
+    await expect(salvarFalaGeral(pedidoGeral(pool))).rejects.toThrow("conexão caiu");
+    expect(pool.passos.at(-1)).toBe("rollback");
+    expect(pool.passos).not.toContain("commit");
+    expect(pool.liberacoes).toEqual([undefined]);
+  });
+
+  it("o rollback também falhou (conexão morta): ela é DESCARTADA com release(erro), não devolvida ao pool; sobe o erro original", async () => {
+    const pool = new PoolDaFalaGeral();
+    comVoz(pool);
+    pool.falharNoInsert = true;
+    pool.falharRollback = true;
+    previaNoStorage(ORG, HASH);
+
+    await expect(salvarFalaGeral(pedidoGeral(pool))).rejects.toThrow("conexão caiu");
+    expect(pool.liberacoes).toHaveLength(1);
+    expect(pool.liberacoes[0]).toBeInstanceOf(Error);
+    expect(pool.liberacoes[0]!.message).toMatch(/Connection terminated/);
+  });
+});

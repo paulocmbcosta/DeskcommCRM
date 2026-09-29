@@ -681,7 +681,7 @@
        `overflow-x: hidden` faz o elemento virar CONTÊINER DE ROLAGEM (a
        especificação computa o eixo oposto para `auto`), e um contêiner de
        rolagem no `<html>` quebra `position: sticky` lá dentro: a barra lateral
-       — que é `sticky top-0 h-screen` em `components/shell/Sidebar.tsx`, com um
+       — que é `sticky`, da altura da janela, em `components/shell/Sidebar.tsx`, com um
        comentário longo explicando por que não é `fixed` — deixava de grudar e
        rolava com a página, sumindo do alto e deixando faixa vazia embaixo.
 

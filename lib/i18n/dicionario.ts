@@ -9494,6 +9494,467 @@ export const DICIONARIO: Traducoes = {
   "Quando a mensagem do cliente só confirma ou agradece, a Assistente deixa de contar a espera. Com uma chave da OpenRouter, ela usa o Jev, da TypeSafe: as últimas mensagens da conversa são enviadas à OpenRouter e à TypeSafe. Sem a chave, a espera é sempre contada.": {
     es: "Cuando el mensaje del cliente solo confirma o agradece, la Asistente deja de contar la espera. Con una clave de OpenRouter usa Jev, de TypeSafe: los últimos mensajes de la conversación se envían a OpenRouter y a TypeSafe. Sin la clave, la espera siempre se cuenta.",
   },
+  // Telefonia, fase 2 — avisos da Central (migration 0288)
+  "Uma fala do telefone não tocou": { es: "Una locución del teléfono no se reprodujo" },
+  "O aviso de instabilidade do telefone desligou sozinho": { es: "El aviso de inestabilidad del teléfono se desactivó solo" },
+  "Gere a fala de novo em Conexões › Telefone. Enquanto isso, as ligações seguem sem ela.": {
+    es: "Genera la locución de nuevo en Conexiones › Teléfono. Mientras tanto, las llamadas siguen sin ella.",
+  },
+  "Revisar as falas do telefone": { es: "Revisar las locuciones del teléfono" },
+  "Se a instabilidade continua, ligue o aviso de novo no time.": {
+    es: "Si la inestabilidad continúa, vuelve a activar el aviso en el equipo.",
+  },
+  "Abrir os times": { es: "Abrir los equipos" },
+  "Menu do telefone manda para time arquivado": { es: "El menú del teléfono envía a un equipo archivado" },
+  "Escolha outro time padrão para o menu. Enquanto isso, quem não escolhe uma opção cai num time que ninguém atende.": {
+    es: "Elige otro equipo predeterminado para el menú. Mientras tanto, quien no elige una opción cae en un equipo que nadie atiende.",
+  },
+  "Revisar os menus do telefone": { es: "Revisar los menús del teléfono" },
+  // O "Ligar de volta" da telefonia, escrito pelo worker no idioma da organização
+  "Ligação perdida de {numero}": { es: "Llamada perdida de {numero}" },
+  "Ninguém atendeu. Ligue de volta pela conversa.": { es: "Nadie atendió. Devuelve la llamada desde la conversación." },
+  "Ninguém do time {time} atendeu. Ligue de volta pela conversa.": {
+    es: "Nadie del equipo {time} atendió. Devuelve la llamada desde la conversación.",
+  },
+  "O cliente desligou no menu do telefone. Ligue de volta pela conversa.": {
+    es: "El cliente colgó en el menú del teléfono. Devuelve la llamada desde la conversación.",
+  },
+  // Os textos sugeridos das falas (lib/telefonia/texto-do-menu.ts), passados por t()
+  "Todos os nossos atendentes estão ocupados no momento. Por favor, aguarde na linha que já vamos atender você.": {
+    es: "Todos nuestros agentes están ocupados en este momento. Por favor, espere en línea que enseguida le atenderemos.",
+  },
+  "No momento não conseguimos atender. Registramos a sua ligação e vamos retornar assim que possível. Obrigado.": {
+    es: "En este momento no podemos atender. Registramos su llamada y le devolveremos la llamada lo antes posible. Gracias.",
+  },
+  "Nosso atendimento está fechado agora. Ligue de novo no nosso horário de atendimento. Obrigado pela ligação.": {
+    es: "Nuestra atención está cerrada ahora. Llame de nuevo en nuestro horario de atención. Gracias por su llamada.",
+  },
+  "Estamos com uma instabilidade no momento e já estamos trabalhando para resolver. Obrigado pela paciência.": {
+    es: "Tenemos una inestabilidad en este momento y ya estamos trabajando para resolverla. Gracias por su paciencia.",
+  },
+  "Opção inválida.": { es: "Opción inválida." },
+  // Telefonia, fase 2 — falhas da fala e da chave de voz
+  "Cole a chave da ElevenLabs (pelo menos 8 caracteres).": { es: "Pega la clave de ElevenLabs (al menos 8 caracteres)." },
+  "Não foi possível guardar a chave agora. Tente de novo em instantes.": {
+    es: "No se pudo guardar la clave ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível ler a chave agora. Tente de novo em instantes.": {
+    es: "No se pudo leer la clave ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "A chave foi guardada, mas não foi possível mostrar o estado agora. Recarregue a página.": {
+    es: "La clave se guardó, pero no se pudo mostrar el estado ahora. Recarga la página.",
+  },
+  "Cadastre a chave da ElevenLabs em Credenciais de IA para gerar as falas.": {
+    es: "Registra la clave de ElevenLabs en Credenciales de IA para generar las locuciones.",
+  },
+  "Escolha a voz das falas na aba Voz e falas antes de gerar.": {
+    es: "Elige la voz de las locuciones en la pestaña Voz y locuciones antes de generar.",
+  },
+  "Não foi possível guardar o áudio da fala. Tente de novo em instantes.": {
+    es: "No se pudo guardar el audio de la locución. Inténtalo de nuevo en unos instantes.",
+  },
+  "Muitas prévias geradas na última hora. Espere um pouco para gerar outra — ouvir as que já estão na tela não custa nada.": {
+    es: "Demasiadas vistas previas generadas en la última hora. Espera un poco para generar otra: escuchar las que ya están en pantalla no cuesta nada.",
+  },
+  "A prévia deste texto não está mais guardada. Gere a prévia de novo e salve em seguida.": {
+    es: "La vista previa de este texto ya no está guardada. Genera la vista previa de nuevo y guarda enseguida.",
+  },
+  "O texto ou a voz mudou depois da prévia. Gere a prévia de novo antes de salvar.": {
+    es: "El texto o la voz cambió después de la vista previa. Genera la vista previa de nuevo antes de guardar.",
+  },
+  "A ElevenLabs recusou a chave. Confira a chave em Credenciais de IA.": {
+    es: "ElevenLabs rechazó la clave. Revisa la clave en Credenciales de IA.",
+  },
+  "A conta da ElevenLabs está sem crédito. As falas já geradas continuam tocando.": {
+    es: "La cuenta de ElevenLabs no tiene crédito. Las locuciones ya generadas siguen sonando.",
+  },
+  "A ElevenLabs recusou este texto. Encurte ou reescreva e tente de novo.": {
+    es: "ElevenLabs rechazó este texto. Acórtalo o reescríbelo e inténtalo de nuevo.",
+  },
+  "Essa voz não existe mais na conta da ElevenLabs. Escolha outra voz.": {
+    es: "Esa voz ya no existe en la cuenta de ElevenLabs. Elige otra voz.",
+  },
+  "A ElevenLabs pediu para esperar um pouco. Tente de novo em instantes.": {
+    es: "ElevenLabs pidió esperar un poco. Inténtalo de nuevo en unos instantes.",
+  },
+  "A ElevenLabs não respondeu. Tente de novo em instantes.": { es: "ElevenLabs no respondió. Inténtalo de nuevo en unos instantes." },
+  "A ElevenLabs devolveu um erro. Tente de novo em instantes.": {
+    es: "ElevenLabs devolvió un error. Inténtalo de nuevo en unos instantes.",
+  },
+  // Telefonia, fase 2 — rotas da prévia, das falas gerais e do áudio da fala
+  "Texto inválido: a fala precisa ter de 1 a 1000 caracteres, sem caracteres invisíveis.": {
+    es: "Texto inválido: la locución debe tener de 1 a 1000 caracteres, sin caracteres invisibles.",
+  },
+  "A fala foi gerada, mas não foi guardada. Gerar de novo consome outra geração da ElevenLabs.": {
+    es: "La locución se generó, pero no se guardó. Generarla de nuevo consume otra generación de ElevenLabs.",
+  },
+  "Outra gravação desta fala está em andamento. Tente de novo em instantes.": {
+    es: "Hay otra grabación de esta locución en curso. Inténtalo de nuevo en unos instantes.",
+  },
+  "Fala não encontrada.": { es: "Locución no encontrada." },
+  "O áudio desta fala não está disponível agora. Tente de novo em instantes.": {
+    es: "El audio de esta locución no está disponible ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "O áudio desta fala não foi encontrado. Gere a prévia de novo e salve.": {
+    es: "No se encontró el audio de esta locución. Genera la vista previa de nuevo y guarda.",
+  },
+  // Telefonia, fase 2 — rotas dos menus de voz
+  "Cada tecla só pode levar a um time.": { es: "Cada tecla solo puede llevar a un equipo." },
+  "Algum time escolhido não existe nesta organização ou está arquivado.": {
+    es: "Algún equipo elegido no existe en esta organización o está archivado.",
+  },
+  "Menu não encontrado.": { es: "Menú no encontrado." },
+  "Este menu atende um número. Troque o destino do número antes de arquivar.": {
+    es: "Este menú atiende un número. Cambia el destino del número antes de archivar.",
+  },
+  "Este menu está em uso por: {numero}. Troque o destino do número antes de arquivar.": {
+    es: "Este menú está en uso por: {numero}. Cambia el destino del número antes de archivar.",
+  },
+  "Este menu está em uso por: {numeros}. Troque o destino dos números antes de arquivar.": {
+    es: "Este menú está en uso por: {numeros}. Cambia el destino de los números antes de archivar.",
+  },
+  "Outra gravação deste menu está em andamento. Tente de novo em instantes.": {
+    es: "Hay otra grabación de este menú en curso. Inténtalo de nuevo en unos instantes.",
+  },
+  "O áudio da fala do menu não foi encontrado. Gere a prévia de novo e salve.": {
+    es: "No se encontró el audio de la locución del menú. Genera la vista previa de nuevo y guarda.",
+  },
+  "O áudio da fala de opção inválida não foi encontrado. Gere a prévia de novo e salve.": {
+    es: "No se encontró el audio de la locución de opción inválida. Genera la vista previa de nuevo y guarda.",
+  },
+  "Não foi possível conferir o áudio da fala do menu agora. Tente de novo em instantes; se continuar, gere a prévia de novo.": {
+    es: "No se pudo verificar el audio de la locución del menú ahora. Inténtalo de nuevo en unos instantes; si continúa, genera la vista previa de nuevo.",
+  },
+  "Não foi possível conferir o áudio da fala de opção inválida agora. Tente de novo em instantes; se continuar, gere a prévia de novo.": {
+    es: "No se pudo verificar el audio de la locución de opción inválida ahora. Inténtalo de nuevo en unos instantes; si continúa, genera la vista previa de nuevo.",
+  },
+  // Telefonia, fase 2 — o destino do número (time ou menu)
+  "Escolha só um destino: um time ou um menu.": { es: "Elige un solo destino: un equipo o un menú." },
+  "Esse menu não existe nesta organização ou foi arquivado.": { es: "Ese menú no existe en esta organización o fue archivado." },
+  "A fala desse menu ainda não está pronta. Gere a prévia e salve o menu na aba Menus antes de ligar o menu ao número.": {
+    es: "La locución de ese menú aún no está lista. Genera la vista previa y guarda el menú en la pestaña Menús antes de conectar el menú al número.",
+  },
+  "O número ou o menu escolhido está sendo alterado agora. Tente de novo em instantes.": {
+    es: "El número o el menú elegido se está modificando ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  // Telefonia, fase 2 — o aviso de instabilidade do time
+  "Time não encontrado.": { es: "Equipo no encontrado." },
+  "Este time está arquivado e não recebe ligações: o aviso não pode ser ligado nele.": {
+    es: "Este equipo está archivado y no recibe llamadas: el aviso no se puede activar en él.",
+  },
+  "Este time está sendo alterado por outra pessoa agora. Tente de novo em instantes.": {
+    es: "Otra persona está modificando este equipo ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não conseguimos conferir o áudio do aviso agora. Tente ligar de novo; se continuar, use o texto já salvo.": {
+    es: "No pudimos verificar el audio del aviso ahora. Intenta activarlo de nuevo; si continúa, usa el texto ya guardado.",
+  },
+  "O áudio deste texto não foi encontrado. Gere a prévia de novo antes de ligar.": {
+    es: "No se encontró el audio de este texto. Genera la vista previa de nuevo antes de activar.",
+  },
+  "A prévia não corresponde a este texto ou à voz atual. Gere a prévia de novo.": {
+    es: "La vista previa no corresponde a este texto o a la voz actual. Genera la vista previa de nuevo.",
+  },
+  "O telefone não está ligado nesta instalação.": { es: "El teléfono no está activado en esta instalación." },
+  "alguém da equipe": { es: "alguien del equipo" },
+  // Telefonia, fase 2 — o cartão da ElevenLabs em Credenciais de IA
+  "ElevenLabs (voz da URA)": { es: "ElevenLabs (voz del IVR)" },
+  "Chave da ElevenLabs": { es: "Clave de ElevenLabs" },
+  "Trocar a chave": { es: "Cambiar la clave" },
+  "A chave que dá voz ao telefone: o menu, o aguarde, o fora do horário e o aviso de instabilidade. Uma por organização. Ela é validada listando as vozes da sua conta, e nunca mais aparece na tela.": {
+    es: "La clave que da voz al teléfono: el menú, el mensaje de espera, el de fuera de horario y el aviso de inestabilidad. Una por organización. Se valida listando las voces de tu cuenta y no vuelve a aparecer en pantalla.",
+  },
+  "Só um administrador cadastra, troca ou testa esta chave.": {
+    es: "Solo un administrador registra, cambia o prueba esta clave.",
+  },
+  Testar: { es: "Probar" },
+  "Não cadastrada": { es: "No registrada" },
+  "Chave recusada": { es: "Clave rechazada" },
+  "ElevenLabs fora do ar": { es: "ElevenLabs fuera de servicio" },
+  "Sem crédito": { es: "Sin crédito" },
+  "Falha no teste": { es: "Falló la prueba" },
+  "Nenhuma chave cadastrada. Sem ela, o telefone não gera as falas do menu, do aguarde e do fora do horário.": {
+    es: "Ninguna clave registrada. Sin ella, el teléfono no genera las locuciones del menú, de espera y de fuera de horario.",
+  },
+  "A ElevenLabs aceitou esta chave.": { es: "ElevenLabs aceptó esta clave." },
+  "Esta chave ainda não foi testada.": { es: "Esta clave aún no se ha probado." },
+  "A ElevenLabs recusou esta chave no último teste. Sem uma chave aceita não dá para gerar falas novas; as já geradas continuam tocando.": {
+    es: "ElevenLabs rechazó esta clave en la última prueba. Sin una clave aceptada no se pueden generar locuciones nuevas; las ya generadas siguen sonando.",
+  },
+  "A ElevenLabs não respondeu ao último teste. A chave continua guardada e as falas já geradas continuam tocando; teste de novo mais tarde.": {
+    es: "ElevenLabs no respondió a la última prueba. La clave sigue guardada y las locuciones ya generadas siguen sonando; vuelve a probar más tarde.",
+  },
+  "A conta da ElevenLabs está sem crédito. As falas já geradas continuam tocando; para gerar falas novas, recarregue a conta.": {
+    es: "La cuenta de ElevenLabs no tiene crédito. Las locuciones ya generadas siguen sonando; para generar locuciones nuevas, recarga la cuenta.",
+  },
+  "A ElevenLabs recusou a chave, e ela não foi salva. Confira se copiou a chave inteira, ou gere uma nova na sua conta da ElevenLabs.": {
+    es: "ElevenLabs rechazó la clave y no se guardó. Revisa si copiaste la clave completa o genera una nueva en tu cuenta de ElevenLabs.",
+  },
+  "A conta desta chave está sem crédito na ElevenLabs, e ela não foi salva. Recarregue a conta e salve de novo.": {
+    es: "La cuenta de esta clave no tiene crédito en ElevenLabs y no se guardó. Recarga la cuenta y guarda de nuevo.",
+  },
+  "A ElevenLabs não respondeu, e a chave não foi salva. Tente de novo em instantes.": {
+    es: "ElevenLabs no respondió y la clave no se guardó. Inténtalo de nuevo en unos instantes.",
+  },
+  "A ElevenLabs devolveu um erro, e a chave não foi salva. Tente de novo em instantes.": {
+    es: "ElevenLabs devolvió un error y la clave no se guardó. Inténtalo de nuevo en unos instantes.",
+  },
+  "A ElevenLabs recusou por limite de uso da conta, e a chave não foi salva. Tente de novo mais tarde.": {
+    es: "ElevenLabs rechazó por límite de uso de la cuenta, y la clave no se guardó. Inténtalo de nuevo más tarde.",
+  },
+  "Não foi possível confirmar o resultado deste teste. Tente de novo em instantes.": {
+    es: "No se pudo confirmar el resultado de esta prueba. Inténtalo de nuevo en unos instantes.",
+  },
+  "Chave da ElevenLabs salva e validada.": { es: "Clave de ElevenLabs guardada y validada." },
+  "A ElevenLabs aceitou a chave.": { es: "ElevenLabs aceptó la clave." },
+  "Não foi possível salvar a chave. Tente de novo.": { es: "No se pudo guardar la clave. Inténtalo de nuevo." },
+  // Telefonia, fase 2 — Conexões › Telefone (sub-abas, voz e falas, prévia)
+  Números: { es: "Números" },
+  Menus: { es: "Menús" },
+  "Voz e falas": { es: "Voz y locuciones" },
+  "Não foi possível carregar a voz do telefone. Recarregue a página.": {
+    es: "No se pudo cargar la voz del teléfono. Recarga la página.",
+  },
+  "Falta a chave da ElevenLabs": { es: "Falta la clave de ElevenLabs" },
+  "As falas do telefone (menu, aguarde, fora do horário e aviso de instabilidade) são geradas pela ElevenLabs, com a chave da sua conta. Sem a chave, nenhuma fala é gerada e nenhum menu pode ser ligado a um número.": {
+    es: "Las locuciones del teléfono (menú, espera, fuera de horario y aviso de inestabilidad) las genera ElevenLabs con la clave de tu cuenta. Sin la clave no se genera ninguna locución y ningún menú puede conectarse a un número.",
+  },
+  "Cadastrar a chave em Credenciais de IA": { es: "Registrar la clave en Credenciales de IA" },
+  "Voz das falas": { es: "Voz de las locuciones" },
+  "A mesma voz vale para todas as falas desta organização. Trocar a voz não muda as falas em uso: gere a prévia e salve cada uma de novo.": {
+    es: "La misma voz vale para todas las locuciones de esta organización. Cambiar la voz no cambia las locuciones en uso: genera la vista previa y guarda cada una de nuevo.",
+  },
+  Voz: { es: "Voz" },
+  "Escolha uma voz": { es: "Elige una voz" },
+  "Ouvir amostra": { es: "Escuchar muestra" },
+  "Não foi possível listar as vozes da sua conta da ElevenLabs. Tente de novo em instantes.": {
+    es: "No se pudieron listar las voces de tu cuenta de ElevenLabs. Inténtalo de nuevo en unos instantes.",
+  },
+  "Voz salva. Gere a prévia e salve cada fala de novo para usar a voz nova.": {
+    es: "Voz guardada. Genera la vista previa y guarda cada locución de nuevo para usar la voz nueva.",
+  },
+  Aguarde: { es: "Espere" },
+  "Ninguém atendeu": { es: "Nadie atendió" },
+  "Fora do horário": { es: "Fuera de horario" },
+  "Toca quando o cliente precisa esperar na fila, e de novo a cada 40 segundos, entre a música.": {
+    es: "Suena cuando el cliente necesita esperar en la fila, y de nuevo cada 40 segundos, entre la música.",
+  },
+  "Toca antes de desligar, quando ninguém do time atendeu a tempo.": {
+    es: "Suena antes de colgar, cuando nadie del equipo atendió a tiempo.",
+  },
+  "Toca quando o time está fora do horário, e a ligação é encerrada em seguida.": {
+    es: "Suena cuando el equipo está fuera de horario, y la llamada se cierra a continuación.",
+  },
+  "Texto da fala: {fala}": { es: "Texto de la locución: {fala}" },
+  "Gerar prévia": { es: "Generar vista previa" },
+  "Gerando a prévia…": { es: "Generando la vista previa…" },
+  "Salvar e usar": { es: "Guardar y usar" },
+  "Escolha a voz acima antes de gerar.": { es: "Elige la voz arriba antes de generar." },
+  "Gere a prévia deste texto e ouça antes de salvar.": {
+    es: "Genera la vista previa de este texto y escúchala antes de guardar.",
+  },
+  "Fala salva. As ligações já tocam o áudio novo.": { es: "Locución guardada. Las llamadas ya reproducen el audio nuevo." },
+  "Não foi possível salvar a fala. Tente de novo em instantes.": {
+    es: "No se pudo guardar la locución. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível gerar a prévia. Tente de novo em instantes.": {
+    es: "No se pudo generar la vista previa. Inténtalo de nuevo en unos instantes.",
+  },
+  Ouvir: { es: "Escuchar" },
+  "Ainda não gerada": { es: "Aún no generada" },
+  "Falhou:": { es: "Falló:" },
+  "Prévia não salva": { es: "Vista previa sin guardar" },
+  "Em uso, com a voz anterior": { es: "En uso, con la voz anterior" },
+  "Em uso": { es: "En uso" },
+  "Não foi possível carregar o áudio desta fala.": { es: "No se pudo cargar el audio de esta locución." },
+  "Carregando o áudio…": { es: "Cargando el audio…" },
+  // O nome acessível de cada tocador: com três falas na tela, o leitor de tela diz qual é qual.
+  "Ouvir: {fala}": { es: "Escuchar: {fala}" },
+  "Prévia da fala": { es: "Vista previa de la locución" },
+  "Prévia da fala: {fala}": { es: "Vista previa de la locución: {fala}" },
+  "Áudio salvo da fala": { es: "Audio guardado de la locución" },
+  "Áudio salvo da fala: {fala}": { es: "Audio guardado de la locución: {fala}" },
+  // O "fora do horário" sugerido com o WhatsApp da organização (texto-do-menu.ts,
+  // `textoSugeridoForaDoHorario`): passa por t() antes de o número entrar.
+  "Nosso atendimento está fechado agora. Se preferir, mande uma mensagem no nosso WhatsApp, {numero}. Obrigado pela ligação.": {
+    es: "Nuestra atención está cerrada ahora. Si lo prefiere, envíe un mensaje a nuestro WhatsApp, {numero}. Gracias por su llamada.",
+  },
+  // Telefonia, fase 2 — aba Menus. A frase de cada opção (`FRASE_DA_OPCAO`, texto-do-menu.ts)
+  // entra por t() de uma CONSTANTE, que o gate de i18n não enxerga: o teste da aba a confere.
+  "Para {time}, digite {tecla}.": { es: "Para {time}, marque {tecla}." },
+  "Só quem administra a organização gerencia os menus de voz.": {
+    es: "Solo quien administra la organización gestiona los menús de voz.",
+  },
+  "Não foi possível carregar os menus. Recarregue a página.": { es: "No se pudieron cargar los menús. Recarga la página." },
+  "Menus de voz": { es: "Menús de voz" },
+  "O menu atende a ligação, fala as opções e leva o cliente ao time da tecla que ele apertar. Quem não escolhe vai para o time padrão. Depois de pronto, ligue o menu a um número na aba Números.": {
+    es: "El menú atiende la llamada, dice las opciones y lleva al cliente al equipo de la tecla que marque. Quien no elige va al equipo predeterminado. Cuando esté listo, conecta el menú a un número en la pestaña Números.",
+  },
+  "Para gerar a fala do menu, cadastre a chave da ElevenLabs e escolha a voz na aba Voz e falas.": {
+    es: "Para generar la locución del menú, registra la clave de ElevenLabs y elige la voz en la pestaña Voz y locuciones.",
+  },
+  "Cada opção do menu leva a um time, e esta organização ainda não tem nenhum ativo.": {
+    es: "Cada opción del menú lleva a un equipo, y esta organización todavía no tiene ninguno activo.",
+  },
+  "Criar um time": { es: "Crear un equipo" },
+  "Novo menu": { es: "Nuevo menú" },
+  "Arquivar este menu? Ele sai da lista e não pode mais ser ligado a um número.": {
+    es: "¿Archivar este menú? Sale de la lista y ya no se puede conectar a un número.",
+  },
+  "Menu arquivado.": { es: "Menú archivado." },
+  "Não foi possível arquivar o menu. Tente de novo em instantes.": {
+    es: "No se pudo archivar el menú. Inténtalo de nuevo en unos instantes.",
+  },
+  Tecla: { es: "Tecla" },
+  "Padrão (sem escolha):": { es: "Predeterminado (sin elección):" },
+  "Este menu leva a um time arquivado ({times}), que não recebe ligações. Edite o menu e escolha outro time.": {
+    es: "Este menú lleva a un equipo archivado ({times}), que no recibe llamadas. Edita el menú y elige otro equipo.",
+  },
+  "Usado por:": { es: "Usado por:" },
+  "Para arquivar, troque antes o destino desses números na aba Números.": {
+    es: "Para archivarlo, cambia antes el destino de esos números en la pestaña Números.",
+  },
+  "Nenhum número usa este menu ainda. Ligue-o a um número na aba Números.": {
+    es: "Ningún número usa este menú todavía. Conéctalo a un número en la pestaña Números.",
+  },
+  "Nenhuma ligação passou por este menu ainda.": { es: "Ninguna llamada pasó por este menú todavía." },
+  "1 ligação": { es: "1 llamada" },
+  "{n} ligações": { es: "{n} llamadas" },
+  "Sem escolha": { es: "Sin elección" },
+  "Tecla errada": { es: "Tecla incorrecta" },
+  "Desligou no menu": { es: "Colgó en el menú" },
+  "Outras teclas": { es: "Otras teclas" },
+  "Muita gente não escolhe uma opção: cai no time padrão ou desliga no meio do menu. Talvez a fala esteja confusa ou longa demais — reescreva e gere a prévia de novo.": {
+    es: "Mucha gente no elige una opción: cae en el equipo predeterminado o cuelga en medio del menú. Tal vez la locución sea confusa o demasiado larga: reescríbela y genera la vista previa de nuevo.",
+  },
+  "Editar menu": { es: "Editar menú" },
+  "Nome do menu": { es: "Nombre del menú" },
+  "Ex.: Atendimento principal": { es: "Ej.: Atención principal" },
+  Opções: { es: "Opciones" },
+  "Tecla da opção {n}": { es: "Tecla de la opción {n}" },
+  "Time da opção {n}": { es: "Equipo de la opción {n}" },
+  "Remover opção": { es: "Quitar opción" },
+  "Adicionar opção": { es: "Agregar opción" },
+  "As teclas * e # ficam reservadas.": { es: "Las teclas * y # quedan reservadas." },
+  "Time padrão (quem não escolhe nada)": { es: "Equipo predeterminado (quien no elige nada)" },
+  "Fala do menu": { es: "Locución del menú" },
+  "Montada a partir das opções. Você pode editar antes de gerar.": {
+    es: "Armada a partir de las opciones. Puedes editarla antes de generar.",
+  },
+  "Fala escrita à mão: ela não acompanha as mudanças nas opções.": {
+    es: "Locución escrita a mano: no sigue los cambios en las opciones.",
+  },
+  "As opções mudaram depois que a fala foi escrita. Confira se ela ainda diz a tecla e o time certos — ou use o texto montado das opções.": {
+    es: "Las opciones cambiaron después de escribir la locución. Revisa si todavía dice la tecla y el equipo correctos, o usa el texto armado a partir de las opciones.",
+  },
+  "Usar o texto montado": { es: "Usar el texto armado" },
+  "Fala de tecla inválida": { es: "Locución de tecla inválida" },
+  "Fala de tecla inválida (opcional)": { es: "Locución de tecla inválida (opcional)" },
+  "Toca quando o cliente aperta uma tecla que não é opção, antes de repetir o menu.": {
+    es: "Suena cuando el cliente marca una tecla que no es opción, antes de repetir el menú.",
+  },
+  "Dê um nome ao menu.": { es: "Ponle un nombre al menú." },
+  "O menu precisa de pelo menos uma opção.": { es: "El menú necesita al menos una opción." },
+  "Escolha o time de cada opção.": { es: "Elige el equipo de cada opción." },
+  "Escolha o time padrão.": { es: "Elige el equipo predeterminado." },
+  "Um time escolhido foi arquivado. Escolha outro time.": { es: "Un equipo elegido fue archivado. Elige otro equipo." },
+  "Escreva a fala do menu.": { es: "Escribe la locución del menú." },
+  "O áudio salvo de uma fala não foi encontrado. Gere a prévia dela de novo antes de salvar.": {
+    es: "No se encontró el audio guardado de una locución. Genera su vista previa de nuevo antes de guardar.",
+  },
+  "Gere a prévia de cada fala que mudou antes de salvar o menu.": {
+    es: "Genera la vista previa de cada locución que cambió antes de guardar el menú.",
+  },
+  "Salvar menu": { es: "Guardar menú" },
+  "Menu salvo.": { es: "Menú guardado." },
+  "Não foi possível salvar o menu. Tente de novo em instantes.": {
+    es: "No se pudo guardar el menú. Inténtalo de nuevo en unos instantes.",
+  },
+  "Quando ligarem: menu": { es: "Cuando llamen: menú" },
+  "Quando ligarem": { es: "Cuando llamen" },
+  "Tocar no time": { es: "Sonar en el equipo" },
+  "Tocar o menu": { es: "Reproducir el menú" },
+  "Menu que atende as ligações": { es: "Menú que atiende las llamadas" },
+  "Escolha o menu": { es: "Elige el menú" },
+  "fala pendente": { es: "locución pendiente" },
+  "Nenhum menu criado ainda. Crie um na aba Menus.": {
+    es: "Ningún menú creado todavía. Crea uno en la pestaña Menús.",
+  },
+  "Criar um menu": { es: "Crear un menú" },
+  "O menu deste número foi arquivado e não atende mais as ligações. Edite o número e escolha outro destino.": {
+    es: "El menú de este número fue archivado y ya no atiende las llamadas. Edita el número y elige otro destino.",
+  },
+  "O time deste número foi arquivado e não recebe ligações. Edite o número e escolha outro time.": {
+    es: "El equipo de este número fue archivado y no recibe llamadas. Edita el número y elige otro equipo.",
+  },
+  "O time escolhido foi arquivado e não recebe ligações. Escolha outro time.": {
+    es: "El equipo elegido fue archivado y no recibe llamadas. Elige otro equipo.",
+  },
+  "O menu escolhido foi arquivado. Escolha outro menu ou toque no time.": {
+    es: "El menú elegido fue archivado. Elige otro menú o haz que suene en el equipo.",
+  },
+  "A fala deste menu ainda não está pronta. Gere a prévia e salve o menu na aba Menus.": {
+    es: "La locución de este menú todavía no está lista. Genera la vista previa y guarda el menú en la pestaña Menús.",
+  },
+  "Não foi possível salvar o número. Tente de novo em instantes.": {
+    es: "No se pudo guardar el número. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível carregar os números. Recarregue a página.": { es: "No se pudieron cargar los números. Recarga la página." },
+  // Telefonia, fase 2 — o aviso de instabilidade em Configurações › Times e a faixa em todo o CRM
+  "Aviso de instabilidade (telefone)": { es: "Aviso de inestabilidad (teléfono)" },
+  "Ligado às {hora}": { es: "Activado a las {hora}" },
+  "Ligado às {hora} por {nome}": { es: "Activado a las {hora} por {nome}" },
+  "desliga às {hora}": { es: "se desactiva a las {hora}" },
+  "até alguém desligar": { es: "hasta que alguien lo desactive" },
+  "Desligar agora": { es: "Desactivar ahora" },
+  "Nenhum aviso gravado ainda. Toda ligação de fora que entrar na fila deste time ouve o aviso inteiro antes de tocar nos atendentes.": {
+    es: "Ningún aviso grabado todavía. Toda llamada externa que entre en la fila de este equipo escucha el aviso completo antes de sonar para los agentes.",
+  },
+  "Ligar aviso": { es: "Activar aviso" },
+  "Ligar o aviso de instabilidade": { es: "Activar el aviso de inestabilidad" },
+  "Toda ligação de fora que entrar na fila do time ouve este aviso inteiro antes de tocar nos atendentes. A ligação transferida por um atendente não ouve.": {
+    es: "Toda llamada externa que entre en la fila del equipo escucha este aviso completo antes de sonar para los agentes. La llamada transferida por un agente no lo escucha.",
+  },
+  "Texto do aviso": { es: "Texto del aviso" },
+  "Gere a prévia e ouça o aviso antes de ligar.": { es: "Genera la vista previa y escucha el aviso antes de activarlo." },
+  "Ouça a prévia antes de ligar.": { es: "Escucha la vista previa antes de activarlo." },
+  "Prévia ouvida. Pode ligar.": { es: "Vista previa escuchada. Ya puedes activarlo." },
+  "Este é o texto já gravado do aviso: dá para ligar direto.": {
+    es: "Este es el texto ya grabado del aviso: puedes activarlo directamente.",
+  },
+  "Desligar sozinho depois de": { es: "Desactivar solo después de" },
+  "1 hora": { es: "1 hora" },
+  "2 horas (padrão)": { es: "2 horas (predeterminado)" },
+  "4 horas": { es: "4 horas" },
+  "Até eu desligar": { es: "Hasta que yo lo desactive" },
+  "Aviso de instabilidade do time {time}": { es: "Aviso de inestabilidad del equipo {time}" },
+  "Aviso de instabilidade ligado no telefone do {time}": { es: "Aviso de inestabilidad activado en el teléfono de {time}" },
+  "Desligar o aviso do time {time}": { es: "Desactivar el aviso del equipo {time}" },
+  "Aviso de instabilidade desligado.": { es: "Aviso de inestabilidad desactivado." },
+  "O aviso de instabilidade já estava desligado.": { es: "El aviso de inestabilidad ya estaba desactivado." },
+  "Aviso de instabilidade ligado.": { es: "Aviso de inestabilidad activado." },
+  "Não foi possível desligar o aviso. Tente de novo em instantes.": {
+    es: "No se pudo desactivar el aviso. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível ligar o aviso. Tente de novo em instantes.": {
+    es: "No se pudo activar el aviso. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível carregar o aviso de instabilidade do telefone. Recarregue a página.": {
+    es: "No se pudo cargar el aviso de inestabilidad del teléfono. Recarga la página.",
+  },
+  // Telefonia, fase 2 — o cartão da ligação na conversa (CartaoDaLigacao): o que a URA fez.
+  // `{menu}`, `{tecla}` e `{time}` são trocados pelo cartão; "do telefone" entra no lugar
+  // de `{menu}` quando o registro não tem o nome do menu.
+  "Ligação fora do horário": { es: "Llamada fuera de horario" },
+  "do telefone": { es: "del teléfono" },
+  "No menu {menu}, digitou {tecla}": { es: "En el menú {menu}, marcó {tecla}" },
+  "No menu {menu}, escolheu uma opção": { es: "En el menú {menu}, eligió una opción" },
+  "No menu {menu}, não digitou nada": { es: "En el menú {menu}, no marcó nada" },
+  "No menu {menu}, digitou uma tecla que não existe": { es: "En el menú {menu}, marcó una tecla que no existe" },
+  "e foi para o time {time}": { es: "y pasó al equipo {time}" },
+  "e foi para o time padrão, {time}": { es: "y pasó al equipo predeterminado, {time}" },
+  "Desligou no menu {menu}, antes de escolher": { es: "Colgó en el menú {menu}, antes de elegir" },
+  "A ligação terminou no menu {menu}, antes de escolher": { es: "La llamada terminó en el menú {menu}, antes de elegir" },
+  "Ouviu o aviso de instabilidade": { es: "Escuchó el aviso de inestabilidad" },
 };
 
 /**

@@ -313,7 +313,9 @@ primeiro — quem inicia conversa pergunta `canalFalaPrimeiro`. Detalhe em `CLAU
   `docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml --env-file .env up -d app`.
   Esquecer o segundo `-f` recria o contêiner sem labels: o domínio inteiro responde `404` com o
   contêiner `healthy` (o healthcheck é um probe TCP interno). Runbook:
-  [`docs/runbooks/deploy.md`](docs/runbooks/deploy.md).
+  [`docs/runbooks/deploy.md`](docs/runbooks/deploy.md). Versão que mexe no `worker` ou no Asterisk
+  pede mais que `up -d app`: o §1 do runbook (`update.sh`, ou `app worker` + `asterisk` só com a
+  telefonia ligada, com os mesmos dois `-f`).
 - **Env vars** — nova variável entra em `.env.example` **e** em `lib/env.ts`. Nunca leia nem logue
   valor de `.env*`; só `.env.example` é template. Segredo/token só em header, nunca em query string.
 - **Gerados — não edite** — `lib/database.types.ts`, `graphify-out/`, `pnpm-lock.yaml`, `.next/`.

@@ -99,6 +99,15 @@ services:
     environment:
       # dentro da rede do compose, o WAHA é o serviço 'waha' na porta interna 3000
       WAHA_API_BASE_URL: http://waha:3000
+    volumes:
+      # As falas do telefone (URA, "aguarde", aviso de instabilidade): o worker as
+      # baixa do Storage e escreve aqui; o Asterisk lê o MESMO volume, só leitura,
+      # no MESMO caminho (desenho da fase 2, D12; DIRETORIO_DAS_FALAS em
+      # lib/channels/telefonia/falas-no-disco.ts), sem o nome do produto (marca
+      # própria). Montado mesmo com a telefonia desligada: sem a ARI o laço nem
+      # roda e o volume fica vazio — não custa nada, e ligar a telefonia depois
+      # não pede editar este arquivo.
+      - telefonia-falas:/var/lib/telefonia/falas
     networks:
       - internal
     healthcheck:
@@ -353,6 +362,11 @@ services:
       TELEFONIA_IP_PUBLICO: ${TELEFONIA_IP_PUBLICO:-}
       TELEFONIA_RTP_INICIO: ${TELEFONIA_RTP_INICIO:-20000}
       TELEFONIA_RTP_FIM: ${TELEFONIA_RTP_FIM:-20039}
+    volumes:
+      # Só leitura: quem escreve é o worker. O mesmo caminho de lá, porque é o
+      # caminho ABSOLUTO que a ARI manda tocar (`midiaDaFala`, passo zero da fase
+      # 2, ramo A). O Asterisk roda como uid 100 e o worker grava 0644/0755.
+      - telefonia-falas:/var/lib/telefonia/falas:ro
     ports:
       - "0.0.0.0:${TELEFONIA_RTP_INICIO:-20000}-${TELEFONIA_RTP_FIM:-20039}:${TELEFONIA_RTP_INICIO:-20000}-${TELEFONIA_RTP_FIM:-20039}/udp"
     logging: *default-logging
@@ -383,6 +397,9 @@ volumes:
   wacalls-data:
   caddy-data:
   caddy-config:
+  # Cópia das falas do telefone (a fonte é o Storage): declarado aqui para o
+  # `up -d` do update.sh criá-lo sozinho em quem já instalou.
+  telefonia-falas:
 
 networks:
   internal:

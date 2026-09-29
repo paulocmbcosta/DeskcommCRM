@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Plus } from "@/lib/ui/icons";
-import { PROVEDORES } from "@/lib/ai/pontos/provedores";
+import { PROVEDORES, credenciaisDeModelo } from "@/lib/ai/pontos/provedores";
 import { useCredentialsList, type CredentialRow, type Provider } from "@/hooks/ai/useCredentials";
 import { useT } from "@/hooks/i18n/useT";
 import { CredentialCard } from "./CredentialCard";
@@ -29,7 +29,11 @@ export function CredentialsList({ initialData, canWrite, usageMap }: Props) {
   const { data } = useCredentialsList({ initialData });
   const [addOpen, setAddOpen] = useState(false);
 
-  const credentials = data ?? [];
+  // Só as chaves de MODELO DE LINGUAGEM, pelo critério central: a da ElevenLabs
+  // (voz do telefone) mora na mesma tabela e tem cartão próprio. Sem este filtro
+  // ela contava como "já tem credencial" e escondia o estado vazio de quem ainda
+  // não cadastrou nenhum modelo.
+  const credentials = credenciaisDeModelo(data ?? []);
 
   // Construído a partir da lista única: escrito à mão, o dia em que um
   // provedor novo entra é o dia em que as credenciais dele somem da tela sem

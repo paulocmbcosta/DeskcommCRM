@@ -223,6 +223,21 @@ export function objetosDoRamal(r: RamalSip): ObjetoPjsip[] {
         // controlador fecha a ligação do outro lado (medido na prova pela tela:
         // sem isto o cliente ficou 4 min pendurado numa ponte com ninguém).
         f("rtp_timeout", 30),
+        // Transferência por REFER fechada (desenho da fase 2, §5.3): quem transfere
+        // é o CRM, pela ARI, com a regra de quem pode e para onde. Um REFER vindo
+        // do navegador mandaria o cliente para qualquer lugar sem passar por ela.
+        // Ramal já registrado só ganha o campo no PRÓXIMO pedido de credencial —
+        // `credencialDoRamal` (ramal.ts:42-45) não regrava um endpoint cujo `auth`
+        // já existe na memória do Asterisk. Mas essa memória (sorcery dinâmico, sem
+        // disco) não sobrevive a uma atualização: `ASTERISK_IMAGE` é fixado na
+        // versão do release a cada `update.sh`, igual às outras três imagens
+        // (hostgator-setup-kit/update.sh:295), o `dc pull` + `dc up -d` (linha 348)
+        // roda com a tag nova, e o compose recria o contêiner porque a imagem
+        // resolvida mudou (docker-compose.prod.yml:345, `image: ${ASTERISK_IMAGE}`)
+        // — não há tag "stable" sobrevivendo à atualização enquanto a telefonia
+        // está ligada. Contêiner novo, sorcery vazio: o próximo registro de cada
+        // ramal recria o endpoint já com `allow_transfer=no`.
+        f("allow_transfer", "no"),
       ],
     },
   ];

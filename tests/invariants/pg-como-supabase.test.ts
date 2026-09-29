@@ -360,6 +360,45 @@ describe("o adaptador FILTRA POR CONJUNTO — `in`", () => {
   });
 });
 
+describe("bytea volta como o PostgREST o devolve — texto `\\x` + hex, não `Buffer`", () => {
+  // O PostgREST monta a resposta com `to_json`, e `to_json(bytea)` é o texto da
+  // saída padrão (`\\x` + hex). O driver `pg` entrega `Buffer`. Com `Buffer`, um
+  // código que compara o bytea lido com uma string passaria no adaptador e
+  // falharia em produção — foi assim que o recibo de idempotência nunca casou.
+  const CHAVE_BYTEA = "ada57e00-0000-4000-8000-0000000000b1";
+  const DIGEST = "9f".repeat(32);
+
+  it("a leitura é igual ao `to_json` do próprio Postgres, nos dois formatos de escrita", async () => {
+    for (const [endpoint, escrito] of [
+      ["/bytea/hex", `\\x${DIGEST}`], // formato hex da entrada de bytea: os 32 bytes
+      ["/bytea/texto", DIGEST], // sem o prefixo: os 64 bytes ASCII dos caracteres
+    ] as const) {
+      const { error } = await db.from("idempotency_keys").insert({
+        organization_id: ORG,
+        key: CHAVE_BYTEA,
+        endpoint,
+        request_hash: escrito,
+        status_code: 201,
+        response_body: {},
+      });
+      expect(error).toBeNull();
+
+      const { data } = await db
+        .from("idempotency_keys")
+        .select("request_hash")
+        .eq("organization_id", ORG)
+        .eq("endpoint", endpoint)
+        .maybeSingle();
+      const { rows } = await pool.query<{ json: string }>(
+        "select to_json(request_hash)::text as json from idempotency_keys where organization_id = $1 and endpoint = $2",
+        [ORG, endpoint],
+      );
+      expect((data as { request_hash: unknown }).request_hash).toBe(JSON.parse(rows[0]!.json));
+      expect(typeof (data as { request_hash: unknown }).request_hash).toBe("string");
+    }
+  });
+});
+
 describe("o que NÃO está implementado estoura", () => {
   it("método ausente lança em vez de devolver vazio — vazio silencioso é teste verde medindo nada", () => {
     expect(() => db.from("crm_pipelines").delete()).toThrow(/não está implementado/);

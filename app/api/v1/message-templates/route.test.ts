@@ -35,6 +35,7 @@ vi.mock("@/lib/audit", () => ({ audit: h.audit }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: h.from }) }));
 
 import { POST } from "@/app/api/v1/message-templates/route";
+import { byteaComoPostgrest } from "@/tests/helpers/bytea-do-postgrest";
 
 const ORG = "b7c30000-0000-4000-8000-000000000001";
 const USER = "b7c30000-0000-4000-8000-000000000002";
@@ -84,8 +85,9 @@ function banco() {
           ) ?? null,
         error: null,
       }),
+      // O `bytea` como o PostgREST o grava e devolve — não a string que foi mandada.
       insert: async (linha: Linha) => {
-        recibos.push(linha);
+        recibos.push({ ...linha, request_hash: byteaComoPostgrest(linha.request_hash) });
         filtros = [];
         maiorQue = null;
         return { error: null };

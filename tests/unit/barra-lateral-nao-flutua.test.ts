@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { JANELA_ABAIXO_DAS_FAIXAS } from "@/lib/ui/faixas-do-topo";
+
 /**
  * A BARRA LATERAL PASSAVA POR CIMA DA LISTA DE CONVERSAS.
  *
@@ -51,7 +53,14 @@ describe("a barra ocupa lugar, em vez de flutuar", () => {
   it("é `sticky` e ocupa a altura da tela", () => {
     // O efeito visual precisa continuar: a barra não rola com a página.
     expect(BARRA).toMatch(/\bsticky\b/);
-    expect(BARRA).toMatch(/h-screen/);
+    // A altura de janela vem da classe (`h-screen`) ou da janela MENOS as faixas
+    // do topo (aviso de instabilidade, conexão caída), no `style` — com elas na
+    // tela, `h-screen` nascia com o rodapé cortado. Sem nenhuma das duas, a barra
+    // perde a altura de janela e a cerca reprova.
+    expect(BARRA).toMatch(/h-screen|height: JANELA_ABAIXO_DAS_FAIXAS/);
+    // E a conta da variável É uma altura de janela, não um valor qualquer com o
+    // nome certo: 100vh menos as faixas (0 sem faixa — o mesmo `h-screen`).
+    expect(JANELA_ABAIXO_DAS_FAIXAS).toBe("calc(100vh - var(--altura-das-faixas, 0px))");
   });
 
   it("não encolhe", () => {

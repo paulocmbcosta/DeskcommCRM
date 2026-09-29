@@ -7,13 +7,20 @@
  * enquanto ainda acha que o anterior está tocando. Uma fila serial basta: o
  * volume de eventos de telefonia é de dezenas por ligação, não de milhares.
  *
+ * Ao lado da fila, a PASSADA de 60 s que não depende da ARI (`passadaDoTelefone`):
+ * os avisos de instabilidade vencidos, as falas do Storage para o volume
+ * `telefonia-falas` e a limpeza do Storage (desenho da fase 2, §4 e §5.5).
+ *
  * Sem `TELEFONIA_ARI_URL`/`TELEFONIA_ARI_PASSWORD` o laço não sobe — a
- * telefonia é um profile opcional do compose (spec 20 §4.3).
+ * telefonia é um profile opcional do compose (spec 20 §4.3). Nem a passada: o
+ * volume segue montado no worker (docker-compose.prod.yml), vazio, e nada é
+ * escrito nele.
  */
 import type pg from "pg";
 
 import { ClienteAri, ErroAri, configAriDoAmbiente, type CanalAri } from "./ari";
 import { ControladorDeChamadas, type EventoAri, type PortaAri, type PortaBanco, type Registro } from "./controle";
+import { falasDoWorker, type FalasNoDisco } from "./falas-no-disco";
 import { idDoRamal } from "./pjsip";
 import * as repo from "./repositorio";
 import { SincronizadorDeTroncos } from "./sincronizacao";
@@ -37,6 +44,8 @@ function portaAri(ari: ClienteAri): PortaAri {
     pararMusica: (c) => ari.pararMusica(c),
     tocarTom: (c, t) => ari.tocarTom(c, t),
     pararReproducao: (id) => ari.pararReproducao(id),
+    tocarFala: async (c, m) => (await ari.tocarFala(c, m)).id,
+    pararFala: (id) => ari.pararFala(id),
     ramalOnline: async (userId) => {
       try {
         const ep = await ari.pedir<{ state: string }>("GET", `/endpoints/PJSIP/${idDoRamal(userId)}`);
@@ -55,18 +64,138 @@ function portaBanco(pool: pg.Pool): PortaBanco {
   return {
     troncoPorId: (id) => repo.troncoPorId(pool, id),
     disponiveisNoTime: (org, team, agora) => repo.disponiveisNoTime(pool, org, team, agora),
+    timeParaAFila: (org, team, agora) => repo.timeParaAFila(pool, org, team, agora),
+    falasGerais: (org) => repo.falasGerais(pool, org),
+    menuPorId: (org, id) => repo.menuPorId(pool, org, id),
+    registrarEscolhaDoMenu: (org, id, e) => repo.registrarEscolhaDoMenu(pool, org, id, e),
+    avisarMenuComTimeArquivado: (org, menu) => repo.avisarMenuComTimeArquivado(pool, org, menu),
+    registrarAvisoOuvido: (org, id) => repo.registrarAvisoOuvido(pool, org, id),
+    avisarFalaIntocavel: (org, rotulo) => repo.avisarFalaIntocavel(pool, org, rotulo),
     acharOuCriarContato: (org, e164, nome) => repo.acharOuCriarContato(pool, org, e164, nome),
     acharOuCriarConversa: (org, c, t, team) => repo.acharOuCriarConversa(pool, org, c, t, team),
     criarLigacao: (l) => repo.criarLigacao(pool, l),
-    ligacaoPorId: (id) => repo.ligacaoPorId(pool, id),
+    ligacaoDoAtendente: (u, id) => repo.ligacaoDoAtendente(pool, u, id),
     ligacoesVivas: () => repo.ligacoesVivas(pool),
-    marcarTocando: (id, u) => repo.marcarTocando(pool, id, u),
-    marcarAtendida: (id, u) => repo.marcarAtendida(pool, id, u),
-    encerrarLigacao: (id, m) => repo.encerrarLigacao(pool, id, m),
+    marcarTocando: (org, id, u) => repo.marcarTocando(pool, org, id, u),
+    marcarAtendida: (org, id, u) => repo.marcarAtendida(pool, org, id, u),
+    encerrarLigacao: (org, id, m) => repo.encerrarLigacao(pool, org, id, m),
     atribuirConversa: (org, c, u) => repo.atribuirConversa(pool, org, c, u),
     registrarNaConversa: (l, d, ms) => repo.registrarNaConversa(pool, l, d, ms),
     avisarPerdida: (l) => repo.avisarPerdida(pool, l),
     registrarFim: (l, d, m) => repo.registrarFim(pool, l, d, m),
+  };
+}
+
+export interface DependenciasDaPassada {
+  falas: Pick<FalasNoDisco, "sincronizar" | "limparStorage">;
+  /** `repo.desligarAvisosVencidos` com o pool do worker: desliga, audita e avisa na Central. */
+  desligarAvisosVencidos: (agora: Date) => Promise<repo.AvisoDesligado[]>;
+  log: Registro;
+  /** Relógio. Padrão: `new Date()`. */
+  agora?: () => Date;
+  /** O desligamento do worker: dado o sinal, nenhuma passada nem etapa começa. */
+  signal?: AbortSignal;
+}
+
+/** Roda `fn` sem reentrar: quem chega com uma execução em curso volta na hora, sem esperá-la. */
+function semReentrancia(fn: () => Promise<void>): () => Promise<void> {
+  let emCurso = false;
+  return async () => {
+    if (emCurso) return;
+    emCurso = true;
+    try {
+      await fn();
+    } finally {
+      emCurso = false;
+    }
+  };
+}
+
+/**
+ * A passada de 60 s do telefone que NÃO depende da ARI — roda com o Asterisk fora.
+ * Duas frentes, cada uma com a SUA guarda de reentrância:
+ *  - os avisos de instabilidade VENCIDOS (§5.5): desligados, auditados
+ *    (`phone.emergency_expired`) e avisados na Central por
+ *    `desligarAvisosVencidos` num comando só; aqui só entram no log. Guarda
+ *    própria porque a limpeza do Storage não tem prazo: com o Storage lento, uma
+ *    guarda comum pularia passadas inteiras e o aviso vencido — e com ele a
+ *    auditoria e a Central — esperaria o Storage;
+ *  - o Storage: as falas para o volume (`sincronizar`) e, depois, a limpeza do
+ *    bucket (`limparStorage`, com freio próprio de 10 min —
+ *    `INTERVALO_DA_LIMPEZA_MS` —, então pode ser chamada a cada passada).
+ *
+ * Cada etapa é isolada: a que falha não impede as outras nem a próxima passada.
+ * Sem inundar o log (30 MB, divididos com o motor da IA): `FalasNoDisco` registra
+ * as próprias quedas na transição, e a etapa que LANÇA — `desligarAvisosVencidos`
+ * com o banco fora; `sincronizar`/`limparStorage` só se quebrarem o contrato de
+ * nunca lançar — é registrada uma vez ao cair e uma ao voltar. Passada sem efeito
+ * não escreve nada.
+ *
+ * No desligamento (`signal`), nenhuma passada nem etapa começa, e a etapa que
+ * falha DEPOIS do sinal não é registrada: o worker encerra o pool em seguida
+ * (workers/agent-worker/main.ts), e a falha é do desligamento, não do banco.
+ */
+export function passadaDoTelefone(d: DependenciasDaPassada): () => Promise<void> {
+  const agora = d.agora ?? (() => new Date());
+  const desligando = () => d.signal?.aborted === true;
+  const fora = new Set<string>();
+
+  const etapa = async (nome: string, rodar: () => Promise<void>) => {
+    if (desligando()) return;
+    try {
+      await rodar();
+    } catch (e) {
+      if (desligando()) return;
+      if (!fora.has(nome)) {
+        fora.add(nome);
+        d.log.warn(`telefonia: a passada de ${nome} falhou — tenta de novo a cada minuto`, { erro: String(e).slice(0, 200) });
+      }
+      return;
+    }
+    if (fora.delete(nome)) d.log.info(`telefonia: a passada de ${nome} voltou a funcionar`);
+  };
+
+  const avisos = semReentrancia(() =>
+    etapa("avisos de instabilidade vencidos", async () => {
+      for (const v of await d.desligarAvisosVencidos(agora())) {
+        d.log.info("telefonia: aviso de instabilidade venceu e foi desligado", {
+          team_id: v.id,
+          organization_id: v.organizationId,
+        });
+      }
+    }),
+  );
+  const storage = semReentrancia(async () => {
+    await etapa("falas no disco", async () => {
+      await d.falas.sincronizar();
+    });
+    await etapa("limpeza do Storage das falas", async () => {
+      await d.falas.limparStorage();
+    });
+  });
+
+  return async () => {
+    if (desligando()) return;
+    await Promise.all([avisos(), storage()]);
+  };
+}
+
+/**
+ * O registro das falas no disco, que se cala no desligamento: dado o sinal, o
+ * worker encerra o pool (workers/agent-worker/main.ts) enquanto um download ou
+ * uma consulta da passada ainda pode estar em curso — e `FalasNoDisco` leria a
+ * falha como "o banco caiu". Aviso e erro depois do sinal não entram no log; a
+ * informação segue.
+ */
+function registroQueCalaAoDesligar(log: Registro, signal: AbortSignal): Registro {
+  return {
+    info: (...a) => log.info(...a),
+    warn: (...a) => {
+      if (!signal.aborted) log.warn(...a);
+    },
+    error: (...a) => {
+      if (!signal.aborted) log.error(...a);
+    },
   };
 }
 
@@ -91,7 +220,8 @@ export async function runTelefoniaLoop(opts: {
     return;
   }
   const ari = new ClienteAri(cfg);
-  const ctl = new ControladorDeChamadas(portaAri(ari), portaBanco(opts.pool), opts.log);
+  const falas = falasDoWorker(opts.pool, registroQueCalaAoDesligar(opts.log, opts.signal));
+  const ctl = new ControladorDeChamadas(portaAri(ari), portaBanco(opts.pool), opts.log, Date.now, falas);
   const sync = new SincronizadorDeTroncos(ari, opts.pool, opts.log, {
     host: new URL(cfg.baseUrl).hostname,
     senha: cfg.senha,
@@ -105,8 +235,19 @@ export async function runTelefoniaLoop(opts: {
   };
   ctl.usarFila(enfileirar);
 
+  // Fora da fila serial: baixar arquivo não pode atrasar o evento de uma ligação
+  // nem a reconciliação dos troncos.
+  const passada = passadaDoTelefone({
+    falas,
+    desligarAvisosVencidos: (agora) => repo.desligarAvisosVencidos(opts.pool, agora),
+    log: opts.log,
+    signal: opts.signal,
+  });
+  void passada();
+
   const reconciliar = setInterval(() => {
     if (estado.conectada) void enfileirar(() => sync.sincronizar(false));
+    void passada();
   }, RECONCILIAR_MS);
   const lerEstados = setInterval(() => {
     if (estado.conectada) void sync.atualizarEstados().catch(() => undefined);

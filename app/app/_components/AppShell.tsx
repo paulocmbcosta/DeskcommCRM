@@ -6,6 +6,7 @@ import { BarraDeProgressoNavegacao } from "@/components/shell/BarraDeProgressoNa
 import { useInboundMessageAlerts } from "@/hooks/notifications/useInboundMessageAlerts";
 import { useCrmAlerts } from "@/hooks/notifications/useCrmAlerts";
 import { useNotifyOpenFromServiceWorker } from "@/lib/notifications/notify_open";
+import { JANELA_ABAIXO_DAS_FAIXAS } from "@/lib/ui/faixas-do-topo";
 
 interface AppShellProps {
   sidebarCollapsed: boolean;
@@ -17,7 +18,9 @@ export function AppShell({ sidebarCollapsed, children }: AppShellProps) {
   useCrmAlerts();
   useNotifyOpenFromServiceWorker();
   return (
-    <div className="flex min-h-screen w-full bg-background">
+    // A janela menos as faixas do topo (lib/ui/faixas-do-topo.ts): com
+    // `min-h-screen`, a faixa + 100vh fazia a página rolar pela altura da faixa.
+    <div className="flex w-full bg-background" style={{ minHeight: JANELA_ABAIXO_DAS_FAIXAS }}>
       <BarraDeProgressoNavegacao />
       <div className="hidden md:block">
         <Sidebar collapsed={sidebarCollapsed} />
@@ -41,7 +44,7 @@ export function AppShell({ sidebarCollapsed, children }: AppShellProps) {
         SEGUNDA medida da mesma coisa — a que discordava e deixava a barra por
         cima da lista.
       */}
-      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col" style={{ minHeight: JANELA_ABAIXO_DAS_FAIXAS }}>
         <TopBar />
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>

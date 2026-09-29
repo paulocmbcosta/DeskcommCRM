@@ -131,6 +131,43 @@ describe("sentryScrubHooks", () => {
     expect(JSON.stringify(truncado)).not.toContain(senha);
   });
 
+  // Os campos que carregam SEGREDO no corpo das rotas do telefone
+  // (`app/api/v1/telefonia/**`), auditados um a um em 2026-09-28:
+  //   - `chave`  — PUT /telefonia/voz/chave (a chave da ElevenLabs). NÃO casava.
+  //   - `clave`  — o mesmo campo em espanhol, para quem traduzir a API. NÃO casava.
+  //   - `senha`  — POST/PATCH /telefonia/numeros (a senha SIP da operadora). Já casava.
+  // As outras rotas do telefone não levam segredo no corpo: `chamadas` leva
+  // contato/número, `ramal` manda `{}` (a senha do ramal vai na RESPOSTA, que o
+  // SDK não anexa), e `ws/autorizar` autentica pelo cookie, que o filtro de
+  // header já tira.
+  it("redige os segredos do corpo das rotas do telefone, e só eles", () => {
+    const segredo = "sk_ficticia_do_telefone_1234";
+    for (const campo of ["chave", "clave", "senha", "Chave", "nova_chave"]) {
+      const evento = sentryScrubHooks.beforeSend({
+        request: { data: JSON.stringify({ [campo]: segredo, servidor: "sip.operadora.com.br", nome: "Recepção" }) },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const texto = JSON.stringify(evento);
+      expect(texto, campo).not.toContain(segredo);
+      expect(texto, campo).toContain(campo);
+      // O que não é segredo continua legível: é o que serve para depurar.
+      expect(texto, campo).toContain("sip.operadora.com.br");
+      expect(texto, campo).toContain("Recepção");
+    }
+
+    const formulario = sentryScrubHooks.beforeSend({
+      request: { data: `chave=${segredo}&clave=${segredo}` },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(JSON.stringify(formulario)).not.toContain(segredo);
+
+    const truncado = sentryScrubHooks.beforeSend({
+      request: { data: `{"chave":"${segredo}` },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(JSON.stringify(truncado)).not.toContain(segredo);
+  });
+
   it("beforeSendTransaction limpa os atributos de trace — o canal que não tinha guarda", () => {
     const event = sentryScrubHooks.beforeSendTransaction({
       transaction: `GET /api/v1/webhooks/in/${TOKEN}`,

@@ -264,3 +264,58 @@ describe("PATCH /api/v1/ai/providers — padrão da organização", () => {
     );
   });
 });
+
+/**
+ * GET — a lista de credenciais do painel é de PROVEDOR DE MODELO.
+ *
+ * A chave de voz do telefone (`elevenlabs`) mora na mesma tabela. O painel usa
+ * `credenciais.length === 0` para dizer "sem chave de IA" e filtra por provedor
+ * para oferecer a chave de cada ponto: devolvê-la aqui faria uma organização que
+ * só cadastrou a voz parecer ter chave de modelo.
+ */
+describe("GET /api/v1/ai/providers — credenciais", () => {
+  function stubDoGet(credenciais: Record<string, unknown>[]) {
+    return {
+      from(tabela: string) {
+        const lista: Record<string, Record<string, unknown>[]> = { ai_provider_credentials: credenciais };
+        const cadeia: Record<string, unknown> = {};
+        for (const m of ["select", "eq", "is", "not", "order", "limit"]) cadeia[m] = () => cadeia;
+        cadeia.maybeSingle = () => Promise.resolve({ data: null, error: null });
+        cadeia.then = (r: (v: unknown) => unknown) =>
+          Promise.resolve({ data: lista[tabela] ?? [], error: null }).then(r);
+        return cadeia;
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    autorizadoComoAdmin();
+  });
+
+  it("com a chave de voz ativa na organização, ela NÃO volta — as de modelo voltam", async () => {
+    vi.mocked(createClient).mockResolvedValue(
+      stubDoGet([
+        { id: "cred-anthropic", provider: "anthropic", label: "Claude", api_key_last4: "aaaa", validated_at: null, is_active: true },
+        { id: "cred-voz", provider: "elevenlabs", label: "ElevenLabs", api_key_last4: "1234", validated_at: null, is_active: true },
+      ]) as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    const { GET } = await import("./route");
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { data: { credenciais: Array<{ id: string; provider: string }> } };
+    expect(json.data.credenciais.map((c) => c.id)).toEqual(["cred-anthropic"]);
+  });
+
+  it("organização que só cadastrou a voz aparece SEM chave de modelo", async () => {
+    vi.mocked(createClient).mockResolvedValue(
+      stubDoGet([
+        { id: "cred-voz", provider: "elevenlabs", label: "ElevenLabs", api_key_last4: "1234", validated_at: null, is_active: true },
+      ]) as unknown as Awaited<ReturnType<typeof createClient>>,
+    );
+    const { GET } = await import("./route");
+    const json = (await (await GET()).json()) as { data: { credenciais: unknown[] } };
+    expect(json.data.credenciais).toEqual([]);
+  });
+});

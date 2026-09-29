@@ -18,11 +18,14 @@ import {
   ImpersonateBanner,
 } from "@/components/app/ImpersonateBanner";
 import { ConexaoCaidaBanner } from "@/components/app/ConexaoCaidaBanner";
+import { FaixasDoTopo } from "@/components/app/FaixasDoTopo";
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
 import { TelefoniaProvider } from "@/components/telefonia/TelefoniaContext";
 import { PainelDoTelefone } from "@/components/telefonia/PainelDoTelefone";
+import { FaixaDoAvisoDeInstabilidade } from "@/components/telefonia/FaixaDoAvisoDeInstabilidade";
+import { configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
 import { acessoFoiRevogado } from "@/lib/auth/vinculo-revogado";
 import { barraLateralRecolhida, COOKIE_BARRA_RECOLHIDA } from "@/lib/navigation/barra-lateral";
 
@@ -244,8 +247,23 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       */}
       <div data-marca-org="" className="contents">
         <EstiloDaMarcaDaOrganizacao css={cssDaOrganizacao} />
-        <ImpersonateBanner impersonating={impersonating} />
-        <ConexaoCaidaBanner caidas={conexoesCaidas} />
+        {/*
+          As faixas de estado do topo EMPILHADAS num contêiner `sticky` só, que
+          publica a altura delas para a TopBar e a Inbox descontarem
+          (components/app/FaixasDoTopo.tsx). Cada uma `sticky top-0` por conta
+          própria, elas grudavam no MESMO ponto ao rolar e a de cima cobria as
+          outras. Sem nenhuma faixa, o contêiner tem altura zero.
+        */}
+        <FaixasDoTopo>
+          <ImpersonateBanner impersonating={impersonating} />
+          <ConexaoCaidaBanner caidas={conexoesCaidas} />
+          {/*
+            O aviso de instabilidade do telefone ligado: todo membro vê (desenho da
+            fase 2, §6.4). `oferecida` é lida AQUI, do ambiente, sem consulta: a
+            instalação sem telefonia não paga nem a primeira leitura da faixa.
+          */}
+          <FaixaDoAvisoDeInstabilidade oferecida={configAriDoAmbiente() !== null} />
+        </FaixasDoTopo>
         {needsMfaGate ? (
           // Gate always mounted for MFA-required roles; it latches the blocking
           // decision client-side so the enroll Server Action's revalidation
