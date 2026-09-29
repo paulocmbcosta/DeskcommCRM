@@ -37,6 +37,8 @@ function portaAri(ari: ClienteAri): PortaAri {
     pararMusica: (c) => ari.pararMusica(c),
     tocarTom: (c, t) => ari.tocarTom(c, t),
     pararReproducao: (id) => ari.pararReproducao(id),
+    tocarFala: async (c, m) => (await ari.tocarFala(c, m)).id,
+    pararFala: (id) => ari.pararFala(id),
     ramalOnline: async (userId) => {
       try {
         const ep = await ari.pedir<{ state: string }>("GET", `/endpoints/PJSIP/${idDoRamal(userId)}`);

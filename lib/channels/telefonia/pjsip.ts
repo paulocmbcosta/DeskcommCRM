@@ -223,6 +223,12 @@ export function objetosDoRamal(r: RamalSip): ObjetoPjsip[] {
         // controlador fecha a ligação do outro lado (medido na prova pela tela:
         // sem isto o cliente ficou 4 min pendurado numa ponte com ninguém).
         f("rtp_timeout", 30),
+        // Transferência por REFER fechada (desenho da fase 2, §5.3): quem transfere
+        // é o CRM, pela ARI, com a regra de quem pode e para onde. Um REFER vindo
+        // do navegador mandaria o cliente para qualquer lugar sem passar por ela.
+        // Ramais já registrados recebem o campo quando o Asterisk é recriado — o
+        // que o `update.sh` faz nesta versão, porque o serviço ganha um volume.
+        f("allow_transfer", "no"),
       ],
     },
   ];

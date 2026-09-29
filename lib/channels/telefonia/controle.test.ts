@@ -72,6 +72,11 @@ class AriFalso implements PortaAri {
     return { id: "tom-1" };
   };
   pararReproducao = (id: string) => this.reg("pararReproducao", id);
+  tocarFala = async (c: string, m: string) => {
+    await this.reg("tocarFala", c, m);
+    return `fala-${++this.seq}`;
+  };
+  pararFala = (id: string) => this.reg("pararFala", id);
   ramalOnline = async (u: string) => this.online.has(u);
   pontes = async () => this.pontesVivas;
   canais = async () => this.canaisVivos;

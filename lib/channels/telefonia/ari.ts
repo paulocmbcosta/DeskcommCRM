@@ -222,6 +222,30 @@ export class ClienteAri {
     }
   }
 
+  /**
+   * Toca uma fala do telefone no canal (URA, aguarde, aviso). `midia` é
+   * `sound:<caminho SEM extensão>` — o Asterisk escolhe o arquivo pelo formato
+   * (`.ulaw`). Medido na VPS (Task 0): responde 201 com `state: "queued"`; o
+   * fim chega pelo evento `PlaybackFinished` no WebSocket, nunca por polling.
+   */
+  tocarFala(canalId: string, midia: string) {
+    return this.pedir<{ id: string }>("POST", `/channels/${canalId}/play`, { query: { media: midia } });
+  }
+
+  /**
+   * Para uma fala em andamento. Um playback que já terminou responde 404
+   * (`GET /playbacks/{id}` medido na VPS) e NÃO é erro — o estado desejado
+   * (fala parada) já vale.
+   */
+  async pararFala(playbackId: string) {
+    try {
+      await this.pedir("DELETE", `/playbacks/${playbackId}`);
+    } catch (e) {
+      if (e instanceof ErroAri && e.status === 404) return;
+      throw e;
+    }
+  }
+
   listarCanais() {
     return this.pedir<CanalAri[]>("GET", "/channels");
   }

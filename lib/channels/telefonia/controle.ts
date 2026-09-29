@@ -56,6 +56,10 @@ export interface PortaAri {
   pararMusica(canal: string): Promise<unknown>;
   tocarTom(canal: string, tom: "ring" | "busy" | "congestion"): Promise<{ id: string }>;
   pararReproducao(id: string): Promise<unknown>;
+  /** Toca uma fala do telefone (URA, aguarde, aviso) e devolve o id do playback. */
+  tocarFala(canal: string, midia: string): Promise<string>;
+  /** Para uma fala em andamento. Um playback que já terminou não é erro. */
+  pararFala(playbackId: string): Promise<unknown>;
   /** O ramal está registrado (há navegador para tocar)? */
   ramalOnline(userId: string): Promise<boolean>;
   /** Pontes vivas com os canais de cada uma — para `recuperar()`. */
@@ -88,11 +92,29 @@ export interface Registro {
 
 // ─── eventos da ARI que importam ───────────────────────────────────────────
 
+/** O playback que a ARI devolve em `PlaybackStarted`/`PlaybackFinished` (Task 0, medido na VPS). */
+export interface PlaybackAri {
+  id: string;
+  media_uri: string;
+  target_uri: string;
+  language: string;
+  state: string;
+}
+
+/**
+ * `PlaybackFinished`, `ChannelDtmfReceived` e `ChannelUserevent` entram aqui
+ * pela Task 13; QUEM TRATA é o controlador da URA (Tasks 14/15) — este arquivo
+ * só tipa o que chega no WebSocket.
+ */
 export type EventoAri =
   | { type: "StasisStart"; channel: CanalAri; args: string[] }
   | { type: "StasisEnd"; channel: CanalAri }
   | { type: "ChannelDestroyed"; channel: CanalAri; cause: number; cause_txt?: string }
   | { type: "Dial"; peer: CanalAri; dialstatus: string }
+  | { type: "PlaybackFinished"; playback: PlaybackAri }
+  /** As teclas da operadora chegam por RFC 4733 (Task 0, medido na VPS). */
+  | { type: "ChannelDtmfReceived"; channel: CanalAri; digit: string; duration_ms?: number }
+  | { type: "ChannelUserevent"; eventname: string; channel?: CanalAri; userevent?: Record<string, unknown> }
   | { type: string; [k: string]: unknown };
 
 // ─── estado por ligação ────────────────────────────────────────────────────
