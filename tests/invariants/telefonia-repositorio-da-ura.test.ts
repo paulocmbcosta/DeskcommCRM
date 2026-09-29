@@ -44,6 +44,7 @@ const FECHADO = "c0de0289-2222-4000-8000-000000000002";
 const ARQUIVADO = "c0de0289-2222-4000-8000-000000000003";
 const TIME_OUTRA = "c0de0289-2222-4000-8000-000000000004";
 const AGENDA_RUIM = "c0de0289-2222-4000-8000-000000000005";
+const ARQUIVADO_OUTRA = "c0de0289-2222-4000-8000-000000000006";
 const PRONTA = "c0de0289-3333-4000-8000-000000000001";
 const FALHOU = "c0de0289-3333-4000-8000-000000000002";
 const AVISO = "c0de0289-3333-4000-8000-000000000003";
@@ -54,6 +55,8 @@ const PRONTA_OUTRA = "c0de0289-3333-4000-8000-000000000007";
 const MENU = "c0de0289-4444-4000-8000-000000000001";
 const MENU_ARQUIVADO = "c0de0289-4444-4000-8000-000000000002";
 const MENU_OUTRA = "c0de0289-4444-4000-8000-000000000003";
+/** Menu de B cujo time padrão foi arquivado depois de o menu ser montado. */
+const MENU_OUTRA_PADRAO_ARQUIVADO = "c0de0289-4444-4000-8000-000000000004";
 const NUMERO = "c0de0289-5555-4000-8000-000000000001";
 const NUMERO_OUTRA = "c0de0289-5555-4000-8000-000000000002";
 /** Segunda-feira, 10h em Brasília. */
@@ -99,9 +102,10 @@ beforeAll(async () => {
        ($3, $6, 'Antigo', 'antigo', '{}'::jsonb, now()),
        ($4, $7, 'Suporte B', 'suporte', '{}'::jsonb, null),
        ($5, $6, 'Agenda ruim', 'agenda-ruim',
-        '{"timezone":"America/Asunción","windows":[{"dow":1,"start":"00:00","end":"23:59"}]}'::jsonb, null)
+        '{"timezone":"America/Asunción","windows":[{"dow":1,"start":"00:00","end":"23:59"}]}'::jsonb, null),
+       ($8, $7, 'Antigo B', 'antigo', '{}'::jsonb, now())
      on conflict (id) do nothing`,
-    [ABERTO, FECHADO, ARQUIVADO, TIME_OUTRA, AGENDA_RUIM, ORG, OUTRA],
+    [ABERTO, FECHADO, ARQUIVADO, TIME_OUTRA, AGENDA_RUIM, ORG, OUTRA, ARQUIVADO_OUTRA],
   );
   // Ana está no Suporte e no Financeiro de A, disponível; Bruno no Suporte de B.
   await pool.query(
@@ -143,15 +147,20 @@ beforeAll(async () => {
     `insert into public.phone_menus (id, organization_id, name, prompt_id, invalid_prompt_id, default_team_id, archived_at) values
        ($1, $4, 'Principal', $6, $7, $8, null),
        ($2, $4, 'Velho', $6, null, $8, now()),
-       ($3, $5, 'Menu B', $9, null, $10, null)
+       ($3, $5, 'Menu B', $9, null, $10, null),
+       ($11, $5, 'Menu B antigo', $9, null, $12, null)
      on conflict (id) do nothing`,
-    [MENU, MENU_ARQUIVADO, MENU_OUTRA, ORG, OUTRA, PRONTA, INVALIDA_FALHOU, ABERTO, PRONTA_OUTRA, TIME_OUTRA],
+    [
+      MENU, MENU_ARQUIVADO, MENU_OUTRA, ORG, OUTRA, PRONTA, INVALIDA_FALHOU, ABERTO, PRONTA_OUTRA, TIME_OUTRA,
+      MENU_OUTRA_PADRAO_ARQUIVADO, ARQUIVADO_OUTRA,
+    ],
   );
   await pool.query(
     `insert into public.phone_menu_options (organization_id, menu_id, digit, team_id) values
-       ($1, $2, '1', $3), ($1, $2, '2', $4), ($1, $2, '3', $5)
+       ($1, $2, '1', $3), ($1, $2, '2', $4), ($1, $2, '3', $5),
+       ($6, $7, '1', $8), ($6, $7, '2', $9)
      on conflict do nothing`,
-    [ORG, MENU, ABERTO, FECHADO, ARQUIVADO],
+    [ORG, MENU, ABERTO, FECHADO, ARQUIVADO, OUTRA, MENU_OUTRA_PADRAO_ARQUIVADO, TIME_OUTRA, ARQUIVADO_OUTRA],
   );
   await pool.query(
     `insert into public.channel_sessions
@@ -212,6 +221,7 @@ describe("menuPorId e o menu do número", () => {
       id: MENU,
       nome: "Principal",
       defaultTeamId: ABERTO,
+      timePadraoAtivo: true,
       fala: { id: PRONTA, storagePath: caminho(ORG, "a") },
       falaInvalida: null,
       opcoes: [
@@ -219,6 +229,28 @@ describe("menuPorId e o menu do número", () => {
         { digito: "2", teamId: FECHADO },
       ],
     });
+  });
+
+  it("time arquivado, nas duas organizações: a opção dele some, a ativa fica, e o time padrão arquivado vira sinal", async () => {
+    // A: a tecla 3 (time "Antigo", arquivado) não volta — cai no caminho de opção inválida da URA.
+    const a = await repo.menuPorId(pool, ORG, MENU);
+    expect(a?.opcoes.map((o) => o.digito)).toEqual(["1", "2"]);
+    expect(a?.opcoes.some((o) => o.teamId === ARQUIVADO)).toBe(false);
+    expect(a?.timePadraoAtivo).toBe(true);
+
+    // B: o menu cujo time padrão foi arquivado ainda volta (o comportamento da ligação não muda),
+    // com o sinal para o controlador avisar na Central; a opção do time arquivado some, a ativa fica.
+    const b = await repo.menuPorId(pool, OUTRA, MENU_OUTRA_PADRAO_ARQUIVADO);
+    expect(b).toMatchObject({
+      id: MENU_OUTRA_PADRAO_ARQUIVADO,
+      defaultTeamId: ARQUIVADO_OUTRA,
+      timePadraoAtivo: false,
+      opcoes: [{ digito: "1", teamId: TIME_OUTRA }],
+    });
+    // O menu de B com o time padrão ativo não acende o sinal.
+    expect((await repo.menuPorId(pool, OUTRA, MENU_OUTRA))?.timePadraoAtivo).toBe(true);
+    // E A não enxerga o menu de B, com sinal ou sem.
+    expect(await repo.menuPorId(pool, ORG, MENU_OUTRA_PADRAO_ARQUIVADO)).toBeNull();
   });
 
   it("menu de outra organização ou arquivado → null", async () => {

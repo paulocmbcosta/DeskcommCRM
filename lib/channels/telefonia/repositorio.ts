@@ -333,22 +333,37 @@ export interface MenuDoBanco {
   id: string;
   nome: string;
   defaultTeamId: string;
+  /**
+   * `false` = o time padrão foi ARQUIVADO depois de o menu ser montado. O menu
+   * continua atendendo como antes (a ligação cai no time padrão, que não recebe
+   * ninguém, e vira perdida com "Ligar de volta"); o sinal existe para o
+   * controlador avisar na Central que o menu precisa de outro time padrão.
+   */
+  timePadraoAtivo: boolean;
   /** `null` = sem fala pronta: o controlador manda direto para o time padrão (desenho §4). */
   fala: FalaDoBanco | null;
   falaInvalida: FalaDoBanco | null;
-  /** Em ordem de tecla; só as de times NÃO arquivados (tecla de time arquivado conta como inválida). */
+  /**
+   * Em ordem de tecla; só as de times NÃO arquivados. A tecla de um time
+   * arquivado não volta, e por isso cai no caminho de "opção inválida" da URA
+   * (`lib/telefonia/ura.ts`): toca a fala de tecla inválida e repete o menu.
+   */
   opcoes: Array<{ digito: string; teamId: string }>;
 }
 
 const falaOuNada = (id: string | null, caminho: string | null): FalaDoBanco | null =>
   id && caminho ? { id, storagePath: caminho } : null;
 
-/** O menu DESTA organização, se não arquivado — só falas prontas, só opções de times não arquivados. */
+/**
+ * O menu DESTA organização, se não arquivado — só falas prontas, só opções de
+ * times não arquivados, e o sinal do time padrão arquivado (`timePadraoAtivo`).
+ */
 export async function menuPorId(db: Queryable, organizationId: string, menuId: string): Promise<MenuDoBanco | null> {
   const { rows } = await db.query<{
     id: string;
     nome: string;
     default_team_id: string;
+    time_padrao_ativo: boolean;
     fala_id: string | null;
     fala_caminho: string | null;
     invalida_id: string | null;
@@ -356,6 +371,7 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     opcoes: Array<{ digito: string; teamId: string }>;
   }>(
     `select m.id, m.name as nome, m.default_team_id,
+            (d.id is not null and d.archived_at is null) as time_padrao_ativo,
             p.id as fala_id, p.storage_path as fala_caminho,
             i.id as invalida_id, i.storage_path as invalida_caminho,
             coalesce((
@@ -366,6 +382,8 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
                where o.menu_id = m.id and o.organization_id = m.organization_id
             ), '[]'::jsonb) as opcoes
        from phone_menus m
+       left join attendance_teams d
+         on d.id = m.default_team_id and d.organization_id = m.organization_id
        left join phone_prompts p
          on p.id = m.prompt_id and p.organization_id = m.organization_id and p.status = 'ready'
        left join phone_prompts i
@@ -379,6 +397,7 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     id: r.id,
     nome: r.nome,
     defaultTeamId: r.default_team_id,
+    timePadraoAtivo: r.time_padrao_ativo,
     fala: falaOuNada(r.fala_id, r.fala_caminho),
     falaInvalida: falaOuNada(r.invalida_id, r.invalida_caminho),
     opcoes: r.opcoes,
