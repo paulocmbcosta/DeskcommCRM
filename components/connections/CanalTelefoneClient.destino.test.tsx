@@ -21,15 +21,22 @@
  *    tela — nunca o HTML, nunca a senha;
  *  - a criação manda `Idempotency-Key`, a MESMA ao repetir o mesmo formulário
  *    (a resposta que se perdeu) e outra quando o formulário muda;
- *  - a lista de menus que não carregou é dita, e não vira "nenhum menu".
+ *  - a lista de menus que não carregou é dita, e não vira "nenhum menu"; a lista
+ *    de NÚMEROS que não carregou também não vira "nenhum número conectado";
+ *  - o salvar que falhou relê a lista de números (a resposta perdida de um número
+ *    que foi criado aparece na hora);
+ *  - o motivo do bloqueio descreve o seletor e o botão (`aria-describedby`);
+ *  - "Criar um menu" abre a aba Menus em OUTRA aba, sem descartar o formulário,
+ *    e a lista de menus é relida quando a pessoa volta.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
+import { makeQueryClient } from "@/lib/query/client";
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
@@ -198,8 +205,10 @@ beforeAll(() => {
 const TETO_MS = 30_000;
 const usuario = () => userEvent.setup({ delay: null });
 
-function pintar(envolver: (filho: ReactNode) => ReactNode = (f) => f) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function pintar(
+  envolver: (filho: ReactNode) => ReactNode = (f) => f,
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   render(<QueryClientProvider client={qc}>{envolver(<CanalTelefoneClient />)}</QueryClientProvider>);
   return qc;
 }
@@ -237,6 +246,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  focusManager.setFocused(undefined);
 });
 
 describe("Quando ligarem — o número toca o time OU o menu", () => {
@@ -424,7 +434,122 @@ describe("Quando ligarem — o destino arquivado", () => {
   );
 });
 
+describe("Quando ligarem — o menu de agora com a fala pendente", () => {
+  it(
+    "o menu do número ficou com a fala pendente: o seletor o marca, e o motivo trava o salvar e descreve o seletor e o botão",
+    async () => {
+      servidor.numeros = [numero({ time_id: null, time_nome: null, menu_id: "m1", menu_nome: "Principal" })];
+      servidor.menus = [menu("m1", "Principal", false)];
+      const user = usuario();
+      pintar();
+      const f = await editar(user);
+      await waitFor(() => expect(seletorDeMenu(f)).toHaveTextContent("Principal — fala pendente"));
+      const motivo = "A fala deste menu ainda não está pronta. Gere a prévia e salve o menu na aba Menus.";
+      expect(f.querySelector("[data-destino-bloqueado]")).toHaveTextContent(motivo);
+      expect(salvarDe(f)).toBeDisabled();
+      expect(seletorDeMenu(f)).toHaveAccessibleDescription(motivo);
+      expect(salvarDe(f)).toHaveAccessibleDescription(motivo);
+    },
+    TETO_MS,
+  );
+
+  it(
+    "o motivo do time arquivado descreve o seletor de time; escolhido outro, a descrição sai",
+    async () => {
+      servidor.numeros = [numero({ time_id: T_ANTIGO, time_nome: "Cobrança antiga", time_arquivado: true })];
+      const user = usuario();
+      pintar();
+      const f = await editar(user);
+      const motivo = "O time escolhido foi arquivado e não recebe ligações. Escolha outro time.";
+      await waitFor(() => expect(seletorDeTime(f)).toHaveAccessibleDescription(motivo));
+      expect(salvarDe(f)).toHaveAccessibleDescription(motivo);
+
+      await escolher(user, seletorDeTime(f), "Suporte");
+      expect(seletorDeTime(f)).not.toHaveAttribute("aria-describedby");
+      expect(salvarDe(f)).not.toHaveAttribute("aria-describedby");
+    },
+    TETO_MS,
+  );
+});
+
+describe("Quando ligarem — criar um menu sem perder o formulário", () => {
+  it(
+    "o link abre a aba Menus em OUTRA aba, e a lista de menus é relida quando a pessoa volta",
+    async () => {
+      servidor.menus = [];
+      const user = usuario();
+      // O cliente da APLICAÇÃO (refetchOnWindowFocus: false por padrão): a releitura
+      // ao voltar tem de ser pedida por esta tela.
+      pintar((x) => x, makeQueryClient());
+      const f = await editar(user);
+      await user.type(within(f).getByLabelText("Senha"), SENHA);
+      await escolher(user, destino(f), "Tocar o menu");
+
+      const link = await within(f).findByRole("link", { name: "Criar um menu" });
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener");
+
+      // Na outra aba, a pessoa cria o menu; volta a esta.
+      servidor.menus = [menu("m1", "Principal")];
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await waitFor(() => expect(within(f).queryByText("Nenhum menu criado ainda. Crie um na aba Menus.")).toBeNull());
+      await escolher(user, seletorDeMenu(f), "Principal");
+      // O formulário ficou: a senha digitada segue no campo.
+      expect(within(f).getByLabelText("Senha")).toHaveValue(SENHA);
+      expect(salvarDe(f)).toBeEnabled();
+    },
+    TETO_MS,
+  );
+});
+
 describe("Quando ligarem — recusas e a criação", () => {
+  it(
+    "a lista de números não carregou: a tela diz, e não finge que não há número",
+    async () => {
+      trocadas.set("GET /api/v1/telefonia/numeros", [() => proxy(504)]);
+      pintar();
+      expect(await screen.findByText("Não foi possível carregar os números. Recarregue a página.")).toBeInTheDocument();
+      expect(screen.queryByText("Nenhum número conectado ainda.")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Adicionar número" })).toBeNull();
+      expect(document.body.textContent).not.toContain("Gateway");
+    },
+    TETO_MS,
+  );
+
+  it(
+    "a resposta da criação se perdeu, mas o número foi criado: a lista é relida e o número aparece na hora",
+    async () => {
+      trocadas.set("POST /api/v1/telefonia/numeros", [
+        (c) => {
+          // O servidor gravou; a resposta nunca chegou.
+          servidor.numeros.push(gravar(numero({ id: "n2", numero: "+556130001111" }), c));
+          throw new TypeError("Failed to fetch");
+        },
+      ]);
+      const user = usuario();
+      pintar();
+      await user.click(await screen.findByRole("button", { name: "Adicionar outro número" }));
+      const f = document.querySelector("[data-telefonia-formulario]") as HTMLElement;
+      await user.type(within(f).getByLabelText("Nome"), "Central");
+      await user.type(within(f).getByLabelText("Número"), "(61) 3000-1111");
+      await user.type(within(f).getByLabelText("Servidor SIP"), "voip.operadora.com.br");
+      await user.type(within(f).getByLabelText("Usuário"), "6130001111");
+      await user.type(within(f).getByLabelText("Senha"), SENHA);
+      await user.click(salvarDe(f));
+
+      expect(await within(f).findByRole("alert")).toHaveTextContent(
+        "Não foi possível salvar o número. Tente de novo em instantes.",
+      );
+      // O número criado aparece enquanto o formulário segue aberto, com a falha.
+      expect(await cartaoDo("Central")).toHaveTextContent("Nenhum time recebe as ligações deste número");
+      expect(document.querySelector("[data-telefonia-formulario]")).not.toBeNull();
+    },
+    TETO_MS,
+  );
+
   it(
     "a recusa da rota aparece com a frase dela; o 504 do proxy, com a frase da tela — nunca o HTML, nunca a senha",
     async () => {

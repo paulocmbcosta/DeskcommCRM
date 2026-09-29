@@ -109,6 +109,8 @@ const SEM_MENU = "__sem_menu__";
 
 /** Onde se criam os menus: a aba Menus do Telefone. */
 const ABA_DOS_MENUS = "/app/connections?aba=telefone&sub=menus";
+/** O motivo do destino bloqueado — descreve o seletor e o "Salvar e conectar". */
+const ID_DO_BLOQUEIO = "tel-destino-bloqueio";
 
 /**
  * O time do número foi arquivado — pela leitura do número ou pela lista de times,
@@ -151,8 +153,11 @@ export function CanalTelefoneClient() {
   const [form, setForm] = useState<Formulario>(VAZIO);
   const [salvando, setSalvando] = useState(false);
   const [falhaAoSalvar, setFalhaAoSalvar] = useState<string | null>(null);
-  // A lista de menus só serve ao formulário: o cartão lê o menu na própria linha do número.
-  const consultaDosMenus = useMenusDoTelefone(editando !== null);
+  // A lista de menus só serve ao formulário: o cartão lê o menu na própria linha do
+  // número. E é relida quando a pessoa VOLTA a esta aba: "Criar um menu" abre a aba
+  // Menus em outra aba do navegador, e o menu criado lá tem de aparecer aqui sem
+  // recarregar — que descartaria o formulário, senha inclusive.
+  const consultaDosMenus = useMenusDoTelefone(editando !== null, { releAoVoltar: true });
   // A chave de idempotência da CRIAÇÃO, por formulário. Repetir o MESMO formulário
   // (o salvar cuja resposta se perdeu — timeout, rede, 504) reusa a chave: se a
   // tentativa anterior chegou a gravar, a rota devolve o número dela em vez de
@@ -198,6 +203,7 @@ export function CanalTelefoneClient() {
       menu_id: n.menu_id ?? "",
     });
     setFalhaAoSalvar(null);
+    recibo.current = null;
     setEditando(n.id);
   };
 
@@ -237,6 +243,10 @@ export function CanalTelefoneClient() {
       // — o 504 de um proxy, a rede —, a da tela. Nunca o texto cru do erro.
       const doServidor = mensagemDoServidor(e);
       setFalhaAoSalvar(doServidor ? t(doServidor) : t("Não foi possível salvar o número. Tente de novo em instantes."));
+      // Falha numa escrita é "não sei", não "não aconteceu": a resposta perdida de
+      // um número que FOI criado (ou editado) aparece na lista na hora — e não só
+      // quando a pessoa tenta de novo e recebe `numero_ja_existe`.
+      void qc.invalidateQueries({ queryKey: ["telefonia", "numeros"] });
     } finally {
       setSalvando(false);
     }
@@ -255,6 +265,12 @@ export function CanalTelefoneClient() {
 
   if (consulta.isLoading) return <p className="text-sm text-muted-foreground">{t("Carregando…")}</p>;
   const dados = consulta.data;
+  // A leitura falhou SEM nada lido antes: dizer "nenhum número conectado" seria
+  // mentir para quem tem números. (Uma releitura que falha depois de uma boa
+  // mantém a lista que já estava na tela.)
+  if (consulta.isError && !dados) {
+    return <Card className="p-5 text-sm text-muted-foreground">{t("Não foi possível carregar os números. Recarregue a página.")}</Card>;
+  }
 
   if (dados && !dados.oferecida) return <TelefoniaDesligada />;
 
@@ -472,7 +488,11 @@ export function CanalTelefoneClient() {
                     value={form.time_id || SEM_TIME}
                     onValueChange={(v) => setForm((f) => ({ ...f, time_id: v === SEM_TIME ? "" : v }))}
                   >
-                    <SelectTrigger id="tel-time" aria-label={t("Time que recebe as ligações")}>
+                    <SelectTrigger
+                      id="tel-time"
+                      aria-label={t("Time que recebe as ligações")}
+                      aria-describedby={bloqueioDoDestino ? ID_DO_BLOQUEIO : undefined}
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -495,7 +515,11 @@ export function CanalTelefoneClient() {
                     value={form.menu_id || SEM_MENU}
                     onValueChange={(v) => setForm((f) => ({ ...f, menu_id: v === SEM_MENU ? "" : v }))}
                   >
-                    <SelectTrigger id="tel-menu" aria-label={t("Menu que atende as ligações")}>
+                    <SelectTrigger
+                      id="tel-menu"
+                      aria-label={t("Menu que atende as ligações")}
+                      aria-describedby={bloqueioDoDestino ? ID_DO_BLOQUEIO : undefined}
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -525,13 +549,19 @@ export function CanalTelefoneClient() {
               ) : form.destino === "menu" && consultaDosMenus.isSuccess && menus.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   {t("Nenhum menu criado ainda. Crie um na aba Menus.")}{" "}
-                  <Link href={ABA_DOS_MENUS} className="font-medium underline underline-offset-2">
+                  {/* Em OUTRA aba: navegar aqui descartaria o formulário (senha inclusive). */}
+                  <Link
+                    href={ABA_DOS_MENUS}
+                    target="_blank"
+                    rel="noopener"
+                    className="font-medium underline underline-offset-2"
+                  >
                     {t("Criar um menu")}
                   </Link>
                 </p>
               ) : null}
               {bloqueioDoDestino ? (
-                <p className="text-xs text-destructive" data-destino-bloqueado>
+                <p id={ID_DO_BLOQUEIO} className="text-xs text-destructive" data-destino-bloqueado>
                   {bloqueioDoDestino}
                 </p>
               ) : null}
@@ -546,7 +576,11 @@ export function CanalTelefoneClient() {
             </p>
           ) : null}
           <div className="flex gap-2">
-            <Button onClick={() => void salvar()} disabled={!podeSalvar || salvando}>
+            <Button
+              onClick={() => void salvar()}
+              disabled={!podeSalvar || salvando}
+              aria-describedby={bloqueioDoDestino ? ID_DO_BLOQUEIO : undefined}
+            >
               {salvando ? t("Salvando…") : t("Salvar e conectar")}
             </Button>
             <Button variant="ghost" onClick={fecharFormulario} disabled={salvando}>

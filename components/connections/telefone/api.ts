@@ -77,11 +77,17 @@ export function useVozesDaConta(ligado: boolean) {
  * `ligado = false` não busca: a aba Números só precisa da lista quando o
  * formulário de um número está aberto — a leitura dos menus soma o "últimos 7
  * dias" de cada um, e o cartão do número não depende dela.
+ *
+ * `releAoVoltar` relê SEMPRE que a janela volta a ter foco — o cliente da
+ * aplicação desliga isso por padrão (`lib/query/client.ts`). É para quem manda a
+ * pessoa criar o menu em outra aba e espera vê-lo ao voltar. A opção só entra no
+ * objeto quando pedida: um `undefined` explícito sobrescreveria o padrão.
  */
-export function useMenusDoTelefone(ligado = true) {
+export function useMenusDoTelefone(ligado = true, { releAoVoltar = false }: { releAoVoltar?: boolean } = {}) {
   return useQuery({
     queryKey: CHAVE_DOS_MENUS,
     enabled: ligado,
+    ...(releAoVoltar ? { refetchOnWindowFocus: "always" as const } : {}),
     queryFn: async () => (await apiClient.get<{ data: RespostaDosMenus }>("/api/v1/telefonia/menus")).data,
   });
 }

@@ -9898,6 +9898,7 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível salvar o número. Tente de novo em instantes.": {
     es: "No se pudo guardar el número. Inténtalo de nuevo en unos instantes.",
   },
+  "Não foi possível carregar os números. Recarregue a página.": { es: "No se pudieron cargar los números. Recarga la página." },
 };
 
 /**
