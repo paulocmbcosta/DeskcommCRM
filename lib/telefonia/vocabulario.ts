@@ -14,9 +14,13 @@
 export const TIPOS_DE_FALA = ["menu", "invalid", "waiting", "nobody", "after_hours", "emergency"] as const;
 export type TipoDeFala = (typeof TIPOS_DE_FALA)[number];
 
-/** `phone_prompts.status`. "Gerando" não é estado do banco: é a requisição em curso na tela. */
+/**
+ * `phone_prompts.status`. "Gerando" não é estado do banco: é a requisição em curso na tela.
+ * O tipo se chama `SituacaoDaFala` (e não `EstadoDaFala`) para não colidir com o
+ * componente do selo, `EstadoDaFala` (components/connections/telefone/).
+ */
 export const ESTADOS_DA_FALA = ["ready", "failed"] as const;
-export type EstadoDaFala = (typeof ESTADOS_DA_FALA)[number];
+export type SituacaoDaFala = (typeof ESTADOS_DA_FALA)[number];
 
 /** `voice_calls.menu_outcome` — o que aconteceu no menu de voz. */
 export const DESFECHOS_DO_MENU = ["chosen", "default_no_input", "default_invalid"] as const;
@@ -159,7 +163,7 @@ export interface FalaPublica {
   voice_id: string;
   /** sha256(modelo, voz, texto) — o mesmo da prévia que a gerou. */
   hash: string;
-  status: EstadoDaFala;
+  status: SituacaoDaFala;
   /** O código de `FalhaDaFala` quando `status = failed`. */
   erro: string | null;
   duracao_ms: number | null;

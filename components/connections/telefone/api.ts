@@ -39,7 +39,7 @@ export interface RespostaDaFala {
 }
 
 /** `GET /api/v1/telefonia/menus` (admin). */
-export interface MenusDoTelefone {
+export interface RespostaDosMenus {
   oferecida: boolean;
   menus: MenuPublico[];
 }
@@ -76,6 +76,6 @@ export function useVozesDaConta(ligado: boolean) {
 export function useMenusDoTelefone() {
   return useQuery({
     queryKey: CHAVE_DOS_MENUS,
-    queryFn: async () => (await apiClient.get<{ data: MenusDoTelefone }>("/api/v1/telefonia/menus")).data,
+    queryFn: async () => (await apiClient.get<{ data: RespostaDosMenus }>("/api/v1/telefonia/menus")).data,
   });
 }

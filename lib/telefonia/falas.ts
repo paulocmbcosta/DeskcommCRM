@@ -48,10 +48,10 @@ import { duracaoDoUlawMs } from "./ulaw";
 import {
   MODELO_DE_VOZ_PADRAO,
   TAMANHO_MAXIMO_DA_FALA,
-  type EstadoDaFala,
   type FalaGeral,
   type FalaPublica,
   type FalhaDaFala,
+  type SituacaoDaFala,
   type TipoDeFala,
 } from "./vocabulario";
 
@@ -122,7 +122,7 @@ export interface LinhaDaFala {
   texto: string;
   voice_id: string;
   model_id: string;
-  status: EstadoDaFala;
+  status: SituacaoDaFala;
   erro: string | null;
   duracao_ms: number | null;
   atualizada_em: Date | string;
@@ -246,7 +246,7 @@ interface DadosDaLinha {
   hash: string;
   storagePath: string | null;
   duracaoMs: number | null;
-  status: EstadoDaFala;
+  status: SituacaoDaFala;
   erro: string | null;
 }
 
