@@ -30,6 +30,7 @@ import type pg from "pg";
 import { storagePathFor } from "@/lib/messaging/media/types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  BUCKET_DAS_GRAVACOES,
   MIME_DA_GRAVACAO,
   PRAZO_TOTAL_DA_GRAVACAO_MS,
   TETO_DA_GRAVACAO_S,
@@ -44,9 +45,6 @@ import type { ClienteAri } from "./ari";
 import type { PortaGravacao, Registro } from "./controle";
 import * as repo from "./repositorio-das-gravacoes";
 import type { GravacaoPendente, PoliticaDeGravacao } from "./repositorio-das-gravacoes";
-
-/** O bucket da mídia das conversas: a gravação é a mídia da mensagem da ligação. */
-export const BUCKET_DAS_GRAVACOES = "whatsapp-media";
 
 /** Quantas pendentes uma passada processa, em série (uma conversão por vez no worker de 512 MB). */
 const LOTE_DA_PASSADA = 5;

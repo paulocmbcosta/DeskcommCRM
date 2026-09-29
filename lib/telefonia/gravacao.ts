@@ -63,6 +63,12 @@ export function retencaoValida(dias: number): dias is RetencaoDaGravacao {
 /** Teto de uma gravação: 2 h (~115 MB de WAV no Asterisk, ~21 MB de MP3 no Storage). */
 export const TETO_DA_GRAVACAO_S = 7_200;
 
+/**
+ * O bucket da gravação: o da mídia das conversas (a gravação É a mídia da
+ * mensagem da ligação). Por estar ali, a anonimização do contato a apaga (0235).
+ */
+export const BUCKET_DAS_GRAVACOES = "whatsapp-media";
+
 /** O MIME do arquivo guardado (MP3 toca em qualquer navegador e computador). */
 export const MIME_DA_GRAVACAO = "audio/mpeg";
 
