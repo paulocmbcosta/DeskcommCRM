@@ -156,6 +156,11 @@ const ACTION_MIN_ROLE = {
   // banner de chamada para quem não pode atendê-la é uma promessa falsa, e a
   // sondagem por trás dele levava 403 em toda navegação.
   "voice.call": "agent",
+  // Ouvir a GRAVAÇÃO de uma ligação do telefone (F3). `agent` e não `viewer`: é
+  // dado sensível, e quem só acompanha não ouve. É o mesmo piso da rota
+  // (`app/api/v1/telefonia/chamadas/[id]/gravacao`), que audita cada escuta; a
+  // outra metade — enxergar a conversa — é da RLS.
+  "voice.recording.listen": "agent",
 } as const satisfies Record<string, Role>;
 
 /** Só as ações que existem em `ACTION_MIN_ROLE`. Nome de papel não é ação. */

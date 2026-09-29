@@ -9989,6 +9989,15 @@ export const DICIONARIO: Traducoes = {
   "Guardar as gravações por": { es: "Guardar las grabaciones durante" },
   "Depois desse prazo, a gravação é apagada sozinha. Cada minuto gravado ocupa cerca de 180 KB no armazenamento. Para atendimento ao consumidor (SAC), a lei pede no mínimo 90 dias.": { es: "Después de ese plazo, la grabación se borra sola. Cada minuto grabado ocupa cerca de 180 KB de almacenamiento. Para atención al consumidor, la ley brasileña pide como mínimo 90 días." },
   "Quem ouve: atendentes, gestores e administradores que enxergam a conversa. Cada vez que alguém ouve uma gravação, fica registrado na auditoria. Anonimizar um contato apaga as gravações das ligações dele.": { es: "Quién escucha: agentes, gestores y administradores que ven la conversación. Cada vez que alguien escucha una grabación, queda registrado en la auditoría. Anonimizar un contacto borra las grabaciones de sus llamadas." },
+  "Preparando a gravação…": { es: "Preparando la grabación…" },
+  "A gravação desta ligação não foi salva.": { es: "La grabación de esta llamada no se guardó." },
+  "Gravação apagada pelo prazo de guarda.": { es: "Grabación borrada por el plazo de conservación." },
+  "Ligação gravada": { es: "Llamada grabada" },
+  "Gravação da ligação": { es: "Grabación de la llamada" },
+  "Fechar o player": { es: "Cerrar el reproductor" },
+  "Abrindo a gravação…": { es: "Abriendo la grabación…" },
+  "Ouvir a gravação": { es: "Escuchar la grabación" },
+  "Não foi possível abrir a gravação. Tente de novo.": { es: "No se pudo abrir la grabación. Inténtalo de nuevo." },
 };
 
 /**

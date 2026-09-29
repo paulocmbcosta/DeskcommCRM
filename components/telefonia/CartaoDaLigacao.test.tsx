@@ -19,10 +19,10 @@
  *  - o metadado estranho (desfecho fora do vocabulário, nomes vazios, `$&` e
  *    marcador no nome) nunca derruba o cartão nem conta uma história errada.
  */
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { format } from "date-fns";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { DESFECHOS_DO_MENU, type DesfechoDoMenu } from "@/lib/telefonia/vocabulario";
@@ -228,5 +228,100 @@ describe("o metadado estranho não derruba o cartão nem conta história errada"
   it("o nome vem do cadastro e sai como está: `$&` e marcador no nome não viram outra coisa", () => {
     const c = cartao(registro({ menu: menu({ nome: "Menu {time} $&", time_nome: "A$'B {menu}" }) }));
     expect(c.menu?.textContent).toBe("No menu Menu {time} $&, digitou 2 e foi para o time A$'B {menu}");
+  });
+});
+
+/**
+ * A GRAVAÇÃO NO CARTÃO (F3). A projeção vem do worker (`metadata.voice_call.gravacao`,
+ * sempre mesclada no banco) e é lida por `gravacaoDaLigacao`. Ouvir pede a URL à
+ * rota da escuta auditada SÓ no clique — abrir a conversa não é escuta.
+ */
+describe("a gravação no cartão", () => {
+  const gravada = (gravacao: Record<string, unknown>) =>
+    registro({ desfecho: "atendida", duracao_ms: 61_000, atendente_nome: "Ana", gravacao });
+
+  function comGravacao(metadata: unknown, podeOuvirGravacao = true) {
+    const ligacao = ligacaoDaMensagem(metadata)!;
+    const { container } = render(<CartaoDaLigacao ligacao={ligacao} em={EM} podeOuvirGravacao={podeOuvirGravacao} />);
+    return {
+      linha: () => container.querySelector("[data-ligacao-gravacao]"),
+      container,
+    };
+  }
+
+  it("ligação não gravada: nenhuma linha de gravação (o cartão de antes)", () => {
+    const { linha } = comGravacao(registro({ desfecho: "atendida" }));
+    expect(linha()).toBeNull();
+  });
+
+  it.each([
+    ["processando", "Preparando a gravação…"],
+    ["falhou", "A gravação desta ligação não foi salva."],
+    ["expirada", "Gravação apagada pelo prazo de guarda."],
+  ])("%s: diz o que houve, sem botão", (situacao, texto) => {
+    const { linha } = comGravacao(gravada({ situacao, duracao_ms: null }));
+    expect(linha()?.getAttribute("data-ligacao-gravacao")).toBe(situacao);
+    expect(linha()?.textContent).toBe(texto);
+    expect(document.querySelector("[data-ouvir-gravacao]")).toBeNull();
+  });
+
+  it("pronta, sem o papel de ouvir: 'Ligação gravada', sem botão e sem pedir nada", () => {
+    const f = vi.fn();
+    vi.stubGlobal("fetch", f);
+    const { linha } = comGravacao(gravada({ situacao: "pronta", duracao_ms: 61_000 }), false);
+    expect(linha()?.textContent).toBe("Ligação gravada");
+    expect(document.querySelector("[data-ouvir-gravacao]")).toBeNull();
+    expect(f).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("pronta: 'Ouvir a gravação · 1:01'; só o clique pede a URL à escuta auditada, e o player toca", async () => {
+    const f = vi.fn(async (_url: string) =>
+      new Response(JSON.stringify({ data: { url: "https://storage.exemplo/g.mp3?token=x", expira_em: "x" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", f);
+    try {
+      const { container } = comGravacao(gravada({ situacao: "pronta", duracao_ms: 61_000 }));
+      const botao = container.querySelector("[data-ouvir-gravacao]") as HTMLButtonElement;
+      expect(botao.textContent).toBe("Ouvir a gravação· 1:01");
+      expect(f).not.toHaveBeenCalled();
+
+      fireEvent.click(botao);
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      expect(f.mock.calls[0]![0]).toBe("/api/v1/telefonia/chamadas/vc-1/gravacao");
+      expect(container.querySelector("audio")?.getAttribute("src")).toBe("https://storage.exemplo/g.mp3?token=x");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a escuta recusada (403/404): avisa e deixa tentar de novo", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: { code: "not_found" } }), { status: 404 })),
+    );
+    try {
+      const { container } = comGravacao(gravada({ situacao: "pronta", duracao_ms: 61_000 }));
+      fireEvent.click(container.querySelector("[data-ouvir-gravacao]")!);
+      await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+        "Não foi possível abrir a gravação. Tente de novo.",
+      ));
+      expect(container.querySelector("[data-ouvir-gravacao]")).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("em espanhol", () => {
+    const ligacao = ligacaoDaMensagem(gravada({ situacao: "processando" }))!;
+    const { container } = render(
+      <IdiomaProvider locale="es">
+        <CartaoDaLigacao ligacao={ligacao} em={EM} />
+      </IdiomaProvider>,
+    );
+    expect(container.querySelector("[data-ligacao-gravacao]")?.textContent).toBe("Preparando la grabación…");
   });
 });
