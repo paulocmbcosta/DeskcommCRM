@@ -695,6 +695,13 @@ jobs:
         canal-oficial-varios-numeros.spec.ts
         inbox-checks-reacoes-e-nome.spec.ts
         devolver-ao-proprio-time.spec.ts
+        telefonia-ura-e-falas.spec.ts
+      # `telefonia-ura-e-falas` (fase 2 da telefonia, 2026-09-29) cria a PRÓPRIA
+      # organização, com admin e atendente sem MFA, e não toca a organização
+      # compartilhada — a vizinhança desta parte não muda por ela. Sobe a
+      # ElevenLabs falsa na porta de `ELEVENLABS_API_BASE_URL` (3996, só dela) e
+      # depende de `TELEFONIA_ARI_URL`/`_PASSWORD` no `.env.e2e`, que ligam a
+      # telefonia para a SUÍTE INTEIRA — o porquê está no gerador.
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts

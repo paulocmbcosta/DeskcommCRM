@@ -130,6 +130,22 @@ UPSTASH_REDIS_REST_TOKEN=e2e-placeholder-nao-e-segredo
 # porta NÃO é a 3998: essa é do UPSTASH acima, e um receiver ali atenderia as
 # chamadas do rate limit. A spec lê a porta DAQUI — uma fonte só.
 CLASSIFICADOR_COMERCIAL_BASE_URL=http://127.0.0.1:3997
+# A ElevenLabs FALSA de \`tests/e2e/telefonia-ura-e-falas.spec.ts\` (receiver HTTP
+# que a própria spec sobe, nesta porta — ela a lê DAQUI). Sem esta linha a
+# prévia das falas do telefone chamaria a ElevenLabs DE VERDADE
+# (\`lib/telefonia/servico-de-falas.ts\` → \`opcoesDaElevenLabs\`).
+ELEVENLABS_API_BASE_URL=http://127.0.0.1:3996
+# A telefonia "oferecida" na suíte: a PRESENÇA destas duas liga as abas do
+# Telefone, a faixa do aviso de instabilidade e o cartão da ElevenLabs
+# (\`configAriDoAmbiente\`, lib/channels/telefonia/ari.ts). Vale para a suíte
+# INTEIRA — o estado "instalação sem telefonia" fica com os testes de unidade
+# (app/app/ai/credentials/page.test.tsx e vizinhos). Nada escuta a 3995, de
+# propósito: empurrar o tronco falha rápido e é engolido
+# (lib/channels/telefonia/empurrar.ts), e o ramal do navegador só é pedido ao
+# Asterisk numa organização que TEM número — sem ele a rota responde
+# \`ativo: false\` sem sair do servidor. A ligação de verdade é provada na VPS.
+TELEFONIA_ARI_URL=http://127.0.0.1:3995
+TELEFONIA_ARI_PASSWORD=e2e-placeholder-nao-e-segredo
 NEXT_TELEMETRY_DISABLED=1
 # Telemetria DESLIGADA na suíte, e não é preferência: sem isto o SDK do browser
 # assume o DSN da comunidade (\`lib/sentry/dsn.ts\` → DEFAULT_SENTRY_DSN) e a suíte
