@@ -9941,6 +9941,20 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível carregar o aviso de instabilidade do telefone. Recarregue a página.": {
     es: "No se pudo cargar el aviso de inestabilidad del teléfono. Recarga la página.",
   },
+  // Telefonia, fase 2 — o cartão da ligação na conversa (CartaoDaLigacao): o que a URA fez.
+  // `{menu}`, `{tecla}` e `{time}` são trocados pelo cartão; "do telefone" entra no lugar
+  // de `{menu}` quando o registro não tem o nome do menu.
+  "Ligação fora do horário": { es: "Llamada fuera de horario" },
+  "do telefone": { es: "del teléfono" },
+  "No menu {menu}, digitou {tecla}": { es: "En el menú {menu}, marcó {tecla}" },
+  "No menu {menu}, escolheu uma opção": { es: "En el menú {menu}, eligió una opción" },
+  "No menu {menu}, não digitou nada": { es: "En el menú {menu}, no marcó nada" },
+  "No menu {menu}, digitou uma tecla que não existe": { es: "En el menú {menu}, marcó una tecla que no existe" },
+  "e foi para o time {time}": { es: "y pasó al equipo {time}" },
+  "e foi para o time padrão, {time}": { es: "y pasó al equipo predeterminado, {time}" },
+  "Desligou no menu {menu}, antes de escolher": { es: "Colgó en el menú {menu}, antes de elegir" },
+  "A ligação terminou no menu {menu}, antes da escolha": { es: "La llamada terminó en el menú {menu}, antes de la elección" },
+  "Ouviu o aviso de instabilidade": { es: "Escuchó el aviso de inestabilidad" },
 };
 
 /**
