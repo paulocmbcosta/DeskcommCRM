@@ -39,6 +39,26 @@ export const BUCKET_DAS_FALAS = "phone-prompts";
 /** Teto de caracteres de uma fala — o mesmo do CHECK `phone_prompts_text_check`. */
 export const TAMANHO_MAXIMO_DA_FALA = 1000;
 
+/**
+ * As teclas de uma opção do menu de voz, na ordem em que a tela as oferece — o
+ * espelho do CHECK `phone_menu_options_digit_check` (`^[0-9]$`). `*` e `#` ficam
+ * de fora de propósito (reservadas). O 0 por último: é, por costume, a tecla de
+ * "falar com alguém". O tamanho da lista é o teto de opções de um menu.
+ */
+export const TECLAS_DO_MENU = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"] as const;
+
+/** Teto do nome de um menu — o mesmo do CHECK `phone_menus_name_check` (1 a 80, aparado). */
+export const TAMANHO_MAXIMO_DO_NOME_DO_MENU = 80;
+
+/**
+ * Duas opções com a mesma tecla — a chave `(menu_id, digit)` de
+ * `phone_menu_options` recusaria. A regra é UMA: a rota (`salvarMenuDaOrg`, em
+ * menus.ts, que é server-only) e o editor da aba Menus perguntam aqui.
+ */
+export function teclaRepetida(opcoes: ReadonlyArray<{ tecla: string }>): boolean {
+  return new Set(opcoes.map((o) => o.tecla)).size !== opcoes.length;
+}
+
 /** O modelo de voz da ElevenLabs usado quando a organização não escolheu outro. */
 export const MODELO_DE_VOZ_PADRAO = "eleven_multilingual_v2";
 

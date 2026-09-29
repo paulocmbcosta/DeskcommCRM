@@ -58,15 +58,29 @@ import {
 import { numeroParaFalar } from "./texto-do-menu";
 import { confirmar, desfazer, emTransacao, type PoolDeTransacao } from "./transacao";
 import { somarUltimosSeteDias, type LinhaDoMenuNaSemana } from "./ultimos-sete-dias";
-import type { FalaPublica, FalhaDaFala, MenuPublico, OpcaoDoMenuPublica, TipoDeFala, UltimosSeteDias } from "./vocabulario";
+import {
+  TAMANHO_MAXIMO_DO_NOME_DO_MENU,
+  TECLAS_DO_MENU,
+  teclaRepetida,
+  type FalaPublica,
+  type FalhaDaFala,
+  type MenuPublico,
+  type OpcaoDoMenuPublica,
+  type TipoDeFala,
+  type UltimosSeteDias,
+} from "./vocabulario";
+
+// A regra da tecla repetida mora no vocabulário (client-safe): o editor da aba
+// Menus pergunta lá, sem puxar este arquivo (server-only) para o navegador.
+export { teclaRepetida };
 
 export const menuSchema = z
   .object({
-    nome: z.string().trim().min(1).max(80),
+    nome: z.string().trim().min(1).max(TAMANHO_MAXIMO_DO_NOME_DO_MENU),
     opcoes: z
       .array(z.object({ tecla: z.string().regex(/^[0-9]$/), time_id: z.string().uuid() }).strict())
       .min(1)
-      .max(10),
+      .max(TECLAS_DO_MENU.length),
     time_padrao_id: z.string().uuid(),
     // O texto e o hash da PRÉVIA da fala do menu — ou os da fala em uso, se o texto
     // não mudou. Nunca um caminho do Storage: quem o monta é o servidor.
@@ -146,10 +160,6 @@ export function mensagemDoMenuEmUso(numeros: readonly NumeroDoMenu[], t: (texto:
   if (rotulos.length === 0) return t(MENSAGEM_DA_FALHA_DO_MENU.menu_em_uso);
   if (rotulos.length === 1) return t(MENSAGEM_DO_MENU_EM_USO.um).replaceAll("{numero}", rotulos[0]!);
   return t(MENSAGEM_DO_MENU_EM_USO.varios).replaceAll("{numeros}", rotulos.join(", "));
-}
-
-export function teclaRepetida(opcoes: ReadonlyArray<{ tecla: string }>): boolean {
-  return new Set(opcoes.map((o) => o.tecla)).size !== opcoes.length;
 }
 
 /** Todos os times são desta organização e não estão arquivados. Repetidos contam uma vez. */
