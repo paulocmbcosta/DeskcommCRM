@@ -15,6 +15,8 @@ import { emitAgentActivityForContact } from "@/lib/leads/agent-activity";
 import { isWithinSchedule } from "@/lib/routing/eligibility";
 import { lerAgenda } from "@/lib/times/agenda";
 import { FUSO_PADRAO, fusoValido } from "@/lib/tempo/fusos";
+import { traduzir } from "@/lib/i18n/dicionario";
+import { normalizarIdioma, type Idioma } from "@/lib/i18n/idiomas";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
 import { avisoVigente } from "@/lib/telefonia/vencimento-da-emergencia";
@@ -527,6 +529,9 @@ export interface EscolhaDoMenu {
  * A regra é a do roteamento de conversas (`lib/routing/worker.ts`): conversa
  * COM DONO (`assigned_to_user_id`) não é mexida — não se tira uma conversa de
  * quem a tem, nem se muda o time debaixo dela. Só a sem dono acompanha a URA.
+ * E só para time ATIVO: o padrão arquivado de um menu fica na ligação (é para
+ * ele que ela vai), mas a conversa não é levada a um time que ninguém vê — fica
+ * onde está.
  * Direto na coluna, e não por `fn_conversation_set_team`: aquela é o gesto de
  * uma PESSOA (exige `auth.uid()`, solta o dono e pede o rodízio de texto, que a
  * conversa de telefone não tem — `skipped_voice_channel`).
@@ -551,6 +556,8 @@ export async function registrarEscolhaDoMenu(
         where c.id = ligacao.conversation_id and c.organization_id = $2
           and c.assigned_to_user_id is null
           and c.team_id is distinct from $5
+          and exists (select 1 from attendance_teams t
+                       where t.id = $5 and t.organization_id = $2 and t.archived_at is null)
         returning c.id
      )
      select (select count(*) from ligacao)::int as ligacao`,
@@ -969,24 +976,63 @@ export async function registrarNaConversa(
 }
 
 /**
+ * O cliente desligou NO MENU: a ligação tinha menu, a URA não chegou a decidir
+ * (sem `menu_outcome`) e ela acabou porque ele desligou. A que o worker encerrou
+ * ao reiniciar no meio do menu não conta — não foi o cliente.
+ */
+export function desligouNoMenu(l: Pick<LigacaoDoBanco, "menu_id" | "menu_outcome" | "end_reason">): boolean {
+  return Boolean(l.menu_id) && !l.menu_outcome && l.end_reason === "cliente_desligou";
+}
+
+/**
+ * O texto do "Ligar de volta", no idioma da organização. Três casos: quem
+ * desligou no menu (ninguém chegou a tocar — dizer que o time não atendeu seria
+ * falso), o time que não atendeu, e sem time.
+ */
+export function textoDoAvisoDePerdida(p: {
+  numero: string;
+  nomeDoTime: string | null;
+  desligouNoMenu: boolean;
+  idioma: Idioma;
+}): { titulo: string; corpo: string } {
+  const titulo = traduzir("Ligação perdida de {numero}", p.idioma).replace("{numero}", p.numero);
+  if (p.desligouNoMenu) {
+    return { titulo, corpo: traduzir("O cliente desligou no menu do telefone. Ligue de volta pela conversa.", p.idioma) };
+  }
+  if (p.nomeDoTime) {
+    return {
+      titulo,
+      corpo: traduzir("Ninguém do time {time} atendeu. Ligue de volta pela conversa.", p.idioma).replace("{time}", p.nomeDoTime),
+    };
+  }
+  return { titulo, corpo: traduzir("Ninguém atendeu. Ligue de volta pela conversa.", p.idioma) };
+}
+
+/**
  * Chamada recebida que ninguém atendeu: aviso na Central para alguém retornar.
  *
  * O aviso diz o TIME que ficou com a ligação (`voice_calls.team_id`): com a URA,
- * o escolhido no menu, ou o padrão dele se o cliente desligou antes de escolher.
- * A Central é da organização inteira (o aviso não tem coluna de time), então é
- * o texto que diz de quem é o retorno; a conversa já está no mesmo time
- * (`registrarEscolhaDoMenu`), e quem é dele a abre. Time lido desta organização.
+ * o escolhido no menu. A Central é da organização inteira (o aviso não tem
+ * coluna de time), então é o texto que diz de quem é o retorno; a conversa já
+ * está no mesmo time (`registrarEscolhaDoMenu`), e quem é dele a abre. O nome do
+ * time e o idioma são lidos DESTA organização: time de outra não é nomeado.
  */
 export async function avisarPerdida(db: Queryable, l: LigacaoDoBanco): Promise<void> {
+  const { rows } = await db.query<{ time: string | null; idioma: string | null }>(
+    `select (select t.name from attendance_teams t where t.id = $2::uuid and t.organization_id = $1) as time,
+            (select o.locale from organizations o where o.id = $1) as idioma`,
+    [l.organization_id, l.team_id],
+  );
+  const { titulo, corpo } = textoDoAvisoDePerdida({
+    numero: l.peer_phone,
+    nomeDoTime: rows[0]?.time ?? null,
+    desligouNoMenu: desligouNoMenu(l),
+    idioma: normalizarIdioma(rows[0]?.idioma),
+  });
   await db.query(
     `insert into agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
-     select $1, 'voice_call_missed', 'warn', $2,
-            case when t.name is null then 'Ninguém atendeu. Ligue de volta pela conversa.'
-                 else 'Ninguém do time ' || t.name || ' atendeu. Ligue de volta pela conversa.' end,
-            $3, $4
-       from (select 1) as um
-       left join attendance_teams t on t.id = $5::uuid and t.organization_id = $1`,
-    [l.organization_id, `Ligação perdida de ${l.peer_phone}`, l.contact_id ? "contact" : null, l.contact_id, l.team_id],
+     values ($1, 'voice_call_missed', 'warn', $2, $3, $4, $5)`,
+    [l.organization_id, titulo, corpo, l.contact_id ? "contact" : null, l.contact_id],
   );
 }
 

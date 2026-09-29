@@ -9510,6 +9510,15 @@ export const DICIONARIO: Traducoes = {
     es: "Elige otro equipo predeterminado para el menú. Mientras tanto, quien no elige una opción cae en un equipo que nadie atiende.",
   },
   "Revisar os menus do telefone": { es: "Revisar los menús del teléfono" },
+  // O "Ligar de volta" da telefonia, escrito pelo worker no idioma da organização
+  "Ligação perdida de {numero}": { es: "Llamada perdida de {numero}" },
+  "Ninguém atendeu. Ligue de volta pela conversa.": { es: "Nadie atendió. Devuelve la llamada desde la conversación." },
+  "Ninguém do time {time} atendeu. Ligue de volta pela conversa.": {
+    es: "Nadie del equipo {time} atendió. Devuelve la llamada desde la conversación.",
+  },
+  "O cliente desligou no menu do telefone. Ligue de volta pela conversa.": {
+    es: "El cliente colgó en el menú del teléfono. Devuelve la llamada desde la conversación.",
+  },
   // Os textos sugeridos das falas (lib/telefonia/texto-do-menu.ts), passados por t()
   "Todos os nossos atendentes estão ocupados no momento. Por favor, aguarde na linha que já vamos atender você.": {
     es: "Todos nuestros agentes están ocupados en este momento. Por favor, espere en línea que enseguida le atenderemos.",

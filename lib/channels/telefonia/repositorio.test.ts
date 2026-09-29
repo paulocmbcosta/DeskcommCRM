@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 
-import { situacaoDaLinhaDoTime, textoDoRegistro } from "./repositorio";
+import { desligouNoMenu, situacaoDaLinhaDoTime, textoDoAvisoDePerdida, textoDoRegistro } from "./repositorio";
 
 /** Segunda-feira, 10h em Brasília. */
 const AGORA = new Date("2026-09-28T13:00:00Z");
@@ -50,5 +50,51 @@ describe("textoDoRegistro", () => {
     expect(textoDoRegistro({ direcao: "outbound", desfecho: "sem_resposta", duracaoMs: null, quem: null, motivo: MOTIVO_FORA_DO_HORARIO })).toBe(
       "Ligação feita · sem resposta",
     );
+  });
+});
+
+describe("o 'Ligar de volta' (textoDoAvisoDePerdida)", () => {
+  const base = { numero: "+5561988887777", nomeDoTime: null, desligouNoMenu: false, idioma: "pt-BR" as const };
+
+  it("sem time: o texto de sempre; com time: diz qual time não atendeu", () => {
+    expect(textoDoAvisoDePerdida(base)).toEqual({
+      titulo: "Ligação perdida de +5561988887777",
+      corpo: "Ninguém atendeu. Ligue de volta pela conversa.",
+    });
+    expect(textoDoAvisoDePerdida({ ...base, nomeDoTime: "Financeiro" }).corpo).toBe(
+      "Ninguém do time Financeiro atendeu. Ligue de volta pela conversa.",
+    );
+  });
+
+  it("desligou no menu: não diz que o time não atendeu — ninguém chegou a tocar", () => {
+    expect(textoDoAvisoDePerdida({ ...base, nomeDoTime: "Suporte", desligouNoMenu: true }).corpo).toBe(
+      "O cliente desligou no menu do telefone. Ligue de volta pela conversa.",
+    );
+  });
+
+  it("em espanhol, na organização que fala espanhol", () => {
+    const es = { ...base, idioma: "es" as const };
+    expect(textoDoAvisoDePerdida(es)).toEqual({
+      titulo: "Llamada perdida de +5561988887777",
+      corpo: "Nadie atendió. Devuelve la llamada desde la conversación.",
+    });
+    expect(textoDoAvisoDePerdida({ ...es, nomeDoTime: "Finanzas" }).corpo).toBe(
+      "Nadie del equipo Finanzas atendió. Devuelve la llamada desde la conversación.",
+    );
+    expect(textoDoAvisoDePerdida({ ...es, desligouNoMenu: true }).corpo).toBe(
+      "El cliente colgó en el menú del teléfono. Devuelve la llamada desde la conversación.",
+    );
+  });
+});
+
+describe("desligouNoMenu", () => {
+  it("só a ligação com menu, sem desfecho, que acabou porque o cliente desligou", () => {
+    expect(desligouNoMenu({ menu_id: "m", menu_outcome: null, end_reason: "cliente_desligou" })).toBe(true);
+    // Escolheu (ou foi ao padrão) e desligou na fila: o time não atendeu.
+    expect(desligouNoMenu({ menu_id: "m", menu_outcome: "chosen", end_reason: "cliente_desligou" })).toBe(false);
+    // Número de time: não há menu.
+    expect(desligouNoMenu({ menu_id: null, menu_outcome: null, end_reason: "cliente_desligou" })).toBe(false);
+    // O worker reiniciou no meio do menu: o cliente não desligou.
+    expect(desligouNoMenu({ menu_id: "m", menu_outcome: null, end_reason: "interrompida_no_reinicio" })).toBe(false);
   });
 });

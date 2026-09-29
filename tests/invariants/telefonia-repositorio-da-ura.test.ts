@@ -933,6 +933,63 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
       expect(await conversa(conv)).toEqual({ team_id: ABERTO, assigned_to_user_id: ANA });
     });
 
+    it("time ARQUIVADO: a ligação o registra (é o padrão do menu), mas a conversa não vai para ele — fica onde está", async () => {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-12", ABERTO, MENU);
+      const conv = await conversaDaLigacao(id);
+      expect(
+        await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: null, desfecho: "default_no_input", teamId: ARQUIVADO }),
+      ).toBe(true);
+      expect(await naLinha(id)).toMatchObject({ team_id: ARQUIVADO, menu_outcome: "default_no_input" });
+      expect(await conversa(conv)).toEqual({ team_id: ABERTO, assigned_to_user_id: null });
+    });
+
+    it("o 'Ligar de volta' de quem desligou no menu diz isso, e não que o time não atendeu", async () => {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-13", ABERTO, MENU);
+      const l = await repo.encerrarLigacao(pool, ORG, id, "cliente_desligou");
+      await repo.avisarPerdida(pool, l!);
+      const { rows } = await pool.query<{ body: string }>(
+        "select body from public.agent_inbox_items where organization_id = $1 and kind = 'voice_call_missed' and ref_id = $2",
+        [ORG, l!.contact_id],
+      );
+      expect(rows.map((r) => r.body)).toEqual(["O cliente desligou no menu do telefone. Ligue de volta pela conversa."]);
+    });
+
+    it("o 'Ligar de volta' nunca nomeia time de outra organização, e sai no idioma da organização", async () => {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-14", ABERTO, MENU);
+      await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "2", desfecho: "chosen", teamId: FECHADO });
+      const l = await repo.encerrarLigacao(pool, ORG, id, "fila_esgotada");
+      // Uma linha forjada com o time de B: o nome dele não aparece em A.
+      await repo.avisarPerdida(pool, { ...l!, team_id: TIME_OUTRA });
+      const corpos = async (org: string, contato: string) =>
+        (
+          await pool.query<{ title: string; body: string }>(
+            "select title, body from public.agent_inbox_items where organization_id = $1 and kind = 'voice_call_missed' and ref_id = $2",
+            [org, contato],
+          )
+        ).rows;
+      expect(await corpos(ORG, l!.contact_id!)).toEqual([
+        { title: `Ligação perdida de ${l!.peer_phone}`, body: "Ninguém atendeu. Ligue de volta pela conversa." },
+      ]);
+
+      // B fala espanhol: o aviso dela sai em espanhol, com o time dela.
+      const idiomaAntes = (await pool.query<{ locale: string }>("select locale from organizations where id = $1", [OUTRA])).rows[0]!
+        .locale;
+      await pool.query("update organizations set locale = 'es' where id = $1", [OUTRA]);
+      try {
+        const idB = await ligacao(OUTRA, NUMERO_OUTRA, "ura-repo-15", TIME_OUTRA, null);
+        const lB = await repo.encerrarLigacao(pool, OUTRA, idB, "fila_esgotada");
+        await repo.avisarPerdida(pool, lB!);
+        expect(await corpos(OUTRA, lB!.contact_id!)).toEqual([
+          {
+            title: `Llamada perdida de ${lB!.peer_phone}`,
+            body: "Nadie del equipo Suporte B atendió. Devuelve la llamada desde la conversación.",
+          },
+        ]);
+      } finally {
+        await pool.query("update organizations set locale = $2 where id = $1", [OUTRA, idiomaAntes]);
+      }
+    });
+
     it("o 'Ligar de volta' diz o time que ficou com a ligação; sem time, o texto de antes", async () => {
       const id = await ligacao(ORG, NUMERO, "ura-repo-11", ABERTO, MENU);
       await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "2", desfecho: "chosen", teamId: FECHADO });
