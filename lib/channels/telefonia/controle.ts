@@ -202,42 +202,35 @@ const ROTULO_DA_FALA = {
   invalida: "tecla inválida do menu",
 } as const satisfies Record<PapelDaFala, string>;
 
+type Relogio = ReturnType<typeof setTimeout>;
+/**
+ * Os relógios de UM grupo do estado da ligação, pelo nome. O grupo é parado
+ * inteiro (`pararTodos`): o relógio novo que entrar aqui já cai junto no fim da
+ * ligação, sem ninguém precisar lembrar de acrescentá-lo a `pararRelogios`.
+ */
+type Relogios<K extends string> = Record<K, Relogio | null>;
+
+function pararRelogio<K extends string>(r: Relogios<K>, nome: K): void {
+  const t = r[nome];
+  if (t) clearTimeout(t);
+  r[nome] = null;
+}
+
+function pararTodos<K extends string>(r: Relogios<K>): void {
+  for (const nome of Object.keys(r) as K[]) pararRelogio(r, nome);
+}
+
 /** A URA de uma ligação, enquanto o cliente escolhe: a regra pura decide, o controlador executa. */
 interface UraEmCurso {
   menu: MenuDoBanco;
   regra: MenuDaUra;
   estado: EstadoDaUra;
-  /** Os 5 s depois do menu. A `vez` da espera fica presa no timer, não aqui (`armarPrazoDaUra`). */
-  prazo: ReturnType<typeof setTimeout> | null;
+  /** `prazo`: os 5 s depois do menu. A `vez` da espera fica presa no timer, não aqui (`armarPrazoDaUra`). */
+  relogios: Relogios<"prazo">;
 }
 
-interface Recebida {
-  tipo: "recebida";
-  vcId: string;
-  org: string;
-  tronco: TroncoDoBanco;
-  cliente: string;
-  numeroExibido: string;
-  /**
-   * Quando a FILA começou (depois do aviso de instabilidade, §5.1.3) — a régua
-   * do "tocou demais sem atender: atende e segura".
-   */
-  inicio: number;
-  estado: EstadoDoToque;
-  ramal: { canal: string; userId: string } | null;
-  atendidaPor: string | null;
-  conversationId: string | null;
-  atendidaPelaRede: boolean;
-  /** Segurando na linha ("aguarde" e música): o cliente já está esperando. */
-  segurando: boolean;
-  naFila: boolean;
-  /** Início dos 2 min de espera sem ninguém disponível (fase 1). */
-  inicioFila: number | null;
-  ponte: string | null;
-  /** Reavaliar a fila, ou a rede de segurança do toque do ramal. */
-  relogio: ReturnType<typeof setTimeout> | null;
-  /** A repetição do "aguarde" (~40 s de música entre um e outro). */
-  relogioDaEspera: ReturnType<typeof setTimeout> | null;
+/** A fila do time (§5.2): o que ela lê na entrada e o que faz enquanto o cliente espera. */
+interface FilaDaLigacao {
   /** O time da fila: o do número (com a URA, o escolhido no menu). */
   teamId: string | null;
   /** Lidas na entrada da fila; todas `null` = a fila da fase 1. */
@@ -245,14 +238,52 @@ interface Recebida {
   /** O aviso de instabilidade que ainda vai tocar (lido na entrada da fila). */
   avisoPendente: FalaDoBanco | null;
   /**
+   * Quando os TOQUES começaram (depois do aviso de instabilidade, §5.1.3) — a
+   * régua do "tocou demais sem atender: atende e segura".
+   */
+  inicioDosToques: number;
+  toque: EstadoDoToque;
+  /** O ramal que está tocando agora. */
+  ramal: { canal: string; userId: string } | null;
+  /** Segurando na linha ("aguarde" e música): o cliente já está esperando. */
+  segurando: boolean;
+  /** Sem ninguém disponível, esperando a vez. */
+  esperando: boolean;
+  /** Início dos 2 min de espera sem ninguém disponível (fase 1). */
+  inicioDaEspera: number | null;
+  /**
+   * `reavaliar`: reavaliar a fila, ou a rede de segurança do toque do ramal;
+   * `aguarde`: a repetição do "aguarde" (~40 s de música entre um e outro).
+   */
+  relogios: Relogios<"reavaliar" | "aguarde">;
+}
+
+/**
+ * Uma ligação recebida. O estado de cada fase mora num GRUPO — a fila, a fala
+ * no ar, a URA —, e cada grupo é limpo inteiro no fim (`pararRelogios`). Em cima
+ * fica só o que é da ligação toda: quem é, se foi atendida e se está acabando.
+ */
+interface Recebida {
+  tipo: "recebida";
+  vcId: string;
+  org: string;
+  tronco: TroncoDoBanco;
+  cliente: string;
+  numeroExibido: string;
+  conversationId: string | null;
+  atendidaPelaRede: boolean;
+  atendidaPor: string | null;
+  ponte: string | null;
+  fila: FilaDaLigacao;
+  /**
    * A fala no ar — uma por vez — e o relógio dela, próprio porque o relógio da
    * fila corre em paralelo durante o "aguarde". Quem escreve é `FalasNoAr`.
    */
   fala: FalaDaLigacao<PapelDaFala>;
-  /** O motivo do fim, já decidido enquanto a última fala toca ("fora do horário", "ninguém atendeu"). */
-  encerrando: string | null;
   /** A URA, enquanto o cliente escolhe no menu; `null` antes (número de time) e depois da escolha. */
   ura: UraEmCurso | null;
+  /** O motivo do fim, já decidido enquanto a última fala toca ("fora do horário", "ninguém atendeu"). */
+  encerrando: string | null;
   /**
    * O cliente pediu para desligar (`ChannelHangupRequest`). Uma fala cortada
    * pela queda do canal termina `failed` ("Playback failed" no
@@ -460,24 +491,25 @@ export class ControladorDeChamadas {
       tronco,
       cliente: canal.id,
       numeroExibido: e164 ?? canal.caller.number ?? "",
-      inicio: this.agora(),
-      estado: ESTADO_INICIAL,
-      ramal: null,
-      atendidaPor: null,
       conversationId,
       atendidaPelaRede: false,
-      segurando: false,
-      naFila: false,
-      inicioFila: null,
+      atendidaPor: null,
       ponte: null,
-      relogio: null,
-      relogioDaEspera: null,
-      teamId,
-      falasGerais: SEM_FALAS_GERAIS,
-      avisoPendente: null,
+      fila: {
+        teamId,
+        falasGerais: SEM_FALAS_GERAIS,
+        avisoPendente: null,
+        inicioDosToques: this.agora(),
+        toque: ESTADO_INICIAL,
+        ramal: null,
+        segurando: false,
+        esperando: false,
+        inicioDaEspera: null,
+        relogios: { reavaliar: null, aguarde: null },
+      },
       fala: semFalaNoAr(),
-      encerrando: null,
       ura: null,
+      encerrando: null,
       clienteSaindo: false,
       fim: false,
     };
@@ -519,10 +551,10 @@ export class ControladorDeChamadas {
    */
   private async entrarNaFila(l: Recebida): Promise<void> {
     if (l.fim) return;
-    let fila: TimeParaAFila = { situacao: "aberto", aviso: null };
-    if (l.teamId) {
+    let entrada: TimeParaAFila = { situacao: "aberto", aviso: null };
+    if (l.fila.teamId) {
       try {
-        fila = await this.banco.timeParaAFila(l.org, l.teamId, new Date(this.agora()));
+        entrada = await this.banco.timeParaAFila(l.org, l.fila.teamId, new Date(this.agora()));
       } catch (e) {
         this.log.warn("telefonia: situação do time não lida — segue a fila sem as falas do time", {
           voice_call: l.vcId,
@@ -531,18 +563,18 @@ export class ControladorDeChamadas {
       }
     }
     try {
-      l.falasGerais = await this.banco.falasGerais(l.org);
+      l.fila.falasGerais = await this.banco.falasGerais(l.org);
     } catch (e) {
       this.log.warn("telefonia: falas gerais não lidas — segue a fila sem elas", { voice_call: l.vcId, erro: mensagemDe(e, 160) });
     }
     if (l.fim) return;
-    l.avisoPendente = fila.aviso;
+    l.fila.avisoPendente = entrada.aviso;
 
     // Fora do horário SÓ com a fala pronta e tocando. Sem ela (ou se ela não
     // toca), a fase 1: fila e "Ligar de volta" — desligar calado seria um beco
     // sem saída para quem ligou (plano, "Decisões de implementação").
-    if (fila.situacao === "fora_do_horario" && l.falasGerais.foraDoHorario) {
-      if ((await this.falaNoAr.porNoAr(l, l.falasGerais.foraDoHorario, "fora_do_horario")) === "no_ar") {
+    if (entrada.situacao === "fora_do_horario" && l.fila.falasGerais.foraDoHorario) {
+      if ((await this.falaNoAr.porNoAr(l, l.fila.falasGerais.foraDoHorario, "fora_do_horario")) === "no_ar") {
         l.encerrando = MOTIVO_FORA_DO_HORARIO;
         return;
       }
@@ -553,8 +585,8 @@ export class ControladorDeChamadas {
   /** O aviso de instabilidade, se houver e se tocar; depois (ou sem ele), os ramais. */
   private async tocarAviso(l: Recebida): Promise<void> {
     if (l.fim) return;
-    const aviso = l.avisoPendente;
-    l.avisoPendente = null;
+    const aviso = l.fila.avisoPendente;
+    l.fila.avisoPendente = null;
     if (aviso && (await this.falaNoAr.porNoAr(l, aviso, "aviso")) === "no_ar") return;
     return this.comecarOsToques(l);
   }
@@ -562,13 +594,13 @@ export class ControladorDeChamadas {
   /** Os ramais. A régua dos 45 s ("atende e segura") conta daqui, depois do aviso. */
   private async comecarOsToques(l: Recebida): Promise<void> {
     if (l.fim) return;
-    l.inicio = this.agora();
+    l.fila.inicioDosToques = this.agora();
     return this.tocarProximo(l);
   }
 
   private async disponiveisComRamal(l: Recebida): Promise<CandidatoAoToque[]> {
-    if (!l.teamId) return [];
-    const todos = await this.banco.disponiveisNoTime(l.org, l.teamId, new Date(this.agora()));
+    if (!l.fila.teamId) return [];
+    const todos = await this.banco.disponiveisNoTime(l.org, l.fila.teamId, new Date(this.agora()));
     const online = await Promise.all(todos.map((c) => this.ari.ramalOnline(c.userId).catch(() => false)));
     return todos.filter((_, i) => online[i]);
   }
@@ -581,9 +613,9 @@ export class ControladorDeChamadas {
 
   /** O cliente vai esperar: "aguarde" (se tocar) e a música no fim dele; sem "aguarde", música direto. */
   private async segurarNaLinha(l: Recebida) {
-    if (l.segurando || l.fim) return;
-    l.segurando = true;
-    const aguarde = l.falasGerais.aguarde;
+    if (l.fila.segurando || l.fim) return;
+    l.fila.segurando = true;
+    const aguarde = l.fila.falasGerais.aguarde;
     if (aguarde && (await this.falaNoAr.porNoAr(l, aguarde, "espera", { valeTocar: () => this.aindaEspera(l) })) === "no_ar") {
       return;
     }
@@ -607,30 +639,30 @@ export class ControladorDeChamadas {
       });
       disponiveis = [];
     }
-    const p = proximoToque(disponiveis, l.estado);
+    const p = proximoToque(disponiveis, l.fila.toque);
 
     if (p.tipo === "desistir") return this.encerrarComFala(l, "ninguem_atendeu");
 
     if (p.tipo === "esperar") {
-      if (!l.naFila) {
-        l.naFila = true;
-        l.inicioFila = this.agora();
+      if (!l.fila.esperando) {
+        l.fila.esperando = true;
+        l.fila.inicioDaEspera = this.agora();
         await this.segurarNaLinha(l);
         if (l.fim) return;
         await this.marcarTocando(l, null);
       }
-      if (this.agora() - (l.inicioFila ?? this.agora()) >= ESPERA_NA_FILA_MS) {
+      if (this.agora() - (l.fila.inicioDaEspera ?? this.agora()) >= ESPERA_NA_FILA_MS) {
         return this.encerrarComFala(l, "fila_esgotada");
       }
       this.armar(l, REAVALIAR_FILA_MS, () => this.tocarProximo(l));
       return;
     }
 
-    l.estado = p.estado;
+    l.fila.toque = p.estado;
     // Tocou demais sem ninguém pegar (ou começou a segunda volta): atende e
     // segura — a rede costuma derrubar ligação que só chama. E a ligação que já
     // foi atendida (pelo aviso, pela URA) não espera o ramal em silêncio.
-    if (l.atendidaPelaRede || p.estado.volta > 1 || this.agora() - l.inicio >= ATENDER_E_SEGURAR_APOS_MS) {
+    if (l.atendidaPelaRede || p.estado.volta > 1 || this.agora() - l.fila.inicioDosToques >= ATENDER_E_SEGURAR_APOS_MS) {
       await this.segurarNaLinha(l);
       // O "aguarde" pode ter encontrado o canal do cliente já fechado: não toca ramal para ninguém.
       if (l.fim) return;
@@ -653,13 +685,13 @@ export class ControladorDeChamadas {
       });
       return this.tocarProximo(l);
     }
-    l.ramal = { canal: canalDoRamal.id, userId: p.userId };
+    l.fila.ramal = { canal: canalDoRamal.id, userId: p.userId };
     this.porCanal.set(canalDoRamal.id, l);
     await this.marcarTocando(l, p.userId);
     // Rede de segurança: se o Asterisk não derrubar o toque no prazo, derrubamos.
     const canalEsperado = canalDoRamal.id;
     this.armar(l, TOQUE_POR_ATENDENTE_MS + 3_000, async () => {
-      if (l.ramal?.canal === canalEsperado && !l.atendidaPor) await this.ari.desligar(canalEsperado, "no_answer");
+      if (l.fila.ramal?.canal === canalEsperado && !l.atendidaPor) await this.ari.desligar(canalEsperado, "no_answer");
     });
   }
 
@@ -671,11 +703,10 @@ export class ControladorDeChamadas {
   }
 
   private armar(l: Recebida, ms: number, fn: () => Promise<unknown>) {
-    if (l.relogio) clearTimeout(l.relogio);
-    l.relogio = null;
+    pararRelogio(l.fila.relogios, "reavaliar");
     if (l.fim) return;
-    l.relogio = setTimeout(() => {
-      l.relogio = null;
+    l.fila.relogios.reavaliar = setTimeout(() => {
+      l.fila.relogios.reavaliar = null;
       if (!l.fim)
         void this.emFila(async () => {
           if (!l.fim) await fn();
@@ -683,14 +714,11 @@ export class ControladorDeChamadas {
     }, ms);
   }
 
-  /** Todos os relógios da ligação: o da fila, o do "aguarde", o da fala no ar e o prazo da URA. */
+  /** Todos os relógios da ligação, grupo a grupo e cada grupo inteiro: a fila, a fala no ar e a URA. */
   private pararRelogios(l: Recebida) {
-    if (l.relogio) clearTimeout(l.relogio);
-    l.relogio = null;
-    if (l.relogioDaEspera) clearTimeout(l.relogioDaEspera);
-    l.relogioDaEspera = null;
+    pararTodos(l.fila.relogios);
     this.falaNoAr.pararRelogio(l);
-    if (l.ura) this.pararPrazoDaUra(l.ura);
+    if (l.ura) pararTodos(l.ura.relogios);
   }
 
   // ─── depois da fala (a mecânica está em `fala-no-ar.ts`) ─────────────────
@@ -767,7 +795,7 @@ export class ControladorDeChamadas {
       menu,
       regra: { opcoes: menu.opcoes, defaultTeamId: menu.defaultTeamId, temFalaInvalida: menu.falaInvalida !== null },
       estado: ESTADO_INICIAL_DA_URA,
-      prazo: null,
+      relogios: { prazo: null },
     };
     l.ura = ura;
     return this.tocarNaUra(l, ura, "menu");
@@ -830,8 +858,8 @@ export class ControladorDeChamadas {
   private armarPrazoDaUra(l: Recebida, ura: UraEmCurso, ms: number, vez: number) {
     this.pararPrazoDaUra(ura);
     if (l.fim) return;
-    ura.prazo = setTimeout(() => {
-      ura.prazo = null;
+    ura.relogios.prazo = setTimeout(() => {
+      ura.relogios.prazo = null;
       if (l.fim || l.ura !== ura) return;
       void this.emFila(() => this.executarUra(l, ura, { tipo: "prazo", vez })).catch((e) =>
         this.log.error("telefonia: prazo da URA falhou", { erro: String(e) }),
@@ -840,8 +868,7 @@ export class ControladorDeChamadas {
   }
 
   private pararPrazoDaUra(ura: UraEmCurso) {
-    if (ura.prazo) clearTimeout(ura.prazo);
-    ura.prazo = null;
+    pararRelogio(ura.relogios, "prazo");
   }
 
   /**
@@ -858,7 +885,7 @@ export class ControladorDeChamadas {
    */
   private async sairDaUra(l: Recebida, ura: UraEmCurso, acao: Extract<AcaoDaUra, { tipo: "encaminhar" }>): Promise<void> {
     l.ura = null;
-    l.teamId = acao.teamId;
+    l.fila.teamId = acao.teamId;
     try {
       const gravou = await this.banco.registrarEscolhaDoMenu(l.org, l.vcId, {
         digito: acao.digito,
@@ -903,14 +930,13 @@ export class ControladorDeChamadas {
 
   /** Daqui a ~40 s: para a música, toca o "aguarde" de novo, e a música volta no fim dele. */
   private armarEspera(l: Recebida) {
-    if (l.relogioDaEspera) clearTimeout(l.relogioDaEspera);
-    l.relogioDaEspera = null;
+    pararRelogio(l.fila.relogios, "aguarde");
     if (l.fim) return;
-    l.relogioDaEspera = setTimeout(() => {
-      l.relogioDaEspera = null;
+    l.fila.relogios.aguarde = setTimeout(() => {
+      l.fila.relogios.aguarde = null;
       if (l.fim) return;
       void this.emFila(async () => {
-        const aguarde = l.falasGerais.aguarde;
+        const aguarde = l.fila.falasGerais.aguarde;
         if (!aguarde || l.fim || l.atendidaPor || l.encerrando || l.fala.atual) return;
         let parouAMusica = false;
         const tocando =
@@ -934,7 +960,7 @@ export class ControladorDeChamadas {
     if (l.fim || l.encerrando) return;
     l.encerrando = motivo;
     this.pararRelogios(l);
-    const ninguem = l.falasGerais.ninguem;
+    const ninguem = l.fila.falasGerais.ninguem;
     if (
       ninguem &&
       (await this.falaNoAr.porNoAr(l, ninguem, "ninguem", {
@@ -953,13 +979,13 @@ export class ControladorDeChamadas {
 
   private async ramalAtendeu(canal: CanalAri, vcId: string) {
     const l = this.porId.get(vcId);
-    if (!l || l.tipo !== "recebida" || l.fim || l.encerrando || l.ramal?.canal !== canal.id || l.atendidaPor) {
+    if (!l || l.tipo !== "recebida" || l.fim || l.encerrando || l.fila.ramal?.canal !== canal.id || l.atendidaPor) {
       // Atendeu tarde (a ligação já foi para outro, acabou ou está se despedindo): larga o ramal.
       await this.ari.desligar(canal.id);
       return;
     }
     this.pararRelogios(l);
-    l.atendidaPor = l.ramal.userId;
+    l.atendidaPor = l.fila.ramal.userId;
 
     // Atendeu no meio do "aguarde": a fala para, e a ponte se forma.
     await this.falaNoAr.pararAtual(l);
@@ -990,7 +1016,7 @@ export class ControladorDeChamadas {
     this.pararRelogios(l);
     l.ura = null;
     this.falaNoAr.esquecer(l);
-    const outros = [l.cliente, l.ramal?.canal].filter((c): c is string => Boolean(c));
+    const outros = [l.cliente, l.fila.ramal?.canal].filter((c): c is string => Boolean(c));
     for (const c of outros) {
       this.porCanal.delete(c);
       await this.ari.desligar(c).catch(() => undefined);
@@ -1143,12 +1169,11 @@ export class ControladorDeChamadas {
     if (l.tipo === "recebida") {
       // Enquanto a última fala toca ("fora do horário", "ninguém atendeu"), o motivo já está decidido.
       if (ev.channel.id === l.cliente) return this.encerrarRecebida(l, l.encerrando ?? "cliente_desligou");
-      if (l.ramal?.canal === ev.channel.id) {
+      if (l.fila.ramal?.canal === ev.channel.id) {
         if (l.atendidaPor) return this.encerrarRecebida(l, "atendente_desligou");
         // Não atendeu, recusou ou o ramal caiu: próximo da lista.
-        l.ramal = null;
-        if (l.relogio) clearTimeout(l.relogio);
-        l.relogio = null;
+        l.fila.ramal = null;
+        pararRelogio(l.fila.relogios, "reavaliar");
         await this.marcarTocando(l, null);
         return this.tocarProximo(l);
       }
