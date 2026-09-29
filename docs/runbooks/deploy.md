@@ -8,10 +8,41 @@ está documentado no fim.
 
 ## 1. O comando
 
+O caminho normal é o kit, e ele recria tudo o que a versão nova mexeu:
+
 ```bash
 cd /var/www/crm
+bash hostgator-setup-kit/update.sh
+```
+
+O `dc up -d` dele não nomeia serviço: sobe **todos** os que mudaram — `app`, `worker`,
+`scheduler` e, com a telefonia ligada, o `asterisk` —, cria volume novo sozinho e usa os
+arquivos de compose que a instalação tem (`dc_files`, em `hostgator-setup-kit/_common.sh`).
+
+À mão, só o `app`, quando a versão não mexeu em mais nada:
+
+```bash
 docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml --env-file .env up -d app
 ```
+
+### `up -d app` sozinho não basta quando a versão mexe no worker ou no Asterisk
+
+Foi o caso da URA do telefone (migration 0288): o volume `telefonia-falas` passou a ser
+montado no `worker` (escrita) e no `asterisk` (só leitura), em `/var/lib/telefonia/falas`.
+Um `up -d app` deixa o `worker` na versão antiga e o `asterisk` **sem o volume** — a
+ligação segue, mas toda fala (menu, aguarde, aviso) é pulada e vira aviso na Central. À mão,
+recrie os três, com os mesmos dois `-f`:
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.traefik.yml --env-file .env up -d app worker asterisk
+```
+
+**Só nomeie `asterisk` se a telefonia estiver ligada** (`grep -E '^COMPOSE_PROFILES=' .env`
+cita `telefonia`). Serviço de profile nomeado no comando SOBE mesmo com o profile desligado:
+numa instalação sem telefonia, o comando acima ligaria um Asterisk que ninguém configurou.
+Sem telefonia, é `up -d app worker`.
+
+Na dúvida sobre o que a versão mexe, use o `update.sh`.
 
 ### Os DOIS `-f` são obrigatórios. Sempre.
 
@@ -55,6 +86,18 @@ curl -s -o /dev/null -w "%{http_code}\n" https://<DOMAIN>/
 # 404      = labels perdidas, refaça o deploy com os dois -f
 ```
 
+Com a telefonia ligada, confira também que o Asterisk enxerga as falas, e só para leitura:
+
+```bash
+# 3) o volume das falas está no Asterisk?
+docker exec "$(docker compose -f docker-compose.prod.yml ps -q asterisk)" ls -la /var/lib/telefonia/falas
+# esperado: a listagem (vazia numa instalação sem fala salva). "No such file" = o asterisk
+# não foi recriado; refaça o up -d nomeando-o (§1)
+docker inspect "$(docker compose -f docker-compose.prod.yml ps -q asterisk)" \
+  --format '{{range .Mounts}}{{.Destination}} rw={{.RW}}{{"\n"}}{{end}}' | grep telefonia
+# esperado: /var/lib/telefonia/falas rw=false
+```
+
 ---
 
 ## 3. Fluxo completo (do código à produção)
@@ -67,12 +110,14 @@ commit → push → PR → merge na main → CI publica imagem → VPS puxa
    VPS não existe: o CI não o vê, some se a VPS for reconstruída, e é invisível
    pra qualquer outra pessoa.
 2. **PR e merge na `main`.** `publish-image.yml` dispara em push na `main` (ou
-   tag `v*`) e publica **três** imagens — `deskcommcrm`, `deskcomm-worker` e
-   `deskcomm-scheduler` — sempre na mesma versão. O build pesado roda nos
+   tag `v*`) e publica **quatro** imagens — `deskcommcrm`, `deskcomm-worker`,
+   `deskcomm-scheduler` e `deskcomm-asterisk` — sempre na mesma versão. O build pesado roda nos
    runners do GitHub, nunca na VPS do usuário.
 3. **Deploy na VPS.** Numa instalação real isto é `bash hostgator-setup-kit/update.sh`,
    não um `up -d` na mão: ele puxa a tag publicada, re-aplica o `baseline.sql`,
-   faz backup antes e grava as três imagens no `.env`.
+   faz backup antes, grava as quatro imagens no `.env` (a do Asterisk mesmo com a
+   telefonia desligada: `gravar_imagens`, em `hostgator-setup-kit/_common.sh`) e
+   recria todos os serviços que mudaram (§1).
 
 > **`latest` não é a última release.** Ele é publicado a partir da branch default, então
 > segue o **topo da `main`** — código ainda não lançado. Quem quer a última release usa
@@ -93,6 +138,11 @@ APP_IMAGE=deskcomm-app:local docker compose \
 APP_IMAGE=deskcomm-app:local APP_PULL_POLICY=never docker compose \
   -f docker-compose.prod.yml -f docker-compose.traefik.yml --env-file .env up -d app
 ```
+
+Isto sobe só o `app`. Se a versão que você está validando mexe no worker ou no
+Asterisk (como o volume `telefonia-falas`), o `app` novo passa a conviver com o
+`worker` antigo e com o `asterisk` sem o volume — veja §1; o jeito de fechar é o
+`update.sh` da versão publicada.
 
 O `docker-compose.build.yml` também cobre `worker` e `scheduler` — troque
 `app` pelo serviço que você precisa construir. Eles têm `build:` no próprio

@@ -353,7 +353,7 @@ Navegador do atendente (JsSIP) ────────────────�
 |---|---|---|
 | F0 | Prova de conceito | medida (§1) |
 | **F1 + distribuição** (release A) | §4–§7 | publicada — para saber em que versão: `awk '/^## \[/{v=$2} /Telefone no CRM — fazer e receber/{print v; exit}' CHANGELOG.md` |
-| F2 v1 | URA e falas: menu por tecla com time padrão, "aguarde", "ninguém atendeu", fora do horário pela agenda do time (o texto sugerido traz o WhatsApp), aviso de instabilidade por time. Desenho: `docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`; plano: `docs/superpowers/plans/2026-09-28-telefonia-fase2-v1-ura.md`; migration 0288 | implementada; prova na VPS pendente (J36 do mapa de jornadas) — publicada? `grep -n 'Menu de voz (URA)' CHANGELOG.md` |
+| F2 v1 | URA e falas: menu por tecla com time padrão, "aguarde", "ninguém atendeu", fora do horário pela agenda do time (com um WhatsApp conectado, o texto sugerido traz o número dele), aviso de instabilidade por time. Desenho: `docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`; plano: `docs/superpowers/plans/2026-09-28-telefonia-fase2-v1-ura.md`; migration 0288 | implementada; prova na VPS pendente (J36 do mapa de jornadas) — publicada? `grep -n 'Menu de voz (URA)' CHANGELOG.md` |
 | F2 v2 | Transferência direta e consultada (§5.3 do mesmo desenho) | a fazer |
 | F2 v3 | Ramais (§5.4 do mesmo desenho) | a fazer |
 | F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada | a fazer |

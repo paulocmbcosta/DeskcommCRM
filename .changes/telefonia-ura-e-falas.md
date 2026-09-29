@@ -20,8 +20,9 @@ depois a tela mostra só os 4 últimos dígitos), a voz é escolhida em **Voz e 
 passa por uma prévia: gera, ouve no navegador e só então "Salvar e usar". A ElevenLabs só é
 chamada na prévia, nunca numa ligação; o mesmo texto com a mesma voz não é cobrado duas vezes, e
 o limite é de 30 prévias por hora. Além do menu há três falas: **aguarde** (a cada ~40 s de
-espera), **ninguém atendeu** e **fora do horário**, pela agenda do time — o texto sugerido já traz
-o WhatsApp da empresa. Sem a fala de fora do horário, a ligação fora do horário segue como antes.
+espera), **ninguém atendeu** e **fora do horário**, pela agenda do time — quando a empresa tem um
+WhatsApp conectado, o texto sugerido já traz o número dele. Sem a fala de fora do horário, a
+ligação fora do horário segue como antes.
 
 Em **Configurações › Times**, gerentes e admins ligam um **aviso de instabilidade** por time,
 com prazo (1 h, 2 h, 4 h ou até desligar): quem liga para aquele time ouve o aviso antes da fila,
