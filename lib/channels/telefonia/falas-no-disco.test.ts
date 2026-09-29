@@ -1,7 +1,9 @@
 // @vitest-environment node
 /**
  * As falas no disco (desenho da fase 2, §4 e D12) contra um `fs` DE VERDADE num
- * diretório temporário — o volume — e um armazém falso no lugar do Storage.
+ * diretório temporário — o volume — e um armazém falso no lugar do Storage. O
+ * relógio é injetado (`relogio`): as carências e a escada de tentativas são
+ * provadas avançando-o, sem esperar.
  *
  * `open` e `rename` passam pelo real; o mock existe só para os dois testes da
  * escrita atômica injetarem, uma vez, um disco que enche no meio da escrita e um
@@ -33,9 +35,12 @@ import { armazemDaInstalacao, type ObjetoDoArmazem, type PortaDoArmazem } from "
 
 import {
   CARENCIA_DO_ORFAO_MS,
+  CARENCIA_DO_TEMPORARIO_MS,
   DIRETORIO_DAS_FALAS,
   DIRETORIO_NO_ASTERISK,
+  ESCADA_DE_TENTATIVAS_MS,
   FalasNoDisco,
+  INTERVALO_DA_LIMPEZA_MS,
   JANELA_DO_STORAGE_MS,
   caminhoValido,
   falasNoDiscoDaInstalacao,
@@ -47,8 +52,16 @@ const { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } = fs;
 
 const ORG = "00000000-0000-4000-8000-00000000000a";
 const OUTRA = "00000000-0000-4000-8000-00000000000b";
+const MINUTO = 60_000;
 const hash = (c: string) => c.repeat(64);
 const caminho = (c: string, org = ORG) => `${org}/${hash(c)}.ulaw`;
+
+// ─── o relógio ───────────────────────────────────────────────────────────────
+
+let relogio: number;
+const avancar = (ms: number) => {
+  relogio += ms;
+};
 
 // ─── o banco falso: as linhas de `phone_prompts` que importam aqui ──────────
 
@@ -59,7 +72,11 @@ interface Linha {
 }
 let linhas: Linha[];
 /** A ordem do que aconteceu, para provar que a referência é lida logo antes de cada `apagar`. */
-let eventos: Array<{ tipo: "consulta_referencias"; org: string; caminhos: string[] } | { tipo: "consulta_prontas"; limite: number } | { tipo: "apagar"; caminhos: string[] }>;
+let eventos: Array<
+  | { tipo: "consulta_referencias"; org: string; caminhos: string[] }
+  | { tipo: "consulta_prontas"; limite: number }
+  | { tipo: "apagar"; caminhos: string[] }
+>;
 let bancoFora: boolean;
 
 const db: Queryable = {
@@ -77,16 +94,24 @@ const db: Queryable = {
     if (sql.includes("organization_id = $1") && sql.includes("any($2")) {
       const [org, caminhos] = params as [string, string[]];
       eventos.push({ tipo: "consulta_referencias", org, caminhos: [...caminhos] });
-      return resposta(linhas.filter((l) => l.organization_id === org && l.storage_path !== null && caminhos.includes(l.storage_path)).map((l) => l.storage_path!));
+      return resposta(
+        linhas.filter((l) => l.organization_id === org && l.storage_path !== null && caminhos.includes(l.storage_path)).map((l) => l.storage_path!),
+      );
     }
     throw new Error(`consulta inesperada: ${sql}`);
   }) as unknown as Queryable["query"],
 };
+const referenciar = (c: string, org = ORG) => linhas.push({ organization_id: org, storage_path: c, status: "ready" });
+const desreferenciar = (c: string) => {
+  linhas = linhas.filter((l) => l.storage_path !== c);
+};
 
 // ─── o Storage falso ─────────────────────────────────────────────────────────
 
+/** O conteúdo dos objetos, para `baixar`. */
 let objetos: Map<string, Uint8Array>;
 let pastasNoStorage: string[];
+/** O que `listarObjetos` devolve — e de onde `apagar` remove. */
 let listaDoStorage: ObjetoDoArmazem[];
 let apagadosDoStorage: string[];
 let baixadosEmParalelo: number;
@@ -100,15 +125,20 @@ const baixarPadrao = async (c: string): Promise<Uint8Array<ArrayBuffer> | null> 
   return objetos.has(c) ? new Uint8Array(objetos.get(c)!) : null;
 };
 let baixar: ReturnType<typeof vi.fn<PortaDoArmazem["baixar"]>>;
+let listarPastas: ReturnType<typeof vi.fn<PortaDoArmazem["listarPastas"]>>;
 
 function armazem(extra: Partial<PortaDoArmazem> = {}): Pick<PortaDoArmazem, "baixar" | "listarPastas" | "listarObjetos" | "apagar"> {
   return {
     baixar: (c, o) => baixar(c, o),
-    listarPastas: async () => [...pastasNoStorage],
+    listarPastas: () => listarPastas(),
     listarObjetos: async (pasta) => listaDoStorage.filter((o) => o.caminho.startsWith(`${pasta}/`)),
     apagar: async (caminhos) => {
       eventos.push({ tipo: "apagar", caminhos: [...caminhos] });
-      apagadosDoStorage.push(...caminhos);
+      // Como o Storage: devolve só o que existia e saiu.
+      const removidos = caminhos.filter((c) => listaDoStorage.some((o) => o.caminho === c));
+      listaDoStorage = listaDoStorage.filter((o) => !removidos.includes(o.caminho));
+      apagadosDoStorage.push(...removidos);
+      return removidos;
     },
     ...extra,
   };
@@ -117,14 +147,14 @@ function armazem(extra: Partial<PortaDoArmazem> = {}): Pick<PortaDoArmazem, "bai
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 let dir: string;
 const disco = (opcoes: OpcoesDasFalasNoDisco = {}, extra: Partial<PortaDoArmazem> = {}) =>
-  new FalasNoDisco(dir, db, armazem(extra), log, opcoes);
-const horasAtras = (h: number) => new Date(Date.now() - h * 3_600_000);
+  new FalasNoDisco(dir, db, armazem(extra), log, { agora: () => relogio, ...opcoes });
+const horasAtras = (h: number) => new Date(relogio - h * 3_600_000);
 const noDisco = (c: string) => join(dir, c);
 async function gravarNoDisco(c: string, bytes: number[], idadeMs = 0) {
   await mkdir(dirname(noDisco(c)), { recursive: true });
   await writeFile(noDisco(c), new Uint8Array(bytes));
   if (idadeMs > 0) {
-    const quando = new Date(Date.now() - idadeMs);
+    const quando = new Date(relogio - idadeMs);
     await utimes(noDisco(c), quando, quando);
   }
 }
@@ -133,9 +163,12 @@ const existe = (c: string) =>
     () => true,
     () => false,
   );
+/** As mensagens registradas num nível, para contar avisos. */
+const mensagens = (nivel: "info" | "warn" | "error") => log[nivel].mock.calls.map((c) => String(c[0]));
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "falas-"));
+  relogio = Date.now();
   linhas = [];
   eventos = [];
   bancoFora = false;
@@ -146,6 +179,7 @@ beforeEach(async () => {
   baixadosEmParalelo = 0;
   picoDeParalelismo = 0;
   baixar = vi.fn<PortaDoArmazem["baixar"]>(baixarPadrao);
+  listarPastas = vi.fn<PortaDoArmazem["listarPastas"]>(async () => [...pastasNoStorage]);
   log.info.mockClear();
   log.warn.mockClear();
   log.error.mockClear();
@@ -187,6 +221,14 @@ describe("o endereço de mídia e a régua do caminho", () => {
     ]) {
       expect(caminhoValido(ruim), ruim).toBe(false);
     }
+  });
+
+  it("as réguas de tempo: órfão 15 min, temporário 5 min, Storage 24 h, limpeza a cada 10 min, escada 1/5/30/60 min", () => {
+    expect(CARENCIA_DO_ORFAO_MS).toBe(15 * MINUTO);
+    expect(CARENCIA_DO_TEMPORARIO_MS).toBe(5 * MINUTO);
+    expect(JANELA_DO_STORAGE_MS).toBe(24 * 60 * MINUTO);
+    expect(INTERVALO_DA_LIMPEZA_MS).toBe(10 * MINUTO);
+    expect(ESCADA_DE_TENTATIVAS_MS).toEqual([MINUTO, 5 * MINUTO, 30 * MINUTO, 60 * MINUTO]);
   });
 });
 
@@ -326,7 +368,7 @@ describe("garantir — a escrita é ATÔMICA", () => {
   });
 });
 
-describe("sincronizar — a passada de 60 s", () => {
+describe("sincronizar — a passada de 60 s baixa o que falta", () => {
   it("baixa as prontas de TODAS as organizações que faltam, uma por vez e em páginas, e pula as que já estão no disco", async () => {
     linhas = [
       { organization_id: ORG, storage_path: caminho("a"), status: "ready" },
@@ -351,78 +393,32 @@ describe("sincronizar — a passada de 60 s", () => {
     expect(paginas.every((e) => e.tipo === "consulta_prontas" && e.limite === 2)).toBe(true);
   });
 
-  it("apaga do disco só o que nenhuma linha referencia e já passou da carência; o resto fica", async () => {
-    const velho = CARENCIA_DO_ORFAO_MS + 60_000;
-    linhas = [
-      { organization_id: ORG, storage_path: caminho("a"), status: "ready" },
-      // Referenciado por uma linha que não está pronta: não é órfão.
-      { organization_id: ORG, storage_path: caminho("f"), status: "failed" },
-    ];
-    objetos.set(caminho("a"), new Uint8Array([1]));
-    await gravarNoDisco(caminho("a"), [1], velho);
-    await gravarNoDisco(caminho("f"), [1], velho);
-    await gravarNoDisco(caminho("d"), [4], velho); // órfão velho: sai
-    await gravarNoDisco(caminho("e"), [5]); // órfão recém-escrito: fica (a fala pode ter nascido depois da leitura)
-    await gravarNoDisco(`${ORG}/.${hash("7")}.abc.tmp`, [0], velho); // temporário largado por uma queda: sai
-    await gravarNoDisco(`${ORG}/.${hash("8")}.def.tmp`, [0]); // temporário de uma escrita em curso: fica
-    await gravarNoDisco(`${ORG}/LEIA-ME.txt`, [0], velho); // nome que não é nosso: não mexe
-    await gravarNoDisco(`nao-e-org/${hash("9")}.ulaw`, [0], velho); // pasta que não é organização: não mexe
-    await writeFile(join(dir, "solto.ulaw"), new Uint8Array([0])); // arquivo na raiz: não mexe
-
-    expect(await disco().sincronizar()).toEqual({ baixadas: 0, apagadas: 2, falhas: 0 });
-    expect((await readdir(join(dir, ORG))).sort()).toEqual(
-      [`.${hash("8")}.def.tmp`, `${hash("a")}.ulaw`, `${hash("e")}.ulaw`, `${hash("f")}.ulaw`, "LEIA-ME.txt"].sort(),
-    );
-    expect(await readdir(join(dir, "nao-e-org"))).toEqual([`${hash("9")}.ulaw`]);
-    expect(await existe("solto.ulaw")).toBe(true);
-  });
-
-  it("a referência do órfão é consultada COM a organização da pasta", async () => {
-    await gravarNoDisco(caminho("d"), [4], CARENCIA_DO_ORFAO_MS + 60_000);
-    await gravarNoDisco(caminho("d", OUTRA), [4], CARENCIA_DO_ORFAO_MS + 60_000);
-    // A linha é da OUTRA organização: o arquivo de ORG com o mesmo hash continua órfão.
-    linhas = [{ organization_id: OUTRA, storage_path: caminho("d", OUTRA), status: "ready" }];
-    objetos.set(caminho("d", OUTRA), new Uint8Array([4]));
-
-    expect(await disco().sincronizar()).toEqual({ baixadas: 0, apagadas: 1, falhas: 0 });
-    expect(await existe(caminho("d"))).toBe(false);
-    expect(await existe(caminho("d", OUTRA))).toBe(true);
-    const consultas = eventos.filter((e) => e.tipo === "consulta_referencias");
-    expect(consultas.map((e) => e.tipo === "consulta_referencias" && e.org).sort()).toEqual([ORG, OUTRA].sort());
-  });
-
-  it("fala pronta que o Storage não devolve conta como falha e não derruba a passada", async () => {
-    linhas = [
-      { organization_id: ORG, storage_path: caminho("8"), status: "ready" },
-      { organization_id: ORG, storage_path: caminho("9"), status: "ready" },
-    ];
-    objetos.set(caminho("9"), new Uint8Array([2]));
-    expect(await disco().sincronizar()).toEqual({ baixadas: 1, apagadas: 0, falhas: 1 });
-    expect(await existe(caminho("9"))).toBe(true);
-  });
-
-  it("Storage fora do ar: para de tentar na 3ª falha seguida (a passada não vira N prazos), e os órfãos saem assim mesmo", async () => {
+  it("Storage fora do ar: para de tentar na 3ª falha seguida (a passada não vira N prazos)", async () => {
     linhas = ["a", "b", "c", "d", "e"].map((c) => ({ organization_id: ORG, storage_path: caminho(c), status: "ready" as const }));
     baixar.mockRejectedValue(new Error("armazem_download: TypeError: fetch failed"));
-    await gravarNoDisco(caminho("6"), [1], CARENCIA_DO_ORFAO_MS + 60_000);
-
-    expect(await disco().sincronizar()).toEqual({ baixadas: 0, apagadas: 1, falhas: 3 });
+    expect(await disco().sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 3 });
     expect(baixar).toHaveBeenCalledTimes(3);
   });
 
   it("banco fora: nada é apagado do disco (sem saber quem referencia, ninguém é órfão) e não lança", async () => {
-    await gravarNoDisco(caminho("d"), [4], CARENCIA_DO_ORFAO_MS + 60_000);
+    await gravarNoDisco(caminho("d"), [4]);
+    const d = disco();
+    await d.sincronizar(); // visto órfão
+    avancar(CARENCIA_DO_ORFAO_MS);
     bancoFora = true;
-    const r = await disco().sincronizar();
+    const r = await d.sincronizar();
     expect(r.apagadas).toBe(0);
     expect(r.falhas).toBeGreaterThan(0);
     expect(await existe(caminho("d"))).toBe(true);
   });
 
-  it("caminho fora da régua vindo do banco (CHECK furado): não baixa e não escreve fora do volume", async () => {
+  it("caminho fora da régua vindo do banco (CHECK furado): não baixa, não escreve fora do volume, e avisa uma vez só", async () => {
     linhas = [{ organization_id: ORG, storage_path: `${ORG}/../../fora.ulaw`, status: "ready" }];
-    expect(await disco().sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 1 });
+    const d = disco();
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 1 });
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 1 });
     expect(baixar).not.toHaveBeenCalled();
+    expect(mensagens("warn").filter((m) => m.includes("fora da régua"))).toHaveLength(1);
   });
 
   it("volume ainda sem nada: cria a raiz e não falha", async () => {
@@ -431,9 +427,223 @@ describe("sincronizar — a passada de 60 s", () => {
   });
 });
 
-describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 24 h depois (desenho §4)", () => {
-  it("apaga só o que nenhuma linha usa E foi gravado há mais de 24 h", async () => {
-    expect(JANELA_DO_STORAGE_MS).toBe(24 * 3_600_000);
+describe("sincronizar — fala pronta sem objeto no Storage: tentativas espaçadas, um aviso só", () => {
+  it("a passada espaça as tentativas em 1, 5, 30 e 60 min, e depois de hora em hora", async () => {
+    linhas = [{ organization_id: ORG, storage_path: caminho("9"), status: "ready" }];
+    const d = disco();
+    const tentativasApos = async (ms: number) => {
+      avancar(ms);
+      await d.sincronizar();
+      return baixar.mock.calls.length;
+    };
+    expect(await tentativasApos(0)).toBe(1);
+    expect(await tentativasApos(MINUTO - 1)).toBe(1);
+    expect(await tentativasApos(1)).toBe(2); // 1 min depois da 1ª
+    expect(await tentativasApos(5 * MINUTO - 1)).toBe(2);
+    expect(await tentativasApos(1)).toBe(3); // 5 min depois da 2ª
+    expect(await tentativasApos(30 * MINUTO - 1)).toBe(3);
+    expect(await tentativasApos(1)).toBe(4); // 30 min depois da 3ª
+    expect(await tentativasApos(60 * MINUTO - 1)).toBe(4);
+    expect(await tentativasApos(1)).toBe(5); // 60 min depois da 4ª
+    expect(await tentativasApos(60 * MINUTO)).toBe(6); // e de hora em hora
+  });
+
+  it("registra UMA vez na primeira falha, e uma vez quando o áudio volta", async () => {
+    linhas = [{ organization_id: ORG, storage_path: caminho("9"), status: "ready" }];
+    const d = disco();
+    for (let i = 0; i < 6; i++) {
+      await d.sincronizar();
+      avancar(60 * MINUTO);
+    }
+    expect(baixar.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(mensagens("warn").filter((m) => m.includes("sem áudio no Storage"))).toHaveLength(1);
+
+    objetos.set(caminho("9"), new Uint8Array([9]));
+    expect(await d.sincronizar()).toEqual({ baixadas: 1, apagadas: 0, falhas: 0 });
+    expect(mensagens("info").filter((m) => m.includes("voltou ao Storage"))).toHaveLength(1);
+    avancar(60 * MINUTO);
+    await d.sincronizar();
+    expect(mensagens("warn").filter((m) => m.includes("sem áudio no Storage"))).toHaveLength(1);
+    expect(mensagens("info").filter((m) => m.includes("voltou ao Storage"))).toHaveLength(1);
+  });
+
+  it("a ligação não espera a escada: garantir tenta na hora (salvar de novo conserta) e não repete o aviso", async () => {
+    linhas = [{ organization_id: ORG, storage_path: caminho("9"), status: "ready" }];
+    const d = disco();
+    await d.sincronizar();
+    expect(await d.garantir({ id: "f", storagePath: caminho("9") })).toBeNull();
+    expect(baixar).toHaveBeenCalledTimes(2);
+    expect(mensagens("warn").filter((m) => m.includes("sem áudio no Storage"))).toHaveLength(1);
+    objetos.set(caminho("9"), new Uint8Array([9]));
+    expect(await d.garantir({ id: "f", storagePath: caminho("9") })).toBe(midiaDaFala(caminho("9")));
+    expect(mensagens("info").filter((m) => m.includes("voltou ao Storage"))).toHaveLength(1);
+  });
+
+  it("a fala que deixou de estar pronta sai da escada (a memória não cresce com fala velha)", async () => {
+    linhas = [{ organization_id: ORG, storage_path: caminho("9"), status: "ready" }];
+    const d = disco();
+    await d.sincronizar();
+    linhas = [];
+    avancar(MINUTO);
+    await d.sincronizar();
+    // Voltou a ser pronta (mesmo caminho): é tratada como nova — tenta já e avisa de novo.
+    linhas = [{ organization_id: ORG, storage_path: caminho("9"), status: "ready" }];
+    await d.sincronizar();
+    expect(baixar).toHaveBeenCalledTimes(2);
+    expect(mensagens("warn").filter((m) => m.includes("sem áudio no Storage"))).toHaveLength(2);
+  });
+});
+
+describe("sincronizar — Storage, disco e banco fora do ar: registra na transição, não em toda passada", () => {
+  it("Storage caiu: um aviso; passadas seguintes caladas; um registro quando volta", async () => {
+    linhas = [{ organization_id: ORG, storage_path: caminho("a"), status: "ready" }];
+    baixar.mockRejectedValue(new Error("armazem_download: TypeError: fetch failed"));
+    const d = disco();
+    for (let i = 0; i < 5; i++) await d.sincronizar();
+    expect(baixar).toHaveBeenCalledTimes(5);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(mensagens("warn")[0]).toMatch(/Storage/);
+
+    baixar.mockImplementation(baixarPadrao);
+    objetos.set(caminho("a"), new Uint8Array([1]));
+    await d.sincronizar();
+    expect(mensagens("info").filter((m) => m.includes("Storage das falas voltou"))).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("banco fora: um aviso por queda, não por passada", async () => {
+    bancoFora = true;
+    const d = disco();
+    for (let i = 0; i < 4; i++) await d.sincronizar();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    bancoFora = false;
+    await d.sincronizar();
+    expect(mensagens("info").filter((m) => m.includes("banco"))).toHaveLength(1);
+  });
+});
+
+describe("sincronizar — o órfão do disco sai 15 min depois de VISTO órfão, não pelo mtime", () => {
+  it("órfão recém-avistado fica, mesmo com mtime antigo; sai 15 min depois do primeiro avistamento", async () => {
+    await gravarNoDisco(caminho("d"), [4], 30 * 24 * 60 * MINUTO); // arquivo de um mês atrás
+    const d = disco();
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 0 });
+    avancar(CARENCIA_DO_ORFAO_MS - 1);
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 0 });
+    expect(await existe(caminho("d"))).toBe(true);
+    avancar(1);
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 1, falhas: 0 });
+    expect(await existe(caminho("d"))).toBe(false);
+  });
+
+  it("voltou a ter referência: sai do mapa — e, órfão de novo, a carência recomeça", async () => {
+    await gravarNoDisco(caminho("d"), [4]);
+    const d = disco();
+    await d.sincronizar(); // visto órfão em T0
+    avancar(10 * MINUTO);
+    referenciar(caminho("d"));
+    await d.sincronizar(); // referenciado: sai do mapa
+    avancar(6 * MINUTO); // T0 + 16 min
+    desreferenciar(caminho("d"));
+    expect((await d.sincronizar()).apagadas).toBe(0); // órfão de NOVO: primeiro avistamento agora
+    avancar(CARENCIA_DO_ORFAO_MS - 1);
+    expect((await d.sincronizar()).apagadas).toBe(0);
+    avancar(1);
+    expect((await d.sincronizar()).apagadas).toBe(1);
+  });
+
+  it("reiniciar o worker zera o mapa: a remoção só ATRASA", async () => {
+    await gravarNoDisco(caminho("d"), [4]);
+    await disco().sincronizar(); // visto órfão em T0 pelo worker antigo
+    avancar(CARENCIA_DO_ORFAO_MS + MINUTO);
+    const reiniciado = disco();
+    expect((await reiniciado.sincronizar()).apagadas).toBe(0);
+    avancar(CARENCIA_DO_ORFAO_MS);
+    expect((await reiniciado.sincronizar()).apagadas).toBe(1);
+  });
+
+  it("a referência é consultada COM a organização da pasta", async () => {
+    await gravarNoDisco(caminho("d"), [4]);
+    await gravarNoDisco(caminho("d", OUTRA), [4]);
+    // A linha é da OUTRA organização: o arquivo de ORG com o mesmo hash continua órfão.
+    linhas = [{ organization_id: OUTRA, storage_path: caminho("d", OUTRA), status: "ready" }];
+    const d = disco();
+    await d.sincronizar();
+    avancar(CARENCIA_DO_ORFAO_MS);
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 1, falhas: 0 });
+    expect(await existe(caminho("d"))).toBe(false);
+    expect(await existe(caminho("d", OUTRA))).toBe(true);
+    const orgs = new Set(eventos.flatMap((e) => (e.tipo === "consulta_referencias" ? [e.org] : [])));
+    expect([...orgs].sort()).toEqual([ORG, OUTRA].sort());
+  });
+
+  it("só mexe no que é seu: referenciado fica (em qualquer estado), temporário largado sai pelo mtime, nome estranho e pasta que não é organização ficam", async () => {
+    linhas = [
+      { organization_id: ORG, storage_path: caminho("a"), status: "ready" },
+      { organization_id: ORG, storage_path: caminho("f"), status: "failed" },
+    ];
+    await gravarNoDisco(caminho("a"), [1]);
+    await gravarNoDisco(caminho("f"), [1]);
+    await gravarNoDisco(`${ORG}/.${hash("7")}.abc.tmp`, [0], CARENCIA_DO_TEMPORARIO_MS); // largado por uma queda: sai
+    await gravarNoDisco(`${ORG}/.${hash("8")}.def.tmp`, [0]); // escrita em curso: fica
+    await gravarNoDisco(`${ORG}/LEIA-ME.txt`, [0]);
+    await gravarNoDisco(`nao-e-org/${hash("9")}.ulaw`, [0]);
+    await writeFile(join(dir, "solto.ulaw"), new Uint8Array([0]));
+    const d = disco();
+
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 1, falhas: 0 });
+    avancar(CARENCIA_DO_ORFAO_MS);
+    await d.sincronizar();
+    // Depois da carência, o temporário "em curso" também é velho e sai; o resto continua.
+    expect((await readdir(join(dir, ORG))).sort()).toEqual([`${hash("a")}.ulaw`, `${hash("f")}.ulaw`, "LEIA-ME.txt"].sort());
+    expect(await readdir(join(dir, "nao-e-org"))).toEqual([`${hash("9")}.ulaw`]);
+    expect(await existe("solto.ulaw")).toBe(true);
+  });
+
+  it("a ligação em curso: a fala ANTIGA continua tocável durante a carência, no disco e no Storage", async () => {
+    // "Aguarde" A está em uso, no disco e no Storage, gravado há dias.
+    referenciar(caminho("a"));
+    objetos.set(caminho("a"), new Uint8Array([1]));
+    listaDoStorage = [{ caminho: caminho("a"), criadoEm: horasAtras(72) }];
+    pastasNoStorage = [ORG];
+    const d = disco();
+    await d.sincronizar();
+    await d.limparStorage();
+    const antiga = { id: "aguarde", storagePath: caminho("a") }; // o que a ligação guardou ao entrar
+
+    // "Salvar e usar" troca o texto: A deixa de ser referenciada.
+    desreferenciar(caminho("a"));
+    referenciar(caminho("b"));
+    objetos.set(caminho("b"), new Uint8Array([2]));
+
+    // A passada roda a cada minuto; o "aguarde" repete a cada ~40 s — tocável durante toda a carência.
+    for (let t = 0; t < CARENCIA_DO_ORFAO_MS; t += MINUTO) {
+      await d.sincronizar();
+      await d.limparStorage();
+      expect(await d.garantir(antiga), `aos ${t / MINUTO} min`).toBe(midiaDaFala(caminho("a")));
+      avancar(MINUTO);
+    }
+    expect(apagadosDoStorage).toEqual([]);
+
+    // Passada a carência, A sai do disco e, na limpeza seguinte, do Storage.
+    await d.sincronizar();
+    expect(await existe(caminho("a"))).toBe(false);
+    avancar(INTERVALO_DA_LIMPEZA_MS);
+    await d.limparStorage();
+    expect(apagadosDoStorage).toEqual([caminho("a")]);
+    expect(await existe(caminho("b"))).toBe(true);
+  });
+});
+
+describe("limparStorage — prévia não salva e áudio sem uso saem do Storage (desenho §4)", () => {
+  /** Primeira limpeza avista os órfãos; a segunda, depois da carência, apaga. */
+  async function limparDuasVezes(d: FalasNoDisco) {
+    const primeira = await d.limparStorage();
+    avancar(CARENCIA_DO_ORFAO_MS);
+    const segunda = await d.limparStorage();
+    return { primeira, segunda };
+  }
+
+  it("regra dupla: mais de 24 h de criação E órfão visto há pelo menos 15 min", async () => {
     pastasNoStorage = [ORG];
     linhas = [
       { organization_id: ORG, storage_path: caminho("a"), status: "ready" },
@@ -442,13 +652,43 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
     listaDoStorage = [
       { caminho: caminho("a"), criadoEm: horasAtras(48) }, // em uso: fica
       { caminho: caminho("f"), criadoEm: horasAtras(48) }, // referenciado por linha failed: fica
-      { caminho: caminho("b"), criadoEm: horasAtras(48) }, // sem uso e velho: sai
+      { caminho: caminho("b"), criadoEm: horasAtras(48) }, // sem uso e velho: sai depois da carência
       { caminho: caminho("c"), criadoEm: horasAtras(2) }, // prévia recém-gerada, ainda sem linha: fica
-      { caminho: caminho("d"), criadoEm: horasAtras(23.9) }, // quase 24 h: fica
+      { caminho: caminho("d"), criadoEm: horasAtras(23.9) }, // só passa de 24 h na 2ª limpeza, e só ali é avistado órfão: fica
       { caminho: caminho("e"), criadoEm: new Date("não é data") }, // data ilegível: fica
     ];
-    expect(await disco().limparStorage()).toEqual({ apagados: 1, falhas: 0 });
+    const { primeira, segunda } = await limparDuasVezes(disco());
+    expect(primeira).toEqual({ apagados: 0, falhas: 0, pulada: false });
+    expect(segunda).toEqual({ apagados: 1, falhas: 0, pulada: false });
     expect(apagadosDoStorage).toEqual([caminho("b")]);
+  });
+
+  it("voltou a ter referência entre duas limpezas: sai do mapa, e a carência recomeça", async () => {
+    pastasNoStorage = [ORG];
+    listaDoStorage = [{ caminho: caminho("b"), criadoEm: horasAtras(48) }];
+    const d = disco();
+    await d.limparStorage(); // avistado em T0
+    avancar(INTERVALO_DA_LIMPEZA_MS);
+    referenciar(caminho("b"));
+    await d.limparStorage(); // referenciado: sai do mapa
+    avancar(INTERVALO_DA_LIMPEZA_MS);
+    desreferenciar(caminho("b"));
+    expect((await d.limparStorage()).apagados).toBe(0); // T0 + 20 min, mas órfão de novo só agora
+    avancar(INTERVALO_DA_LIMPEZA_MS);
+    expect((await d.limparStorage()).apagados).toBe(0);
+    avancar(INTERVALO_DA_LIMPEZA_MS);
+    expect((await d.limparStorage()).apagados).toBe(1);
+  });
+
+  it("reiniciar o worker zera o mapa: só atrasa", async () => {
+    pastasNoStorage = [ORG];
+    listaDoStorage = [{ caminho: caminho("b"), criadoEm: horasAtras(48) }];
+    await disco().limparStorage();
+    avancar(CARENCIA_DO_ORFAO_MS);
+    const reiniciado = disco();
+    expect((await reiniciado.limparStorage()).apagados).toBe(0);
+    avancar(CARENCIA_DO_ORFAO_MS);
+    expect((await reiniciado.limparStorage()).apagados).toBe(1);
   });
 
   it("o áudio de um menu arquivado sai: arquivar apaga as linhas das falas, e o objeto fica sem referência", async () => {
@@ -458,8 +698,26 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
       { caminho: caminho("4"), criadoEm: horasAtras(24 * 30) },
       { caminho: caminho("5"), criadoEm: horasAtras(24 * 30) },
     ];
-    expect(await disco().limparStorage()).toEqual({ apagados: 2, falhas: 0 });
+    expect((await limparDuasVezes(disco())).segunda).toEqual({ apagados: 2, falhas: 0, pulada: false });
     expect(apagadosDoStorage.sort()).toEqual([caminho("4"), caminho("5")].sort());
+  });
+
+  it("conta só o que o Storage DE FATO removeu", async () => {
+    pastasNoStorage = [ORG];
+    listaDoStorage = [
+      { caminho: caminho("b"), criadoEm: horasAtras(48) },
+      { caminho: caminho("c"), criadoEm: horasAtras(48) },
+    ];
+    const d = disco(
+      {},
+      {
+        apagar: async (caminhos) => {
+          apagadosDoStorage.push(...caminhos.slice(0, 1));
+          return caminhos.slice(0, 1); // o outro já não existia quando o pedido chegou
+        },
+      },
+    );
+    expect((await limparDuasVezes(d)).segunda).toEqual({ apagados: 1, falhas: 0, pulada: false });
   });
 
   it("nunca apaga pasta: nem a da organização, nem subpasta, nem pasta que não é organização (esta nem é listada)", async () => {
@@ -471,7 +729,7 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
       { caminho: `${ORG}/${hash("a")}`, criadoEm: horasAtras(48) },
       { caminho: `nao-e-org/${hash("a")}.ulaw`, criadoEm: horasAtras(48) },
     ];
-    const r = await disco(
+    const d = disco(
       {},
       {
         listarObjetos: async (pasta) => {
@@ -479,17 +737,18 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
           return listaDoStorage.filter((o) => o.caminho.startsWith(`${pasta}/`));
         },
       },
-    ).limparStorage();
-    expect(r).toEqual({ apagados: 0, falhas: 0 });
-    expect(listadas).toEqual([ORG]);
-    expect(apagadosDoStorage).toEqual([]);
+    );
+    const { segunda } = await limparDuasVezes(d);
+    expect(segunda).toEqual({ apagados: 0, falhas: 0, pulada: false });
+    expect(new Set(listadas)).toEqual(new Set([ORG]));
+    expect(eventos.some((e) => e.tipo === "apagar")).toBe(false);
   });
 
   it("objeto listado numa pasta com caminho de OUTRA organização não é apagado por ela", async () => {
     pastasNoStorage = [ORG];
-    const r = await disco({}, { listarObjetos: async () => [{ caminho: caminho("b", OUTRA), criadoEm: horasAtras(48) }] }).limparStorage();
-    expect(r).toEqual({ apagados: 0, falhas: 0 });
-    expect(apagadosDoStorage).toEqual([]);
+    const d = disco({}, { listarObjetos: async () => [{ caminho: caminho("b", OUTRA), criadoEm: horasAtras(48) }] });
+    expect((await limparDuasVezes(d)).segunda).toEqual({ apagados: 0, falhas: 0, pulada: false });
+    expect(eventos.some((e) => e.tipo === "apagar")).toBe(false);
   });
 
   it("a referência é lida IMEDIATAMENTE antes de CADA apagar, com a organização, e cobre tudo o que vai ser apagado", async () => {
@@ -498,7 +757,11 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
       ...["b", "c", "d"].map((c) => ({ caminho: caminho(c), criadoEm: horasAtras(48) })),
       ...["b", "c"].map((c) => ({ caminho: caminho(c, OUTRA), criadoEm: horasAtras(48) })),
     ];
-    expect(await disco({ lote: 2 }).limparStorage()).toEqual({ apagados: 5, falhas: 0 });
+    const d = disco({ lote: 2 });
+    await d.limparStorage();
+    avancar(CARENCIA_DO_ORFAO_MS);
+    eventos = [];
+    expect(await d.limparStorage()).toEqual({ apagados: 5, falhas: 0, pulada: false });
 
     const apagares = eventos.flatMap((e, i) => (e.tipo === "apagar" ? [i] : []));
     expect(apagares.length).toBe(3);
@@ -517,41 +780,50 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
       { caminho: caminho("b"), criadoEm: horasAtras(48) },
       { caminho: caminho("c"), criadoEm: horasAtras(48) },
     ];
+    let armado = false;
     const d = disco(
       { lote: 1 },
       {
         apagar: async (caminhos) => {
-          eventos.push({ tipo: "apagar", caminhos: [...caminhos] });
           apagadosDoStorage.push(...caminhos);
           // Depois do primeiro apagar, alguém salva uma fala que reaproveita "c".
-          linhas.push({ organization_id: ORG, storage_path: caminho("c"), status: "ready" });
+          if (armado) referenciar(caminho("c"));
+          return caminhos;
         },
       },
     );
-    expect(await d.limparStorage()).toEqual({ apagados: 1, falhas: 0 });
+    await d.limparStorage();
+    avancar(CARENCIA_DO_ORFAO_MS);
+    armado = true;
+    expect(await d.limparStorage()).toEqual({ apagados: 1, falhas: 0, pulada: false });
     expect(apagadosDoStorage).toEqual([caminho("b")]);
   });
 
   it("o que passou a ser usado entre a listagem e o apagar não é apagado", async () => {
     pastasNoStorage = [ORG];
+    listaDoStorage = [{ caminho: caminho("b"), criadoEm: horasAtras(48) }];
+    let armado = false;
     const d = disco(
       {},
       {
         listarObjetos: async () => {
-          const lista = [{ caminho: caminho("b"), criadoEm: horasAtras(48) }];
-          linhas.push({ organization_id: ORG, storage_path: caminho("b"), status: "ready" });
-          return lista;
+          if (armado) referenciar(caminho("b"));
+          return [...listaDoStorage];
         },
       },
     );
-    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 0 });
+    await d.limparStorage();
+    avancar(CARENCIA_DO_ORFAO_MS);
+    armado = true;
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 0, pulada: false });
     expect(apagadosDoStorage).toEqual([]);
   });
 
   it("bucket ausente ao listar as pastas: aborta a passada, não apaga nada e grita no log", async () => {
-    const d = disco({}, { listarPastas: async () => Promise.reject(new Error("armazem_lista: StorageApiError 400: Bucket not found")) });
-    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1 });
-    expect(apagadosDoStorage).toEqual([]);
+    listarPastas.mockRejectedValue(new Error("armazem_lista: StorageApiError 400: Bucket not found"));
+    const d = disco();
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1, pulada: false });
+    expect(eventos.some((e) => e.tipo === "apagar")).toBe(false);
     expect(log.error).toHaveBeenCalledWith(expect.stringContaining("bucket"), expect.anything());
   });
 
@@ -559,17 +831,22 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
     pastasNoStorage = [ORG, OUTRA];
     listaDoStorage = [{ caminho: caminho("b", OUTRA), criadoEm: horasAtras(48) }];
     const listadas: string[] = [];
+    let quebrado = false;
     const d = disco(
       {},
       {
         listarObjetos: async (pasta) => {
           listadas.push(pasta);
-          if (pasta === ORG) throw new Error("armazem_lista: StorageApiError 400: Bucket not found");
+          if (quebrado && pasta === ORG) throw new Error("armazem_lista: StorageApiError 400: Bucket not found");
           return listaDoStorage.filter((o) => o.caminho.startsWith(`${pasta}/`));
         },
       },
     );
-    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1 });
+    await d.limparStorage(); // avista o órfão de OUTRA
+    avancar(CARENCIA_DO_ORFAO_MS);
+    quebrado = true;
+    listadas.length = 0;
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1, pulada: false });
     expect(listadas).toEqual([ORG]);
     expect(apagadosDoStorage).toEqual([]);
   });
@@ -591,7 +868,8 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
         },
       },
     );
-    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1 });
+    const { segunda } = await limparDuasVezes(d);
+    expect(segunda).toEqual({ apagados: 0, falhas: 1, pulada: false });
     expect(tentativas).toEqual([[caminho("b")]]);
   });
 
@@ -607,31 +885,67 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
         },
       },
     );
-    expect(await d.limparStorage()).toEqual({ apagados: 1, falhas: 1 });
+    const { segunda } = await limparDuasVezes(d);
+    expect(segunda).toEqual({ apagados: 1, falhas: 1, pulada: false });
     expect(apagadosDoStorage).toEqual([caminho("b", OUTRA)]);
   });
 
   it("banco fora: sem conferir a referência, não apaga nada, e não lança", async () => {
     pastasNoStorage = [ORG];
     listaDoStorage = [{ caminho: caminho("b"), criadoEm: horasAtras(48) }];
+    const d = disco();
+    await d.limparStorage();
+    avancar(CARENCIA_DO_ORFAO_MS);
     bancoFora = true;
-    expect(await disco().limparStorage()).toEqual({ apagados: 0, falhas: 1 });
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1, pulada: false });
     expect(apagadosDoStorage).toEqual([]);
   });
 
-  it("Storage fora do ar: conta a falha e não lança", async () => {
-    const d = disco({}, { listarPastas: async () => Promise.reject(new Error("armazem_lista: TypeError: fetch failed")) });
-    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1 });
+  it("Storage fora do ar: conta a falha, não lança, e avisa uma vez por queda", async () => {
+    listarPastas.mockRejectedValue(new Error("armazem_lista: TypeError: fetch failed"));
+    const d = disco();
+    for (let i = 0; i < 4; i++) {
+      expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1, pulada: false });
+      avancar(MINUTO);
+    }
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    listarPastas.mockResolvedValue([]);
+    await d.limparStorage();
+    expect(mensagens("info").filter((m) => m.includes("Storage das falas voltou"))).toHaveLength(1);
+  });
+});
+
+describe("limparStorage — o freio de 10 min", () => {
+  it("depois de uma limpeza bem-sucedida, só roda de novo 10 min depois", async () => {
+    pastasNoStorage = [ORG];
+    const d = disco();
+    expect((await d.limparStorage()).pulada).toBe(false);
+    avancar(INTERVALO_DA_LIMPEZA_MS - 1);
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 0, pulada: true });
+    expect(listarPastas).toHaveBeenCalledTimes(1);
+    avancar(1);
+    expect((await d.limparStorage()).pulada).toBe(false);
+    expect(listarPastas).toHaveBeenCalledTimes(2);
+  });
+
+  it("limpeza que falhou não conta: a próxima chamada tenta de novo", async () => {
+    listarPastas.mockRejectedValueOnce(new Error("armazem_lista: TypeError: fetch failed"));
+    const d = disco();
+    expect((await d.limparStorage()).falhas).toBe(1);
+    avancar(MINUTO);
+    expect((await d.limparStorage()).pulada).toBe(false);
+    expect(listarPastas).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("falasNoDiscoDaInstalacao — a fiação do worker", () => {
-  it("usa o armazém da instalação (sem ElevenLabs no caminho) e não toca o Storage ao nascer", async () => {
+  it("usa o armazém da instalação (sem ElevenLabs no caminho) e não toca o Storage ao nascer", () => {
     const falso = { ...armazem(), enviar: vi.fn() } as PortaDoArmazem;
     vi.mocked(armazemDaInstalacao).mockReturnValueOnce(falso);
     const f = falasNoDiscoDaInstalacao(db, log);
     expect(f).toBeInstanceOf(FalasNoDisco);
     expect(armazemDaInstalacao).toHaveBeenCalledTimes(1);
     expect(baixar).not.toHaveBeenCalled();
+    expect(listarPastas).not.toHaveBeenCalled();
   });
 });

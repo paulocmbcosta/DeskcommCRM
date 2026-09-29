@@ -64,8 +64,11 @@ export interface PortaDoArmazem {
    * Com `signal`, o pedido é abortado quando ele disparar (e isso também LANÇA).
    */
   baixar(caminho: string, opcoes?: { signal?: AbortSignal }): Promise<Uint8Array<ArrayBuffer> | null>;
-  /** Lança se o Storage recusar: quem limpa precisa saber que não limpou. */
-  apagar(caminhos: string[]): Promise<void>;
+  /**
+   * Os caminhos que o Storage DE FATO removeu — o que já não existia não volta.
+   * Lança se o Storage recusar: quem limpa precisa saber que não limpou.
+   */
+  apagar(caminhos: string[]): Promise<string[]>;
   /** As pastas do topo do bucket — uma por organização. */
   listarPastas(): Promise<string[]>;
   /** Os arquivos de uma pasta, com a data de criação. Pastas dentro dela ficam de fora. */
@@ -147,9 +150,11 @@ export function armazemDoSupabase(admin: SupabaseClient): PortaDoArmazem {
       return new Uint8Array(await data.arrayBuffer());
     },
     async apagar(caminhos) {
-      if (caminhos.length === 0) return;
-      const { error } = await bucket().remove(caminhos);
+      if (caminhos.length === 0) return [];
+      const { data, error } = await bucket().remove(caminhos);
       if (error) throw new Error(`armazem_remocao: ${descrever(error)}`);
+      // O `remove` devolve um FileObject por objeto apagado; `name` é o caminho no bucket.
+      return (data ?? []).map((o) => o.name);
     },
     async listarPastas() {
       const pastas: string[] = [];

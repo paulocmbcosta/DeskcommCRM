@@ -73,8 +73,9 @@ function clienteFalso(opcoes: { falha?: Partial<Record<"upload" | "download" | "
   });
   const remove = vi.fn(async (caminhos: string[]) => {
     if (falha.remove) return { data: null, error: falha.remove };
-    for (const c of caminhos) objetos.delete(c);
-    return { data: caminhos.map((name) => ({ name })), error: null };
+    // Como o Storage: devolve só o que existia e saiu.
+    const removidos = caminhos.filter((c) => objetos.delete(c));
+    return { data: removidos.map((name) => ({ name })), error: null };
   });
   const admin = {
     storage: {
@@ -162,9 +163,15 @@ describe("armazemDoSupabase.apagar — para a limpeza do worker", () => {
     expect([...c.objetos.keys()]).toEqual(["org/b.ulaw"]);
   });
 
-  it("lista vazia: nem chama o Storage", async () => {
+  it("devolve só o que o Storage DE FATO removeu: o que já não existia não conta", async () => {
     const c = clienteFalso();
-    await armazemDoSupabase(c.admin).apagar([]);
+    c.objetos.set("org/a.ulaw", new Uint8Array(1));
+    expect(await armazemDoSupabase(c.admin).apagar(["org/a.ulaw", "org/sumiu.ulaw"])).toEqual(["org/a.ulaw"]);
+  });
+
+  it("lista vazia: nem chama o Storage, e nada foi removido", async () => {
+    const c = clienteFalso();
+    expect(await armazemDoSupabase(c.admin).apagar([])).toEqual([]);
     expect(c.remove).not.toHaveBeenCalled();
   });
 
