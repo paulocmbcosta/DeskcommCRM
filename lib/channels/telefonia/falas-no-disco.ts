@@ -14,7 +14,7 @@
  *     nunca chama a ElevenLabs: este arquivo não alcança o cliente dela
  *     (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts);
  *   - a limpeza do Storage (`limparStorage`, chamada na mesma passada, com freio
- *     próprio de `INTERVALO_DA_LIMPEZA_MS`): a prévia que ninguém salvou e o áudio
+ *     próprio de `INTERVALO_DA_LIMPEZA_MS`, armado com ou sem falha): a prévia que ninguém salvou e o áudio
  *     que nenhuma fala referencia saem do bucket (desenho §4, passo 4). O áudio do
  *     menu arquivado entra aqui: arquivar apaga as falas dele (lib/telefonia/menus.ts).
  *
@@ -48,8 +48,8 @@
  * (`ESCADA_DE_TENTATIVAS_MS`: 1, 5, 30 e 60 min, e de hora em hora) e registrada
  * UMA vez na primeira falha e uma quando o áudio volta; a ligação não espera a
  * escada (`garantir` tenta sempre — salvar de novo conserta na hora). Storage,
- * bucket, disco e banco fora do ar são registrados na TRANSIÇÃO (caiu / voltou),
- * nunca em toda passada.
+ * bucket, volume (a pasta), gravação (a escrita) e banco fora do ar são
+ * registrados na TRANSIÇÃO (caiu / voltou), nunca em toda passada.
  *
  * Escrita ATÔMICA: temporário na MESMA pasta (o `rename` só é atômico dentro do
  * mesmo sistema de arquivos), `fsync`, e só então `rename` para o nome final — o
@@ -105,7 +105,10 @@ export const CARENCIA_DO_TEMPORARIO_MS = 5 * 60_000;
  * que protege a prévia recém-gerada, que ainda não tem linha em `phone_prompts`.
  */
 export const JANELA_DO_STORAGE_MS = 24 * 3_600_000;
-/** `limparStorage` só roda de novo 10 min depois da última limpeza bem-sucedida — o laço pode chamá-la a cada 60 s. */
+/**
+ * `limparStorage` só roda de novo 10 min depois da última limpeza — com ou sem
+ * falha, bucket ausente inclusive —, e o laço pode chamá-la a cada 60 s.
+ */
 export const INTERVALO_DA_LIMPEZA_MS = 10 * 60_000;
 /** Intervalo até a próxima tentativa de uma fala pronta sem objeto no Storage: 1, 5, 30, 60 min, e de hora em hora. */
 export const ESCADA_DE_TENTATIVAS_MS: readonly number[] = Object.freeze([60_000, 5 * 60_000, 30 * 60_000, 60 * 60_000]);
@@ -184,12 +187,20 @@ export type ArmazemDasFalas = Pick<PortaDoArmazem, "baixar" | "listarPastas" | "
 
 type Baixa = "gravada" | "ausente" | "falhou";
 /** O que pode cair — e é registrado só na transição. */
-type Frente = "storage" | "bucket" | "disco" | "banco";
+/**
+ * O que pode cair — e é registrado só na transição. O disco são DUAS frentes: o
+ * `volume` (a raiz está legível?) volta assim que a pasta volta, mesmo sem nada
+ * para baixar; a `gravacao` (a escrita deu certo?) volta na próxima escrita boa.
+ * Com o disco cheio a pasta segue legível e a escrita falha: nenhuma das duas
+ * alterna a cada passada.
+ */
+type Frente = "storage" | "bucket" | "volume" | "gravacao" | "banco";
 
 const VOLTOU: Record<Frente, string> = {
   storage: "telefonia: o Storage das falas voltou a responder",
   bucket: "telefonia: o bucket das falas voltou a existir",
-  disco: "telefonia: o volume das falas voltou a aceitar gravação",
+  volume: "telefonia: o volume das falas voltou a ficar acessível",
+  gravacao: "telefonia: o volume das falas voltou a aceitar gravação",
   banco: "telefonia: o banco voltou a responder à passada das falas",
 };
 
@@ -233,7 +244,8 @@ export class FalasNoDisco {
   /** Caminhos fora da régua já registrados (um aviso por caminho). */
   private readonly foraDaReguaAvisados = new Set<string>();
   private readonly fora = new Set<Frente>();
-  private ultimaLimpezaOk: number | null = null;
+  /** Quando a última limpeza RODOU — com ou sem falha. */
+  private ultimaLimpeza: number | null = null;
 
   constructor(
     private readonly dir: string,
@@ -285,9 +297,10 @@ export class FalasNoDisco {
       await this.pastaLegivel(this.dir);
     } catch (e) {
       r.falhas++;
-      this.caiu("disco", "telefonia: volume das falas inacessível", { erro: motivo(e) });
+      this.caiu("volume", "telefonia: volume das falas inacessível", { erro: motivo(e) });
       return r;
     }
+    this.voltou("volume");
     await this.baixarAsQueFaltam(r, agora);
     await this.apagarOrfaos(r, agora);
     if (r.baixadas || r.apagadas) this.log.info("telefonia: falas sincronizadas no disco", { ...r });
@@ -352,7 +365,7 @@ export class FalasNoDisco {
       orgs = (await readdir(this.dir)).filter((nome) => ORG_VALIDA.test(nome));
     } catch (e) {
       r.falhas++;
-      this.caiu("disco", "telefonia: volume das falas inacessível", { erro: motivo(e) });
+      this.caiu("volume", "telefonia: volume das falas inacessível", { erro: motivo(e) });
       return;
     }
     // Só fica no mapa quem esta passada CONFIRMOU órfão: o que voltou a ter
@@ -397,11 +410,11 @@ export class FalasNoDisco {
    * imediatamente antes de CADA `apagar`, com a organização da pasta. Só pastas de
    * organização (uuid), só caminhos na régua e da própria pasta. Bucket ausente ou
    * banco fora abortam a passada. Roda no máximo a cada `INTERVALO_DA_LIMPEZA_MS`
-   * contados da última limpeza sem falha. Nunca lança.
+   * contados da última limpeza, com ou sem falha. Nunca lança.
    */
   async limparStorage(): Promise<ResultadoDaLimpeza> {
     const agora = this.agora();
-    if (this.ultimaLimpezaOk !== null && agora - this.ultimaLimpezaOk < INTERVALO_DA_LIMPEZA_MS) {
+    if (this.ultimaLimpeza !== null && agora - this.ultimaLimpeza < INTERVALO_DA_LIMPEZA_MS) {
       return { apagados: 0, falhas: 0, pulada: true };
     }
     const r: ResultadoDaLimpeza = { apagados: 0, falhas: 0, pulada: false };
@@ -465,7 +478,9 @@ export class FalasNoDisco {
     } finally {
       this.orfaosNoStorage = vistos;
     }
-    if (r.falhas === 0) this.ultimaLimpezaOk = agora;
+    // O freio arma com ou sem falha: uma organização que falha sempre na listagem,
+    // ou o bucket ausente (que não volta em 60 s), não pode virar limpeza por minuto.
+    this.ultimaLimpeza = agora;
     if (r.apagados) this.log.info("telefonia: falas sem uso apagadas do Storage", { apagados: r.apagados });
     return r;
   }
@@ -516,9 +531,15 @@ export class FalasNoDisco {
     try {
       bytes = await comPrazoDeLeitura(this.armazem, prazoMs).baixar(storagePath);
     } catch (e) {
-      this.caiu("storage", "telefonia: o Storage das falas não responde", { caminho: storagePath, erro: motivo(e) });
+      if (bucketAusente(e)) {
+        this.caiu("bucket", "telefonia: o bucket das falas não existe — falas não baixadas", { caminho: storagePath, erro: motivo(e) }, "error");
+      } else {
+        this.caiu("storage", "telefonia: o Storage das falas não responde", { caminho: storagePath, erro: motivo(e) });
+      }
       return "falhou";
     }
+    // O armazém LANÇA com bucket ausente: resposta (objeto ou ausência) prova os dois.
+    this.voltou("bucket");
     this.voltou("storage");
     if (!bytes || bytes.length === 0) {
       this.registrarAusencia(storagePath);
@@ -527,10 +548,10 @@ export class FalasNoDisco {
     try {
       await this.gravarAtomico(storagePath, bytes);
     } catch (e) {
-      this.caiu("disco", "telefonia: fala não gravada no volume", { caminho: storagePath, erro: motivo(e) });
+      this.caiu("gravacao", "telefonia: fala não gravada no volume", { caminho: storagePath, erro: motivo(e) });
       return "falhou";
     }
-    this.voltou("disco");
+    this.voltou("gravacao");
     if (this.ausentes.delete(storagePath)) this.log.info("telefonia: o áudio da fala voltou ao Storage", { caminho: storagePath });
     return "gravada";
   }

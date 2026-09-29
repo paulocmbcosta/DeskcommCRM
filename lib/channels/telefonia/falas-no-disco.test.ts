@@ -522,6 +522,58 @@ describe("sincronizar — Storage, disco e banco fora do ar: registra na transi�
   });
 });
 
+describe("sincronizar — volume e gravação são frentes separadas", () => {
+  it("volume inacessível que volta SEM nada para baixar: um aviso quando cai, um registro quando volta", async () => {
+    const bloqueio = join(dir, "bloqueio");
+    await writeFile(bloqueio, new Uint8Array([0])); // um ARQUIVO onde devia haver pasta: a raiz do volume não nasce
+    const d = new FalasNoDisco(join(bloqueio, "falas"), db, armazem(), log, { agora: () => relogio });
+    for (let i = 0; i < 3; i++) expect((await d.sincronizar()).falhas).toBe(1);
+    expect(mensagens("warn").filter((m) => m.includes("inacessível"))).toHaveLength(1);
+
+    await rm(bloqueio);
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 0 });
+    await d.sincronizar();
+    expect(mensagens("info").filter((m) => m.includes("volume das falas voltou a ficar acessível"))).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("disco cheio: a pasta segue legível e a escrita falha — um aviso só, sem alternar a cada passada; volta na próxima escrita boa", async () => {
+    linhas = [{ organization_id: ORG, storage_path: caminho("a"), status: "ready" }];
+    objetos.set(caminho("a"), new Uint8Array([1]));
+    for (let i = 0; i < 4; i++) {
+      vi.mocked(fs.open).mockRejectedValueOnce(Object.assign(new Error("ENOSPC: no space left on device, open"), { code: "ENOSPC" }));
+    }
+    const d = disco();
+    for (let i = 0; i < 4; i++) {
+      expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 1 });
+      avancar(MINUTO);
+    }
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(mensagens("warn")[0]).toContain("não gravada");
+    expect(mensagens("info").filter((m) => m.includes("voltou"))).toEqual([]);
+
+    expect(await d.sincronizar()).toEqual({ baixadas: 1, apagadas: 0, falhas: 0 });
+    expect(mensagens("info").filter((m) => m.includes("voltou a aceitar gravação"))).toHaveLength(1);
+    expect(mensagens("info").filter((m) => m.includes("voltou a ficar acessível"))).toEqual([]);
+  });
+
+  it("bucket ausente visto pela passada é registrado como BUCKET (erro), não como Storage fora; e volta como bucket", async () => {
+    linhas = [{ organization_id: ORG, storage_path: caminho("a"), status: "ready" }];
+    baixar.mockRejectedValue(new Error("armazem_download: StorageApiError 400: Bucket not found"));
+    const d = disco();
+    await d.sincronizar();
+    await d.sincronizar();
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(mensagens("error")[0]).toMatch(/bucket/);
+    expect(mensagens("warn").filter((m) => m.includes("Storage das falas não responde"))).toEqual([]);
+
+    baixar.mockImplementation(baixarPadrao);
+    objetos.set(caminho("a"), new Uint8Array([1]));
+    await d.sincronizar();
+    expect(mensagens("info").filter((m) => m.includes("bucket das falas voltou"))).toHaveLength(1);
+  });
+});
+
 describe("sincronizar — o órfão do disco sai 15 min depois de VISTO órfão, não pelo mtime", () => {
   it("órfão recém-avistado fica, mesmo com mtime antigo; sai 15 min depois do primeiro avistamento", async () => {
     await gravarNoDisco(caminho("d"), [4], 30 * 24 * 60 * MINUTO); // arquivo de um mês atrás
@@ -906,7 +958,7 @@ describe("limparStorage — prévia não salva e áudio sem uso saem do Storage 
     const d = disco();
     for (let i = 0; i < 4; i++) {
       expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1, pulada: false });
-      avancar(MINUTO);
+      avancar(INTERVALO_DA_LIMPEZA_MS);
     }
     expect(log.warn).toHaveBeenCalledTimes(1);
     listarPastas.mockResolvedValue([]);
@@ -928,12 +980,32 @@ describe("limparStorage — o freio de 10 min", () => {
     expect(listarPastas).toHaveBeenCalledTimes(2);
   });
 
-  it("limpeza que falhou não conta: a próxima chamada tenta de novo", async () => {
-    listarPastas.mockRejectedValueOnce(new Error("armazem_lista: TypeError: fetch failed"));
+  it("falha persistente numa organização: o freio arma assim mesmo — nada de limpeza a cada 60 s", async () => {
+    pastasNoStorage = [ORG];
+    const listarObjetos = vi.fn<PortaDoArmazem["listarObjetos"]>(async () => {
+      throw new Error("armazem_lista: TypeError: fetch failed");
+    });
+    const d = disco({}, { listarObjetos });
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 1, pulada: false });
+    for (let t = MINUTO; t < INTERVALO_DA_LIMPEZA_MS; t += MINUTO) {
+      avancar(MINUTO);
+      expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 0, pulada: true });
+    }
+    expect(listarObjetos).toHaveBeenCalledTimes(1);
+    avancar(MINUTO);
+    expect((await d.limparStorage()).pulada).toBe(false);
+    expect(listarObjetos).toHaveBeenCalledTimes(2);
+  });
+
+  it("bucket ausente aborta a passada, e o freio arma também: o bucket não volta em 60 s", async () => {
+    listarPastas.mockRejectedValue(new Error("armazem_lista: StorageApiError 400: Bucket not found"));
     const d = disco();
     expect((await d.limparStorage()).falhas).toBe(1);
     avancar(MINUTO);
-    expect((await d.limparStorage()).pulada).toBe(false);
+    expect(await d.limparStorage()).toEqual({ apagados: 0, falhas: 0, pulada: true });
+    expect(listarPastas).toHaveBeenCalledTimes(1);
+    avancar(INTERVALO_DA_LIMPEZA_MS);
+    await d.limparStorage();
     expect(listarPastas).toHaveBeenCalledTimes(2);
   });
 });
