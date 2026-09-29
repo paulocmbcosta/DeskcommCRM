@@ -9623,6 +9623,11 @@ export const DICIONARIO: Traducoes = {
   "O número ou o menu escolhido está sendo alterado agora. Tente de novo em instantes.": {
     es: "El número o el menú elegido se está modificando ahora. Inténtalo de nuevo en unos instantes.",
   },
+  // Telefonia, fase 2 — o aviso de instabilidade do time
+  "Time não encontrado.": { es: "Equipo no encontrado." },
+  "Outra mudança no aviso deste time está em andamento. Tente de novo em instantes.": {
+    es: "Otro cambio en el aviso de este equipo está en curso. Inténtalo de nuevo en unos instantes.",
+  },
 };
 
 /**
