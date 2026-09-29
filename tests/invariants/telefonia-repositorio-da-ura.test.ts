@@ -22,7 +22,9 @@
  *     prova aqui mede relógio: "não esperou" é "não levou 55P03 com lock_timeout";
  *  4. a ligação guarda o que a URA fez (menu, tecla, desfecho e time numa escrita
  *     só, aviso ouvido), com toda escrita presa à organização — também as da
- *     fase 1 (tocando, atendida, encerrada) —, e o cartão da conversa o mostra;
+ *     fase 1 (tocando, atendida, encerrada) —, e o cartão da conversa o mostra
+ *     (`MenuDaLigacao`: o nome do menu e do time daquela hora, e o "desligou no
+ *     menu" separado do menu que parou por outro motivo);
  *     o pedido de saída só volta para o atendente dono dele;
  *  5. o aviso de fala intocável não se repete enquanto o anterior está aberto;
  *  6. o aviso do menu cujo time padrão foi arquivado também não se repete, com
@@ -754,9 +756,39 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
       [ORG, `ligacao:${id}`],
     );
     expect(rows[0].vc).toMatchObject({
-      menu: { desfecho: "chosen", tecla: "2", time_nome: "Financeiro" },
+      menu: { nome: "Principal", desfecho: "chosen", tecla: "2", time_nome: "Financeiro", desligou: false },
       ouviu_aviso: true,
       motivo: "cliente_desligou",
+    });
+  });
+
+  /** O `metadata.voice_call` do registro que `registrarNaConversa` gravou para a ligação `id`. */
+  const registroDaLigacao = async (org: string, id: string) =>
+    (
+      await pool.query("select metadata->'voice_call' as vc from public.messages where organization_id = $1 and external_id = $2", [
+        org,
+        `ligacao:${id}`,
+      ])
+    ).rows[0]?.vc;
+
+  it("desligou no menu, antes de escolher: o cartão diz isso, com o nome do menu e sem time (ninguém chegou a tocar)", async () => {
+    const id = await ligacao(ORG, NUMERO, "ura-repo-8", ABERTO, MENU);
+    const l = await repo.encerrarLigacao(pool, ORG, id, "cliente_desligou");
+    await repo.registrarNaConversa(pool, l!, "perdida", null);
+    expect(await registroDaLigacao(ORG, id)).toMatchObject({
+      menu: { nome: "Principal", desfecho: null, tecla: null, time_nome: null, desligou: true },
+      ouviu_aviso: false,
+    });
+  });
+
+  it("o menu parou sem ser o cliente (reinício do worker): não é 'desligou'; e o nome é o daquela hora, também de menu arquivado", async () => {
+    // O menu 'Velho' está arquivado: o registro conta o que o cliente ouviu, e o
+    // nome sai sem filtro de arquivamento — é história, não escolha.
+    const id = await ligacao(ORG, NUMERO, "ura-repo-9", ABERTO, MENU_ARQUIVADO);
+    const l = await repo.encerrarLigacao(pool, ORG, id, "interrompida_no_reinicio");
+    await repo.registrarNaConversa(pool, l!, "perdida", null);
+    expect(await registroDaLigacao(ORG, id)).toMatchObject({
+      menu: { nome: "Velho", desfecho: null, tecla: null, time_nome: null, desligou: false },
     });
   });
 

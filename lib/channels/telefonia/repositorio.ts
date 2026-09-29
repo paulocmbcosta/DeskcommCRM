@@ -20,7 +20,7 @@ import { normalizarIdioma, type Idioma } from "@/lib/i18n/idiomas";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
 import { avisoVigente } from "@/lib/telefonia/vencimento-da-emergencia";
-import { MOTIVO_FORA_DO_HORARIO, type DesfechoDoMenu } from "@/lib/telefonia/vocabulario";
+import { MOTIVO_FORA_DO_HORARIO, type DesfechoDoMenu, type MenuDaLigacao } from "@/lib/telefonia/vocabulario";
 
 import { CHANNEL_PROVIDER_SIP_TRUNK, MEIO_TELEFONE } from "../capabilities";
 import type { TroncoSip, TransporteSip } from "./pjsip";
@@ -911,18 +911,25 @@ export async function registrarNaConversa(
     quem = rows[0]?.nome ?? null;
   }
   const texto = textoDoRegistro({ direcao: l.direction, desfecho, duracaoMs, quem, motivo: l.end_reason ?? null });
-  // O que a URA fez (fase 2): o cartão mostra "escolheu 2 → Financeiro" ou "sem escolha → Suporte".
-  let menu: { desfecho: DesfechoDoMenu; tecla: string | null; time_nome: string | null } | null = null;
-  if (l.menu_outcome) {
-    let timeNome: string | null = null;
-    if (l.team_id) {
-      const { rows: t } = await db.query<{ name: string }>(
-        "select name from attendance_teams where id = $1 and organization_id = $2",
-        [l.team_id, l.organization_id],
-      );
-      timeNome = t[0]?.name ?? null;
-    }
-    menu = { desfecho: l.menu_outcome, tecla: l.menu_digit ?? null, time_nome: timeNome };
+  // O que a URA fez (fase 2), no schema central que o cartão lê (`MenuDaLigacao`):
+  // o menu, a tecla, o time para onde a ligação foi — ou que o cliente desligou
+  // no menu. Os nomes são os desta hora, sem filtro de arquivamento (é história),
+  // e os dois lidos DESTA organização. Sem decisão, não há time a nomear: o
+  // `team_id` ainda é o de entrada, e ninguém chegou a tocar.
+  let menu: MenuDaLigacao | null = null;
+  if (l.menu_id || l.menu_outcome) {
+    const { rows: nomes } = await db.query<{ menu: string | null; time: string | null }>(
+      `select (select m.name from phone_menus m where m.id = $2::uuid and m.organization_id = $1) as menu,
+              (select t.name from attendance_teams t where t.id = $3::uuid and t.organization_id = $1) as time`,
+      [l.organization_id, l.menu_id ?? null, l.menu_outcome ? l.team_id : null],
+    );
+    menu = {
+      nome: nomes[0]?.menu ?? null,
+      desfecho: l.menu_outcome ?? null,
+      tecla: l.menu_digit ?? null,
+      time_nome: nomes[0]?.time ?? null,
+      desligou: desligouNoMenu(l),
+    };
   }
   // Sem `on conflict`: a trava única de `(organization_id, external_id)` é
   // DEFERRABLE, e o Postgres recusa trava deferível como árbitro ("ON CONFLICT

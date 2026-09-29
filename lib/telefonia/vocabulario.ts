@@ -26,6 +26,54 @@ export type SituacaoDaFala = (typeof ESTADOS_DA_FALA)[number];
 export const DESFECHOS_DO_MENU = ["chosen", "default_no_input", "default_invalid"] as const;
 export type DesfechoDoMenu = (typeof DESFECHOS_DO_MENU)[number];
 
+/**
+ * O que a URA fez numa ligação, como fica no registro da conversa
+ * (`messages.metadata.voice_call.menu`). O schema central das duas pontas: quem
+ * ESCREVE é o worker, no fim da ligação (`registrarNaConversa`,
+ * lib/channels/telefonia/repositorio.ts); quem LÊ é o cartão da ligação
+ * (`CartaoDaLigacao`), sempre por `menuDaLigacao` — nunca pelo path cru.
+ *
+ * Os NOMES (`nome` do menu, `time_nome`) são os DAQUELA hora, gravados no fim da
+ * ligação: o cartão conta o que o cliente ouviu e para onde foi, e um menu ou
+ * time renomeado ou arquivado depois não reescreve a história.
+ *
+ * `desfecho` nulo = a URA não chegou a decidir: `desligou` diz se foi porque o
+ * cliente desligou no menu (a MESMA regra do "Ligar de volta", `desligouNoMenu`);
+ * senão a ligação acabou por outro motivo (o worker reiniciou no meio do menu).
+ * O objeto inteiro é nulo quando a ligação não passou por menu.
+ */
+export interface MenuDaLigacao {
+  nome: string | null;
+  desfecho: DesfechoDoMenu | null;
+  tecla: string | null;
+  time_nome: string | null;
+  desligou: boolean;
+}
+
+const textoOuNulo = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
+
+/**
+ * Lê `metadata.voice_call.menu` e NUNCA lança: o metadado é jsonb aberto. Um
+ * desfecho fora do vocabulário (um worker mais novo, um registro malformado) faz
+ * a leitura devolver `null` — o cartão cala sobre o menu em vez de contar uma
+ * história errada. O registro da primeira versão da fase 2, sem `nome` nem
+ * `desligou`, é lido com os dois vazios.
+ */
+export function menuDaLigacao(bruto: unknown): MenuDaLigacao | null {
+  if (!bruto || typeof bruto !== "object" || Array.isArray(bruto)) return null;
+  const m = bruto as Record<string, unknown>;
+  const desfecho = m.desfecho ?? null;
+  if (desfecho !== null && !DESFECHOS_DO_MENU.includes(desfecho as DesfechoDoMenu)) return null;
+  return {
+    nome: textoOuNulo(m.nome),
+    desfecho: desfecho as DesfechoDoMenu | null,
+    tecla: textoOuNulo(m.tecla),
+    time_nome: textoOuNulo(m.time_nome),
+    // Só sem desfecho: quem escolheu (ou caiu no padrão) já saiu do menu.
+    desligou: desfecho === null && m.desligou === true,
+  };
+}
+
 /** As falas gerais da organização (`phone_settings.<tipo>_prompt_id`). */
 export const FALAS_GERAIS = ["waiting", "nobody", "after_hours"] as const;
 export type FalaGeral = (typeof FALAS_GERAIS)[number];
