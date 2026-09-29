@@ -194,12 +194,12 @@ afterEach(async () => {
 
 describe("o endereço de mídia e a régua do caminho", () => {
   it("o worker escreve e o Asterisk lê o MESMO caminho absoluto (passo zero, ramo A)", () => {
-    expect(DIRETORIO_DAS_FALAS).toBe("/var/lib/deskcomm/falas");
+    expect(DIRETORIO_DAS_FALAS).toBe("/var/lib/telefonia/falas");
     expect(DIRETORIO_NO_ASTERISK).toBe(DIRETORIO_DAS_FALAS);
   });
 
   it("sound: + caminho absoluto SEM extensão (o Asterisk escolhe o formato pelo arquivo)", () => {
-    expect(midiaDaFala(caminho("a"))).toBe(`sound:/var/lib/deskcomm/falas/${ORG}/${hash("a")}`);
+    expect(midiaDaFala(caminho("a"))).toBe(`sound:/var/lib/telefonia/falas/${ORG}/${hash("a")}`);
   });
 
   it("midiaDaFala recusa caminho fora da régua em vez de montar um endereço para fora do volume", () => {

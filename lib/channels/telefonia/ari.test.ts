@@ -24,12 +24,12 @@ describe("ClienteAri.tocarFala", () => {
     const f = vi.fn(async () => new Response(JSON.stringify({ id: "pb-1", state: "queued" }), { status: 201 }));
     vi.stubGlobal("fetch", f);
 
-    const r = await ari().tocarFala("canal-1", "sound:/var/lib/deskcomm/falas/org/abc");
+    const r = await ari().tocarFala("canal-1", "sound:/var/lib/telefonia/falas/org/abc");
 
     expect(r).toEqual({ id: "pb-1", state: "queued" });
     const [url, init] = f.mock.calls[0] as unknown as [URL, RequestInit];
     expect(String(url)).toBe(
-      "http://asterisk:8088/ari/channels/canal-1/play?media=sound%3A%2Fvar%2Flib%2Fdeskcomm%2Ffalas%2Forg%2Fabc",
+      "http://asterisk:8088/ari/channels/canal-1/play?media=sound%3A%2Fvar%2Flib%2Ftelefonia%2Ffalas%2Forg%2Fabc",
     );
     expect(init.method).toBe("POST");
     expect(String(url)).not.toContain("segredo-ari");

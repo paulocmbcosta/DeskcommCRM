@@ -88,13 +88,19 @@ import { armazemDaInstalacao, comPrazoDeLeitura, type ObjetoDoArmazem, type Port
 import type { Registro } from "./controle";
 import type { FalaDoBanco } from "./repositorio";
 
-/** Onde o worker escreve: o volume `telefonia-falas`, montado com escrita no serviço `worker`. */
-export const DIRETORIO_DAS_FALAS = "/var/lib/deskcomm/falas";
+/**
+ * Onde o worker escreve: o volume `telefonia-falas`, montado com escrita no serviço
+ * `worker`. O caminho NÃO leva o nome do produto: numa instalação de marca própria
+ * ele aparece em log, em `docker inspect` e no endereço que a ARI manda tocar
+ * (`tests/unit/branding.test.ts`). Mudá-lo pede mudar as DUAS montagens em
+ * `docker-compose.prod.yml` (`tests/unit/telefonia-falas-no-volume.test.ts`).
+ */
+export const DIRETORIO_DAS_FALAS = "/var/lib/telefonia/falas";
 /**
  * Como o Asterisk enxerga o MESMO volume (só leitura). Passo zero, ramo A:
  * caminho absoluto, no mesmo ponto de montagem do worker.
  */
-export const DIRETORIO_NO_ASTERISK = "/var/lib/deskcomm/falas";
+export const DIRETORIO_NO_ASTERISK = "/var/lib/telefonia/falas";
 
 /** Um arquivo (disco) ou objeto (Storage) sem referência só sai 15 min depois de VISTO órfão pela primeira vez. */
 export const CARENCIA_DO_ORFAO_MS = 15 * 60_000;
