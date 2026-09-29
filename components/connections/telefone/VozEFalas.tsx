@@ -55,7 +55,7 @@ import {
 } from "@/lib/telefonia/vocabulario";
 import { Play } from "@/lib/ui/icons";
 
-import { CHAVE_DA_VOZ, useVozDoTelefone, useVozesDaConta, type RespostaDaFala } from "./api";
+import { CHAVE_DA_GRAVACAO, CHAVE_DA_VOZ, useVozDoTelefone, useVozesDaConta, type RespostaDaFala } from "./api";
 import { EstadoDaFala } from "./EstadoDaFala";
 import { TelefoniaDesligada } from "./TelefoniaDesligada";
 
@@ -236,7 +236,12 @@ function CartaoDaFalaGeral({
     // Nas opções, e aguardado: o salvar só termina (e o campo só destrava) depois
     // de a aba reler a voz — senão o campo voltaria editável por um instante com o
     // texto antigo, e o que a pessoa digitasse ali seria apagado logo em seguida.
-    onSuccess: () => qc.invalidateQueries({ queryKey: CHAVE_DA_VOZ }),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: CHAVE_DA_VOZ }),
+        // O aviso de gravação destrava o interruptor da aba Gravação (F3).
+        tipo === "recording_notice" ? qc.invalidateQueries({ queryKey: CHAVE_DA_GRAVACAO }) : undefined,
+      ]),
   });
   const salvarFala = (p: FalaParaSalvar) =>
     // Os efeitos na TELA vão no `mutate`: não rodam depois de um `reset()`.
