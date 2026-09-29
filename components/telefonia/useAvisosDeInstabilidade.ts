@@ -39,7 +39,18 @@ import type { AvisoDoTimePublico, AvisoNaFaixa, AvisosNaResposta, FalaParaSalvar
 
 import { fraseDaFalhaDaFala } from "./usePreviaDaFala";
 
+/** A leitura COMPLETA (o cartão de Configurações › Times) — e o prefixo de toda leitura de aviso. */
 export const CHAVE_DOS_AVISOS = ["telefonia", "avisos"] as const;
+
+/**
+ * A leitura da FAIXA (`?so=ligados`): só `ligados` e `pode_mudar`, sem a lista
+ * completa nem o nome de quem ligou pedido à Auth — ela roda em toda tela, uma
+ * vez por minuto em cada aba. Mora DEBAIXO de `CHAVE_DOS_AVISOS`: invalidar o
+ * prefixo (o que ligar e desligar fazem) relê as duas.
+ */
+export const CHAVE_DA_FAIXA = [...CHAVE_DOS_AVISOS, "faixa"] as const;
+
+const URL_DOS_AVISOS = "/api/v1/telefonia/emergencias";
 
 /** Com a telefonia oferecida, quanto a faixa espera entre uma leitura e outra. */
 export const INTERVALO_DA_RELEITURA_MS = 60_000;
@@ -50,7 +61,7 @@ const FOLGA_DO_PRAZO_MS = 1_000;
 /** O maior atraso que o `setTimeout` aceita (~24,8 dias); acima dele o navegador dispara na hora. */
 const MAIOR_ESPERA_MS = 2_147_483_647;
 
-const urlDoTime = (teamId: string) => `/api/v1/telefonia/emergencias/${encodeURIComponent(teamId)}`;
+const urlDoTime = (teamId: string) => `${URL_DOS_AVISOS}/${encodeURIComponent(teamId)}`;
 
 /** O prazo mais próximo entre os avisos ligados, em ms; `null` quando nenhum tem prazo. */
 export function proximoPrazo(ligados: readonly AvisoNaFaixa[]): number | null {
@@ -73,10 +84,20 @@ export function horaDoAviso(iso: string, agora: Date, locale?: Locale): string {
   return format(d, isSameDay(d, agora) ? "HH:mm" : "dd/MM HH:mm", { locale });
 }
 
-export function useAvisosDeInstabilidade({ ligado = true }: { ligado?: boolean } = {}) {
+/** A faixa em todo o CRM: `oferecida` vem do layout (servidor), e sem ela nada é lido. */
+export function useAvisosNaFaixa(oferecida: boolean) {
+  return useLeituraDosAvisos(CHAVE_DA_FAIXA, `${URL_DOS_AVISOS}?so=ligados`, oferecida);
+}
+
+/** O cartão de Configurações › Times: a leitura completa (gerente e admin recebem `times`). */
+export function useAvisosDosTimes() {
+  return useLeituraDosAvisos(CHAVE_DOS_AVISOS, URL_DOS_AVISOS, true);
+}
+
+function useLeituraDosAvisos(chave: readonly string[], url: string, ligado: boolean) {
   const { activeOrg } = useAuth();
   const consulta = useQuery({
-    queryKey: CHAVE_DOS_AVISOS,
+    queryKey: chave,
     enabled: ligado && activeOrg !== null,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
@@ -87,7 +108,7 @@ export function useAvisosDeInstabilidade({ ligado = true }: { ligado?: boolean }
     // diz, com todas as letras, que a instalação não tem telefonia (o cartão do
     // time não recebe `ligado` do servidor e fica sabendo por ele).
     refetchInterval: (q) => (ligado && q.state.data?.oferecida !== false ? INTERVALO_DA_RELEITURA_MS : false),
-    queryFn: async () => (await apiClient.get<{ data: AvisosNaResposta }>("/api/v1/telefonia/emergencias")).data,
+    queryFn: async () => (await apiClient.get<{ data: AvisosNaResposta }>(url)).data,
   });
 
   const prazo = consulta.data ? proximoPrazo(consulta.data.ligados) : null;

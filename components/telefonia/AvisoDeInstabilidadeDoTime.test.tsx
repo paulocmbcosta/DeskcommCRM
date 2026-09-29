@@ -59,8 +59,10 @@ vi.mock("./OuvirPrevia", () => ({
 }));
 
 import { AvisoDeInstabilidadeDoTime } from "./AvisoDeInstabilidadeDoTime";
+import { FaixaDoAvisoDeInstabilidade } from "./FaixaDoAvisoDeInstabilidade";
 
 const URL_DOS_AVISOS = "/api/v1/telefonia/emergencias";
+const URL_DA_FAIXA = `${URL_DOS_AVISOS}?so=ligados`;
 const URL_DO_TIME = `${URL_DOS_AVISOS}/t1`;
 const URL_DA_PREVIA = "/api/v1/telefonia/falas/previa";
 const HASH_PREVIA = "1".repeat(64);
@@ -117,13 +119,14 @@ function timeDesligado(extra: Partial<AvisoDoTimePublico> = {}): AvisoDoTimePubl
 const doTime = () => servidor.times!.find((a) => a.team_id === "t1")!;
 
 function rotaPadrao(metodo: string, url: string): Rota | null {
-  if (metodo === "GET" && url === URL_DOS_AVISOS) {
+  if (metodo === "GET" && (url === URL_DOS_AVISOS || url === URL_DA_FAIXA)) {
     return () => {
       const times = servidor.times ?? [];
       const ligados = times
         .filter((a) => a.ativa)
         .map((a) => ({ team_id: a.team_id, time_nome: a.time_nome, expira_em: a.expira_em, arquivado: a.arquivado }));
-      return dados(structuredClone({ ...servidor, ligados }));
+      // `?so=ligados` (a faixa): nunca a lista completa, para papel nenhum.
+      return dados(structuredClone({ ...servidor, ligados, times: url === URL_DA_FAIXA ? null : servidor.times }));
     };
   }
   if (metodo === "POST" && url === URL_DA_PREVIA) {
@@ -401,6 +404,41 @@ describe("janela do aviso — quando ligar é recusado", () => {
       expect(gerarDe(j)).toHaveTextContent("Gerar prévia");
       expect(ligarDe(j)).toBeDisabled();
       expect(enviados("POST", URL_DA_PREVIA)).toHaveLength(1);
+    },
+    TETO_MS,
+  );
+});
+
+describe("o cartão e a faixa leem por chaves diferentes, e a mutação relê as duas", () => {
+  it(
+    "ligar pela janela faz a faixa aparecer; desligar pela faixa devolve o cartão a desligado",
+    async () => {
+      doTime().fala = falaGravada();
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={qc}>
+          <FaixaDoAvisoDeInstabilidade oferecida />
+          <AvisoDeInstabilidadeDoTime teamId="t1" />
+        </QueryClientProvider>,
+      );
+      const u = usuario();
+      const c = await cartao();
+      // Cada um pela SUA leitura: a faixa nunca pede a lista completa.
+      expect(fetchFalso.mock.calls.some(([url]) => url === URL_DA_FAIXA)).toBe(true);
+      expect(qc.getQueryData(["telefonia", "avisos", "faixa"])).toMatchObject({ times: null });
+
+      await u.click(within(c).getByRole("button", { name: "Ligar aviso" }));
+      await u.click(ligarDe(await screen.findByRole("dialog")));
+      const faixa = await waitFor(() => {
+        const f = document.querySelector("[data-faixa-aviso-de-instabilidade]");
+        expect(f).not.toBeNull();
+        return f as HTMLElement;
+      });
+      expect(faixa).toHaveTextContent("Suporte");
+
+      await u.click(within(faixa).getByRole("button", { name: "Desligar o aviso do time Suporte" }));
+      await waitFor(() => expect(c).toHaveAttribute("data-ativo", "nao"));
+      expect(document.querySelector("[data-faixa-aviso-de-instabilidade]")).toBeNull();
     },
     TETO_MS,
   );

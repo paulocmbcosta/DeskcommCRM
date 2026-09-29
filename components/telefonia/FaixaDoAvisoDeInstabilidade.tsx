@@ -4,7 +4,8 @@
  * fase 2, §6.4): todo membro vê que os clientes estão ouvindo um aviso — o
  * atendente que atende o telefone precisa saber o que o cliente acabou de ouvir.
  * Gerente e admin (`pode_mudar`, decidido pelo servidor) desligam por aqui mesmo.
- * Aparece e some sem recarregar a página (`useAvisosDeInstabilidade`).
+ * Aparece e some sem recarregar a página (`useAvisosNaFaixa`, que pede à rota só
+ * a faixa — `?so=ligados` —, nunca a lista completa do gerente).
  *
  * `oferecida` vem do LAYOUT (servidor), que sabe se a instalação tem telefonia
  * sem perguntar a ninguém: sem ela, a faixa não faz uma leitura sequer — a
@@ -23,12 +24,12 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { Siren } from "@/lib/ui/icons";
 
-import { horaDoAviso, useAvisosDeInstabilidade, useDesligarAviso } from "./useAvisosDeInstabilidade";
+import { horaDoAviso, useAvisosNaFaixa, useDesligarAviso } from "./useAvisosDeInstabilidade";
 
 export function FaixaDoAvisoDeInstabilidade({ oferecida }: { oferecida: boolean }) {
   const t = useT();
   const locale = useLocaleDeData();
-  const avisos = useAvisosDeInstabilidade({ ligado: oferecida });
+  const avisos = useAvisosNaFaixa(oferecida);
   const desligar = useDesligarAviso();
 
   const dados = avisos.data;

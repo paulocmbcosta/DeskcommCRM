@@ -268,6 +268,6 @@ export interface AvisosNaResposta {
   pode_mudar: boolean;
   /** Os avisos vigentes — o que a faixa mostra, para qualquer membro. */
   ligados: AvisoNaFaixa[];
-  /** A lista completa, só para gerente e admin; `null` para os outros papéis. */
+  /** A lista completa, só para gerente e admin; `null` para os outros papéis e na leitura da faixa (`?so=ligados`). */
   times: AvisoDoTimePublico[] | null;
 }

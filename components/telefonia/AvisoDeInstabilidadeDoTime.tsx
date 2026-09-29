@@ -11,7 +11,7 @@
  * Ligado: quando, por quem e até quando (hora de quem olha), e "Desligar agora".
  *
  * Os botões seguem `pode_mudar` da leitura — a régua da sessão decidida no
- * servidor, a mesma das escritas (`useAvisosDeInstabilidade`). Só aparece onde a
+ * servidor, a mesma das escritas (`useAvisosDosTimes`). Só aparece onde a
  * instalação oferece telefonia e para quem recebe a lista dos times.
  *
  * O gerente não lê a voz do telefone (a rota da voz é de admin): a prévia fica
@@ -40,7 +40,7 @@ import { Play, Siren } from "@/lib/ui/icons";
 
 import { OuvirFala } from "./OuvirFala";
 import { OuvirPrevia } from "./OuvirPrevia";
-import { horaDoAviso, useAvisosDeInstabilidade, useDesligarAviso, useLigarAviso } from "./useAvisosDeInstabilidade";
+import { horaDoAviso, useAvisosDosTimes, useDesligarAviso, useLigarAviso } from "./useAvisosDeInstabilidade";
 import { falaParaSalvar, fraseDaFalhaDaFala, mensagemDaFalhaDaPrevia, usePreviaDaFala } from "./usePreviaDaFala";
 
 /** As recusas do "Ligar" que dizem que a prévia da tela não serve mais: é preciso gerar outra. */
@@ -49,7 +49,7 @@ const PREVIA_QUE_NAO_SERVE = new Set(["previa_ausente", "previa_desatualizada"])
 export function AvisoDeInstabilidadeDoTime({ teamId }: { teamId: string }) {
   const t = useT();
   const locale = useLocaleDeData();
-  const avisos = useAvisosDeInstabilidade();
+  const avisos = useAvisosDosTimes();
   const desligar = useDesligarAviso();
   const [aberto, setAberto] = useState(false);
 

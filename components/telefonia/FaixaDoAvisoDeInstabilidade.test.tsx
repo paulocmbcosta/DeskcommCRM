@@ -41,6 +41,8 @@ vi.mock("@/hooks/auth/AuthProvider", () => ({
 import { FaixaDoAvisoDeInstabilidade } from "./FaixaDoAvisoDeInstabilidade";
 
 const URL_DOS_AVISOS = "/api/v1/telefonia/emergencias";
+/** A faixa pede SÓ a faixa: a leitura completa do gerente (com nome pedido à Auth) não é dela. */
+const URL_DA_FAIXA = `${URL_DOS_AVISOS}?so=ligados`;
 const HTML_DO_PROXY = "<html><body><h1>504 Gateway Time-out</h1><p>nginx</p></body></html>";
 /** Meio-dia no fuso da máquina: "hoje" não vira "amanhã" no meio do teste. */
 const AGORA = new Date(2026, 8, 29, 12, 0, 0);
@@ -65,7 +67,7 @@ const fetchFalso = vi.fn(async (url: string, init: RequestInit = {}) => {
   const metodo = init.method ?? "GET";
   const trocada = trocadas.get(`${metodo} ${url}`);
   if (trocada) return trocada();
-  if (metodo === "GET" && url === URL_DOS_AVISOS) return json(200, { data: structuredClone(servidor) });
+  if (metodo === "GET" && url === URL_DA_FAIXA) return json(200, { data: structuredClone(servidor) });
   const desligar = /^\/api\/v1\/telefonia\/emergencias\/([^/]+)$/.exec(url);
   if (metodo === "DELETE" && desligar) {
     const antes = servidor.ligados.length;
@@ -75,7 +77,7 @@ const fetchFalso = vi.fn(async (url: string, init: RequestInit = {}) => {
   throw new Error(`rota inesperada: ${metodo} ${url}`);
 });
 
-const leituras = () => fetchFalso.mock.calls.filter(([u, i]) => u === URL_DOS_AVISOS && (i?.method ?? "GET") === "GET").length;
+const leituras = () => fetchFalso.mock.calls.filter(([u, i]) => u === URL_DA_FAIXA && (i?.method ?? "GET") === "GET").length;
 
 // ─── A tela ──────────────────────────────────────────────────────────────────
 
@@ -260,7 +262,7 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
   });
 
   it("a leitura falhou: nada aparece, e nada quebra", async () => {
-    trocadas.set(`GET ${URL_DOS_AVISOS}`, () => new Response(HTML_DO_PROXY, { status: 504, headers: { "Content-Type": "text/html" } }));
+    trocadas.set(`GET ${URL_DA_FAIXA}`, () => new Response(HTML_DO_PROXY, { status: 504, headers: { "Content-Type": "text/html" } }));
     pintar();
     await waitFor(() => expect(leituras()).toBe(1));
     await act(async () => {
@@ -276,7 +278,7 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
   ])(
     "a PRIMEIRA leitura falhou (%s): a releitura de um minuto recupera a faixa, sem troca de foco",
     async (_caso, falha) => {
-      trocadas.set(`GET ${URL_DOS_AVISOS}`, falha);
+      trocadas.set(`GET ${URL_DA_FAIXA}`, falha);
       pintar();
       await waitFor(() => expect(leituras()).toBe(1));
       await act(async () => {
@@ -298,7 +300,7 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
   it("a releitura falhou com o aviso na tela: a faixa sai, em vez de afirmar o que não dá mais para confirmar", async () => {
     const qc = pintar();
     await screen.findByRole("status");
-    trocadas.set(`GET ${URL_DOS_AVISOS}`, () => recusa(500, "internal_error", "Erro interno."));
+    trocadas.set(`GET ${URL_DA_FAIXA}`, () => recusa(500, "internal_error", "Erro interno."));
     await act(async () => {
       await qc.invalidateQueries();
     });
