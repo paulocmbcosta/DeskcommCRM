@@ -29,11 +29,18 @@
  *     `voice_calls` com aquele `menu_id` (a FK pede `key share`) entra na hora —
  *     e o CONTROLE com `for update` mostra a ligação caindo no `lock_timeout`;
  *  9. arquivar apaga as falas do menu na mesma transação; o menu fica, solto delas,
- *     para o histórico das ligações.
+ *     para o histórico das ligações;
+ * 10. o `atualizarNumero` DE VERDADE (lib/channels/telefonia/numeros.ts) honra o
+ *     contrato do item 7 — e não só a cópia `apontarNumero`: aponta para o menu
+ *     pronto, recusa o de outra organização, o arquivado e o de fala pendente,
+ *     escolher um time tira o menu, a aba antiga mantém; nas duas ordens contra o
+ *     arquivamento, nunca sobra número tocando menu arquivado; e a trava da linha
+ *     do número (`for no key update`) não faz a ligação esperar.
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { atualizarNumero, numeroSchema, type EntradaDoNumero } from "@/lib/channels/telefonia/numeros";
 import { caminhoDaFala, hashDaFala } from "@/lib/telefonia/falas";
 import {
   CONSULTA_DA_SEMANA,
@@ -196,7 +203,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   sql(`
-    update public.channel_sessions set sip_menu_id = null where id in ('${NUMERO_A}', '${NUMERO_B}');
+    update public.channel_sessions set sip_menu_id = null, sip_team_id = null where id in ('${NUMERO_A}', '${NUMERO_B}');
     delete from public.voice_calls where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from public.phone_menus where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from public.phone_prompts where organization_id in ('${ORG_A}', '${ORG_B}');
@@ -538,6 +545,18 @@ function acompanhar<T>(p: Promise<T>) {
   return () => terminou;
 }
 const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Espera a transação chegar ao portão, com prazo: se o código sob teste deixar de
+ * travar o menu, o portão nunca é alcançado — e o caso tem de ficar VERMELHO em
+ * segundos, não pendurado até o timeout.
+ */
+const chegouAoPortao = (travou: Promise<void>) =>
+  Promise.race([
+    travou,
+    esperar(5_000).then(() => {
+      throw new Error("a transação não chegou à trava do menu em 5 s");
+    }),
+  ]);
 
 const destinoDoNumero = async () =>
   (await pool.query<{ sip_menu_id: string | null }>("select sip_menu_id from channel_sessions where id = $1", [NUMERO_A]))
@@ -674,6 +693,38 @@ describe("a trava do menu não faz a LIGAÇÃO esperar", () => {
     expect(await salvando).toMatchObject({ ok: true });
   });
 
+  it("com o número E o menu travados por um atualizarNumero de verdade (portão), o INSERT da ligação no número entra na hora", async () => {
+    const { id } = await criar();
+    const portao = poolComPortao();
+    const apontando = atualizarNumero(portao.pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: id }));
+    try {
+      await chegouAoPortao(portao.travou);
+      const inicio = Date.now();
+      expect(await inserirLigacao(id)).toBe("entrou");
+      expect(Date.now() - inicio).toBeLessThan(900);
+    } finally {
+      portao.abrir();
+      // Mesmo com a asserção vermelha, a transação termina ANTES do caso acabar: o
+      // `beforeEach` seguinte usa `sql()` síncrono, que prende o event loop — com a
+      // transação aberta segurando a trava, o arquivo inteiro pendura.
+      await Promise.allSettled([apontando]);
+    }
+    expect(await apontando).toMatchObject({ ok: true });
+  });
+
+  it("CONTROLE — com a linha do NÚMERO em for update, o mesmo INSERT espera e cai no lock_timeout (55P03)", async () => {
+    const { id } = await criar();
+    const dono = await pool.connect();
+    try {
+      await dono.query("begin");
+      await dono.query("select 1 from channel_sessions where id = $1 for update", [NUMERO_A]);
+      expect(await inserirLigacao(id)).toBe("55P03");
+    } finally {
+      await dono.query("rollback").catch(() => undefined);
+      dono.release();
+    }
+  });
+
   it("CONTROLE — com o menu em for update (a trava antiga), o mesmo INSERT espera e cai no lock_timeout (55P03)", async () => {
     const { id } = await criar();
     const dono = await pool.connect();
@@ -685,5 +736,156 @@ describe("a trava do menu não faz a LIGAÇÃO esperar", () => {
       await dono.query("rollback").catch(() => undefined);
       dono.release();
     }
+  });
+});
+
+/** O formulário do número A como a tela o manda: a MESMA conta (sem senha), mais o destino. */
+const doNumeroA = (e: Partial<EntradaDoNumero> = {}): EntradaDoNumero =>
+  numeroSchema.parse({
+    nome: "Recepção",
+    numero: "(61) 3000-8801",
+    servidor: "voip.menus-a.com.br",
+    porta: 5060,
+    transporte: "udp",
+    usuario: "u-menus-a",
+    time_id: null,
+    ...e,
+  });
+const doNumeroB = (e: Partial<EntradaDoNumero> = {}): EntradaDoNumero =>
+  numeroSchema.parse({
+    nome: "Recepção B",
+    numero: "(61) 3000-8802",
+    servidor: "voip.menus-b.com.br",
+    porta: 5060,
+    transporte: "udp",
+    usuario: "u-menus-b",
+    time_id: null,
+    ...e,
+  });
+const timeDoNumero = async () =>
+  (await pool.query<{ sip_team_id: string | null }>("select sip_team_id from channel_sessions where id = $1", [NUMERO_A]))
+    .rows[0]!.sip_team_id;
+
+describe("o atualizarNumero de verdade e o destino do número (Postgres real)", () => {
+  it("aponta para o menu pronto; a aba antiga mantém; escolher um time tira o menu — com o antes e o depois que a transação leu", async () => {
+    const { id } = await criar();
+
+    expect(await atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: id }))).toEqual({
+      ok: true,
+      destino: { de: { time_id: null, menu_id: null }, para: { time_id: null, menu_id: id } },
+    });
+    expect(await destinoDoNumero()).toBe(id);
+
+    // Aba aberta antes da atualização: sem `menu_id` no corpo, o menu guardado fica.
+    expect(await atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ nome: "Recepção" }))).toEqual({
+      ok: true,
+      destino: { de: { time_id: null, menu_id: id }, para: { time_id: null, menu_id: id } },
+    });
+
+    expect(await atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ time_id: TIME_A1 }))).toEqual({
+      ok: true,
+      destino: { de: { time_id: null, menu_id: id }, para: { time_id: TIME_A1, menu_id: null } },
+    });
+    expect([await timeDoNumero(), await destinoDoNumero()]).toEqual([TIME_A1, null]);
+  });
+
+  it("recusa, sem escrever: time E menu, menu de OUTRA organização, inexistente, arquivado e com a fala pendente", async () => {
+    const { id, fala } = await criar();
+
+    expect(await atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ time_id: TIME_A1, menu_id: id }))).toEqual({
+      ok: false,
+      motivo: "destino_duplo",
+    });
+    // B tenta apontar o número DELE para o menu de A: a trava filtra pela organização da sessão.
+    expect(await atualizarNumero(pool, ORG_B, NUMERO_B, doNumeroB({ menu_id: id }))).toEqual({
+      ok: false,
+      motivo: "menu_invalido",
+    });
+    expect(
+      await atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: "c0de0288-8888-4000-8000-0000000000ff" })),
+    ).toEqual({ ok: false, motivo: "menu_invalido" });
+
+    sql(`update public.phone_prompts set status = 'failed', error = 'erro_do_provedor' where id = '${fala.fala.id}';`);
+    expect(await atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: id }))).toEqual({
+      ok: false,
+      motivo: "menu_com_fala_pendente",
+    });
+    sql(`update public.phone_prompts set status = 'ready', error = null where id = '${fala.fala.id}';`);
+
+    expect(await arquivarMenu(pool, ORG_A, id)).toMatchObject({ ok: true });
+    expect(await atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: id }))).toEqual({
+      ok: false,
+      motivo: "menu_invalido",
+    });
+
+    expect(await destinoDoNumero()).toBeNull();
+    const { rows: b } = await pool.query<{ sip_menu_id: string | null }>("select sip_menu_id from channel_sessions where id = $1", [
+      NUMERO_B,
+    ]);
+    expect(b[0]!.sip_menu_id).toBeNull();
+  });
+
+  it("arquivar trava primeiro: o atualizarNumero espera e, quando o arquivamento confirma, recebe menu_invalido — o número não toca o menu arquivado", async () => {
+    const { id } = await criar();
+    const portao = poolComPortao();
+    const arquivando = arquivarMenu(portao.pool, ORG_A, id);
+    let apontando: ReturnType<typeof atualizarNumero> = Promise.resolve({ ok: false, motivo: "nao_encontrado" });
+    try {
+      await chegouAoPortao(portao.travou);
+      apontando = atualizarNumero(pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: id }));
+      const apontou = acompanhar(apontando);
+      await esperar(300);
+      expect(apontou()).toBe(false); // parado na trava do menu
+    } finally {
+      portao.abrir();
+      await Promise.allSettled([arquivando, apontando]);
+    }
+    expect(await arquivando).toMatchObject({ ok: true });
+    expect(await apontando).toEqual({ ok: false, motivo: "menu_invalido" });
+    expect(await arquivado(id)).toBe(true);
+    expect(await destinoDoNumero()).toBeNull();
+  });
+
+  it("o atualizarNumero trava primeiro: o arquivamento espera e, no comando seguinte, vê o número — menu_em_uso, e o menu segue ativo", async () => {
+    const { id } = await criar();
+    const portao = poolComPortao();
+    const apontando = atualizarNumero(portao.pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: id }));
+    let arquivando: ReturnType<typeof arquivarMenu> = Promise.resolve({ ok: false, motivo: "nao_encontrado" });
+    try {
+      await chegouAoPortao(portao.travou);
+      arquivando = arquivarMenu(pool, ORG_A, id);
+      const arquivou = acompanhar(arquivando);
+      await esperar(300);
+      expect(arquivou()).toBe(false); // parado na trava do menu
+    } finally {
+      portao.abrir();
+      await Promise.allSettled([apontando, arquivando]);
+    }
+    expect(await apontando).toMatchObject({ ok: true });
+    expect(await arquivando).toEqual({
+      ok: false,
+      motivo: "menu_em_uso",
+      numeros: [{ nome: "Recepção", numero: "+556130008801" }],
+    });
+    expect(await arquivado(id)).toBe(false);
+    expect(await destinoDoNumero()).toBe(id);
+  });
+
+  it("os dois juntos, com o encontro forçado: um só vence, e nunca sobra número tocando menu arquivado", async () => {
+    const { id } = await criar();
+    const e = poolComEncontro();
+
+    const [a, n] = await Promise.all([
+      arquivarMenu(e.pool, ORG_A, id),
+      atualizarNumero(e.pool, ORG_A, NUMERO_A, doNumeroA({ menu_id: id })),
+    ]);
+
+    const fim = { arquivado: await arquivado(id), destino: await destinoDoNumero() };
+    expect(fim.arquivado && fim.destino === id, JSON.stringify({ a, n, fim })).toBe(false);
+    const venceuArquivar = a.ok && !n.ok && n.motivo === "menu_invalido" && fim.arquivado && fim.destino === null;
+    const venceuApontar = !a.ok && a.motivo === "menu_em_uso" && n.ok && !fim.arquivado && fim.destino === id;
+    expect(venceuArquivar !== venceuApontar, JSON.stringify({ a, n, fim })).toBe(true);
+    expect(e.chegadas).toBe(2);
+    expect(e.simultaneas).toBe(1);
   });
 });
