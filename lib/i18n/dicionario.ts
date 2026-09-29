@@ -9614,6 +9614,15 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível conferir o áudio da fala de opção inválida agora. Tente de novo em instantes; se continuar, gere a prévia de novo.": {
     es: "No se pudo verificar el audio de la locución de opción inválida ahora. Inténtalo de nuevo en unos instantes; si continúa, genera la vista previa de nuevo.",
   },
+  // Telefonia, fase 2 — o destino do número (time ou menu)
+  "Escolha só um destino: um time ou um menu.": { es: "Elige un solo destino: un equipo o un menú." },
+  "Esse menu não existe nesta organização ou foi arquivado.": { es: "Ese menú no existe en esta organización o fue archivado." },
+  "A fala desse menu ainda não está pronta. Gere a prévia e salve o menu na aba Menus antes de ligar o menu ao número.": {
+    es: "La locución de ese menú aún no está lista. Genera la vista previa y guarda el menú en la pestaña Menús antes de conectar el menú al número.",
+  },
+  "O número ou o menu escolhido está sendo alterado agora. Tente de novo em instantes.": {
+    es: "El número o el menú elegido se está modificando ahora. Inténtalo de nuevo en unos instantes.",
+  },
 };
 
 /**

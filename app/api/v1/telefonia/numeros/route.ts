@@ -10,6 +10,9 @@
  * Salvar não espera a operadora: o número nasce `STARTING`, o Asterisk recebe o
  * tronco na hora (quando alcançável) e o estado do registro (Conectado / senha
  * recusada / sem resposta) aparece na linha em segundos, pelo worker.
+ *
+ * Fase 2: o número pode nascer apontando para um time OU um menu de voz
+ * (`menu_id`); `criarNumero` trava o menu na mesma transação do INSERT.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -19,7 +22,13 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
-import { MENSAGEM_DA_FALHA, criarNumero, numeroSchema, numerosDaOrg } from "@/lib/channels/telefonia/numeros";
+import {
+  MENSAGEM_DA_FALHA,
+  criarNumero,
+  numeroSchema,
+  numerosDaOrg,
+  statusDaFalhaDoCadastro,
+} from "@/lib/channels/telefonia/numeros";
 import { empurrarTroncoAgora } from "@/lib/channels/telefonia/empurrar";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
@@ -52,7 +61,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   const pool = getRequestPool();
   const r = await criarNumero(pool, authz.org.orgId, parsed.data);
   if (!r.ok) {
-    return fail(r.motivo, t(MENSAGEM_DA_FALHA[r.motivo]), r.motivo === "nao_encontrado" ? 404 : 422, { requestId });
+    return fail(r.motivo, t(MENSAGEM_DA_FALHA[r.motivo]), statusDaFalhaDoCadastro(r.motivo), { requestId });
   }
 
   void audit({
@@ -65,6 +74,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       servidor: parsed.data.servidor,
       usuario: parsed.data.usuario,
       time_id: parsed.data.time_id,
+      menu_id: parsed.data.menu_id ?? null,
       prefixo: parsed.data.prefixo ?? null,
     },
     requestId,
