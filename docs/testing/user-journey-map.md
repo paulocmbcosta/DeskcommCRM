@@ -3087,18 +3087,22 @@ do celular para o (61) 3686-1503 (Task 29 do plano). A máquina da URA e as fala
 em unidade (`lib/telefonia/ura.test.ts`, `lib/channels/telefonia/controle.test.ts`), e o SQL do
 worker contra Postgres real (`tests/invariants/telefonia-repositorio-da-ura.test.ts`).
 
-**Estado da spec:** escrita e presa à parte 3; o resultado da rodada no CI se confere na fonte
-— `gh run list --workflow e2e.yml --limit 5` — e entra nesta tabela quando sair. Até lá, os
-casos pela tela abaixo dizem **"e2e, a registrar"**, não PASS.
+**Estado da spec:** **PASSOU** na execução 36576512233 do `e2e.yml` (`workflow_dispatch` na
+branch da fase 2, commit `0fba1433`), job `e2e-parte (3)`, com `E2E_TELEFONIA=1`. Para conferir
+na fonte: `gh run view 36576512233`. A spec é um teste só, com oito passos; os casos J36.1 a
+J36.6 são os passos dela, e PASS aqui vale só para eles. O job terminou vermelho por UMA outra
+spec, `inbox-rotulo-de-origem.spec.ts:224`, que também falha no último e2e da `main`
+(execução 36439395747, o merge do PR #93) — herdada, não desta versão. Nenhum caso a partir do
+J36.7 é coberto por ela.
 
 | Caso | Prioridade | Resultado |
 |---|---|---|
-| J36.1 O admin cola a chave em Credenciais de IA › "ElevenLabs (voz da URA)": a errada volta ao lado do campo ("A ElevenLabs recusou a chave, e ela não foi salva…"); a certa é guardada e a tela mostra só os 4 últimos dígitos; a chave não aparece em URL nenhuma | `[P0]` | e2e, a registrar (passo 1; toda URL pedida pelo navegador é conferida) |
-| J36.2 Voz escolhida numa lista vinda da conta; "Gerar prévia" da fala de aguarde toca no navegador SEM criar fala; "Salvar e usar" a cria; a mesma prévia de novo não chama a ElevenLabs | `[P0]` | e2e, a registrar (passo 2; duração ~1 s medida no `<audio>`, sínteses contadas no receptor falso, linhas contadas no banco) |
-| J36.3 Menu novo: a fala é montada das opções ("Para X, digite 1. Para Y, digite 2.") e o menu só salva com a prévia dela; o cartão lista `1 → X` e `2 → Y` | `[P0]` | e2e, a registrar (passo 3) |
-| J36.4 Em Números, "Quando ligarem" → "Tocar o menu": o cartão diz "Quando ligarem: menu <nome>", e o banco guarda só o menu (`sip_team_id` nulo) | `[P0]` | e2e, a registrar (passo 4) |
-| J36.5 Aviso de instabilidade com texto novo: "Ligar" só destrava depois de "Gerar prévia" e "Ouvir"; ligado por 1 hora, o cartão diz "Ligado às …" e a faixa "Aviso de instabilidade ligado no telefone do <time>" aparece para o atendente, em outra tela, sem o botão; o gerente desliga pela faixa e ela some sem recarregar | `[P0]` | e2e, a registrar (passos 5, 7 e 8; o prazo escolhido conferido no banco) |
-| J36.6 Com a faixa à vista, a TopBar gruda logo abaixo das faixas ao rolar, e o composer da Inbox fica inteiro na janela | `[P0]` | e2e, a registrar (passos 6 e 7, `getBoundingClientRect`). A barra lateral, que também desconta as faixas, só em jsdom (`components/shell/Sidebar.faixas.test.tsx`) |
+| J36.1 O admin cola a chave em Credenciais de IA › "ElevenLabs (voz da URA)": a errada volta ao lado do campo ("A ElevenLabs recusou a chave, e ela não foi salva…"); a certa é guardada e a tela mostra só os 4 últimos dígitos; a chave não aparece em URL nenhuma | `[P0]` | **PASS** (e2e, execução 36576512233, passo 1; toda URL pedida pelo navegador é conferida) |
+| J36.2 Voz escolhida numa lista vinda da conta; "Gerar prévia" da fala de aguarde toca no navegador SEM criar fala; "Salvar e usar" a cria; a mesma prévia de novo não chama a ElevenLabs | `[P0]` | **PASS** (e2e, execução 36576512233, passo 2; duração ~1 s medida no `<audio>`, sínteses contadas no receptor falso, linhas contadas no banco) |
+| J36.3 Menu novo: a fala é montada das opções ("Para X, digite 1. Para Y, digite 2.") e o menu só salva com a prévia dela; o cartão lista `1 → X` e `2 → Y` | `[P0]` | **PASS** (e2e, execução 36576512233, passo 3) |
+| J36.4 Em Números, "Quando ligarem" → "Tocar o menu": o cartão diz "Quando ligarem: menu <nome>", e o banco guarda só o menu (`sip_team_id` nulo) | `[P0]` | **PASS** (e2e, execução 36576512233, passo 4) |
+| J36.5 Aviso de instabilidade com texto novo: "Ligar" só destrava depois de "Gerar prévia" e "Ouvir"; ligado por 1 hora, o cartão diz "Ligado às …" e a faixa "Aviso de instabilidade ligado no telefone do <time>" aparece para o atendente, em outra tela, sem o botão; o gerente desliga pela faixa e ela some sem recarregar | `[P0]` | **PASS** (e2e, execução 36576512233, passos 5, 7 e 8; o prazo escolhido e as auditorias conferidos no banco) |
+| J36.6 Com a faixa à vista, a TopBar gruda logo abaixo das faixas ao rolar, e o composer da Inbox fica inteiro na janela | `[P0]` | **PASS** (e2e, execução 36576512233, passos 6 e 7, medido por `getBoundingClientRect` com a faixa visível). A barra lateral, que também desconta as faixas, só em jsdom (`components/shell/Sidebar.faixas.test.tsx`) |
 | J36.7 Ligação real, opção 1: o cliente ouve o menu, digita 1 e toca no time da opção 1; o cartão diz "No menu X, digitou 1 e foi para o time Y" | `[P0]` | pendente — prova na VPS (Task 29) |
 | J36.8 Ligação real, opção 2: toca no time da opção 2, e a conversa passa a esse time — quem é só dele a enxerga | `[P0]` | pendente — prova na VPS; a conversa no time escolhido está provada no Postgres real, com o JWT de uma atendente só do time 2 (`tests/invariants/telefonia-repositorio-da-ura.test.ts`) |
 | J36.9 Tecla errada: ouve a fala de tecla inválida (se houver) e o menu de novo; depois do terceiro toque do menu, o time padrão; o cartão diz "No menu X, digitou uma tecla que não existe e foi para o time padrão, Y" | `[P0]` | pendente — prova na VPS; a regra em `lib/telefonia/ura.test.ts`, o texto em `components/telefonia/CartaoDaLigacao.test.tsx` |
