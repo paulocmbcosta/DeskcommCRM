@@ -237,8 +237,9 @@ describe("o metadado estranho não derruba o cartão nem conta história errada"
  * rota da escuta auditada SÓ no clique — abrir a conversa não é escuta.
  */
 describe("a gravação no cartão", () => {
+  const VC = "3f1c2b8e-9a4d-4c6e-8f00-1234567890ab";
   const gravada = (gravacao: Record<string, unknown>) =>
-    registro({ desfecho: "atendida", duracao_ms: 61_000, atendente_nome: "Ana", gravacao });
+    registro({ id: VC, desfecho: "atendida", duracao_ms: 61_000, atendente_nome: "Ana", gravacao });
 
   function comGravacao(metadata: unknown, podeOuvirGravacao = true) {
     const ligacao = ligacaoDaMensagem(metadata)!;
@@ -291,7 +292,7 @@ describe("a gravação no cartão", () => {
 
       fireEvent.click(botao);
       await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-      expect(f.mock.calls[0]![0]).toBe("/api/v1/telefonia/chamadas/vc-1/gravacao");
+      expect(f.mock.calls[0]![0]).toBe(`/api/v1/telefonia/chamadas/${VC}/gravacao`);
       expect(container.querySelector("audio")?.getAttribute("src")).toBe("https://storage.exemplo/g.mp3?token=x");
     } finally {
       vi.unstubAllGlobals();
@@ -313,6 +314,12 @@ describe("a gravação no cartão", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("id de ligação que não é uuid (metadado forjado): 'Ligação gravada', sem botão", () => {
+    const { linha } = comGravacao(registro({ id: "../../admin", desfecho: "atendida", gravacao: { situacao: "pronta", duracao_ms: 1_000 } }));
+    expect(linha()?.textContent).toBe("Ligação gravada");
+    expect(document.querySelector("[data-ouvir-gravacao]")).toBeNull();
   });
 
   it("em espanhol", () => {

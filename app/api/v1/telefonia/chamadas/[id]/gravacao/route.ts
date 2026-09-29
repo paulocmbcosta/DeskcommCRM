@@ -10,9 +10,12 @@
  * 404, sem dizer se a ligação existe.
  *
  * Nunca o caminho do arquivo na resposta nem na auditoria: só a URL assinada,
- * que vence. O caminho ainda precisa morar debaixo de `<org>/<conversa>/` — a
- * mesma régua do envio de mídia —, para uma linha gravada por fora não virar
- * porta para o arquivo de outra conversa.
+ * que vence. E o arquivo tem de ser O da gravação: a ligação (lida também pela
+ * sessão) está `stored` e mora na MESMA conversa da mensagem, e o caminho é
+ * EXATAMENTE `<org>/<conversa>/<mensagem>.mp3` — o que o worker escreve. Uma
+ * mensagem `ligacao:*` plantada em outra conversa, ou um caminho trocado, não
+ * abre arquivo nenhum (achados da revisão de segurança; a trava do banco,
+ * `trg_mensagem_de_ligacao_e_do_sistema`, já recusa a escrita — esta é a segunda camada).
  *
  * A rota genérica de mídia (`/api/v1/messages/[id]/media`) RECUSA a mensagem de
  * ligação: sem isso, ela serviria a gravação sem piso de papel nem auditoria.
@@ -26,8 +29,8 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
-import { isMediaPathOwnedBy } from "@/lib/messaging/media/upload-validation";
-import { BUCKET_DAS_GRAVACOES } from "@/lib/telefonia/gravacao";
+import { storagePathFor } from "@/lib/messaging/media/types";
+import { BUCKET_DAS_GRAVACOES, MIME_DA_GRAVACAO } from "@/lib/telefonia/gravacao";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -58,7 +61,17 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     .maybeSingle();
   if (error) return fail("internal_error", t("Erro ao buscar a gravação."), 500, { requestId });
   const caminho = msg?.media_storage_path;
-  if (!msg || !caminho || !msg.conversation_id || !isMediaPathOwnedBy(caminho, org, msg.conversation_id)) return naoHa();
+  if (!msg || !caminho || !msg.conversation_id) return naoHa();
+  if (caminho !== storagePathFor(org, msg.conversation_id, msg.id, MIME_DA_GRAVACAO)) return naoHa();
+
+  const { data: ligacao, error: erroDaLigacao } = await supabase
+    .from("voice_calls")
+    .select("id, conversation_id, recording_status")
+    .eq("organization_id", org)
+    .eq("id", vcId)
+    .maybeSingle();
+  if (erroDaLigacao) return fail("internal_error", t("Erro ao buscar a gravação."), 500, { requestId });
+  if (!ligacao || ligacao.conversation_id !== msg.conversation_id || ligacao.recording_status !== "stored") return naoHa();
 
   const { data: assinada, error: erroDaAssinatura } = await createAdminClient()
     .storage.from(BUCKET_DAS_GRAVACOES)

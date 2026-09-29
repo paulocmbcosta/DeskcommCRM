@@ -120,6 +120,14 @@ export class FalasNoAr<L extends LigacaoComFala<P>, P extends string> {
       /** O nome da fala na Central quando quem pede não dá um. */
       rotuloDoPapel: (papel: P) => string;
       ganchos: GanchosDaFala<L, P>;
+      /**
+       * Quando o `PlaybackFinished` se perde e o RELÓGIO da fala conclui, a fala
+       * conta como tocada? O padrão é sim (ver `armarRelogio`). O aviso de
+       * gravação responde NÃO: sem a prova de que tocou, a ligação não é gravada
+       * (D3 da gravação) — e isso não vira aviso na Central, porque a fala pode
+       * muito bem ter tocado.
+       */
+      tocouPeloRelogio?: (papel: P) => boolean;
     },
   ) {}
 
@@ -212,8 +220,8 @@ export class FalasNoAr<L extends LigacaoComFala<P>, P extends string> {
     l.fala.relogio = null;
   }
 
-  /** O fim de uma fala — pelo `PlaybackFinished` ou pelo relógio dela. */
-  private async concluir(l: L, id: string, tocou: boolean): Promise<void> {
+  /** O fim de uma fala — pelo `PlaybackFinished` ou pelo relógio dela (`semAviso`: não avisa a Central). */
+  private async concluir(l: L, id: string, tocou: boolean, opcoes: { semAviso?: boolean } = {}): Promise<void> {
     this.porReproducao.delete(id);
     if (l.fim || l.fala.atual?.playbackId !== id) return;
     const fala = l.fala.atual;
@@ -223,7 +231,7 @@ export class FalasNoAr<L extends LigacaoComFala<P>, P extends string> {
     // Vale para toda fala — a do menu também: quem desliga no menu não "escolheu"
     // nada, e a ligação vira perdida pelo fim do canal, não pela URA.
     if (l.clienteSaindo) return;
-    if (!tocou) {
+    if (!tocou && !opcoes.semAviso) {
       this.d.log.warn("telefonia: o Asterisk não tocou a fala — pulada", { voice_call: l.vcId, papel: fala.papel });
       await this.d.ganchos.avisarIntocavel(l, fala.rotulo);
     }
@@ -259,7 +267,7 @@ export class FalasNoAr<L extends LigacaoComFala<P>, P extends string> {
           await this.d.ari
             .pararFala(playbackId)
             .catch((e) => this.d.log.warn("telefonia: fala não parada", { erro: mensagemDe(e) }));
-          await this.concluir(l, playbackId, true);
+          await this.concluir(l, playbackId, this.d.tocouPeloRelogio?.(l.fala.atual.papel) ?? true, { semAviso: true });
         })
         .catch((e) => this.d.log.error("telefonia: relógio da fala falhou", { erro: String(e) }));
     }, duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);

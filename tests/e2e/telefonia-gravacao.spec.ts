@@ -16,7 +16,9 @@
  * A ligação e a gravação são SEMEADAS (voice_calls `stored` + a mensagem da
  * ligação + o arquivo no Storage local), como o worker as deixa ao fim do
  * processamento: a ligação de verdade — Asterisk, ponte, ffmpeg — não existe no
- * CI (nada escuta a porta da ARI) e é provada na VPS. O processamento está em
+ * CI (nada escuta a porta da ARI) e é provada na VPS. As escritas da semeadura
+ * vão como o SISTEMA (postgres/service role): pela REST, com o JWT de um membro,
+ * a mensagem da ligação é recusada pelo trigger da 0289. O processamento está em
  * unidade (`lib/channels/telefonia/gravacoes.test.ts`) e o SQL no Postgres real
  * (`tests/invariants/telefonia-gravacao.test.ts`).
  *
@@ -82,27 +84,15 @@ async function entrar(page: Page, email: string, senha: string): Promise<void> {
   await page.waitForURL(/\/app\//, { timeout: 30_000 });
 }
 
-/** Um segundo de tom em WAV PCM 8 kHz, 16 bits, mono — o que o navegador toca sem codec extra. */
-function umSegundoDeWav(): Buffer {
-  const amostras = 8_000;
-  const dados = Buffer.alloc(amostras * 2);
-  for (let i = 0; i < amostras; i++) dados.writeInt16LE(Math.round(6000 * Math.sin((2 * Math.PI * 440 * i) / 8_000)), i * 2);
-  const cab = Buffer.alloc(44);
-  cab.write("RIFF", 0);
-  cab.writeUInt32LE(36 + dados.length, 4);
-  cab.write("WAVE", 8);
-  cab.write("fmt ", 12);
-  cab.writeUInt32LE(16, 16);
-  cab.writeUInt16LE(1, 20);
-  cab.writeUInt16LE(1, 22);
-  cab.writeUInt32LE(8_000, 24);
-  cab.writeUInt32LE(16_000, 28);
-  cab.writeUInt16LE(2, 32);
-  cab.writeUInt16LE(16, 34);
-  cab.write("data", 36);
-  cab.writeUInt32LE(dados.length, 40);
-  return Buffer.concat([cab, dados]);
-}
+/**
+ * Um segundo de tom (440 Hz) em MP3 mono 16 kHz 24 kbps — gerado pelo MESMO
+ * ffmpeg do Alpine que o worker usa (`conversorFfmpeg`), com os mesmos parâmetros:
+ * `ffmpeg -f lavfi -i sine=frequency=440:duration=1 -ac 1 -ar 16000 -c:a libmp3lame -b:a 24k`.
+ */
+const UM_SEGUNDO_DE_MP3 = Buffer.from(
+  "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",
+  "base64",
+);
 
 const contarAuditoria = async (acao: string, ator: string) =>
   (
@@ -237,12 +227,14 @@ test.describe("telefonia — gravação das ligações pela tela", () => {
       ],
     );
     mensagemId = mensagem!.id;
-    const caminho = `${orgId}/${conversaId}/${mensagemId}.wav`;
-    const subiu = await db.storage.from("whatsapp-media").upload(caminho, umSegundoDeWav(), { contentType: "audio/wav", upsert: true });
+    // O caminho CANÔNICO da gravação (`<org>/<conversa>/<mensagem>.mp3`): a escuta
+    // recusa qualquer outro.
+    const caminho = `${orgId}/${conversaId}/${mensagemId}.mp3`;
+    const subiu = await db.storage.from("whatsapp-media").upload(caminho, UM_SEGUNDO_DE_MP3, { contentType: "audio/mpeg", upsert: true });
     if (subiu.error) throw subiu.error;
     await sql(
-      `update public.messages set media_storage_path = $2, media_mime = 'audio/wav', media_size_bytes = $3 where id = $1`,
-      [mensagemId, caminho, umSegundoDeWav().length],
+      `update public.messages set media_storage_path = $2, media_mime = 'audio/mpeg', media_size_bytes = $3 where id = $1`,
+      [mensagemId, caminho, UM_SEGUNDO_DE_MP3.length],
     );
   });
 

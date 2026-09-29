@@ -13,6 +13,7 @@ import type { EstadoDaGravacao } from "@/lib/telefonia/gravacao";
 
 import {
   GravacoesDaTelefonia,
+  comPrazo,
   type AriDaGravacao,
   type BancoDaGravacao,
   type ConversorDaGravacao,
@@ -41,6 +42,7 @@ class AriFalsa implements AriDaGravacao {
   };
   tocarNaPonte = async (p: string, m: string) => {
     this.chamadas.push(["tocarNaPonte", p, m]);
+    return { id: "pb-aviso" };
   };
   baixarGravacao = async (n: string, destino: string) => {
     this.chamadas.push(["baixarGravacao", n]);
@@ -64,7 +66,7 @@ class BancoFalso implements BancoDaGravacao {
   marcar = true;
   falharMarcar = false;
   falharAnexar = false;
-  estadosAtuais = new Map<string, EstadoDaGravacao | null>();
+  estadosAtuais = new Map<string, { estado: EstadoDaGravacao | null; encerrada: boolean }>();
   pendentesAtuais: Array<{ vcId: string; organizationId: string; fimEm: Date }> = [];
   politica = async () => ({ gravar: true, aviso: null });
   marcarGravando = async (org: string, id: string, avisoEm: Date) => {
@@ -87,6 +89,9 @@ class BancoFalso implements BancoDaGravacao {
     this.eventos.push(["descartar", org, id]);
   };
   estados = async (ids: string[]) => new Map(ids.filter((id) => this.estadosAtuais.has(id)).map((id) => [id, this.estadosAtuais.get(id)!]));
+  desmarcar = async (org: string, id: string) => {
+    this.eventos.push(["desmarcar", org, id]);
+  };
   tem(nome: string) {
     return this.eventos.filter((e) => e[0] === nome);
   }
@@ -96,11 +101,13 @@ class StorageFalso implements StorageDaGravacao {
   subidos: Array<[string, string]> = [];
   apagados: string[] = [];
   falharSubir = false;
+  falharApagar = false;
   subir = async (caminho: string, _arquivo: string, mime: string) => {
     if (this.falharSubir) throw new Error("storage fora do ar");
     this.subidos.push([caminho, mime]);
   };
   apagar = async (caminho: string) => {
+    if (this.falharApagar) throw new Error("storage fora do ar");
     this.apagados.push(caminho);
   };
 }
@@ -154,6 +161,16 @@ describe("processar — o caminho feliz", () => {
         { organizationId: ORG, vcId: VC, mensagemId: MSG, caminho: `${ORG}/${CONVERSA}/${MSG}.mp3`, bytes: 183_000, duracaoMs: 61_000 },
       ],
     ]);
+  });
+
+  it("anonimizada, mas o Storage não apaga agora: NÃO descarta — a próxima passada tenta de novo", async () => {
+    banco.resultadoDoAnexar = "anonimizada";
+    storage.falharApagar = true;
+    expect(await g.processar(pendente)).toBe("esperando");
+    expect(banco.tem("descartar")).toEqual([]);
+    storage.falharApagar = false;
+    expect(await g.processar(pendente)).toBe("anonimizada");
+    expect(banco.tem("descartar")).toHaveLength(1);
   });
 
   it("mensagem anonimizada no meio do caminho: o arquivo recém-subido é apagado e a gravação descartada", async () => {
@@ -245,13 +262,22 @@ describe("a porta do controlador", () => {
     expect(ari.nomes()).toEqual(["gravarPonte", "pararGravacao", "apagarGravacao"]);
   });
 
-  it("parar e tocar o aviso vão à ARI pelo nome da ligação e pela ponte", async () => {
+  it("parar e tocar o aviso vão à ARI pelo nome da ligação e pela ponte; tocar devolve o id do playback", async () => {
     await g.parar(VC);
-    expect(await g.tocarAvisoNaPonte("p-1", "sound:/x")).toBe(true);
+    expect(await g.tocarAvisoNaPonte("p-1", "sound:/x")).toBe("pb-aviso");
     expect(ari.chamadas).toEqual([
       ["pararGravacao", `g-${VC}`],
       ["tocarNaPonte", "p-1", "sound:/x"],
     ]);
+  });
+
+  it("descartar (o aviso da feita falhou): para, apaga o arquivo e desmarca a ligação", async () => {
+    await g.descartar(ORG, VC);
+    expect(ari.chamadas).toEqual([
+      ["pararGravacao", `g-${VC}`],
+      ["apagarGravacao", `g-${VC}`],
+    ]);
+    expect(banco.tem("desmarcar")).toEqual([["desmarcar", ORG, VC]]);
   });
 
   it("aoEncerrar: processa sozinho logo depois do fim", async () => {
@@ -268,24 +294,52 @@ describe("a porta do controlador", () => {
 });
 
 describe("passada", () => {
-  it("processa as pendentes e apaga só as órfãs de ligação em estado terminal", async () => {
+  it("processa as pendentes e apaga só as órfãs que ninguém vai guardar", async () => {
     banco.pendentesAtuais = [pendente];
     const TERMINADA = "3f1c2b8e-9a4d-4c6e-8f00-1234567890ad";
     const PERDIDA = "3f1c2b8e-9a4d-4c6e-8f00-1234567890ae";
     const GRAVANDO = "3f1c2b8e-9a4d-4c6e-8f00-1234567890af";
     const SEM_LINHA = "3f1c2b8e-9a4d-4c6e-8f00-1234567890b0";
-    ari.guardadas = [`g-${TERMINADA}`, `g-${PERDIDA}`, `g-${GRAVANDO}`, `g-${SEM_LINHA}`, `g-${OUTRO}`, "sonda-g-1"];
-    banco.estadosAtuais.set(TERMINADA, "stored");
-    banco.estadosAtuais.set(PERDIDA, "failed");
-    banco.estadosAtuais.set(GRAVANDO, "recording");
-    banco.estadosAtuais.set(OUTRO, null);
+    const NUNCA_MARCADA = "3f1c2b8e-9a4d-4c6e-8f00-1234567890b1";
+    ari.guardadas = [
+      `g-${TERMINADA}`,
+      `g-${PERDIDA}`,
+      `g-${GRAVANDO}`,
+      `g-${SEM_LINHA}`,
+      `g-${OUTRO}`,
+      `g-${NUNCA_MARCADA}`,
+      "sonda-g-1",
+    ];
+    banco.estadosAtuais.set(TERMINADA, { estado: "stored", encerrada: true });
+    banco.estadosAtuais.set(PERDIDA, { estado: "failed", encerrada: true });
+    banco.estadosAtuais.set(GRAVANDO, { estado: "recording", encerrada: false });
+    // Viva e ainda sem marca: o arquivo existe um instante antes de o banco marcar.
+    banco.estadosAtuais.set(OUTRO, { estado: null, encerrada: false });
+    // Encerrada e nunca marcada: o `comecar` que não limpou.
+    banco.estadosAtuais.set(NUNCA_MARCADA, { estado: null, encerrada: true });
 
     await g.passada();
 
     expect(storage.subidos).toHaveLength(1);
     const apagadas = ari.chamadas.filter((c) => c[0] === "apagarGravacao").map((c) => c[1]);
-    // A da pendente (depois de guardada) e as duas órfãs terminais. Nunca a que grava,
-    // a sem linha, a não gravada, nem o que não é gravação de ligação.
-    expect(apagadas.sort()).toEqual([`g-${PERDIDA}`, `g-${TERMINADA}`, `g-${VC}`].sort());
+    // A da pendente (depois de guardada), as terminais, a de ligação que não existe
+    // mais e a encerrada nunca marcada. Nunca a que grava, a viva sem marca, nem o
+    // que não é gravação de ligação.
+    expect(apagadas.sort()).toEqual(
+      [`g-${PERDIDA}`, `g-${TERMINADA}`, `g-${VC}`, `g-${SEM_LINHA}`, `g-${NUNCA_MARCADA}`].sort(),
+    );
+  });
+
+  it("comPrazo: o passo que não responde vira erro no prazo (e a gravação tenta de novo)", async () => {
+    vi.useFakeTimers();
+    try {
+      const nunca = comPrazo(() => new Promise<never>(() => undefined), 1_000, "conversao_sem_resposta");
+      const pego = nunca.catch((e: Error) => e.message);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await pego).toBe("conversao_sem_resposta");
+      await expect(comPrazo(async () => 7, 1_000, "x")).resolves.toBe(7);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

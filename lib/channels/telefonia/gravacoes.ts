@@ -44,13 +44,22 @@ import {
 import type { ClienteAri } from "./ari";
 import type { PortaGravacao, Registro } from "./controle";
 import * as repo from "./repositorio-das-gravacoes";
-import type { GravacaoPendente, PoliticaDeGravacao } from "./repositorio-das-gravacoes";
+import type { EstadoParaAsOrfas, GravacaoPendente, PoliticaDeGravacao } from "./repositorio-das-gravacoes";
 
 /** Quantas pendentes uma passada processa, em série (uma conversão por vez no worker de 512 MB). */
 const LOTE_DA_PASSADA = 5;
 
 /** Espera entre o fim da ligação e o primeiro processamento (o arquivo fecha no `stop`). */
 const ESPERA_DO_PRIMEIRO_PROCESSAMENTO_MS = 1_000;
+
+/**
+ * Prazos dos passos lentos (achado da revisão de segurança): sem eles, um ffmpeg
+ * ou um upload travado seguraria a fila inteira — nenhuma pendente chegaria aos
+ * 30 min do "perdida", e os WAVs se acumulariam no Asterisk. 2 h de WAV convertem
+ * em bem menos de 10 min; 21 MB sobem em bem menos de 5.
+ */
+export const PRAZO_DA_CONVERSAO_MS = 10 * 60_000;
+export const PRAZO_DO_UPLOAD_MS = 5 * 60_000;
 
 export interface AriDaGravacao {
   gravarPonte(ponte: string, nome: string, tetoS: number): Promise<unknown>;
@@ -69,7 +78,9 @@ export interface BancoDaGravacao {
   anexar(p: Parameters<typeof repo.anexarGravacao>[1]): Promise<"anexada" | "anonimizada">;
   falhar(org: string, vcId: string): Promise<boolean>;
   descartar(org: string, vcId: string): Promise<void>;
-  estados(vcIds: string[]): Promise<Map<string, EstadoDaGravacao | null>>;
+  estados(vcIds: string[]): Promise<Map<string, EstadoParaAsOrfas>>;
+  /** A feita cujo aviso falhou: a ligação volta a "não gravada". */
+  desmarcar(org: string, vcId: string): Promise<void>;
 }
 
 export interface StorageDaGravacao {
@@ -99,8 +110,23 @@ const TERMINAIS: ReadonlySet<EstadoDaGravacao> = new Set<EstadoDaGravacao>(["sto
 
 const mensagemDe = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 200);
 
+/** Corre `fn` com prazo; vencido, rejeita com `motivo` (o que estava em curso segue por conta própria). */
+export function comPrazo<T>(fn: () => Promise<T>, ms: number, motivo: string): Promise<T> {
+  let relogio: ReturnType<typeof setTimeout> | undefined;
+  const estouro = new Promise<never>((_, rejeitar) => {
+    relogio = setTimeout(() => rejeitar(new Error(motivo)), ms);
+  });
+  return Promise.race([fn(), estouro]).finally(() => clearTimeout(relogio));
+}
+
 export class GravacoesDaTelefonia implements PortaGravacao {
   private readonly emCurso = new Set<string>();
+  /**
+   * UMA gravação por vez no trecho pesado (baixar, converter, subir): várias
+   * ligações terminando juntas não abrem N ffmpeg e N leituras de ~21 MB dentro
+   * dos 512 MB do worker (os filhos contam na mesma cota).
+   */
+  private serie: Promise<unknown> = Promise.resolve();
   /** As que já tiveram a falha registrada no log: tentar de novo a cada minuto não repete a linha. */
   private readonly jaAvisadas = new Set<string>();
   private readonly agora: () => Date;
@@ -137,13 +163,25 @@ export class GravacoesDaTelefonia implements PortaGravacao {
     return false;
   }
 
-  async tocarAvisoNaPonte(ponte: string, midia: string): Promise<boolean> {
-    await this.p.ari.tocarNaPonte(ponte, midia);
-    return true;
+  async tocarAvisoNaPonte(ponte: string, midia: string): Promise<string | null> {
+    const r = (await this.p.ari.tocarNaPonte(ponte, midia)) as { id?: unknown } | undefined;
+    return typeof r?.id === "string" ? r.id : null;
   }
 
   async parar(vcId: string): Promise<void> {
     await this.p.ari.pararGravacao(nomeNoAsterisk(vcId));
+  }
+
+  /**
+   * O aviso da feita falhou DEPOIS de a gravação começar: quem não ouviu o aviso
+   * não é gravado (D3). Para, apaga o arquivo e a ligação volta a "não gravada".
+   */
+  async descartar(org: string, vcId: string): Promise<void> {
+    const nome = nomeNoAsterisk(vcId);
+    await this.p.ari.pararGravacao(nome).catch(() => undefined);
+    await this.p.ari.apagarGravacao(nome).catch(() => undefined);
+    await this.p.banco.desmarcar(org, vcId);
+    this.p.log.warn("telefonia: o aviso de gravação falhou na ligação feita — a gravação foi descartada", { voice_call: vcId });
   }
 
   aoEncerrar(org: string, vcId: string): void {
@@ -161,6 +199,16 @@ export class GravacoesDaTelefonia implements PortaGravacao {
   async processar(g: GravacaoPendente): Promise<DesfechoDoProcessamento> {
     if (this.emCurso.has(g.vcId)) return "em_curso";
     this.emCurso.add(g.vcId);
+    try {
+      const vez = this.serie.then(() => this.processarAgora(g));
+      this.serie = vez.catch(() => undefined);
+      return await vez;
+    } finally {
+      this.emCurso.delete(g.vcId);
+    }
+  }
+
+  private async processarAgora(g: GravacaoPendente): Promise<DesfechoDoProcessamento> {
     const idade = () => this.agora().getTime() - g.fimEm.getTime();
     let dir: string | null = null;
     try {
@@ -179,10 +227,10 @@ export class GravacoesDaTelefonia implements PortaGravacao {
           ? await this.perder(g, "arquivo_ausente")
           : "esperando";
       }
-      await this.p.conversor.converter(wav, mp3);
+      await comPrazo(() => this.p.conversor.converter(wav, mp3), PRAZO_DA_CONVERSAO_MS, "conversao_sem_resposta");
       const bytes = (await stat(mp3)).size;
       const caminho = storagePathFor(g.organizationId, msg.conversationId, msg.id, MIME_DA_GRAVACAO);
-      await this.p.storage.subir(caminho, mp3, MIME_DA_GRAVACAO);
+      await comPrazo(() => this.p.storage.subir(caminho, mp3, MIME_DA_GRAVACAO), PRAZO_DO_UPLOAD_MS, "upload_sem_resposta");
       const r = await this.p.banco.anexar({
         organizationId: g.organizationId,
         vcId: g.vcId,
@@ -193,13 +241,18 @@ export class GravacoesDaTelefonia implements PortaGravacao {
       });
       if (r === "anonimizada") {
         // A conversa foi anonimizada no meio do caminho: o arquivo recém-subido
-        // não pode ficar sem dono no Storage.
-        await this.p.storage.apagar(caminho).catch((e) =>
-          this.p.log.warn("telefonia: gravação de conversa anonimizada não apagada do Storage", {
+        // não pode ficar sem dono no Storage. Se o Storage não apaga agora, a
+        // ligação segue `recording` e a próxima passada tenta de novo (subir outra
+        // vez é upsert; apagar de novo, idempotente).
+        try {
+          await this.p.storage.apagar(caminho);
+        } catch (e) {
+          this.p.log.warn("telefonia: gravação de conversa anonimizada não apagada do Storage — tenta de novo", {
             voice_call: g.vcId,
             erro: mensagemDe(e),
-          }),
-        );
+          });
+          return "esperando";
+        }
         await this.p.banco.descartar(g.organizationId, g.vcId);
       }
       // O WAV no Asterisk já não serve. Se o apagar falhar, a passada das órfãs o pega.
@@ -240,10 +293,11 @@ export class GravacoesDaTelefonia implements PortaGravacao {
 
   /**
    * A passada (a cada 60 s, fora da fila serial): as pendentes, em série, e
-   * depois as órfãs — arquivos `g-<id>` no Asterisk cuja ligação já está num
-   * estado TERMINAL (guardada, perdida, expirada). Nunca apaga o de ligação
-   * `recording` nem o de ligação desconhecida: um arquivo pode existir um
-   * instante antes de o banco marcar a ligação (`comecar`).
+   * depois as órfãs — arquivos `g-<id>` no Asterisk que ninguém vai guardar:
+   * de ligação num estado TERMINAL (guardada, perdida, expirada), de ligação
+   * ENCERRADA que nunca foi marcada (o `comecar` que não limpou), ou de ligação
+   * que não existe mais. Nunca o de ligação `recording`, nem o de ligação viva
+   * ainda sem marca: o arquivo existe um instante antes de o banco a marcar.
    */
   async passada(): Promise<void> {
     const pendentes = await this.p.banco.pendentes(LOTE_DA_PASSADA);
@@ -260,8 +314,9 @@ export class GravacoesDaTelefonia implements PortaGravacao {
     if (porId.size === 0) return;
     const estados = await this.p.banco.estados([...porId.keys()]);
     for (const [id, nome] of porId) {
-      const estado = estados.get(id);
-      if (!estado || !TERMINAIS.has(estado)) continue;
+      const e = estados.get(id);
+      const lixo = !e || (e.estado !== null && TERMINAIS.has(e.estado)) || (e.estado === null && e.encerrada);
+      if (!lixo) continue;
       await this.p.ari
         .apagarGravacao(nome)
         .catch((e) => this.p.log.warn("telefonia: gravação órfã não apagada", { voice_call: id, erro: mensagemDe(e) }));
@@ -271,16 +326,24 @@ export class GravacoesDaTelefonia implements PortaGravacao {
 
 // ─── as portas de verdade (o worker) ─────────────────────────────────────────
 
-/** Roda ffmpeg; rejeita com a cauda do stderr se sair diferente de zero. */
+/** Roda ffmpeg; rejeita com a cauda do stderr se sair diferente de zero — ou o mata no prazo. */
 function rodarFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("ffmpeg", ["-nostdin", "-y", "-hide_banner", "-loglevel", "error", ...args]);
     let stderr = "";
+    const relogio = setTimeout(() => proc.kill("SIGKILL"), PRAZO_DA_CONVERSAO_MS);
     proc.stderr.on("data", (d: Buffer) => {
       stderr = (stderr + d.toString()).slice(-2_000);
     });
-    proc.on("error", (err) => reject(new Error(`ffmpeg_spawn_failed: ${err.message}`)));
-    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg_exit_${code}: ${stderr.slice(-200)}`))));
+    proc.on("error", (err) => {
+      clearTimeout(relogio);
+      reject(new Error(`ffmpeg_spawn_failed: ${err.message}`));
+    });
+    proc.on("close", (code, sinal) => {
+      clearTimeout(relogio);
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg_exit_${code ?? sinal}: ${stderr.slice(-200)}`));
+    });
   });
 }
 
@@ -331,6 +394,7 @@ export function gravacoesDoWorker(pool: pg.Pool, ari: ClienteAri, log: Registro)
       falhar: (org, id) => repo.falharGravacao(pool, org, id),
       descartar: (org, id) => repo.descartarGravacao(pool, org, id),
       estados: (ids) => repo.estadosDasGravacoes(pool, ids),
+      desmarcar: (org, id) => repo.desmarcarGravacao(pool, org, id),
     },
     storage: storageDaInstalacao(),
     conversor: conversorFfmpeg,

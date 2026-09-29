@@ -110,6 +110,13 @@ function oQueAUraFez(menu: MenuDaLigacao, t: (texto: string) => string): { situa
   return { situacao: menu.desfecho, texto: preencher(texto, valores) };
 }
 
+/**
+ * O id da ligação vem do metadado da mensagem — e a URL da escuta é montada com
+ * ele: só uuid vira pedido (achado da revisão de segurança). O resto vê "Ligação
+ * gravada", sem botão.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /** O que a linha da gravação está fazendo agora, na tela. */
 type Escuta = { fase: "parada" } | { fase: "pedindo" } | { fase: "tocando"; url: string } | { fase: "erro" };
 
@@ -152,7 +159,7 @@ function LinhaDaGravacao({
       </p>
     );
   }
-  if (!podeOuvir) {
+  if (!podeOuvir || !UUID.test(vcId)) {
     return (
       <p className={classe} data-ligacao-gravacao="pronta">
         {t("Ligação gravada")}
@@ -164,7 +171,9 @@ function LinhaDaGravacao({
   const ouvir = async () => {
     setEscuta({ fase: "pedindo" });
     try {
-      const r = await apiClient.get<{ data: { url: string } }>(`/api/v1/telefonia/chamadas/${vcId}/gravacao`);
+      const r = await apiClient.get<{ data: { url: string } }>(
+        `/api/v1/telefonia/chamadas/${encodeURIComponent(vcId)}/gravacao`,
+      );
       setEscuta({ fase: "tocando", url: r.data.url });
     } catch {
       setEscuta({ fase: "erro" });

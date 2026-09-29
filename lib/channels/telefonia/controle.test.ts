@@ -1875,7 +1875,13 @@ describe("gravação das ligações (F3)", () => {
     };
     tocarAvisoNaPonte = async (ponte: string, midia: string) => {
       this.chamadas.push(["tocarAvisoNaPonte", ponte, midia]);
-      return !this.tocarNaPonteFalha;
+      return this.tocarNaPonteFalha ? null : "aviso-pb-1";
+    };
+    descartar = async (org: string, vcId: string) => {
+      this.chamadas.push(["descartar", org, vcId]);
+      // Como `desmarcarGravacao`: a ligação volta a "não gravada".
+      const l = banco.ligacoes.get(vcId);
+      if (l) l.recording_status = null;
     };
     parar = async (vcId: string) => {
       this.chamadas.push(["parar", vcId]);
@@ -1966,6 +1972,15 @@ describe("gravação das ligações (F3)", () => {
       expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
       await ramalAtende(ari.ultimoOriginado());
       await destruir("cli-1");
+      expect(gravacao.nomes()).toEqual(["politica"]);
+    });
+
+    it("o fim do aviso se perde (sem PlaybackFinished): o relógio segue a ligação, mas ela NÃO é gravada, e a Central não é avisada", async () => {
+      await entrar();
+      await vi.advanceTimersByTimeAsync(AVISO_DE_GRAVACAO.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS + 10);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      await ramalAtende(ari.ultimoOriginado());
       expect(gravacao.nomes()).toEqual(["politica"]);
     });
 
@@ -2081,6 +2096,30 @@ describe("gravação das ligações (F3)", () => {
       const nomesAri = ari.nomes();
       // Parada antes de a ponte cair.
       expect(nomesAri.indexOf("destruirPonte")).toBeGreaterThan(-1);
+    });
+
+    it("o aviso da feita FALHA depois de começar: a gravação que começou junto é descartada", async () => {
+      const { perna } = await pedido();
+      await atende(perna);
+      await ctl.tratar({
+        type: "PlaybackFinished",
+        playback: { id: "aviso-pb-1", media_uri: SOM_DO_AVISO, target_uri: "bridge:p-x", language: "en", state: "failed" },
+      });
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar", "descartar"]);
+      // Descartada, o fim não pede processamento nem para a gravação de novo.
+      await destruir(perna);
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar", "descartar"]);
+    });
+
+    it("o aviso da feita tocou até o fim: a gravação segue", async () => {
+      const { perna } = await pedido();
+      await atende(perna);
+      await ctl.tratar({
+        type: "PlaybackFinished",
+        playback: { id: "aviso-pb-1", media_uri: SOM_DO_AVISO, target_uri: "bridge:p-x", language: "en", state: "done" },
+      });
+      await destruir(perna);
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar", "parar", "aoEncerrar"]);
     });
 
     it("ninguém atende do outro lado: sem aviso, sem gravação", async () => {

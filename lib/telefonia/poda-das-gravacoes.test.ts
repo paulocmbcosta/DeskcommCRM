@@ -14,8 +14,8 @@ import { podarGravacoesVencidas, type GravacaoVencida } from "./poda-das-gravaco
 const ORG_A = "00000000-0000-4000-8000-00000000000a";
 const ORG_B = "00000000-0000-4000-8000-00000000000b";
 
-function vencida(i: number, org = ORG_A, caminho: string | null = `${org}/c/m${i}.mp3`): GravacaoVencida {
-  return { vcId: `vc-${i}`, organizationId: org, mensagemId: `m-${i}`, caminho };
+function vencida(i: number, org = ORG_A, caminho: string | null = `${org}/c/m-${i}.mp3`): GravacaoVencida {
+  return { vcId: `vc-${i}`, organizationId: org, mensagemId: `m-${i}`, conversationId: "c", caminho };
 }
 
 /** Um banco que entrega as vencidas em lotes e registra as marcações, na ordem. */
@@ -27,7 +27,13 @@ function banco(lotes: GravacaoVencida[][], linha: string[]) {
         linha.push("ler");
         const r = lotes.shift() ?? [];
         return {
-          rows: r.map((g) => ({ id: g.vcId, organization_id: g.organizationId, mensagem_id: g.mensagemId, caminho: g.caminho })),
+          rows: r.map((g) => ({
+            id: g.vcId,
+            organization_id: g.organizationId,
+            conversation_id: g.conversationId,
+            mensagem_id: g.mensagemId,
+            caminho: g.caminho,
+          })),
           rowCount: r.length,
         };
       }
@@ -56,7 +62,7 @@ describe("podarGravacoesVencidas", () => {
       },
     });
     expect(linha).toEqual(["ler", "remover", "marcar", "marcar"]);
-    expect(removidos).toEqual([[`${ORG_A}/c/m1.mp3`, `${ORG_B}/c/m2.mp3`]]);
+    expect(removidos).toEqual([[`${ORG_A}/c/m-1.mp3`, `${ORG_B}/c/m-2.mp3`]]);
     expect(marcadas).toEqual(["vc-1", "vc-2"]);
     expect([...r.porOrganizacao]).toEqual([
       [ORG_A, 1],
@@ -106,6 +112,23 @@ describe("podarGravacoesVencidas", () => {
     expect(linha).toEqual(["ler"]);
     expect(chamou).toBe(false);
     expect(r.porOrganizacao.size).toBe(0);
+  });
+
+  it("caminho que não é o da gravação (ponteiro trocado): NÃO é removido — só a marcação", async () => {
+    const linha: string[] = [];
+    let chamou = false;
+    const { db, marcadas } = banco([[vencida(1, ORG_A, `${ORG_A}/c/outra-midia.jpg`)]], linha);
+    await podarGravacoesVencidas({
+      db,
+      agora: new Date(),
+      storage: {
+        remover: async () => {
+          chamou = true;
+        },
+      },
+    });
+    expect(chamou).toBe(false);
+    expect(marcadas).toEqual(["vc-1"]);
   });
 
   it("vencida sem arquivo na mensagem (anonimizada): marca sem pedir remoção vazia", async () => {

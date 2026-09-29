@@ -706,7 +706,7 @@ jobs:
       # passa nesta parte. Spec que dependa da telefonia mora AQUI.
       # `telefonia-gravacao` (F3, DYD-53) segue o mesmo desenho: organização
       # própria, admin e atendente sem MFA, e a ligação gravada SEMEADA (nada
-      # escuta a ARI); sobe um WAV de 1 s no Storage local para o player tocar.
+      # escuta a ARI); sobe um MP3 de 1 s no Storage local para o player tocar.
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts

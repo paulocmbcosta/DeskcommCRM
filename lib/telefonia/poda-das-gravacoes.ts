@@ -15,14 +15,28 @@
  * que desligou a telefonia depois de gravar.
  */
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { storagePathFor } from "@/lib/messaging/media/types";
 
-import { RETENCAO_PADRAO_DIAS } from "./gravacao";
+import { MIME_DA_GRAVACAO, RETENCAO_PADRAO_DIAS } from "./gravacao";
 
 export interface GravacaoVencida {
   vcId: string;
   organizationId: string;
   mensagemId: string | null;
+  /** A conversa da LIGAÇÃO — a mensagem só vem se morar nela. */
+  conversationId: string | null;
   caminho: string | null;
+}
+
+/**
+ * O caminho só é removido se for EXATAMENTE o da gravação
+ * (`<org>/<conversa da ligação>/<mensagem>.mp3`): a poda roda com a service key,
+ * e um ponteiro trocado a faria apagar outro objeto do bucket (achado da revisão
+ * de segurança — a trava do banco já impede a troca; esta é a segunda camada).
+ */
+export function caminhoDaGravacao(g: GravacaoVencida): string | null {
+  if (!g.caminho || !g.mensagemId || !g.conversationId) return null;
+  return g.caminho === storagePathFor(g.organizationId, g.conversationId, g.mensagemId, MIME_DA_GRAVACAO) ? g.caminho : null;
 }
 
 export interface StorageDaPoda {
@@ -45,14 +59,16 @@ export async function gravacoesVencidas(db: Queryable, agora: Date, limite: numb
   const { rows } = await db.query<{
     id: string;
     organization_id: string;
+    conversation_id: string | null;
     mensagem_id: string | null;
     caminho: string | null;
   }>(
-    `select v.id, v.organization_id, m.id as mensagem_id, m.media_storage_path as caminho
+    `select v.id, v.organization_id, v.conversation_id, m.id as mensagem_id, m.media_storage_path as caminho
        from voice_calls v
        left join phone_settings s on s.organization_id = v.organization_id
        left join messages m
          on m.organization_id = v.organization_id and m.external_id = 'ligacao:' || v.id::text
+        and m.conversation_id = v.conversation_id
       where v.recording_status = 'stored'
         and v.ended_at < $1::timestamptz - make_interval(days => coalesce(s.recording_retention_days, $3))
       order by v.ended_at
@@ -62,6 +78,7 @@ export async function gravacoesVencidas(db: Queryable, agora: Date, limite: numb
   return rows.map((r) => ({
     vcId: r.id,
     organizationId: r.organization_id,
+    conversationId: r.conversation_id,
     mensagemId: r.mensagem_id,
     caminho: r.caminho,
   }));
@@ -103,7 +120,7 @@ export async function podarGravacoesVencidas(d: {
   for (let i = 0; i < maxLotes; i += 1) {
     const vencidas = await gravacoesVencidas(d.db, d.agora, lote);
     if (vencidas.length === 0) return { porOrganizacao, temResto: false, falhas };
-    const caminhos = vencidas.map((v) => v.caminho).filter((c): c is string => Boolean(c));
+    const caminhos = vencidas.map(caminhoDaGravacao).filter((c): c is string => c !== null);
     try {
       if (caminhos.length > 0) await d.storage.remover(caminhos);
     } catch (e) {

@@ -27,6 +27,8 @@
 -- 4. `agent_inbox_items.kind` ganha `phone_recording_failed`: a gravação de uma
 --    ligação não pôde ser guardada em 30 min (serviço de telefonia fora, Storage
 --    fora, conversor quebrado). Sem ele a falha ficaria só no log do worker.
+-- 5. `messages`: a mensagem da ligação passa a ser só do sistema (trigger
+--    `trg_mensagem_de_ligacao_e_do_sistema`) — o porquê no bloco 5, abaixo.
 --
 -- Índices parciais: o processamento procura as gravações PENDENTES (poucas, e o
 -- histórico inteiro não entra no índice), e a poda diária procura as GUARDADAS
@@ -116,6 +118,76 @@ comment on column public.voice_calls.recording_status is
   'Ciclo da gravação (fonte da verdade): recording (gravando ou esperando ser guardada), stored (arquivo na mensagem da ligação), failed (perdida), expired (apagada pela retenção). NULL = não gravada. Só sip_trunk. A projeção para a tela fica em messages.metadata.voice_call.gravacao.';
 comment on column public.voice_calls.recording_notice_at is
   'Quando o aviso de gravação tocou para quem estava na linha (recebida: ao fim da fala, antes do menu/fila; feita: ao atender). NULL = não houve aviso, e então a ligação não foi gravada.';
+
+-- 5. messages — a mensagem da LIGAÇÃO é do sistema ------------------------------
+-- (achado da revisão de segurança antes do merge.) A gravação passou a depender de
+-- três colunas da mensagem da ligação — `external_id`, `media_storage_path` e
+-- `metadata` —, e qualquer membro da organização, inclusive `viewer`, escreve em
+-- `messages` pela REST (as policies só conferem a organização). Sem esta trava, um
+-- atendente de um time inseria uma mensagem `ligacao:<id>` na conversa DELE e
+-- recebia a gravação da ligação de outro time; ou copiava o caminho do arquivo para
+-- outra mensagem e o ouvia pela rota genérica de mídia, sem auditoria.
+--
+-- A regra vale só para o USUÁRIO FINAL pela REST (o PostgREST assume
+-- `authenticated`/`anon`); o worker (postgres), o app (service_role) e as funções
+-- security definer — a cascata LGPD inclusive — escrevem como sempre:
+--  - criar mensagem `ligacao:*`: recusado;
+--  - alterar a mensagem da ligação: as colunas que a identificam e apontam o
+--    arquivo são mantidas (o resto — lida, status — segue alterável, e um UPDATE em
+--    lote não quebra por causa dela);
+--  - apagar a mensagem da ligação: ignorado (o arquivo ficaria sem dono);
+--  - pôr como mídia de outra mensagem o arquivo de uma gravação: recusado.
+create or replace function public.fn_mensagem_de_ligacao_e_do_sistema()
+returns trigger language plpgsql set search_path = public as $$
+declare
+  v_alvo text;
+begin
+  if current_user not in ('authenticated', 'anon') then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+  if tg_op = 'DELETE' then
+    if old.external_id like 'ligacao:%' then
+      return null;
+    end if;
+    return old;
+  end if;
+  if tg_op = 'UPDATE' and old.external_id like 'ligacao:%' then
+    new.organization_id := old.organization_id;
+    new.conversation_id := old.conversation_id;
+    new.contact_id := old.contact_id;
+    new.external_id := old.external_id;
+    new.type := old.type;
+    new.body := old.body;
+    new.metadata := old.metadata;
+    new.media_url := old.media_url;
+    new.media_mime := old.media_mime;
+    new.media_size_bytes := old.media_size_bytes;
+    new.media_storage_path := old.media_storage_path;
+    return new;
+  end if;
+  if new.external_id like 'ligacao:%' then
+    raise exception 'a mensagem de uma ligação só é escrita pelo sistema' using errcode = '42501';
+  end if;
+  if new.media_storage_path is not null
+     and (tg_op = 'INSERT' or new.media_storage_path is distinct from old.media_storage_path) then
+    v_alvo := substring(new.media_storage_path
+                        from '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.[A-Za-z0-9]+$');
+    if v_alvo is not null
+       and exists (select 1 from public.messages c where c.id = v_alvo::uuid and c.external_id like 'ligacao:%') then
+      raise exception 'o arquivo de uma gravação não pode ser mídia de outra mensagem' using errcode = '42501';
+    end if;
+  end if;
+  return new;
+end $$;
+-- Função de trigger não é chamada por RPC (o PostgREST não expõe `returns trigger`),
+-- mas a regra 9 vale para toda função nova em `public`: as duas origens revogadas.
+revoke execute on function public.fn_mensagem_de_ligacao_e_do_sistema() from public, anon;
+grant execute on function public.fn_mensagem_de_ligacao_e_do_sistema() to authenticated, service_role;
+
+drop trigger if exists trg_mensagem_de_ligacao_e_do_sistema on public.messages;
+create trigger trg_mensagem_de_ligacao_e_do_sistema
+  before insert or update or delete on public.messages
+  for each row execute function public.fn_mensagem_de_ligacao_e_do_sistema();
 
 -- 4. agent_inbox_items.kind — a LISTA INTEIRA: a última migration que reconstrói
 --    a constraint termina igual ao baseline (tests/unit/kind-check-migration-x-baseline.test.ts).

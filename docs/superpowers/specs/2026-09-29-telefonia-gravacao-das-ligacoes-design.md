@@ -124,7 +124,24 @@ Uma ligação por vez (`Set` do que está em curso). Regras:
   de ligação: sem isso, ela serviria a gravação sem auditoria nem piso de papel.
 - Anonimizar o contato apaga a gravação (cascata existente) e limpa o
   metadado; a exportação LGPD passa a dizer quais ligações foram gravadas.
-- Nenhuma função SQL nova exposta: a poda usa o pool do servidor.
+- Nenhuma função SQL nova exposta por RPC: a poda usa o pool do servidor.
+
+### 4.1 O que a revisão de segurança achou antes do merge (e o conserto)
+
+Revisão independente em 2026-09-30, antes de sair do rascunho. A raiz das mais
+graves é ANTERIOR à feature: qualquer membro da organização, inclusive `viewer`,
+insere, altera e apaga linhas de `messages` pela REST (as policies só conferem a
+organização), e a gravação passou a depender de três colunas dessa tabela.
+
+| Achado | Conserto |
+|---|---|
+| Uma mensagem `ligacao:<id>` plantada na conversa de outro time recebia a gravação (fura a visibilidade por time e a anonimização) | Trigger `trg_mensagem_de_ligacao_e_do_sistema` (0289): usuário final não cria `ligacao:*`, não altera as colunas que identificam a ligação e apontam o arquivo, não a apaga, e não põe o arquivo de uma gravação como mídia de outra mensagem. E o worker só anexa à mensagem da CONVERSA DA LIGAÇÃO. |
+| A rota genérica de mídia servia a gravação copiada para outra mensagem | O mesmo trigger; e a escuta exige a ligação `stored` na mesma conversa e o caminho EXATO `<org>/<conversa>/<mensagem>.mp3`. |
+| A poda (service key) apagaria qualquer caminho que estivesse na linha | Só remove o caminho canônico, da conversa da ligação. |
+| Corrida entre a anonimização e o anexar deixava arquivo órfão | O anexar é uma transação com a MESMA trava da cascata (`fn_service_lock`) e confere `contacts.is_anonymized`. |
+| O relógio de reserva dava o aviso como ouvido; o aviso da feita que falhasse depois de aceito não era visto | Para o papel `gravacao`, o relógio conta "não tocou" (sem aviso na Central); na feita, o `PlaybackFinished failed` do aviso descarta a gravação. |
+| Sem prazo no ffmpeg/upload, N conversões em paralelo, órfãs sem estado nunca apagadas | Prazos (10 min / 5 min), uma conversão por vez, e a órfã de ligação encerrada sem marca é apagada. |
+| O cartão montava a URL com um id vindo do metadado | Só uuid vira pedido, codificado. |
 
 ## 5. Fora da v1 (e onde encaixa)
 

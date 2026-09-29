@@ -305,11 +305,56 @@ describe("o ciclo da gravação na ligação", () => {
     expect(rows[0].n).toBe(1);
   });
 
-  it("estadosDasGravacoes: o estado de cada ligação pedida", async () => {
+  it("estadosDasGravacoes: o estado de cada ligação pedida, e se ela já acabou", async () => {
     const { vcId } = await ligacao(ORG, NUMERO);
     const estados = await gravacoes.estadosDasGravacoes(pool, [vcId, "c0de0289-9999-4000-8000-000000000000"]);
-    expect(estados.get(vcId)).toBeNull();
+    expect(estados.get(vcId)).toEqual({ estado: null, encerrada: false });
     expect(estados.has("c0de0289-9999-4000-8000-000000000000")).toBe(false);
+    await repo.encerrarLigacao(pool, ORG, vcId, "cliente_desligou");
+    expect((await gravacoes.estadosDasGravacoes(pool, [vcId])).get(vcId)).toEqual({ estado: null, encerrada: true });
+  });
+
+  it("mensagem `ligacao:<id>` plantada em OUTRA conversa: não é a mensagem da ligação (a gravação não vai para ela)", async () => {
+    const { vcId } = await ligacao(ORG, NUMERO);
+    const outra = await ligacao(ORG, NUMERO);
+    await gravacoes.marcarGravando(pool, ORG, vcId, new Date());
+    // Plantada como o sistema (a REST já é barrada pelo trigger — provado abaixo).
+    await pool.query(
+      `insert into messages (organization_id, conversation_id, contact_id, channel_session_id, external_id, direction, type, body,
+                             sent_via, status, metadata)
+       values ($1, $2, $3, $4, $5, 'outbound', 'system', 'plantada', 'system', 'sent', '{"voice_call":{}}')`,
+      [ORG, outra.conversationId, outra.contactId, NUMERO, `ligacao:${vcId}`],
+    );
+    expect(await gravacoes.mensagemDaLigacao(pool, ORG, vcId)).toBeNull();
+  });
+
+  it("anexar com o contato já anonimizado: nada é escrito", async () => {
+    const { vcId, contactId } = await ligacao(ORG, NUMERO);
+    await gravacoes.marcarGravando(pool, ORG, vcId, new Date());
+    await encerrarERegistrar(ORG, vcId);
+    const msg = await gravacoes.mensagemDaLigacao(pool, ORG, vcId);
+    await pool.query("update contacts set is_anonymized = true where id = $1", [contactId]);
+    expect(
+      await gravacoes.anexarGravacao(pool, {
+        organizationId: ORG,
+        vcId,
+        mensagemId: msg!.id,
+        caminho: `${ORG}/${msg!.conversationId}/${msg!.id}.mp3`,
+        bytes: 1,
+        duracaoMs: 1,
+      }),
+    ).toBe("anonimizada");
+    expect((await metadadoDa(ORG, vcId))?.media_storage_path).toBeNull();
+    expect((await estadoDa(vcId))?.recording_status).toBe("recording");
+  });
+
+  it("desmarcarGravacao: a feita cujo aviso falhou volta a 'não gravada' (só a que ainda grava)", async () => {
+    const { vcId } = await ligacao(ORG, NUMERO);
+    await gravacoes.marcarGravando(pool, ORG, vcId, new Date());
+    await gravacoes.desmarcarGravacao(pool, OUTRA, vcId);
+    expect((await estadoDa(vcId))?.recording_status).toBe("recording");
+    await gravacoes.desmarcarGravacao(pool, ORG, vcId);
+    expect(await estadoDa(vcId)).toEqual({ recording_status: null, recording_notice_at: null });
   });
 });
 
@@ -386,5 +431,144 @@ describe("retenção — a poda diária das gravações vencidas", () => {
     expect((await poda.gravacoesVencidas(pool, new Date(), 100)).map((x) => x.vcId)).not.toContain(vcId);
     await pool.query("update voice_calls set ended_at = now() - interval '91 days' where id = $1", [vcId]);
     expect((await poda.gravacoesVencidas(pool, new Date(), 100)).map((x) => x.vcId)).toContain(vcId);
+  });
+});
+
+describe("a mensagem da ligação é do SISTEMA — pela REST, com o JWT de uma atendente (trigger da 0289)", () => {
+  /** Roda como a REST roda: papel `authenticated` e o JWT da Ana. */
+  async function comoAna<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      await c.query("set local role authenticated");
+      await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: ANA, role: "authenticated" })]);
+      const r = await fn(c);
+      await c.query("commit");
+      return r;
+    } catch (e) {
+      await c.query("rollback").catch(() => undefined);
+      throw e;
+    } finally {
+      c.release();
+    }
+  }
+
+  let gravada: { vcId: string; conversationId: string; contactId: string; msgId: string; caminho: string };
+
+  beforeAll(async () => {
+    await pool.query(
+      `insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+       values ($1, $2, 'agent', now()) on conflict do nothing`,
+      [ANA, ORG],
+    );
+    const l = await ligacao(ORG, NUMERO);
+    await gravacoes.marcarGravando(pool, ORG, l.vcId, new Date());
+    await encerrarERegistrar(ORG, l.vcId);
+    const msg = await gravacoes.mensagemDaLigacao(pool, ORG, l.vcId);
+    const caminho = `${ORG}/${msg!.conversationId}/${msg!.id}.mp3`;
+    await gravacoes.anexarGravacao(pool, { organizationId: ORG, vcId: l.vcId, mensagemId: msg!.id, caminho, bytes: 1, duracaoMs: 1_000 });
+    gravada = { vcId: l.vcId, conversationId: l.conversationId, contactId: l.contactId, msgId: msg!.id, caminho };
+  });
+
+  it("controle: a Ana enxerga a mensagem da ligação (senão as provas abaixo seriam vazias)", async () => {
+    const n = await comoAna(async (c) => (await c.query("select 1 from messages where id = $1", [gravada.msgId])).rowCount);
+    expect(n).toBe(1);
+  });
+
+  it("criar mensagem `ligacao:*` é recusado — e a MESMA inserção com outro external_id passa (controle: não é a RLS)", async () => {
+    const outra = await ligacao(ORG, NUMERO);
+    await comoAna((c) =>
+      c.query(
+        `insert into messages (organization_id, conversation_id, contact_id, channel_session_id, external_id, direction, type, body,
+                               sent_via, status, metadata)
+         values ($1, $2, $3, $4, $5, 'outbound', 'system', 'controle', 'system', 'sent', '{"voice_call":{}}')`,
+        [ORG, outra.conversationId, outra.contactId, NUMERO, `controle:${outra.vcId}`],
+      ),
+    );
+    await expect(
+      comoAna((c) =>
+        c.query(
+          `insert into messages (organization_id, conversation_id, contact_id, channel_session_id, external_id, direction, type, body,
+                                 sent_via, status, metadata)
+           values ($1, $2, $3, $4, $5, 'outbound', 'system', 'forjada', 'system', 'sent', '{"voice_call":{}}')`,
+          [ORG, outra.conversationId, outra.contactId, NUMERO, `ligacao:${outra.vcId}`],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("alterar a mensagem da ligação: as colunas que a identificam e apontam o arquivo ficam; o resto muda", async () => {
+    await comoAna((c) =>
+      c.query(
+        `update messages set media_storage_path = $2, metadata = '{}'::jsonb, external_id = 'x', body = 'mexi',
+                             status = 'read'
+          where id = $1`,
+        [gravada.msgId, `${ORG}/${gravada.conversationId}/outra.jpg`],
+      ),
+    );
+    const { rows } = await pool.query(
+      "select media_storage_path, external_id, body, status, metadata from messages where id = $1",
+      [gravada.msgId],
+    );
+    expect(rows[0].media_storage_path).toBe(gravada.caminho);
+    expect(rows[0].external_id).toBe(`ligacao:${gravada.vcId}`);
+    expect(rows[0].body).not.toBe("mexi");
+    expect(rows[0].metadata.voice_call.gravacao.situacao).toBe("pronta");
+    expect(rows[0].status).toBe("read");
+  });
+
+  it("apagar a mensagem da ligação é ignorado (o arquivo ficaria sem dono) — e apagar uma comum passa (controle)", async () => {
+    await comoAna((c) => c.query("delete from messages where id = $1", [gravada.msgId]));
+    const { rowCount } = await pool.query("select 1 from messages where id = $1", [gravada.msgId]);
+    expect(rowCount).toBe(1);
+
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into messages (organization_id, conversation_id, contact_id, channel_session_id, direction, type, body, sent_via, status)
+       values ($1, $2, $3, $4, 'outbound', 'text', 'para apagar', 'user', 'sent') returning id`,
+      [ORG, gravada.conversationId, gravada.contactId, NUMERO],
+    );
+    await comoAna((c) => c.query("delete from messages where id = $1", [rows[0]!.id]));
+    expect((await pool.query("select 1 from messages where id = $1", [rows[0]!.id])).rowCount).toBe(0);
+  });
+
+  it("pôr o arquivo da gravação como mídia de OUTRA mensagem é recusado — na criação e na alteração", async () => {
+    // Controle: a mesma inserção com a mídia de outro arquivo passa.
+    await comoAna((c) =>
+      c.query(
+        `insert into messages (organization_id, conversation_id, contact_id, channel_session_id, direction, type, body,
+                               sent_via, status, media_storage_path)
+         values ($1, $2, $3, $4, 'outbound', 'audio', 'controle', 'user', 'sent', $5)`,
+        [ORG, gravada.conversationId, gravada.contactId, NUMERO, `${ORG}/${gravada.conversationId}/audio-comum.ogg`],
+      ),
+    );
+    await expect(
+      comoAna((c) =>
+        c.query(
+          `insert into messages (organization_id, conversation_id, contact_id, channel_session_id, direction, type, body,
+                                 sent_via, status, media_storage_path)
+           values ($1, $2, $3, $4, 'outbound', 'audio', 'copiada', 'user', 'sent', $5)`,
+          [ORG, gravada.conversationId, gravada.contactId, NUMERO, gravada.caminho],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into messages (organization_id, conversation_id, contact_id, channel_session_id, direction, type, body, sent_via, status)
+       values ($1, $2, $3, $4, 'outbound', 'text', 'comum', 'user', 'sent') returning id`,
+      [ORG, gravada.conversationId, gravada.contactId, NUMERO],
+    );
+    await expect(
+      comoAna((c) => c.query("update messages set media_storage_path = $2 where id = $1", [rows[0]!.id, gravada.caminho])),
+    ).rejects.toMatchObject({ code: "42501" });
+    // A mensagem comum segue alterável pela Ana no que não é a gravação.
+    await comoAna((c) => c.query("update messages set body = 'comum editada' where id = $1", [rows[0]!.id]));
+    const { rows: depois } = await pool.query("select body from messages where id = $1", [rows[0]!.id]);
+    expect(depois[0].body).toBe("comum editada");
+  });
+
+  it("o sistema (postgres, service role) segue escrevendo a mensagem da ligação", async () => {
+    await pool.query("update messages set status = 'delivered' where id = $1", [gravada.msgId]);
+    const { rows } = await pool.query("select status from messages where id = $1", [gravada.msgId]);
+    expect(rows[0].status).toBe("delivered");
   });
 });

@@ -93,15 +93,27 @@ export async function gravacoesPendentes(db: Queryable, limite: number): Promise
   return rows.map((r) => ({ vcId: r.id, organizationId: r.organization_id, fimEm: new Date(r.ended_at) }));
 }
 
-/** A mensagem da ligação na conversa (`external_id = ligacao:<id>`), se já foi registrada. */
+/**
+ * A mensagem da ligação (`external_id = ligacao:<id>`), se já foi registrada — e
+ * só a que mora na conversa DA PRÓPRIA LIGAÇÃO. Achar só pelo `external_id` era a
+ * porta do sequestro medido na revisão de segurança: uma mensagem `ligacao:<id>`
+ * inserida pela REST na conversa de outro time receberia a gravação. A trava do
+ * banco (`trg_mensagem_de_ligacao_e_do_sistema`, 0289) já recusa essa inserção;
+ * a conversa conferida aqui é a segunda camada.
+ */
 export async function mensagemDaLigacao(
   db: Queryable,
   organizationId: string,
   vcId: string,
 ): Promise<{ id: string; conversationId: string } | null> {
   const { rows } = await db.query<{ id: string; conversation_id: string }>(
-    "select id, conversation_id from messages where organization_id = $1 and external_id = $2 limit 1",
-    [organizationId, `ligacao:${vcId}`],
+    `select m.id, m.conversation_id
+       from messages m
+       join voice_calls v
+         on v.id = $2::uuid and v.organization_id = m.organization_id and v.conversation_id = m.conversation_id
+      where m.organization_id = $1 and m.external_id = $3 and m.type = 'system'
+      limit 1`,
+    [organizationId, vcId, `ligacao:${vcId}`],
   );
   const r = rows[0];
   return r ? { id: r.id, conversationId: r.conversation_id } : null;
@@ -111,15 +123,21 @@ const projecao = (g: GravacaoDaLigacao) => JSON.stringify(g);
 
 /**
  * O arquivo está no Storage: a mensagem da ligação passa a apontá-lo e a
- * projeção diz "pronta"; a ligação vira `stored`. UM comando (CTEs que
- * modificam dados rodam na mesma transação): nunca uma sem a outra.
+ * projeção diz "pronta"; a ligação vira `stored`.
  *
- * `"anonimizada"` = a mensagem não tem mais o `voice_call` no metadado (a
- * cascata de anonimização o limpou no meio do caminho) ou sumiu: nada foi
+ * Numa TRANSAÇÃO com a MESMA trava da cascata de anonimização
+ * (`fn_service_lock(org, contato)`, que `fn_lgpd_cascade_redact_contact` toma
+ * primeiro): sem ela, o anexar que confirmasse entre a coleta dos caminhos e a
+ * limpeza da cascata deixaria o arquivo fora da fila de remoção e sem ponteiro —
+ * órfão para sempre (achado da revisão de segurança). Com ela, ou a cascata vem
+ * depois e leva o arquivo, ou veio antes e o contato já está anonimizado.
+ *
+ * `"anonimizada"` = o contato está anonimizado, ou a mensagem não tem mais o
+ * `voice_call` (a cascata a limpou) ou não está na conversa da ligação: nada foi
  * escrito, e quem chamou apaga o arquivo recém-subido.
  */
 export async function anexarGravacao(
-  db: Queryable,
+  pool: Pick<pg.Pool, "connect">,
   p: {
     organizationId: string;
     vcId: string;
@@ -129,30 +147,64 @@ export async function anexarGravacao(
     duracaoMs: number;
   },
 ): Promise<"anexada" | "anonimizada"> {
-  const { rows } = await db.query<{ mensagens: string }>(
-    `with m as (
-       update messages
-          set media_storage_path = $4, media_mime = $5, media_size_bytes = $6,
-              metadata = jsonb_set(metadata, '{voice_call,gravacao}', $7::jsonb, true)
-        where id = $3 and organization_id = $1 and metadata ? 'voice_call'
-        returning id
-     ), v as (
-       update voice_calls set recording_status = 'stored', updated_at = now()
-        where id = $2 and organization_id = $1 and recording_status = 'recording' and exists (select 1 from m)
-        returning id
-     )
-     select (select count(*) from m) as mensagens`,
-    [
-      p.organizationId,
-      p.vcId,
-      p.mensagemId,
-      p.caminho,
-      MIME_DA_GRAVACAO,
-      p.bytes,
-      projecao({ situacao: "pronta", duracao_ms: p.duracaoMs > 0 ? p.duracaoMs : null }),
-    ],
-  );
-  return Number(rows[0]?.mensagens ?? 0) > 0 ? "anexada" : "anonimizada";
+  const c = await pool.connect();
+  let quebrada: Error | undefined;
+  try {
+    await c.query("begin");
+    const { rows: ligacoes } = await c.query<{ contact_id: string | null; conversation_id: string | null }>(
+      `select contact_id, conversation_id from voice_calls
+        where id = $2 and organization_id = $1 and provider = 'sip_trunk'`,
+      [p.organizationId, p.vcId],
+    );
+    const l = ligacoes[0];
+    if (!l?.conversation_id) {
+      await c.query("rollback");
+      return "anonimizada";
+    }
+    if (l.contact_id) {
+      await c.query("select public.fn_service_lock($1, $2)", [p.organizationId, l.contact_id]);
+      const { rows: contatos } = await c.query<{ is_anonymized: boolean | null }>(
+        "select is_anonymized from contacts where id = $1 and organization_id = $2",
+        [l.contact_id, p.organizationId],
+      );
+      if (!contatos[0] || contatos[0].is_anonymized === true) {
+        await c.query("rollback");
+        return "anonimizada";
+      }
+    }
+    const { rows } = await c.query<{ mensagens: string }>(
+      `with m as (
+         update messages
+            set media_storage_path = $4, media_mime = $5, media_size_bytes = $6,
+                metadata = jsonb_set(metadata, '{voice_call,gravacao}', $7::jsonb, true)
+          where id = $3 and organization_id = $1 and conversation_id = $8 and metadata ? 'voice_call'
+          returning id
+       ), v as (
+         update voice_calls set recording_status = 'stored', updated_at = now()
+          where id = $2 and organization_id = $1 and recording_status = 'recording' and exists (select 1 from m)
+          returning id
+       )
+       select (select count(*) from m) as mensagens`,
+      [
+        p.organizationId,
+        p.vcId,
+        p.mensagemId,
+        p.caminho,
+        MIME_DA_GRAVACAO,
+        p.bytes,
+        projecao({ situacao: "pronta", duracao_ms: p.duracaoMs > 0 ? p.duracaoMs : null }),
+        l.conversation_id,
+      ],
+    );
+    await c.query("commit");
+    return Number(rows[0]?.mensagens ?? 0) > 0 ? "anexada" : "anonimizada";
+  } catch (e) {
+    quebrada = e instanceof Error ? e : new Error(String(e));
+    await c.query("rollback").catch(() => undefined);
+    throw e;
+  } finally {
+    c.release(quebrada);
+  }
 }
 
 /**
@@ -208,15 +260,32 @@ export async function descartarGravacao(db: Queryable, organizationId: string, v
   );
 }
 
+/**
+ * A gravação de uma ligação FEITA não chegou a ter o aviso tocado (o Asterisk
+ * aceitou e depois falhou o playback): ela volta a "não gravada". Só a que ainda
+ * está `recording` — a guardada não é desfeita por aqui.
+ */
+export async function desmarcarGravacao(db: Queryable, organizationId: string, vcId: string): Promise<void> {
+  await db.query(
+    `update voice_calls set recording_status = null, recording_notice_at = null, updated_at = now()
+      where id = $2 and organization_id = $1 and recording_status = 'recording'`,
+    [organizationId, vcId],
+  );
+}
+
+/** O que a passada das órfãs precisa saber de uma ligação. */
+export interface EstadoParaAsOrfas {
+  estado: EstadoDaGravacao | null;
+  /** A ligação acabou: nenhuma gravação dela está sendo escrita agora. */
+  encerrada: boolean;
+}
+
 /** O estado da gravação de cada ligação pedida (as que não existem ficam de fora). */
-export async function estadosDasGravacoes(
-  db: Queryable,
-  vcIds: string[],
-): Promise<Map<string, EstadoDaGravacao | null>> {
+export async function estadosDasGravacoes(db: Queryable, vcIds: string[]): Promise<Map<string, EstadoParaAsOrfas>> {
   if (vcIds.length === 0) return new Map();
-  const { rows } = await db.query<{ id: string; recording_status: EstadoDaGravacao | null }>(
-    "select id, recording_status from voice_calls where id = any($1::uuid[])",
+  const { rows } = await db.query<{ id: string; recording_status: EstadoDaGravacao | null; status: string }>(
+    "select id, recording_status, status from voice_calls where id = any($1::uuid[])",
     [vcIds],
   );
-  return new Map(rows.map((r) => [r.id, r.recording_status]));
+  return new Map(rows.map((r) => [r.id, { estado: r.recording_status, encerrada: r.status === "ended" }]));
 }
