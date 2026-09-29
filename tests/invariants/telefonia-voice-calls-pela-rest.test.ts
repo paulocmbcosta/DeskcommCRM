@@ -264,6 +264,28 @@ describe("o catálogo e o apêndice", () => {
     }
   });
 
+  it("voice_calls_write é a ÚNICA policy de escrita que alcança authenticated (outra permissiva a somaria)", () => {
+    // Policies permissivas se somam por OU: uma segunda de INSERT/UPDATE/DELETE/ALL
+    // para `authenticated` (ou `public`, que o inclui) devolveria a linha do telefone à REST.
+    const consulta = `select policyname || ':' || cmd from pg_policies
+                       where schemaname = 'public' and tablename = 'voice_calls'
+                         and cmd in ('INSERT', 'UPDATE', 'DELETE', 'ALL')
+                         and permissive = 'PERMISSIVE'
+                         and roles && array['authenticated', 'public']::name[]
+                       order by 1;`;
+    const escrita = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
+    expect(escrita(sql(consulta))).toEqual(["voice_calls_write:ALL"]);
+    // Controle: a consulta vê uma segunda policy de escrita (criada e desfeita).
+    expect(
+      escrita(
+        sql(`begin;
+          create policy voice_calls_sonda_insert on public.voice_calls for insert to authenticated with check (true);
+          ${consulta}
+          rollback;`),
+      ).filter((l) => l.includes(":")),
+    ).toEqual(["voice_calls_sonda_insert:INSERT", "voice_calls_write:ALL"]);
+  });
+
   it("o CHECK existe e está VALIDADO", () => {
     expect(
       sql(`select convalidated from pg_constraint
