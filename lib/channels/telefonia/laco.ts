@@ -57,6 +57,12 @@ function portaBanco(pool: pg.Pool): PortaBanco {
   return {
     troncoPorId: (id) => repo.troncoPorId(pool, id),
     disponiveisNoTime: (org, team, agora) => repo.disponiveisNoTime(pool, org, team, agora),
+    timeParaAFila: (org, team, agora) => repo.timeParaAFila(pool, org, team, agora),
+    falasGerais: (org) => repo.falasGerais(pool, org),
+    menuPorId: (org, id) => repo.menuPorId(pool, org, id),
+    registrarEscolhaDoMenu: (org, id, e) => repo.registrarEscolhaDoMenu(pool, org, id, e),
+    registrarAvisoOuvido: (org, id) => repo.registrarAvisoOuvido(pool, org, id),
+    avisarFalaIntocavel: (org, rotulo) => repo.avisarFalaIntocavel(pool, org, rotulo),
     acharOuCriarContato: (org, e164, nome) => repo.acharOuCriarContato(pool, org, e164, nome),
     acharOuCriarConversa: (org, c, t, team) => repo.acharOuCriarConversa(pool, org, c, t, team),
     criarLigacao: (l) => repo.criarLigacao(pool, l),
