@@ -9778,6 +9778,87 @@ export const DICIONARIO: Traducoes = {
   "Nosso atendimento está fechado agora. Se preferir, mande uma mensagem no nosso WhatsApp, {numero}. Obrigado pela ligação.": {
     es: "Nuestra atención está cerrada ahora. Si lo prefiere, envíe un mensaje a nuestro WhatsApp, {numero}. Gracias por su llamada.",
   },
+  // Telefonia, fase 2 — aba Menus. A frase de cada opção (`FRASE_DA_OPCAO`, texto-do-menu.ts)
+  // entra por t() de uma CONSTANTE, que o gate de i18n não enxerga: o teste da aba a confere.
+  "Para {time}, digite {tecla}.": { es: "Para {time}, marque {tecla}." },
+  "Só quem administra a organização gerencia os menus de voz.": {
+    es: "Solo quien administra la organización gestiona los menús de voz.",
+  },
+  "Não foi possível carregar os menus. Recarregue a página.": { es: "No se pudieron cargar los menús. Recarga la página." },
+  "Menus de voz": { es: "Menús de voz" },
+  "O menu atende a ligação, fala as opções e leva o cliente ao time da tecla que ele apertar. Quem não escolhe vai para o time padrão. Depois de pronto, ligue o menu a um número na aba Números.": {
+    es: "El menú atiende la llamada, dice las opciones y lleva al cliente al equipo de la tecla que marque. Quien no elige va al equipo predeterminado. Cuando esté listo, conecta el menú a un número en la pestaña Números.",
+  },
+  "Para gerar a fala do menu, cadastre a chave da ElevenLabs e escolha a voz na aba Voz e falas.": {
+    es: "Para generar la locución del menú, registra la clave de ElevenLabs y elige la voz en la pestaña Voz y locuciones.",
+  },
+  "Cada opção do menu leva a um time, e esta organização ainda não tem nenhum ativo.": {
+    es: "Cada opción del menú lleva a un equipo, y esta organización todavía no tiene ninguno activo.",
+  },
+  "Criar um time": { es: "Crear un equipo" },
+  "Novo menu": { es: "Nuevo menú" },
+  "Arquivar este menu? Ele sai da lista e não pode mais ser ligado a um número.": {
+    es: "¿Archivar este menú? Sale de la lista y ya no se puede conectar a un número.",
+  },
+  "Menu arquivado.": { es: "Menú archivado." },
+  "Não foi possível arquivar o menu. Tente de novo em instantes.": {
+    es: "No se pudo archivar el menú. Inténtalo de nuevo en unos instantes.",
+  },
+  Tecla: { es: "Tecla" },
+  "Padrão (sem escolha):": { es: "Predeterminado (sin elección):" },
+  "Este menu leva a um time arquivado ({times}), que não recebe ligações. Edite o menu e escolha outro time.": {
+    es: "Este menú lleva a un equipo archivado ({times}), que no recibe llamadas. Edita el menú y elige otro equipo.",
+  },
+  "Usado por:": { es: "Usado por:" },
+  "Para arquivar, troque antes o destino desses números na aba Números.": {
+    es: "Para archivarlo, cambia antes el destino de esos números en la pestaña Números.",
+  },
+  "Nenhum número usa este menu ainda. Ligue-o a um número na aba Números.": {
+    es: "Ningún número usa este menú todavía. Conéctalo a un número en la pestaña Números.",
+  },
+  "Nenhuma ligação passou por este menu ainda.": { es: "Ninguna llamada pasó por este menú todavía." },
+  "1 ligação": { es: "1 llamada" },
+  "{n} ligações": { es: "{n} llamadas" },
+  "Sem escolha": { es: "Sin elección" },
+  "Tecla errada": { es: "Tecla incorrecta" },
+  "Desligou no menu": { es: "Colgó en el menú" },
+  "Muita gente não escolhe uma opção: cai no time padrão ou desliga no meio do menu. Talvez a fala esteja confusa ou longa demais — reescreva e gere a prévia de novo.": {
+    es: "Mucha gente no elige una opción: cae en el equipo predeterminado o cuelga en medio del menú. Tal vez la locución sea confusa o demasiado larga: reescríbela y genera la vista previa de nuevo.",
+  },
+  "Editar menu": { es: "Editar menú" },
+  "Nome do menu": { es: "Nombre del menú" },
+  "Ex.: Atendimento principal": { es: "Ej.: Atención principal" },
+  Opções: { es: "Opciones" },
+  "Tecla da opção": { es: "Tecla de la opción" },
+  "Time da opção": { es: "Equipo de la opción" },
+  "Remover opção": { es: "Quitar opción" },
+  "Adicionar opção": { es: "Agregar opción" },
+  "As teclas * e # ficam reservadas.": { es: "Las teclas * y # quedan reservadas." },
+  "Time padrão (quem não escolhe nada)": { es: "Equipo predeterminado (quien no elige nada)" },
+  "Fala do menu": { es: "Locución del menú" },
+  "Montada a partir das opções. Você pode editar antes de gerar.": {
+    es: "Armada a partir de las opciones. Puedes editarla antes de generar.",
+  },
+  "Refazer a partir das opções": { es: "Rehacer a partir de las opciones" },
+  "Fala de tecla inválida": { es: "Locución de tecla inválida" },
+  "Fala de tecla inválida (opcional)": { es: "Locución de tecla inválida (opcional)" },
+  "Toca quando o cliente aperta uma tecla que não é opção, antes de repetir o menu.": {
+    es: "Suena cuando el cliente marca una tecla que no es opción, antes de repetir el menú.",
+  },
+  "Dê um nome ao menu.": { es: "Ponle un nombre al menú." },
+  "O menu precisa de pelo menos uma opção.": { es: "El menú necesita al menos una opción." },
+  "Escolha o time de cada opção.": { es: "Elige el equipo de cada opción." },
+  "Escolha o time padrão.": { es: "Elige el equipo predeterminado." },
+  "Um time escolhido foi arquivado. Escolha outro time.": { es: "Un equipo elegido fue archivado. Elige otro equipo." },
+  "Escreva a fala do menu.": { es: "Escribe la locución del menú." },
+  "Gere a prévia de cada fala que mudou antes de salvar o menu.": {
+    es: "Genera la vista previa de cada locución que cambió antes de guardar el menú.",
+  },
+  "Salvar menu": { es: "Guardar menú" },
+  "Menu salvo.": { es: "Menú guardado." },
+  "Não foi possível salvar o menu. Tente de novo em instantes.": {
+    es: "No se pudo guardar el menú. Inténtalo de nuevo en unos instantes.",
+  },
 };
 
 /**
