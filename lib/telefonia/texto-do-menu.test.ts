@@ -7,6 +7,7 @@ import {
   naOrdemFalada,
   numeroParaFalar,
   textoSugeridoForaDoHorario,
+  trocarMarcador,
 } from "./texto-do-menu";
 import { TECLAS_DO_MENU } from "./vocabulario";
 
@@ -20,6 +21,14 @@ describe("naOrdemFalada", () => {
   it("a lista de teclas que a tela oferece já está nessa ordem (uma regra só)", () => {
     const teclas = TECLAS_DO_MENU.map((tecla) => ({ tecla }));
     expect(naOrdemFalada([...teclas].reverse()).map((o) => o.tecla)).toEqual([...TECLAS_DO_MENU]);
+  });
+});
+
+describe("trocarMarcador", () => {
+  it("troca todas as ocorrências pelo valor LITERAL — `$&` e `$$` num nome de time não viram padrão", () => {
+    expect(trocarMarcador("Time arquivado ({times}).", "{times}", "A$&B")).toBe("Time arquivado (A$&B).");
+    expect(trocarMarcador("{n} e {n}", "{n}", "Cobrança $$")).toBe("Cobrança $$ e Cobrança $$");
+    expect(trocarMarcador("sem marcador", "{n}", "x")).toBe("sem marcador");
   });
 });
 

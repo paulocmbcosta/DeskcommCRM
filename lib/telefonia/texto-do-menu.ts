@@ -27,6 +27,16 @@ export function naOrdemFalada<T extends { tecla: string }>(opcoes: readonly T[])
   return [...opcoes].sort((a, b) => ordemDaTecla(a.tecla) - ordemDaTecla(b.tecla));
 }
 
+/**
+ * Troca TODAS as ocorrências de um marcador (`{times}`, `{n}`) por um valor que
+ * pode vir do banco — o nome de um time. Por `split`/`join`, nunca `replace` com
+ * string: ele interpreta `$&`/`$$` no VALOR, e um time "A$&B" apareceria na tela
+ * como "A{times}B" (o mesmo cuidado de `montarTextoDoMenu`, abaixo).
+ */
+export function trocarMarcador(modelo: string, marcador: string, valor: string): string {
+  return modelo.split(marcador).join(valor);
+}
+
 /** Os dois marcadores da frase, numa única passada — ver o comentário de `montarTextoDoMenu`. */
 const MARCADORES_DA_FRASE = /\{time\}|\{tecla\}/g;
 
