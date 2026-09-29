@@ -22,6 +22,7 @@ import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
 import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { avisoVigente } from "@/lib/telefonia/vencimento-da-emergencia";
+import type { EstadoDaGravacao, GravacaoDaLigacao } from "@/lib/telefonia/gravacao";
 import { MOTIVO_FORA_DO_HORARIO, type DesfechoDoMenu, type MenuDaLigacao } from "@/lib/telefonia/vocabulario";
 
 import { CHANNEL_PROVIDER_SIP_TRUNK, MEIO_TELEFONE } from "../capabilities";
@@ -767,12 +768,14 @@ export interface LigacaoDoBanco {
   menu_outcome?: DesfechoDoMenu | null;
   emergency_heard_at?: string | Date | null;
   end_reason?: string | null;
+  /** O ciclo da gravação (0289). `recording` no fim = há arquivo a guardar. */
+  recording_status?: EstadoDaGravacao | null;
 }
 
 /** As colunas de `LigacaoDoBanco` — uma lista só para leitura, recuperação e encerramento. */
 const COLUNAS_DA_LIGACAO = `id, organization_id, channel_session_id, contact_id, conversation_id, direction,
   peer_phone, status, owner_user_id, created_by, team_id, started_at, answered_at,
-  provider, sip_call_ref, menu_id, menu_digit, menu_outcome, emergency_heard_at, end_reason`;
+  provider, sip_call_ref, menu_id, menu_digit, menu_outcome, emergency_heard_at, end_reason, recording_status`;
 
 /**
  * A ligação `id`, se ela for DESTE atendente (`owner_user_id`) — o pedido de
@@ -927,6 +930,8 @@ async function menuDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<MenuDaL
   };
 }
 
+const GRAVACAO_EM_PROCESSAMENTO: GravacaoDaLigacao = { situacao: "processando", duracao_ms: null };
+
 /**
  * O registro da ligação DENTRO da conversa — a linha que o atendente vê no chat.
  *
@@ -988,6 +993,9 @@ export async function registrarNaConversa(
           motivo: l.end_reason ?? null,
           menu,
           ouviu_aviso: Boolean(l.emergency_heard_at),
+          // Gravada: o arquivo ainda vai ser guardado (lib/channels/telefonia/gravacoes.ts),
+          // e é o processamento que troca a situação, sempre mesclando no banco.
+          ...(l.recording_status === "recording" ? { gravacao: GRAVACAO_EM_PROCESSAMENTO } : {}),
         },
       }),
     ],
