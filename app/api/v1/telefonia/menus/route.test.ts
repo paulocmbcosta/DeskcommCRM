@@ -8,17 +8,18 @@
  * gravou (sem reler a lista); o POST aceita `Idempotency-Key` — a mesma chave
  * cria UM menu só; e a rota nunca CHAMA a ElevenLabs.
  *
- * "Nunca chama", e não "nem carrega": a rota importa `STATUS_DA_FALHA` e o armazém
- * de `servico-de-falas.ts`, que importa o cliente para a prévia. O que o D15
- * proíbe é a CHAMADA — então as duas chamadas de rede do cliente viram
- * armadilhas, e o `fetch` global é contado em todo caso deste arquivo.
+ * O que este arquivo prova é que a rota nunca CHAMA a ElevenLabs: as duas
+ * chamadas de rede do cliente viram armadilhas, e o `fetch` global é contado em
+ * todo caso deste arquivo. (O `STATUS_DA_FALHA` e o armazém moram fora do
+ * `servico-de-falas.ts` — vocabulario.ts e armazem.ts —, e a rota não importa o
+ * módulo que carrega o cliente.)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import type * as ModuloElevenLabs from "@/lib/telefonia/elevenlabs";
 import type * as ModuloMenus from "@/lib/telefonia/menus";
-import type * as ModuloServico from "@/lib/telefonia/servico-de-falas";
+import type * as ModuloArmazem from "@/lib/telefonia/armazem";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const USUARIO = "11111111-1111-4111-8111-111111111111";
@@ -53,8 +54,8 @@ vi.mock("@/lib/telefonia/elevenlabs", async () => {
   return { ...real, listarVozes: armadilha("listarVozes"), sintetizar: armadilha("sintetizar") };
 });
 // O `STATUS_DA_FALHA` é o DE VERDADE: o teste mede o código, não uma cópia dele.
-vi.mock("@/lib/telefonia/servico-de-falas", async () => ({
-  ...(await vi.importActual<typeof ModuloServico>("@/lib/telefonia/servico-de-falas")),
+vi.mock("@/lib/telefonia/armazem", async () => ({
+  ...(await vi.importActual<typeof ModuloArmazem>("@/lib/telefonia/armazem")),
   armazemDaInstalacao: vi.fn(() => ({ marca: "armazem" })),
 }));
 vi.mock("@/lib/telefonia/menus", async () => ({

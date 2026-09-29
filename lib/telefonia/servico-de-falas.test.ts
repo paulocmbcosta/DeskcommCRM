@@ -16,6 +16,7 @@ import type * as ModuloEnv from "@/lib/env";
 
 import type * as ModuloPrevia from "./previa";
 import type * as ModuloServico from "./servico-de-falas";
+import { STATUS_DA_FALHA } from "./vocabulario";
 
 // O caminho SEM Upstash: sem as duas variáveis, `checkRateLimit` conta em memória.
 vi.mock("@/lib/env", async () => {
@@ -114,7 +115,7 @@ describe("a cota de prévias da organização, no contador de verdade", () => {
 
   it("a cota estourada é limite NOSSO: 429 (doutrina da API), e não os 422/502 das falhas da ElevenLabs", () => {
     expect(servico.LIMITE_DE_PREVIAS_POR_HORA).toBe(30);
-    expect(servico.STATUS_DA_FALHA.limite_de_previas).toBe(429);
-    expect(servico.STATUS_DA_FALHA.limite_de_uso).toBe(422);
+    expect(STATUS_DA_FALHA.limite_de_previas).toBe(429);
+    expect(STATUS_DA_FALHA.limite_de_uso).toBe(422);
   });
 });

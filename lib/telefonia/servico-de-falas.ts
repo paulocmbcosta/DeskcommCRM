@@ -1,15 +1,18 @@
 /**
- * A FIAÇÃO DA INSTALAÇÃO para as rotas do telefone — o único lugar que lê o env
- * da ElevenLabs, monta o armazém com o cliente de serviço e decide o status HTTP
- * de cada falha. Server-only. Nada do caminho da ligação importa este arquivo
- * (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts).
+ * A FIAÇÃO DA ELEVENLABS para as rotas do telefone — o único lugar que lê o env
+ * da ElevenLabs, valida a chave, monta o sintetizador da prévia e conta a cota
+ * de prévias. Server-only. Nada do caminho da ligação importa este arquivo
+ * (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts): ele importa o cliente.
+ *
+ * O que NÃO depende da ElevenLabs mora fora daqui, para quem não sintetiza não
+ * carregar o cliente: o armazém da instalação (`armazemDaInstalacao`, em
+ * armazem.ts — o worker o usa) e o status HTTP de cada falha (`STATUS_DA_FALHA`,
+ * em vocabulario.ts — as rotas de salvar, do menu e do aviso o usam).
  */
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { env } from "@/lib/env";
-import { createAdminClient } from "@/lib/supabase/admin";
 
-import { armazemDoSupabase, type PortaDoArmazem } from "./armazem";
 import { chaveDeVoz } from "./chave-elevenlabs";
 import { ErroDaElevenLabs, listarVozes, sintetizar, type OpcoesDoCliente } from "./elevenlabs";
 import { vozDaOrganizacao, type VozDaOrganizacao } from "./falas";
@@ -41,51 +44,10 @@ export async function validarChaveDeVoz(chave: string): Promise<ValidacaoDaChave
   }
 }
 
-/**
- * Falha da ElevenLabs (e do Storage) volta 422 (a pessoa pode consertar, ou
- * esperar) ou 502 (o provedor/Storage falhou) — NUNCA 429 ou 503: o `apiClient`
- * do navegador repete esses sozinho, e cada repetição de síntese gasta crédito
- * da conta do cliente. Por isso o 429 da PRÓPRIA ElevenLabs (`limite_de_uso`)
- * sai 422.
- *
- * A exceção é a cota de prévias da organização (`limite_de_previas`, 30 por
- * hora): ela é limite NOSSO, e limite nosso responde 429 com `Retry-After`, como
- * manda a doutrina da API. A rota da prévia põe o `Retry-After`, e o contrato do
- * `apiClient` (lib/api/client.ts) é não esperar nem repetir quando ele passa de
- * 10 s — lançar o erro na hora (com o código `limite_de_previas`), em vez de
- * travar a tela por até 1 h.
- *
- * `gravacao_em_andamento` é 409: outra gravação da mesma fala segurou a trava de
- * `phone_settings` por mais que o `lock_timeout` (`salvarFalaGeral`, em falas.ts).
- * O `apiClient` não repete 409, e nada foi pago: tentar de novo resolve.
- */
-export const STATUS_DA_FALHA: Record<FalhaDaFala, 409 | 422 | 429 | 502> = {
-  sem_chave: 422,
-  sem_voz: 422,
-  chave_invalida: 422,
-  sem_credito: 422,
-  texto_recusado: 422,
-  voz_inexistente: 422,
-  limite_de_uso: 422,
-  limite_de_previas: 429,
-  previa_ausente: 422,
-  previa_desatualizada: 422,
-  // Conflito com outra gravação da mesma fala (a trava venceu o prazo): tentar de novo resolve.
-  gravacao_em_andamento: 409,
-  armazenamento: 502,
-  sem_resposta: 502,
-  erro_do_provedor: 502,
-};
-
 /** A síntese com a URL base da instalação. Só a rota da PRÉVIA a entrega a `gerarPrevia`. */
 export function sintetizadorDaInstalacao(): Sintetizador {
   const opcoes = opcoesDaElevenLabs();
   return (p) => sintetizar(p, opcoes);
-}
-
-/** O Storage das falas pelo cliente de serviço — o mesmo dos outros buckets privados. */
-export function armazemDaInstalacao(): PortaDoArmazem {
-  return armazemDoSupabase(createAdminClient());
 }
 
 /**
@@ -119,7 +81,8 @@ export interface CotaDePrevia {
  * que o limitador implementa, não uma janela deslizante. A organização vem da
  * SESSÃO, pela rota: nenhum corpo escolhe de quem é a cota.
  *
- * A recusa volta 429 com `Retry-After` (`STATUS_DA_FALHA.limite_de_previas`). O
+ * A recusa volta 429 com `Retry-After` (`STATUS_DA_FALHA.limite_de_previas`, em
+ * vocabulario.ts). O
  * `Retry-After` passa de 10 s quase sempre, e é isso que faz o `apiClient` do
  * navegador lançar na hora em vez de dormir e repetir (lib/api/client.ts).
  */

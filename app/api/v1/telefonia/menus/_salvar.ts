@@ -43,6 +43,7 @@ import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
+import { armazemDaInstalacao } from "@/lib/telefonia/armazem";
 import {
   MENSAGEM_DA_FALHA_DO_MENU,
   MENSAGEM_DO_AUDIO_DA_FALA_DO_MENU,
@@ -51,11 +52,11 @@ import {
   semanaDoMenu,
   type QualFala,
 } from "@/lib/telefonia/menus";
-import { STATUS_DA_FALHA, armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
 import { somarUltimosSeteDias } from "@/lib/telefonia/ultimos-sete-dias";
 import {
   MENSAGEM_DA_FALHA_DA_FALA,
   MENSAGEM_DO_TEXTO_INVALIDO,
+  STATUS_DA_FALHA,
   type FalhaDaFala,
   type MenuPublico,
 } from "@/lib/telefonia/vocabulario";

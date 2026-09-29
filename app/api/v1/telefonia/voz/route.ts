@@ -26,8 +26,8 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { chaveDeVoz, estadoDaChaveDeVoz } from "@/lib/telefonia/chave-elevenlabs";
 import { ErroDaElevenLabs, listarVozes } from "@/lib/telefonia/elevenlabs";
 import { falasGeraisDaOrg, vozDaOrganizacao } from "@/lib/telefonia/falas";
-import { STATUS_DA_FALHA, opcoesDaElevenLabs } from "@/lib/telefonia/servico-de-falas";
-import { ID_DE_VOZ, MENSAGEM_DA_FALHA_DA_FALA, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
+import { opcoesDaElevenLabs } from "@/lib/telefonia/servico-de-falas";
+import { ID_DE_VOZ, MENSAGEM_DA_FALHA_DA_FALA, STATUS_DA_FALHA, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

@@ -7,7 +7,7 @@ import type { PortaDoArmazem } from "./armazem";
 import { ErroDaElevenLabs, sintetizar as sintetizarDeVerdade } from "./elevenlabs";
 import { caminhoDaFala, hashDaFala } from "./falas";
 import { gerarPrevia, type PedidoDePrevia } from "./previa";
-import { STATUS_DA_FALHA } from "./servico-de-falas";
+import { STATUS_DA_FALHA } from "./vocabulario";
 
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

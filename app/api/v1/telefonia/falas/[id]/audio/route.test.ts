@@ -42,7 +42,7 @@ vi.mock("@/lib/agent-engine/db/request-pool", () => ({
     },
   })),
 }));
-vi.mock("@/lib/telefonia/servico-de-falas", () => ({
+vi.mock("@/lib/telefonia/armazem", () => ({
   armazemDaInstalacao: vi.fn(() => ({
     baixar: async (caminho: string) => {
       estado.baixados.push(caminho);

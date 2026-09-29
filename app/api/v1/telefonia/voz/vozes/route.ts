@@ -14,8 +14,8 @@ import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { chaveDeVoz } from "@/lib/telefonia/chave-elevenlabs";
 import { ErroDaElevenLabs, listarVozes } from "@/lib/telefonia/elevenlabs";
-import { STATUS_DA_FALHA, opcoesDaElevenLabs } from "@/lib/telefonia/servico-de-falas";
-import { MENSAGEM_DA_FALHA_DA_FALA, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
+import { opcoesDaElevenLabs } from "@/lib/telefonia/servico-de-falas";
+import { MENSAGEM_DA_FALHA_DA_FALA, STATUS_DA_FALHA, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

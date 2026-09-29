@@ -27,11 +27,12 @@ import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { falaParaSalvarSchema, salvarFalaGeral } from "@/lib/telefonia/falas";
-import { STATUS_DA_FALHA, armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
+import { armazemDaInstalacao } from "@/lib/telefonia/armazem";
 import {
   FALAS_GERAIS,
   MENSAGEM_DA_FALHA_DA_FALA,
   MENSAGEM_DO_TEXTO_INVALIDO,
+  STATUS_DA_FALHA,
   type FalaGeral,
 } from "@/lib/telefonia/vocabulario";
 

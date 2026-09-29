@@ -2,7 +2,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it, vi } from "vitest";
 
-import { armazemDoSupabase, comPrazoDeLeitura, type PortaDoArmazem } from "./armazem";
+const admin = vi.hoisted(() => ({ cliente: null as unknown }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn(() => admin.cliente) }));
+
+import { createAdminClient } from "@/lib/supabase/admin";
+
+import { armazemDaInstalacao, armazemDoSupabase, comPrazoDeLeitura, type PortaDoArmazem } from "./armazem";
 
 /**
  * O erro que o storage-js monta a partir de uma resposta HTTP (`StorageApiError`):
@@ -254,5 +259,18 @@ describe("comPrazoDeLeitura — a leitura que desiste", () => {
     await expect(comPrazoDeLeitura(a, 40).baixar("org/h.ulaw")).rejects.toThrow(/armazem_download: .*prazo de 40 ms/);
     expect(Date.now() - inicio).toBeLessThan(1_000);
     expect(a.baixar.mock.calls[0]![1]!.signal!.aborted).toBe(true);
+  });
+});
+
+describe("armazemDaInstalacao — o Storage das falas com o cliente de serviço da instalação", () => {
+  it("é o armazemDoSupabase sobre o createAdminClient, no bucket phone-prompts — e só pede o cliente quando é chamado", async () => {
+    const c = clienteFalso();
+    c.objetos.set("org/h.ulaw", new Uint8Array([9]));
+    admin.cliente = c.admin;
+    vi.mocked(createAdminClient).mockClear();
+    const armazem = armazemDaInstalacao();
+    expect(createAdminClient).toHaveBeenCalledTimes(1);
+    expect(await armazem.baixar("org/h.ulaw")).toEqual(new Uint8Array([9]));
+    expect(c.baldes).toEqual(["phone-prompts"]);
   });
 });

@@ -42,7 +42,7 @@ import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
 import { caminhoDaFala, falaPorId } from "@/lib/telefonia/falas";
-import { armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
+import { armazemDaInstalacao } from "@/lib/telefonia/armazem";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

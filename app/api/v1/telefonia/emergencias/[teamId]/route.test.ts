@@ -19,7 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import type * as ModuloEmergencias from "@/lib/telefonia/emergencias";
-import type * as ModuloServico from "@/lib/telefonia/servico-de-falas";
+import type * as ModuloArmazem from "@/lib/telefonia/armazem";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const OUTRA_ORG = "99999999-9999-4999-8999-999999999999";
@@ -44,9 +44,9 @@ vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async (
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => ({ pool: "da-rota" })) }));
 vi.mock("@/lib/channels/telefonia/ari", () => ({ configAriDoAmbiente: vi.fn(() => estado.ari) }));
-// O `STATUS_DA_FALHA` é o DE VERDADE: é ele que decide 409, 422 e 502.
-vi.mock("@/lib/telefonia/servico-de-falas", async () => {
-  const real = await vi.importActual<typeof ModuloServico>("@/lib/telefonia/servico-de-falas");
+// O `STATUS_DA_FALHA` é o DE VERDADE (vocabulario.ts, sem mock): é ele que decide 409, 422 e 502.
+vi.mock("@/lib/telefonia/armazem", async () => {
+  const real = await vi.importActual<typeof ModuloArmazem>("@/lib/telefonia/armazem");
   return { ...real, armazemDaInstalacao: vi.fn(() => ({ armazem: "da-instalacao" })) };
 });
 vi.mock("@/lib/telefonia/emergencias", async () => {

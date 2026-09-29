@@ -20,7 +20,13 @@
  *  1. o alvo existe — renomear o cliente não pode deixar este teste verde e cego;
  *  2. a varredura viu o caminho da ligação e resolveu `@/` e `./`;
  *  3. o detector acha uma cadeia de VERDADE (o teste do cliente importa o cliente)
- *     e uma cadeia transitiva num grafo montado à mão.
+ *     e uma cadeia transitiva num grafo montado à mão;
+ *  4. o que o caminho da ligação PRECISA da fiação das falas está fora do alcance
+ *     do cliente: o armazém da instalação (`armazemDaInstalacao`, em
+ *     lib/telefonia/armazem.ts — o worker copia as falas do Storage para o disco
+ *     com ele) e o `STATUS_DA_FALHA` (lib/telefonia/vocabulario.ts). E o módulo que
+ *     os guardava antes, `servico-de-falas.ts`, ALCANÇA o cliente (de propósito:
+ *     a prévia mora lá) — importá-lo no caminho da ligação seria pego.
  * A prova de que ele morde é a sabotagem descrita no plano da fase 2 (Task 2,
  * Steps 9 e 10; de novo na Task 25): um import do cliente num arquivo do caminho
  * da ligação deixa este teste vermelho, com a cadeia na mensagem.
@@ -152,6 +158,23 @@ describe("a ligação nunca chama a ElevenLabs (desenho da fase 2, D15)", () => 
     const grafo: Record<string, string[]> = { "/a.ts": ["/b.ts"], "/b.ts": ["/c.ts"], "/c.ts": [ALVO] };
     expect(cadeiaAte(ALVO, ["/a.ts"], (f) => grafo[f] ?? [])).toEqual(["/a.ts", "/b.ts", "/c.ts", ALVO]);
     expect(cadeiaAte(ALVO, ["/a.ts"], (f) => (f === "/c.ts" ? [] : (grafo[f] ?? [])))).toBeNull();
+  });
+
+  it("controle: o armazém da instalação e o STATUS_DA_FALHA moram fora do alcance do cliente; o servico-de-falas, não", () => {
+    const armazem = path.join(RAIZ_DO_REPO, "lib/telefonia/armazem.ts");
+    const vocabulario = path.join(RAIZ_DO_REPO, "lib/telefonia/vocabulario.ts");
+    const servico = path.join(RAIZ_DO_REPO, "lib/telefonia/servico-de-falas.ts");
+    // O símbolo mora ONDE a varredura procura: mover de novo sem mover este controle o deixa vermelho.
+    expect(readFileSync(armazem, "utf8")).toMatch(/export function armazemDaInstalacao\(/);
+    expect(readFileSync(vocabulario, "utf8")).toMatch(/export const STATUS_DA_FALHA\b/);
+    expect(cadeiaAte(ALVO, [armazem], importsDoRepo)).toBeNull();
+    expect(cadeiaAte(ALVO, [vocabulario], importsDoRepo)).toBeNull();
+    // A régua morde o vizinho: o servico-de-falas alcança o cliente, então um import dele
+    // em lib/channels/telefonia/ ou workers/ deixaria o caso abaixo vermelho.
+    expect(cadeiaAte(ALVO, [servico], importsDoRepo)?.map(caminhoRelativo)).toEqual([
+      "lib/telefonia/servico-de-falas.ts",
+      "lib/telefonia/elevenlabs.ts",
+    ]);
   });
 
   it(

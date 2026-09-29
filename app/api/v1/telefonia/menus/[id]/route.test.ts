@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import type * as ModuloMenus from "@/lib/telefonia/menus";
-import type * as ModuloServico from "@/lib/telefonia/servico-de-falas";
+import type * as ModuloArmazem from "@/lib/telefonia/armazem";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const TIME = "44444444-4444-4444-8444-444444444444";
@@ -34,8 +34,8 @@ vi.mock("@/lib/supabase/server", () => ({
     throw new Error("o PATCH não grava recibo de idempotência");
   }),
 }));
-vi.mock("@/lib/telefonia/servico-de-falas", async () => ({
-  ...(await vi.importActual<typeof ModuloServico>("@/lib/telefonia/servico-de-falas")),
+vi.mock("@/lib/telefonia/armazem", async () => ({
+  ...(await vi.importActual<typeof ModuloArmazem>("@/lib/telefonia/armazem")),
   armazemDaInstalacao: vi.fn(() => ({ marca: "armazem" })),
 }));
 vi.mock("@/lib/telefonia/menus", async () => ({

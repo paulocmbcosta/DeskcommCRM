@@ -32,10 +32,18 @@
  * grants só em `public` (ver `url_do_schema` em hostgator-setup-kit/_common.sh),
  * e a service role alcança o Storage em toda instalação.
  *
+ * `armazemDaInstalacao()` é ESTE armazém sobre o cliente de serviço da instalação
+ * — o que as rotas e o worker usam. Mora aqui, e não na fiação da ElevenLabs
+ * (servico-de-falas.ts), porque o worker copia as falas do Storage para o disco e
+ * não pode carregar o cliente da ElevenLabs nem por um módulo no meio.
+ *
  * Sem import do cliente da ElevenLabs: o worker usa este arquivo
- * (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts).
+ * (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts, que tem um controle só
+ * para ele).
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { createAdminClient } from "@/lib/supabase/admin";
 
 import { BUCKET_DAS_FALAS } from "./vocabulario";
 
@@ -169,6 +177,15 @@ export function armazemDoSupabase(admin: SupabaseClient): PortaDoArmazem {
       }
     },
   };
+}
+
+/**
+ * O Storage das falas pelo cliente de serviço da instalação — o mesmo dos outros
+ * buckets privados. O cliente só é pedido quando esta função é chamada (nunca na
+ * importação). Import: `@/lib/telefonia/armazem`.
+ */
+export function armazemDaInstalacao(): PortaDoArmazem {
+  return armazemDoSupabase(createAdminClient());
 }
 
 /**

@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+import type * as ModuloArmazem from "@/lib/telefonia/armazem";
 import type * as ModuloServico from "@/lib/telefonia/servico-de-falas";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
@@ -31,13 +32,16 @@ vi.mock("@/lib/auth/require-role", () => ({
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => ({})) }));
-// O `STATUS_DA_FALHA` é o DE VERDADE: é ele que decide o 429 da cota e o 502 do Storage.
+// O `STATUS_DA_FALHA` é o DE VERDADE (vocabulario.ts, sem mock): é ele que decide o 429 da cota e o 502 do Storage.
+vi.mock("@/lib/telefonia/armazem", async () => ({
+  ...(await vi.importActual<typeof ModuloArmazem>("@/lib/telefonia/armazem")),
+  armazemDaInstalacao: vi.fn(() => ({})),
+}));
 vi.mock("@/lib/telefonia/servico-de-falas", async () => {
   const real = await vi.importActual<typeof ModuloServico>("@/lib/telefonia/servico-de-falas");
   return {
     ...real,
     contextoDeFala: vi.fn(async () => ({ chave: "sk_ficticia", voz: { voiceId: "v1", modelId: "eleven_multilingual_v2" } })),
-    armazemDaInstalacao: vi.fn(() => ({})),
     sintetizadorDaInstalacao: vi.fn(() => vi.fn()),
     consumirCotaDePrevia: vi.fn(async () => estado.cota),
   };

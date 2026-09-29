@@ -40,6 +40,7 @@ import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
+import { armazemDaInstalacao } from "@/lib/telefonia/armazem";
 import {
   MENSAGEM_DA_FALHA_DO_AVISO,
   QUEM_LIGOU_SEM_NOME,
@@ -50,9 +51,13 @@ import {
   type FalhaDoAviso,
   type PeriodoDoAviso,
 } from "@/lib/telefonia/emergencias";
-import { STATUS_DA_FALHA, armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
 import { expiraEm } from "@/lib/telefonia/vencimento-da-emergencia";
-import { MENSAGEM_DO_TEXTO_INVALIDO, type AvisoDoTimePublico, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
+import {
+  MENSAGEM_DO_TEXTO_INVALIDO,
+  STATUS_DA_FALHA,
+  type AvisoDoTimePublico,
+  type FalhaDaFala,
+} from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

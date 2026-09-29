@@ -20,8 +20,8 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { logger } from "@/lib/logger";
 import { PROVEDOR_DE_VOZ, estadoDaChaveDeVoz, guardarChaveDeVoz } from "@/lib/telefonia/chave-elevenlabs";
-import { STATUS_DA_FALHA, validarChaveDeVoz } from "@/lib/telefonia/servico-de-falas";
-import { MENSAGEM_DA_FALHA_DA_FALA } from "@/lib/telefonia/vocabulario";
+import { validarChaveDeVoz } from "@/lib/telefonia/servico-de-falas";
+import { MENSAGEM_DA_FALHA_DA_FALA, STATUS_DA_FALHA } from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

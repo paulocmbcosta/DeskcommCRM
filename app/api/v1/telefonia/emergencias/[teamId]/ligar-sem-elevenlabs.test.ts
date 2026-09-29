@@ -1,26 +1,27 @@
 // @vitest-environment node
 /**
- * D15 PELA ROTA, COM A CAMADA DE BANCO DE VERDADE: ligar o aviso de instabilidade
- * nunca alcança a ElevenLabs — nem a carrega.
+ * D15 PELA ROTA, COM A CAMADA DE BANCO DE VERDADE: a rota de ligar o aviso de
+ * instabilidade NÃO CARREGA o cliente da ElevenLabs, e ligar NÃO FAZ chamada de
+ * rede nenhuma.
  *
- * O cliente da ElevenLabs é uma fábrica que LANÇA AO CARREGAR. A rota, o
- * `lib/telefonia/emergencias.ts`, o `lib/telefonia/falas.ts` e o armazém são os
- * DE VERDADE; só o banco e o Storage são portas em memória. Se qualquer um deles
- * passasse a importar o cliente (direto ou por um módulo no meio), este arquivo
- * inteiro ficaria vermelho ao carregar.
+ * "Não carrega": o cliente (`lib/telefonia/elevenlabs.ts`) é uma fábrica que
+ * LANÇA AO CARREGAR, e todo o grafo de módulos da rota é o DE VERDADE — a rota,
+ * `emergencias.ts`, `falas.ts`, `armazem.ts`, `vocabulario.ts` (com o
+ * `STATUS_DA_FALHA`). Nenhum módulo da telefonia é trocado por mock; se qualquer
+ * um passasse a importar o cliente (direto ou por um módulo no meio, como o
+ * `servico-de-falas.ts`), este arquivo ficaria vermelho ao carregar. Portas em
+ * memória só para o banco (`getRequestPool`), para o Storage
+ * (`armazemDaInstalacao` devolve um armazém falso; o resto de armazem.ts é o
+ * real) e para sessão, auditoria e telefonia oferecida.
  *
- * A única peça trocada por um módulo sem a ElevenLabs é `servico-de-falas.ts`:
- * ele importa o cliente de propósito (a PRÉVIA e a validação da chave moram lá),
- * e a rota só usa dele o armazém da instalação e o `STATUS_DA_FALHA` — que as
- * recusas usam e estes casos, que ligam, não alcançam. O status de verdade de
- * cada recusa é medido em route.test.ts.
- *
- * Os dois caminhos do ligar: o texto NOVO (confere a prévia no Storage, com
- * prazo) e o texto SALVO sem mudança (não vai ao Storage). E o `fetch` global não
- * é chamado nenhuma vez.
+ * "Não chama": nos dois caminhos do ligar — o texto NOVO (confere a prévia no
+ * Storage, com prazo) e o texto SALVO sem mudança (não vai ao Storage) — o
+ * `fetch` global não é chamado nenhuma vez.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+
+import type * as ModuloArmazem from "@/lib/telefonia/armazem";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const TIME = "44444444-4444-4444-8444-444444444444";
@@ -29,8 +30,8 @@ const h = vi.hoisted(() => ({ banco: null as unknown, armazem: null as unknown }
 vi.mock("@/lib/telefonia/elevenlabs", () => {
   throw new Error("ligar o aviso carregou o cliente da ElevenLabs (D15)");
 });
-vi.mock("@/lib/telefonia/servico-de-falas", () => ({
-  STATUS_DA_FALHA: {},
+vi.mock("@/lib/telefonia/armazem", async () => ({
+  ...(await vi.importActual<typeof ModuloArmazem>("@/lib/telefonia/armazem")),
   armazemDaInstalacao: vi.fn(() => h.armazem),
 }));
 vi.mock("@/lib/auth/require-role", () => ({

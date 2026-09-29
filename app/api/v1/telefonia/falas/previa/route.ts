@@ -46,9 +46,8 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { hashDaFala, textoDaFalaValido } from "@/lib/telefonia/falas";
 import { gerarPrevia } from "@/lib/telefonia/previa";
+import { armazemDaInstalacao } from "@/lib/telefonia/armazem";
 import {
-  STATUS_DA_FALHA,
-  armazemDaInstalacao,
   consumirCotaDePrevia,
   contextoDeFala,
   sintetizadorDaInstalacao,
@@ -57,6 +56,7 @@ import {
 import {
   MENSAGEM_DA_FALHA_DA_FALA,
   MENSAGEM_DO_TEXTO_INVALIDO,
+  STATUS_DA_FALHA,
   type PreviaNaResposta,
 } from "@/lib/telefonia/vocabulario";
 
