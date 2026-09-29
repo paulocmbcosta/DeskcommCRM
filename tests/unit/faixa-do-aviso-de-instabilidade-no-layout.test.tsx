@@ -11,14 +11,18 @@
  *    cada aba aberta. Um `true` fixo passaria no teste do componente e custaria
  *    caro em toda instalação que nunca ligou o telefone.
  *
- * E as duas faixas do topo ficam EMPILHADAS num contêiner `sticky` só: cada uma
- * `sticky top-0` sozinha, grudavam no mesmo ponto e a de cima cobria a outra.
+ * E as faixas do topo (acompanhamento, conexão caída, aviso) ficam EMPILHADAS num
+ * contêiner `sticky` só (`FaixasDoTopo`): cada uma `sticky top-0` sozinha,
+ * grudavam no mesmo ponto e a de cima cobria as outras.
  *
  * Mede o elemento que o layout devolve, e não o texto-fonte: a cerca irmã conta
  * por que uma regex no arquivo cimenta a implementação sem vigiar o efeito.
  */
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { FaixasDoTopo } from "@/components/app/FaixasDoTopo";
+import { ImpersonateBanner } from "@/components/app/ImpersonateBanner";
 
 const sessao = vi.hoisted(() => ({ papel: "agent" }));
 const adminClient = {
@@ -75,21 +79,6 @@ function achar(no: ReactNode, alvo: unknown, irmaos: ReactNode[] = []): { elemen
   return achar(elemento.props?.children, alvo);
 }
 
-/** O primeiro elemento da árvore que declara a prop `prop`. */
-function acharPorProp(no: ReactNode, prop: string): ReactElement<{ children?: ReactNode; className?: string }> | null {
-  if (!no || typeof no !== "object") return null;
-  if (Array.isArray(no)) {
-    for (const filho of no) {
-      const achado = acharPorProp(filho as ReactNode, prop);
-      if (achado) return achado;
-    }
-    return null;
-  }
-  const elemento = no as ReactElement<{ children?: ReactNode; className?: string } & Record<string, unknown>>;
-  if (elemento.props && prop in elemento.props) return elemento;
-  return acharPorProp(elemento.props?.children, prop);
-}
-
 async function montar() {
   const { FaixaDoAvisoDeInstabilidade } = await import("@/components/telefonia/FaixaDoAvisoDeInstabilidade");
   const { ConexaoCaidaBanner } = await import("@/components/app/ConexaoCaidaBanner");
@@ -117,12 +106,15 @@ describe("a faixa do aviso de instabilidade no layout de /app", () => {
     const irmaos = faixa!.irmaos;
     expect(irmaos).toBe(conexao!.irmaos);
     expect(irmaos.indexOf(faixa!.elemento)).toBe(irmaos.indexOf(conexao!.elemento) + 1);
-    // E EMPILHADAS: as duas dentro do mesmo contêiner que gruda no topo — cada uma
-    // `sticky top-0` sozinha, a de cima cobria a outra ao rolar.
-    const topo = acharPorProp(arvore, "data-faixas-do-topo");
+    // E EMPILHADAS: as três faixas de estado (acompanhamento, conexão, aviso)
+    // dentro do contêiner que gruda no topo e publica a altura delas — cada uma
+    // `sticky top-0` sozinha, a de cima cobria as outras ao rolar.
+    const topo = achar(arvore, FaixasDoTopo);
     expect(topo, "falta o contêiner das faixas do topo").not.toBeNull();
-    expect(topo!.props.children).toBe(irmaos);
-    expect(String(topo!.props.className).split(/\s+/)).toEqual(expect.arrayContaining(["sticky", "top-0"]));
+    expect((topo!.elemento.props as { children: unknown }).children).toBe(irmaos);
+    const acompanhamento = achar(arvore, ImpersonateBanner);
+    expect(acompanhamento!.irmaos).toBe(irmaos);
+    expect(irmaos.indexOf(acompanhamento!.elemento)).toBeLessThan(irmaos.indexOf(conexao!.elemento));
   });
 
   it("sem a telefonia no ambiente: `oferecida` falso — a faixa não fará leitura nenhuma", async () => {

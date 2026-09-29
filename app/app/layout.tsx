@@ -18,6 +18,7 @@ import {
   ImpersonateBanner,
 } from "@/components/app/ImpersonateBanner";
 import { ConexaoCaidaBanner } from "@/components/app/ConexaoCaidaBanner";
+import { FaixasDoTopo } from "@/components/app/FaixasDoTopo";
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
@@ -246,16 +247,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       */}
       <div data-marca-org="" className="contents">
         <EstiloDaMarcaDaOrganizacao css={cssDaOrganizacao} />
-        <ImpersonateBanner impersonating={impersonating} />
         {/*
-          As faixas de estado do topo EMPILHADAS num contêiner `sticky` só. Cada
-          uma `sticky top-0` por conta própria, as duas grudavam no MESMO ponto ao
-          rolar e a de cima cobria a outra. Dentro do contêiner, o `sticky` da
-          faixa de conexão não tem para onde andar (o pai tem a altura dela) e ela
-          se comporta como antes; quem gruda é o conjunto. Sem nenhuma faixa, o
-          contêiner tem altura zero.
+          As faixas de estado do topo EMPILHADAS num contêiner `sticky` só, que
+          publica a altura delas para a TopBar e a Inbox descontarem
+          (components/app/FaixasDoTopo.tsx). Cada uma `sticky top-0` por conta
+          própria, elas grudavam no MESMO ponto ao rolar e a de cima cobria as
+          outras. Sem nenhuma faixa, o contêiner tem altura zero.
         */}
-        <div data-faixas-do-topo="" className="sticky top-0 z-50">
+        <FaixasDoTopo>
+          <ImpersonateBanner impersonating={impersonating} />
           <ConexaoCaidaBanner caidas={conexoesCaidas} />
           {/*
             O aviso de instabilidade do telefone ligado: todo membro vê (desenho da
@@ -263,7 +263,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             instalação sem telefonia não paga nem a primeira leitura da faixa.
           */}
           <FaixaDoAvisoDeInstabilidade oferecida={configAriDoAmbiente() !== null} />
-        </div>
+        </FaixasDoTopo>
         {needsMfaGate ? (
           // Gate always mounted for MFA-required roles; it latches the blocking
           // decision client-side so the enroll Server Action's revalidation
