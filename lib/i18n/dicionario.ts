@@ -9726,8 +9726,8 @@ export const DICIONARIO: Traducoes = {
   Voz: { es: "Voz" },
   "Escolha uma voz": { es: "Elige una voz" },
   "Ouvir amostra": { es: "Escuchar muestra" },
-  "Não foi possível listar as vozes da sua conta da ElevenLabs. Confira a chave em Credenciais de IA.": {
-    es: "No se pudieron listar las voces de tu cuenta de ElevenLabs. Revisa la clave en Credenciales de IA.",
+  "Não foi possível listar as vozes da sua conta da ElevenLabs. Tente de novo em instantes.": {
+    es: "No se pudieron listar las voces de tu cuenta de ElevenLabs. Inténtalo de nuevo en unos instantes.",
   },
   "Voz salva. Gere a prévia e salve cada fala de novo para usar a voz nova.": {
     es: "Voz guardada. Genera la vista previa y guarda cada locución de nuevo para usar la voz nueva.",
@@ -9744,7 +9744,7 @@ export const DICIONARIO: Traducoes = {
   "Toca quando o time está fora do horário, e a ligação é encerrada em seguida.": {
     es: "Suena cuando el equipo está fuera de horario, y la llamada se cierra a continuación.",
   },
-  "Texto da fala": { es: "Texto de la locución" },
+  "Texto da fala: {fala}": { es: "Texto de la locución: {fala}" },
   "Gerar prévia": { es: "Generar vista previa" },
   "Gerando a prévia…": { es: "Generando la vista previa…" },
   "Salvar e usar": { es: "Guardar y usar" },
@@ -9767,6 +9767,12 @@ export const DICIONARIO: Traducoes = {
   "Em uso": { es: "En uso" },
   "Não foi possível carregar o áudio desta fala.": { es: "No se pudo cargar el audio de esta locución." },
   "Carregando o áudio…": { es: "Cargando el audio…" },
+  // O nome acessível de cada tocador: com três falas na tela, o leitor de tela diz qual é qual.
+  "Ouvir: {fala}": { es: "Escuchar: {fala}" },
+  "Prévia da fala": { es: "Vista previa de la locución" },
+  "Prévia da fala: {fala}": { es: "Vista previa de la locución: {fala}" },
+  "Áudio salvo da fala": { es: "Audio guardado de la locución" },
+  "Áudio salvo da fala: {fala}": { es: "Audio guardado de la locución: {fala}" },
   // O "fora do horário" sugerido com o WhatsApp da organização (texto-do-menu.ts,
   // `textoSugeridoForaDoHorario`): passa por t() antes de o número entrar.
   "Nosso atendimento está fechado agora. Se preferir, mande uma mensagem no nosso WhatsApp, {numero}. Obrigado pela ligação.": {

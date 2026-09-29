@@ -16,6 +16,10 @@
  * quando a prévia não serve mais (`previa_ausente`, `previa_desatualizada`), a
  * prévia sai da tela: o botão volta a pedir "Gerar prévia", que é o que a frase
  * manda fazer.
+ *
+ * Um gesto por vez em cada fala: enquanto salva, "Gerar prévia" e o campo ficam
+ * travados (uma prévia paga no meio do salvar seria apagada por ele, e o texto
+ * digitado também); enquanto a prévia é gerada, o "Salvar e usar" fica travado.
  */
 import Link from "next/link";
 import { useState } from "react";
@@ -180,7 +184,7 @@ export function VozEFalas() {
           <p className="text-sm text-destructive">
             {/* A frase da rota: "a ElevenLabs não respondeu" não pede para conferir a chave. */}
             {fraseDaFalhaDaFala(vozes.error, t) ??
-              t("Não foi possível listar as vozes da sua conta da ElevenLabs. Confira a chave em Credenciais de IA.")}
+              t("Não foi possível listar as vozes da sua conta da ElevenLabs. Tente de novo em instantes.")}
           </p>
         ) : null}
       </Card>
@@ -209,14 +213,12 @@ function CartaoDaFalaGeral({
   // (que pode chegar depois — o WhatsApp da organização vem de outra consulta).
   const [editado, setEditado] = useState<string | null>(null);
   const texto = editado ?? fala?.texto ?? sugerido;
-  const previa = usePreviaDaFala();
-  // A voz com que a prévia foi pedida. O hash da prévia inclui a voz: trocada a
-  // voz, a prévia não serve mais (o servidor recusaria com `previa_desatualizada`),
-  // e a tela volta a pedir "Gerar prévia" em vez de oferecer um salvar condenado.
-  const [vozDaPrevia, setVozDaPrevia] = useState<string | null>(null);
-  const previaAtual = previa.previa && vozDaPrevia === vozAtual ? previa.previa : null;
-  const previaDoCampo = previaAtual !== null && previaAtual.texto === texto.trim();
-  const paraSalvar = falaParaSalvar(texto, fala, previaAtual);
+  // A prévia fica amarrada à voz com que foi pedida (o hash dela inclui a voz):
+  // trocada a voz, some, e a tela volta a pedir "Gerar prévia" em vez de oferecer
+  // um salvar que o servidor recusaria com `previa_desatualizada`.
+  const previa = usePreviaDaFala(vozAtual);
+  const previaDoCampo = previa.valePara(texto);
+  const paraSalvar = falaParaSalvar(texto, fala, previa.previa);
   // Há o que salvar quando a prévia deste texto não é a fala em uso — ou quando a
   // pessoa acabou de gerar a prévia do MESMO texto em uso: é o conserto de um
   // áudio que sumiu do Storage ("gere a prévia de novo e salve", diz a rota do
@@ -228,43 +230,52 @@ function CartaoDaFalaGeral({
   const salvar = useMutation({
     mutationFn: async (p: FalaParaSalvar) =>
       (await apiClient.put<{ data: RespostaDaFala }>(`/api/v1/telefonia/falas/gerais/${tipo}`, p)).data,
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: CHAVE_DA_VOZ });
-      previa.limpar();
-      setEditado(null);
-      toast.success(t("Fala salva. As ligações já tocam o áudio novo."));
-    },
-    onError: (e) => {
-      if (e instanceof ApiError && RECUSA_QUE_PEDE_PREVIA_NOVA.has(e.code as FalhaDaFala)) previa.limpar();
-    },
+    // Nas opções, e aguardado: o salvar só termina (e o campo só destrava) depois
+    // de a aba reler a voz — senão o campo voltaria editável por um instante com o
+    // texto antigo, e o que a pessoa digitasse ali seria apagado logo em seguida.
+    onSuccess: () => qc.invalidateQueries({ queryKey: CHAVE_DA_VOZ }),
   });
+  const salvarFala = (p: FalaParaSalvar) =>
+    // Os efeitos na TELA vão no `mutate`: não rodam depois de um `reset()`.
+    salvar.mutate(p, {
+      onSuccess: () => {
+        previa.limpar();
+        setEditado(null);
+        toast.success(t("Fala salva. As ligações já tocam o áudio novo."));
+      },
+      onError: (e) => {
+        if (e instanceof ApiError && RECUSA_QUE_PEDE_PREVIA_NOVA.has(e.code as FalhaDaFala)) previa.limpar();
+      },
+    });
   const falhaAoSalvar = salvar.isError
     ? (fraseDaFalhaDaFala(salvar.error, t) ?? t("Não foi possível salvar a fala. Tente de novo em instantes."))
     : null;
 
   const idDoCampo = `tel-fala-${tipo}`;
+  const nome = t(TITULO[tipo]);
 
   return (
     <Card className="space-y-3 p-5" data-fala-geral={tipo}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{t(TITULO[tipo])}</h3>
+        <h3 className="text-sm font-semibold">{nome}</h3>
         <EstadoDaFala
           fala={fala}
           vozAtual={vozAtual}
           gerando={previa.gerando}
           previaNaoSalva={previaNaoSalva}
-          erro={mensagemDaFalhaDaPrevia(previa.erro, t)}
+          erro={mensagemDaFalhaDaPrevia(previa.erroPara(texto), t)}
         />
       </div>
       <p className="text-xs text-muted-foreground">{t(QUANDO_TOCA[tipo])}</p>
       <Label htmlFor={idDoCampo} className="sr-only">
-        {t("Texto da fala")}
+        {t("Texto da fala: {fala}").replace("{fala}", nome)}
       </Label>
       <Textarea
         id={idDoCampo}
         rows={3}
         maxLength={TAMANHO_MAXIMO_DA_FALA}
         value={texto}
+        disabled={salvar.isPending}
         onChange={(e) => {
           setEditado(e.target.value);
           if (salvar.isError) salvar.reset();
@@ -277,17 +288,16 @@ function CartaoDaFalaGeral({
           data-gerar-previa={tipo}
           onClick={() => {
             salvar.reset();
-            setVozDaPrevia(vozAtual);
             previa.gerar(texto);
           }}
-          disabled={!vozAtual || !texto.trim() || previa.gerando}
+          disabled={!vozAtual || !texto.trim() || previa.gerando || salvar.isPending}
         >
           <Play size={16} aria-hidden /> {previa.gerando ? t("Gerando a prévia…") : t("Gerar prévia")}
         </Button>
         <Button
           type="button"
           onClick={() => {
-            if (paraSalvar && podeSalvar) salvar.mutate(paraSalvar);
+            if (paraSalvar && podeSalvar) salvarFala(paraSalvar);
           }}
           disabled={!podeSalvar || salvar.isPending || previa.gerando}
         >
@@ -295,10 +305,10 @@ function CartaoDaFalaGeral({
         </Button>
         {!vozAtual ? <span className="text-xs text-muted-foreground">{t("Escolha a voz acima antes de gerar.")}</span> : null}
       </div>
-      {previaDoCampo && previaAtual ? (
-        <OuvirPrevia audio={previaAtual.audio} aoOuvir={previa.marcarOuvida} />
+      {previaDoCampo && previa.previa ? (
+        <OuvirPrevia audio={previa.previa.audio} aoOuvir={previa.marcarOuvida} nome={nome} />
       ) : emUsoNoCampo && fala ? (
-        <OuvirFala falaId={fala.id} />
+        <OuvirFala falaId={fala.id} nome={nome} />
       ) : null}
       {vozAtual && !emUsoNoCampo && paraSalvar === null && texto.trim() && !previa.gerando ? (
         <p className="text-xs text-muted-foreground">{t("Gere a prévia deste texto e ouça antes de salvar.")}</p>

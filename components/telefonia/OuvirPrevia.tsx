@@ -16,7 +16,16 @@ import { useT } from "@/hooks/i18n/useT";
 import { ulawParaWav } from "@/lib/telefonia/ulaw";
 import { Play } from "@/lib/ui/icons";
 
-export function OuvirPrevia({ audio, aoOuvir }: { audio: Uint8Array; aoOuvir?: () => void }) {
+export function OuvirPrevia({
+  audio,
+  aoOuvir,
+  nome,
+}: {
+  audio: Uint8Array;
+  aoOuvir?: () => void;
+  /** O nome da fala ("Aguarde"): com vários tocadores na tela, o leitor de tela diz qual é qual. */
+  nome?: string;
+}) {
   const t = useT();
   const el = useRef<HTMLAudioElement>(null);
 
@@ -32,6 +41,7 @@ export function OuvirPrevia({ audio, aoOuvir }: { audio: Uint8Array; aoOuvir?: (
         type="button"
         variant="outline"
         size="sm"
+        aria-label={nome ? t("Ouvir: {fala}").replace("{fala}", nome) : undefined}
         onClick={() => {
           aoOuvir?.();
           void Promise.resolve(el.current?.play()).catch(() => undefined);
@@ -39,7 +49,14 @@ export function OuvirPrevia({ audio, aoOuvir }: { audio: Uint8Array; aoOuvir?: (
       >
         <Play size={14} aria-hidden /> {t("Ouvir")}
       </Button>
-      <audio ref={el} controls data-previa-audio onPlay={() => aoOuvir?.()} className="h-8 max-w-full" />
+      <audio
+        ref={el}
+        controls
+        aria-label={nome ? t("Prévia da fala: {fala}").replace("{fala}", nome) : t("Prévia da fala")}
+        data-previa-audio
+        onPlay={() => aoOuvir?.()}
+        className="h-8 max-w-full"
+      />
     </span>
   );
 }

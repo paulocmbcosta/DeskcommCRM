@@ -10,6 +10,10 @@
  *    pede uma ação diferente de "o Storage falhou, tente de novo".
  *  - `OuvirPrevia` toca o áudio que já está na memória da aba, sem rede, e avisa
  *    quem precisa saber que a pessoa ouviu.
+ *  - Sair da tela no meio do download cancela o pedido e não cria `blob:`; sair
+ *    depois de tocar revoga o `blob:` — nenhum fica vivo sem dono.
+ *  - Cada `<audio>` tem o nome da sua fala: com três na tela, o leitor de tela
+ *    precisa dizer qual é qual.
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -84,6 +88,56 @@ describe("OuvirFala — o áudio da fala salva", () => {
     fetchFalso.mockResolvedValueOnce(new Response(new Uint8Array([0xff]), { status: 200 }));
     await userEvent.click(screen.getByRole("button", { name: /Ouvir/ }));
     await waitFor(() => expect(document.querySelector('audio[data-fala-audio="fala-3"]')).not.toBeNull());
+  });
+});
+
+describe("OuvirFala — sair da tela não deixa pedido nem blob: para trás", () => {
+  it("desmontar no meio do download cancela o pedido, e a resposta que chega depois não vira blob:", async () => {
+    let soltar: (r: Response) => void = () => undefined;
+    fetchFalso.mockImplementation(
+      () =>
+        new Promise<Response>((res) => {
+          soltar = res;
+        }),
+    );
+    const { unmount } = render(<OuvirFala falaId="fala-4" />);
+    await userEvent.click(screen.getByRole("button", { name: /Ouvir/ }));
+    const sinal = (fetchFalso.mock.calls[0]?.[1] as RequestInit).signal as AbortSignal;
+    expect(sinal.aborted).toBe(false);
+
+    unmount();
+    expect(sinal.aborted).toBe(true);
+    soltar(new Response(new Uint8Array([0xff]), { status: 200 }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("desmontar depois de tocar revoga o blob: criado", async () => {
+    fetchFalso.mockResolvedValue(new Response(new Uint8Array([0xff]), { status: 200 }));
+    const { unmount } = render(<OuvirFala falaId="fala-5" />);
+    await userEvent.click(screen.getByRole("button", { name: /Ouvir/ }));
+    await waitFor(() => expect(document.querySelector('audio[data-fala-audio="fala-5"]')).not.toBeNull());
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:teste/1");
+  });
+});
+
+describe("os tocadores dizem de qual fala são", () => {
+  it("o áudio salvo e o botão levam o nome da fala", async () => {
+    fetchFalso.mockResolvedValue(new Response(new Uint8Array([0xff]), { status: 200 }));
+    render(<OuvirFala falaId="fala-6" nome="Aguarde" />);
+    await userEvent.click(screen.getByRole("button", { name: "Ouvir: Aguarde" }));
+    expect(await screen.findByLabelText("Áudio salvo da fala: Aguarde")).toBeInstanceOf(HTMLAudioElement);
+  });
+
+  it("a prévia e o botão levam o nome da fala; sem nome, um rótulo genérico", () => {
+    const { unmount } = render(<OuvirPrevia audio={new Uint8Array([0xff])} nome="Fora do horário" />);
+    expect(screen.getByLabelText("Prévia da fala: Fora do horário")).toBeInstanceOf(HTMLAudioElement);
+    expect(screen.getByRole("button", { name: "Ouvir: Fora do horário" })).toBeInTheDocument();
+    unmount();
+    render(<OuvirPrevia audio={new Uint8Array([0xff])} />);
+    expect(screen.getByLabelText("Prévia da fala")).toBeInstanceOf(HTMLAudioElement);
   });
 });
 
