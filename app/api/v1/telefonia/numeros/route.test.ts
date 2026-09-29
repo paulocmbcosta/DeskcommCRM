@@ -45,6 +45,7 @@ vi.mock("@/lib/channels/telefonia/numeros", async () => ({
 }));
 
 import { hashDoCorpo } from "@/lib/api/idempotency";
+import { byteaComoPostgrest } from "@/tests/helpers/bytea-do-postgrest";
 import { audit } from "@/lib/audit";
 import { criarNumero, numeroSchema } from "@/lib/channels/telefonia/numeros";
 import { empurrarTroncoAgora } from "@/lib/channels/telefonia/empurrar";
@@ -88,8 +89,9 @@ function recibos() {
         filtros = [];
         return { data: achado, error: null };
       },
+      // O `bytea` como o PostgREST o grava e devolve — não a string que foi mandada.
       insert: async (linha: Record<string, unknown>) => {
-        gravados.push(linha);
+        gravados.push({ ...linha, request_hash: byteaComoPostgrest(linha.request_hash) });
         return { error: null };
       },
     };
@@ -191,8 +193,9 @@ describe("POST /api/v1/telefonia/numeros — Idempotency-Key", () => {
 
     expect(JSON.stringify(gravados)).not.toContain(SENHA);
     const { senha: _senha, ...semSenha } = numeroSchema.parse(corpo({ menu_id: MENU }));
-    expect(gravados[0]!.request_hash).toBe(hashDoCorpo(semSenha));
-    expect(gravados[0]!.request_hash).not.toBe(hashDoCorpo(numeroSchema.parse(corpo({ menu_id: MENU }))));
+    // O que o banco guarda: os 32 bytes do digest do corpo SEM a senha.
+    expect(gravados[0]!.request_hash).toBe(`\\x${hashDoCorpo(semSenha)}`);
+    expect(gravados[0]!.request_hash).not.toBe(`\\x${hashDoCorpo(numeroSchema.parse(corpo({ menu_id: MENU })))}`);
   });
 
   it("o preço de a senha ficar fora: a mesma chave com a mesma conta e OUTRA senha é replay, sem criar de novo", async () => {

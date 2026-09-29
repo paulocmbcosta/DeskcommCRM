@@ -44,6 +44,30 @@
  * `idempotency_keys_organization_id_key_endpoint_key`), relemos e devolvemos
  * replay ou conflito, em vez de estourar 500.
  *
+ * ── O formato do hash no banco (`request_hash` é `bytea`) ────────────────────
+ * O supabase-js manda o valor como string JSON, e o PostgREST o passa pela
+ * ENTRADA de `bytea` do Postgres: com o prefixo `\x`, o resto é hex (os bytes
+ * que ele representa); sem o prefixo, é o formato "escape" — os bytes dos
+ * próprios caracteres. Na volta, o PostgREST devolve `bytea` SEMPRE como
+ * `"\x" + hex` dos bytes guardados.
+ *
+ * Até 2026-09-29 este helper gravava o hex SEM o prefixo: o banco guardava os 64
+ * bytes ASCII do texto, a leitura voltava `\x3966…`, e a comparação com o hash
+ * nunca casava — TODO replay com a mesma chave virava 409 `idempotency_conflict`,
+ * em todas as rotas. Os testes de unidade não viam: o banco falso devolvia a
+ * mesma string que recebeu.
+ *
+ * Agora:
+ *  - GRAVA `\x` + hex (`hashParaGravar`): os 32 bytes do digest, o mesmo
+ *    formato de `fn_create_tenant_with_owner` (`decode(p_hash, 'hex')`), o outro
+ *    escritor desta tabela;
+ *  - COMPARA pelo hash lido de volta (`hashGuardado`), que reconhece os dois
+ *    formatos que existem na tabela: os 32 bytes do digest e os 64 bytes ASCII
+ *    do recibo gravado antes do conserto (vive até 24 h). O recibo antigo
+ *    continua CASANDO — replay com o mesmo corpo, 409 com outro. Valor que não é
+ *    nenhum dos dois é conflito (409), nunca exceção.
+ * Medido no Postgres real em tests/invariants/idempotencia-recibo-no-banco.test.ts.
+ *
  * ── Falha ao gravar o recibo ────────────────────────────────────────────────
  * Se o efeito já aconteceu e a gravação do recibo falha, o desfecho devolvido
  * é `executou` — não erro. Devolver erro faria o cliente retentar e DUPLICAR o
@@ -63,7 +87,8 @@ export function chaveDaRequisicao(req: Request): string | null {
 export const TTL_MS = 24 * 60 * 60 * 1000;
 
 export type Recibo = {
-  request_hash: string;
+  /** Como a leitura o devolve: `"\x" + hex` dos bytes guardados (ver `hashGuardado`). */
+  request_hash: unknown;
   status_code: number;
   response_body: unknown;
 };
@@ -80,6 +105,32 @@ export function hashDoCorpo(corpo: unknown): string {
   return createHash("sha256")
     .update(JSON.stringify(ordenar(corpo)))
     .digest("hex");
+}
+
+/** O hash (64 hex) no formato que a entrada de `bytea` grava como os 32 bytes do digest. */
+export function hashParaGravar(hash: string): string {
+  return `\\x${hash}`;
+}
+
+const HEX_DO_SHA256 = /^[0-9a-f]{64}$/;
+
+/**
+ * O hash guardado num recibo, no formato de `hashDoCorpo` (64 hex minúsculos) —
+ * ou `null`, se o valor não é um hash reconhecível. Lê o que a leitura devolve
+ * (`"\x" + hex` dos bytes guardados) nos dois formatos que existem na tabela:
+ *  - 32 bytes: o digest (gravado por este helper e pelo RPC de tenant);
+ *  - 64 bytes que são o próprio texto hex: o recibo gravado antes do conserto.
+ * O texto hex puro também vale (coluna `text`, como em `channel_connection_requests`).
+ */
+export function hashGuardado(valor: unknown): string | null {
+  if (typeof valor !== "string") return null;
+  if (!valor.startsWith("\\x")) return HEX_DO_SHA256.test(valor) ? valor : null;
+  const hex = valor.slice(2);
+  if (!/^(?:[0-9a-fA-F]{2})*$/.test(hex)) return null;
+  const bytes = Buffer.from(hex, "hex");
+  if (bytes.length === 32) return bytes.toString("hex");
+  const texto = bytes.toString("latin1");
+  return bytes.length === 64 && HEX_DO_SHA256.test(texto) ? texto : null;
 }
 
 function ordenar(valor: unknown): unknown {
@@ -135,7 +186,7 @@ export async function comIdempotencia<T>(
   };
 
   const classificar = (recibo: Recibo): DesfechoIdempotente<T> =>
-    recibo.request_hash === hash
+    hashGuardado(recibo.request_hash) === hash
       ? { tipo: "replay", resposta: recibo.response_body as T, status: recibo.status_code }
       : { tipo: "conflito" };
 
@@ -149,7 +200,7 @@ export async function comIdempotencia<T>(
     organization_id: organizationId,
     key: chave,
     endpoint,
-    request_hash: hash,
+    request_hash: hashParaGravar(hash),
     status_code: status,
     response_body: resposta as unknown as Record<string, unknown>,
     expires_at: expiraEm,

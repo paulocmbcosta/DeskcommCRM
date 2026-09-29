@@ -71,6 +71,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createClient } from "@/lib/supabase/server";
 import { menusDaOrg, salvarMenuDaOrg, semanaDoMenu } from "@/lib/telefonia/menus";
+import { byteaComoPostgrest } from "@/tests/helpers/bytea-do-postgrest";
 
 import { GET, POST } from "./route";
 
@@ -140,8 +141,9 @@ function recibos() {
         filtros = [];
         return { data: achado, error: null };
       },
+      // O `bytea` como o PostgREST o grava e devolve — não a string que foi mandada.
       insert: async (linha: Record<string, unknown>) => {
-        gravados.push(linha);
+        gravados.push({ ...linha, request_hash: byteaComoPostgrest(linha.request_hash) });
         return { error: null };
       },
     };
