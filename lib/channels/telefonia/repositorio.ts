@@ -578,6 +578,41 @@ export async function avisarFalaIntocavel(
   );
 }
 
+/**
+ * Quem ligou caiu no time PADRÃO de um menu, e esse time está ARQUIVADO: a
+ * ligação segue a fila dele (que não atende ninguém) e vira perdida com
+ * "Ligar de volta"; este aviso diz na Central que o menu precisa de outro time
+ * padrão. Um por menu enquanto o anterior estiver ABERTO — o dedup
+ * `kind_e_titulo`, com o nome do menu no título —, como `avisarFalaIntocavel`.
+ *
+ * `kind` `other` e não um kind próprio: um kind novo é mudança de schema (o
+ * CHECK `agent_inbox_items_kind_check`), e este é um aviso de configuração raro
+ * — arquivar um time que um menu usa como padrão. A referência é o NÚMERO que
+ * aponta para o menu (`channel_session`): o destino do aviso vira "Revisar
+ * conexão", que abre Conexões, onde mora a aba dos menus do telefone.
+ */
+export async function avisarMenuComTimeArquivado(
+  db: Pick<pg.Pool, "query">,
+  organizationId: string,
+  menu: { id: string; nome: string },
+  troncoId: string,
+): Promise<void> {
+  await insertInboxItem(
+    db,
+    organizationId,
+    {
+      kind: "other",
+      severity: "warn",
+      title: `O menu do telefone ${menu.nome} manda para um time arquivado`.slice(0, 200),
+      body:
+        "Quem liga e não escolhe uma opção nesse menu cai no time padrão dele, que foi arquivado e não atende ninguém: a ligação vira perdida. Escolha outro time padrão para o menu em Conexões › Telefone › Menus.",
+      refKind: "channel_session",
+      refId: troncoId,
+    },
+    "kind_e_titulo",
+  );
+}
+
 /** Um aviso de instabilidade que a passada desligou. */
 export interface AvisoDesligado {
   id: string;

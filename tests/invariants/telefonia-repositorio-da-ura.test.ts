@@ -24,7 +24,9 @@
  *     só, aviso ouvido), com toda escrita presa à organização — também as da
  *     fase 1 (tocando, atendida, encerrada) —, e o cartão da conversa o mostra;
  *     o pedido de saída só volta para o atendente dono dele;
- *  5. o aviso de fala intocável não se repete enquanto o anterior está aberto.
+ *  5. o aviso de fala intocável não se repete enquanto o anterior está aberto;
+ *  6. o aviso do menu cujo time padrão foi arquivado também não se repete, e
+ *     aponta para o número (o destino "Revisar conexão" na Central).
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -667,6 +669,41 @@ describe("aviso de fala intocável na Central", () => {
       [ORG],
     );
     expect(rows[0]).toEqual({ ref_kind: null, severity: "warn" });
+  });
+});
+
+describe("aviso do menu com o time padrão arquivado", () => {
+  const abertos = async (org: string) =>
+    (
+      await pool.query<{ title: string; kind: string; ref_kind: string | null; ref_id: string | null; severity: string }>(
+        `select title, kind, ref_kind, ref_id, severity from public.agent_inbox_items
+          where organization_id = $1 and kind = 'other' and title like 'O menu do telefone %' and status = 'open'
+          order by title`,
+        [org],
+      )
+    ).rows;
+
+  it("um por menu enquanto o anterior está aberto, cada organização com o seu, apontando para o número", async () => {
+    const antigo = { id: MENU_OUTRA_PADRAO_ARQUIVADO, nome: "Menu B antigo" };
+    await repo.avisarMenuComTimeArquivado(pool, OUTRA, antigo, NUMERO_OUTRA);
+    await repo.avisarMenuComTimeArquivado(pool, OUTRA, antigo, NUMERO_OUTRA);
+    expect(await abertos(OUTRA)).toEqual([
+      {
+        title: "O menu do telefone Menu B antigo manda para um time arquivado",
+        kind: "other",
+        ref_kind: "channel_session",
+        ref_id: NUMERO_OUTRA,
+        severity: "warn",
+      },
+    ]);
+    expect(await abertos(ORG)).toEqual([]);
+
+    // Outro menu, outro aviso.
+    await repo.avisarMenuComTimeArquivado(pool, OUTRA, { id: MENU_OUTRA, nome: "Menu B" }, NUMERO_OUTRA);
+    expect((await abertos(OUTRA)).map((a) => a.title)).toEqual([
+      "O menu do telefone Menu B antigo manda para um time arquivado",
+      "O menu do telefone Menu B manda para um time arquivado",
+    ]);
   });
 });
 

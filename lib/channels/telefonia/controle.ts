@@ -5,7 +5,13 @@
  * O Asterisk entrega aqui toda ligação (o dialplan só diz `Stasis(crm)`),
  * e este controlador decide tudo o que não é áudio:
  *
- *   RECEBIDA  tronco → contato/conversa/voice_calls → FILA DO TIME (§5.2):
+ *   RECEBIDA  tronco → contato/conversa/voice_calls → URA, se o número aponta
+ *             para um menu (§5.1): atende e toca o menu; a tecla do cliente
+ *             escolhe o time, e o silêncio ou a tecla errada repetem o menu até
+ *             levar ao time padrão. Quem decide é a regra pura
+ *             (`lib/telefonia/ura.ts`); aqui só se executa o que ela manda.
+ *             Decidido o time (ou direto, no número que aponta para um time) →
+ *             FILA DO TIME (§5.2):
  *             time fora do horário, com a fala pronta → "fora do horário" e
  *             desliga (sem "Ligar de volta"); aviso de instabilidade vigente →
  *             toca o aviso INTEIRO; então toca UM ramal por vez, quem atendeu
@@ -41,6 +47,15 @@ import {
 } from "@/lib/telefonia/distribuicao";
 import { RECUSA_DA_SAIDA, fimDaSaidaNaoAtendida } from "@/lib/telefonia/fim-da-saida";
 import { binaParaE164, numeroParaLigar } from "@/lib/telefonia/numero";
+import {
+  ESTADO_INICIAL_DA_URA,
+  passoDaUra,
+  type AcaoDaUra,
+  type EstadoDaUra,
+  type EventoDaUra,
+  type FalaDaUra,
+  type MenuDaUra,
+} from "@/lib/telefonia/ura";
 import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 
 import { ErroAri, type CanalAri } from "./ari";
@@ -99,6 +114,8 @@ export interface PortaBanco {
   /** A URA (§5.1): o menu do número e o que o cliente escolheu nele. */
   menuPorId(org: string, menuId: string): Promise<MenuDoBanco | null>;
   registrarEscolhaDoMenu(org: string, id: string, e: EscolhaDoMenu): Promise<boolean>;
+  /** O cliente caiu no time padrão do menu, e ele está ARQUIVADO: a Central fica sabendo. */
+  avisarMenuComTimeArquivado(org: string, menu: Pick<MenuDoBanco, "id" | "nome">, troncoId: string): Promise<void>;
   /** O cliente ouviu o aviso de instabilidade INTEIRO (`emergency_heard_at`). */
   registrarAvisoOuvido(org: string, id: string): Promise<boolean>;
   /** A fala não tocou e a ligação seguiu sem ela: `phone_prompt_unplayable` na Central. */
@@ -153,10 +170,10 @@ export interface PlaybackAri {
 }
 
 /**
- * O que chega no WebSocket. `PlaybackFinished` fecha as falas da fila (§5.2).
- * `ChannelDtmfReceived` NÃO é tratado na fila, de propósito: o aviso de
- * instabilidade toca INTEIRO, e tecla nenhuma o interrompe — só a URA (Task 15)
- * lê teclas. `ChannelUserevent` é da transferência (versão 2).
+ * O que chega no WebSocket. `PlaybackFinished` fecha as falas (URA e fila).
+ * `ChannelDtmfReceived` é lido SÓ enquanto a URA está ativa (§5.1): na fila, de
+ * propósito, tecla nenhuma muda nada — o aviso de instabilidade toca INTEIRO.
+ * `ChannelUserevent` é da transferência (versão 2).
  */
 export type EventoAri =
   | { type: "StasisStart"; channel: CanalAri; args: string[] }
@@ -171,8 +188,11 @@ export type EventoAri =
 
 // ─── estado por ligação ────────────────────────────────────────────────────
 
-/** Para que serve a fala no ar — é o que decide o que vem depois dela. */
-type PapelDaFala = "fora_do_horario" | "aviso" | "espera" | "ninguem";
+/**
+ * Para que serve a fala no ar — é o que decide o que vem depois dela. As da URA
+ * (`menu`, `invalida`) têm os mesmos nomes das falas da regra (`FalaDaUra`).
+ */
+type PapelDaFala = "fora_do_horario" | "aviso" | "espera" | "ninguem" | FalaDaUra;
 
 /** Como a Central chama cada fala quando ela não toca (`phone_prompt_unplayable`). */
 const ROTULO_DA_FALA = {
@@ -180,7 +200,29 @@ const ROTULO_DA_FALA = {
   aviso: "aviso de instabilidade",
   espera: "aguarde",
   ninguem: "ninguém atendeu",
+  // A URA sempre manda o rótulo com o nome do menu ("menu Principal").
+  menu: "menu",
+  invalida: "tecla inválida do menu",
 } as const satisfies Record<PapelDaFala, string>;
+
+/**
+ * O que aconteceu ao pedir uma fala (`porFalaNoAr`):
+ *  - `no_ar` — tocando; o que vem depois é decidido no fim dela;
+ *  - `pulada` — não tocou (sem arquivo, recusada pelo Asterisk, ou deixou de
+ *    valer enquanto o arquivo era garantido), e quem pediu segue sem ela;
+ *  - `sem_canal` — o canal do cliente já tinha ido embora: é ele desligando, e
+ *    o fim da ligação vem logo atrás.
+ */
+type FalaPedida = "no_ar" | "pulada" | "sem_canal";
+
+/** A URA de uma ligação, enquanto o cliente escolhe: a regra pura decide, o controlador executa. */
+interface UraEmCurso {
+  menu: MenuDoBanco;
+  regra: MenuDaUra;
+  estado: EstadoDaUra;
+  /** Os 5 s depois do menu. A `vez` da espera fica presa no timer, não aqui (`armarPrazoDaUra`). */
+  prazo: ReturnType<typeof setTimeout> | null;
+}
 
 interface FalaNoAr {
   playbackId: string;
@@ -232,6 +274,8 @@ interface Recebida {
   fala: FalaNoAr | null;
   /** O motivo do fim, já decidido enquanto a última fala toca ("fora do horário", "ninguém atendeu"). */
   encerrando: string | null;
+  /** A URA, enquanto o cliente escolhe no menu; `null` antes (número de time) e depois da escolha. */
+  ura: UraEmCurso | null;
   /**
    * O cliente pediu para desligar (`ChannelHangupRequest`). Uma fala cortada
    * pela queda do canal termina `failed` ("Playback failed" no
@@ -350,6 +394,8 @@ export class ControladorDeChamadas {
           return await this.aoDiscar(ev as Extract<EventoAri, { type: "Dial" }>);
         case "PlaybackFinished":
           return await this.aoTerminarFala(ev as Extract<EventoAri, { type: "PlaybackFinished" }>);
+        case "ChannelDtmfReceived":
+          return await this.aoReceberTecla(ev as Extract<EventoAri, { type: "ChannelDtmfReceived" }>);
         default:
           return;
       }
@@ -397,7 +443,11 @@ export class ControladorDeChamadas {
     // O chamar que quem ligou ouve enquanto escolhemos quem atende.
     await this.ari.indicarChamando(canal.id).catch(() => undefined);
 
-    const teamId = tronco.teamId;
+    // O número aponta para um time OU para um menu (0288). Com menu, a ligação
+    // nasce no time PADRÃO dele: é o time dela enquanto o cliente escolhe, e o
+    // dono do "Ligar de volta" de quem desliga no menu (§5.1).
+    const menu = await this.menuDoNumero(tronco);
+    const teamId = menu ? menu.defaultTeamId : tronco.teamId;
     const e164 = binaParaE164(canal.caller.number);
     let contactId: string | null = null;
     let conversationId: string | null = null;
@@ -415,6 +465,7 @@ export class ControladorDeChamadas {
       conversationId,
       teamId,
       status: "ringing",
+      menuId: menu?.id ?? null,
     });
 
     const l: Recebida = {
@@ -442,12 +493,37 @@ export class ControladorDeChamadas {
       avisoPendente: null,
       fala: null,
       encerrando: null,
+      ura: null,
       clienteSaindo: false,
       fim: false,
     };
     this.registrar(l, canal.id);
-    this.log.info("telefonia: ligação recebida", { voice_call: vcId, tronco: tronco.id, time: teamId });
+    this.log.info("telefonia: ligação recebida", { voice_call: vcId, tronco: tronco.id, time: teamId, menu: menu?.id ?? null });
+    if (menu) return this.iniciarUra(l, menu);
     await this.entrarNaFila(l);
+  }
+
+  /**
+   * O menu do número, se ele aponta para um. Menu que não volta (arquivado ou
+   * apagado — a tela recusa arquivar menu em uso, então é raro) ou leitura que
+   * falha: a ligação segue SEM menu, com o time do número — nenhum, num número
+   * de menu —, a fila da fase 1 e, no fim, "Ligar de volta".
+   */
+  private async menuDoNumero(tronco: TroncoDoBanco): Promise<MenuDoBanco | null> {
+    if (!tronco.menuId) return null;
+    try {
+      const menu = await this.banco.menuPorId(tronco.organizationId, tronco.menuId);
+      if (!menu) {
+        this.log.warn("telefonia: o número aponta para um menu que não existe mais — segue sem menu", {
+          tronco: tronco.id,
+          menu: tronco.menuId,
+        });
+      }
+      return menu;
+    } catch (e) {
+      this.log.warn("telefonia: menu do número não lido — segue sem menu", { tronco: tronco.id, erro: mensagemDe(e, 160) });
+      return null;
+    }
   }
 
   /**
@@ -482,7 +558,7 @@ export class ControladorDeChamadas {
     // toca), a fase 1: fila e "Ligar de volta" — desligar calado seria um beco
     // sem saída para quem ligou (plano, "Decisões de implementação").
     if (fila.situacao === "fora_do_horario" && l.falasGerais.foraDoHorario) {
-      if (await this.tocarNaFila(l, l.falasGerais.foraDoHorario, "fora_do_horario")) {
+      if ((await this.porFalaNoAr(l, l.falasGerais.foraDoHorario, "fora_do_horario")) === "no_ar") {
         l.encerrando = MOTIVO_FORA_DO_HORARIO;
         return;
       }
@@ -495,7 +571,7 @@ export class ControladorDeChamadas {
     if (l.fim) return;
     const aviso = l.avisoPendente;
     l.avisoPendente = null;
-    if (aviso && (await this.tocarNaFila(l, aviso, "aviso"))) return;
+    if (aviso && (await this.porFalaNoAr(l, aviso, "aviso")) === "no_ar") return;
     return this.comecarOsToques(l);
   }
 
@@ -523,7 +599,10 @@ export class ControladorDeChamadas {
   private async segurarNaLinha(l: Recebida) {
     if (l.segurando || l.fim) return;
     l.segurando = true;
-    if (l.falasGerais.aguarde && (await this.tocarNaFila(l, l.falasGerais.aguarde, "espera"))) return;
+    const aguarde = l.falasGerais.aguarde;
+    if (aguarde && (await this.porFalaNoAr(l, aguarde, "espera", { valeTocar: () => this.aindaEspera(l) })) === "no_ar") {
+      return;
+    }
     if (l.fim || l.atendidaPor) return;
     await this.garantirAtendida(l);
     await this.ari.musicaDeEspera(l.cliente).catch(() => undefined);
@@ -617,64 +696,45 @@ export class ControladorDeChamadas {
     }, ms);
   }
 
+  /** Todos os relógios da ligação: o da fila, o do "aguarde", o da fala no ar e o prazo da URA. */
   private pararRelogios(l: Recebida) {
     if (l.relogio) clearTimeout(l.relogio);
     l.relogio = null;
     if (l.relogioDaEspera) clearTimeout(l.relogioDaEspera);
     l.relogioDaEspera = null;
     this.pararRelogioDaFala(l);
+    if (l.ura) this.pararPrazoDaUra(l.ura);
   }
 
-  private pararRelogioDaFala(l: Recebida) {
-    if (l.relogioDaFala) clearTimeout(l.relogioDaFala);
-    l.relogioDaFala = null;
-  }
+  // ─── a fala no ar (a mecânica comum da URA e da fila) ────────────────────
+  //
+  // Uma fala por vez no canal do cliente. Quem pede uma fala (a URA, a fila)
+  // não lida com playback nem relógio: pede com um PAPEL (`porFalaNoAr`), e o
+  // fim dela — pelo `PlaybackFinished` ou pelo relógio da fala, se o evento se
+  // perder — volta em `aposFala`, que pergunta ao dono do papel o que vem depois.
+  // Parar a fala no ar (`pararFalaAtual`) faz o fim dela, que chega depois, ser
+  // ignorado.
 
   /**
-   * Se o `PlaybackFinished` desta fala não chegar até a duração dela + a folga,
-   * a fala é parada e a ligação segue EXATAMENTE como se ela tivesse terminado
-   * bem. O fim que chegar atrasado já não a encontra no mapa e é ignorado.
+   * Toca uma fala no canal do cliente e devolve o que aconteceu (`FalaPedida`).
+   * A fala que não toca — sem arquivo no disco, ou recusada pelo Asterisk — é
+   * PULADA: a Central fica sabendo, e quem pediu segue como se ela não
+   * existisse. Atende a ligação só depois de o arquivo estar garantido: sem
+   * fala, a fila da fase 1 (que ainda deixa chamar) segue.
    */
-  private armarRelogioDaFala(l: Recebida, playbackId: string, duracaoMs: number) {
-    this.pararRelogioDaFala(l);
-    if (l.fim) return;
-    l.relogioDaFala = setTimeout(() => {
-      l.relogioDaFala = null;
-      if (l.fim) return;
-      void this.emFila(async () => {
-        if (l.fim || l.fala?.playbackId !== playbackId) return;
-        this.log.warn("telefonia: o fim da fala não chegou — a ligação segue sem ele", {
-          voice_call: l.vcId,
-          papel: l.fala.papel,
-        });
-        await this.ari
-          .pararFala(playbackId)
-          .catch((e) => this.log.warn("telefonia: fala não parada", { erro: mensagemDe(e, 160) }));
-        await this.concluirFala(l, playbackId, true);
-      }).catch((e) => this.log.error("telefonia: relógio da fala falhou", { erro: String(e) }));
-    }, duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
-  }
-
-  // ─── falas da fila ───────────────────────────────────────────────────────
-
-  /**
-   * Toca uma fala da fila no canal do cliente. `true` = no ar (o que vem depois
-   * é decidido no `PlaybackFinished`). `false` = a fala foi PULADA — sem arquivo
-   * no disco ou recusada pelo Asterisk —, a Central fica sabendo, e quem chamou
-   * segue como se ela não existisse. Atende a ligação só depois de o arquivo
-   * estar garantido: sem fala, a fila da fase 1 (que ainda deixa chamar) segue.
-   */
-  private async tocarNaFila(
+  private async porFalaNoAr(
     l: Recebida,
     fala: FalaDoBanco,
     papel: PapelDaFala,
     opcoes: {
       /** O nome da fala na Central; o padrão é o do papel ("aguarde"…). */
       rotulo?: string;
+      /** Conferido com o arquivo já garantido: a fala ainda faz sentido? Senão, pulada sem aviso. */
+      valeTocar?: () => boolean;
       /** Com o arquivo garantido, logo antes de tocar: parar o que está no ar. */
       antesDeTocar?: () => Promise<void>;
     } = {},
-  ): Promise<boolean> {
+  ): Promise<FalaPedida> {
     const rotulo = opcoes.rotulo ?? ROTULO_DA_FALA[papel];
     // Com o arquivo no disco, é um `stat`. Sem ele, baixa do Storage com prazo de
     // até 3 s, e a fila SERIAL do laço fica parada esse tempo — todas as
@@ -682,11 +742,11 @@ export class ControladorDeChamadas {
     // recém-salva toca antes da passada de 60 s levá-la ao disco. A conferência
     // abaixo é defesa para quem chama sem a fila (os testes).
     const midia = await this.falas.garantir(fala).catch(() => null);
-    if (l.fim || (papel === "espera" && (l.atendidaPor || l.encerrando))) return false;
+    if (l.fim || (opcoes.valeTocar && !opcoes.valeTocar())) return "pulada";
     if (!midia) {
       this.log.warn("telefonia: fala sem arquivo no disco — pulada", { voice_call: l.vcId, fala: fala.id, papel });
       await this.avisarIntocavel(l, rotulo);
-      return false;
+      return "pulada";
     }
     if (opcoes.antesDeTocar) await opcoes.antesDeTocar();
     await this.garantirAtendida(l);
@@ -702,14 +762,15 @@ export class ControladorDeChamadas {
         papel,
         erro: mensagemDe(e, 160),
       });
-      if (!canalSumiu) await this.avisarIntocavel(l, rotulo);
-      return false;
+      if (canalSumiu) return "sem_canal";
+      await this.avisarIntocavel(l, rotulo);
+      return "pulada";
     }
-    if (l.fim) return false;
+    if (l.fim) return "pulada";
     l.fala = { playbackId, papel, rotulo };
     this.porReproducao.set(playbackId, l);
     this.armarRelogioDaFala(l, playbackId, fala.duracaoMs);
-    return true;
+    return "no_ar";
   }
 
   private async avisarIntocavel(l: Recebida, rotulo: string) {
@@ -744,6 +805,8 @@ export class ControladorDeChamadas {
     l.fala = null;
     this.pararRelogioDaFala(l);
     // Cortada porque o cliente desligou: quem encerra é o StasisEnd que vem atrás.
+    // Vale para toda fala — a do menu também: quem desliga no menu não "escolheu"
+    // nada, e a ligação vira perdida pelo fim do canal, não pela URA.
     if (l.clienteSaindo) return;
     if (!tocou) {
       this.log.warn("telefonia: o Asterisk não tocou a fala — pulada", { voice_call: l.vcId, papel: fala.papel });
@@ -752,10 +815,55 @@ export class ControladorDeChamadas {
     return this.aposFala(l, fala.papel, tocou);
   }
 
+  /**
+   * Se o `PlaybackFinished` desta fala não chegar até a duração dela + a folga,
+   * a fala é parada e a ligação segue EXATAMENTE como se ela tivesse terminado
+   * bem. O fim que chegar atrasado já não a encontra no mapa e é ignorado.
+   *
+   * "Como se tivesse terminado bem" é uma SUPOSIÇÃO: sem o evento não há como
+   * saber se o áudio tocou até o fim. Quando a fala é o aviso de instabilidade,
+   * isso quer dizer que o "ouviu o aviso" (`emergency_heard_at`, no cartão da
+   * ligação) é gravado por suposição — a fala tinha arquivo, o Asterisk a
+   * aceitou e a duração dela passou. É a leitura mais provável, e a alternativa
+   * (não gravar) diria ao atendente que o cliente não ouviu o que provavelmente
+   * ouviu. Na URA, o menu dado por terminado abre a espera de 5 s.
+   */
+  private armarRelogioDaFala(l: Recebida, playbackId: string, duracaoMs: number) {
+    this.pararRelogioDaFala(l);
+    if (l.fim) return;
+    l.relogioDaFala = setTimeout(() => {
+      l.relogioDaFala = null;
+      if (l.fim) return;
+      void this.emFila(async () => {
+        if (l.fim || l.fala?.playbackId !== playbackId) return;
+        this.log.warn("telefonia: o fim da fala não chegou — a ligação segue sem ele", {
+          voice_call: l.vcId,
+          papel: l.fala.papel,
+        });
+        await this.ari
+          .pararFala(playbackId)
+          .catch((e) => this.log.warn("telefonia: fala não parada", { erro: mensagemDe(e, 160) }));
+        await this.concluirFala(l, playbackId, true);
+      }).catch((e) => this.log.error("telefonia: relógio da fala falhou", { erro: String(e) }));
+    }, duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
+  }
+
+  private pararRelogioDaFala(l: Recebida) {
+    if (l.relogioDaFala) clearTimeout(l.relogioDaFala);
+    l.relogioDaFala = null;
+  }
+
   /** O que vem depois de cada fala — ou de uma que não tocou (e então é como se não existisse). */
   private async aposFala(l: Recebida, papel: PapelDaFala, tocou: boolean): Promise<void> {
     if (l.fim) return;
     switch (papel) {
+      case "menu":
+      case "invalida": {
+        // A URA: a regra decide o que vem depois do fim — ou da fala que não tocou.
+        const ura = l.ura;
+        if (!ura) return;
+        return this.executarUra(l, ura, tocou ? { tipo: "fim_da_fala" } : { tipo: "fala_falhou" });
+      }
       case "fora_do_horario":
         // Ouviu o porquê: acaba aqui, sem "Ligar de volta" (§5.2.1).
         if (tocou) return this.encerrarRecebida(l, MOTIVO_FORA_DO_HORARIO);
@@ -780,6 +888,155 @@ export class ControladorDeChamadas {
     }
   }
 
+  // ─── URA (desenho §5.1) ──────────────────────────────────────────────────
+  //
+  // A regra é a pura de `lib/telefonia/ura.ts` — estado + evento → UMA ação —, e
+  // aqui só se executa a ação. Os eventos que chegam à regra: a tecla do cliente
+  // (só enquanto a URA está ativa), o fim da fala, a fala que não tocou e o prazo
+  // dos 5 s depois do menu. Decidido o time, a URA acaba (`l.ura = null`) e a
+  // ligação entra na fila dele: a partir dali tecla nenhuma muda nada.
+
+  /**
+   * A tecla do CLIENTE, e só enquanto a URA está ativa. No aviso de
+   * instabilidade, no "aguarde" e na fila, a tecla é ignorada: o aviso toca
+   * INTEIRO (§5.2.2). A tecla do canal do ramal também não conta.
+   */
+  private async aoReceberTecla(ev: Extract<EventoAri, { type: "ChannelDtmfReceived" }>) {
+    const canal = ev.channel?.id;
+    const l = canal ? this.porCanal.get(canal) : undefined;
+    if (!l || l.tipo !== "recebida" || l.fim || l.clienteSaindo || !l.ura || canal !== l.cliente) return;
+    if (typeof ev.digit !== "string" || ev.digit.length !== 1) return;
+    return this.executarUra(l, l.ura, { tipo: "tecla", digito: ev.digit });
+  }
+
+  /** O número aponta para um menu: a URA começa, e o menu toca (atendendo a ligação). */
+  private async iniciarUra(l: Recebida, menu: MenuDoBanco): Promise<void> {
+    const ura: UraEmCurso = {
+      menu,
+      regra: { opcoes: menu.opcoes, defaultTeamId: menu.defaultTeamId, temFalaInvalida: menu.falaInvalida !== null },
+      estado: ESTADO_INICIAL_DA_URA,
+      prazo: null,
+    };
+    l.ura = ura;
+    return this.tocarNaUra(l, ura, "menu");
+  }
+
+  /**
+   * Põe no ar a fala que a regra pediu. A que não toca (sem fala pronta, sem
+   * arquivo, recusada pelo Asterisk) volta à regra como `fala_falhou` — é ela
+   * quem decide o que isso significa (o menu vai ao time padrão; a de tecla
+   * inválida cede ao menu).
+   */
+  private async tocarNaUra(l: Recebida, ura: UraEmCurso, qual: FalaDaUra): Promise<void> {
+    const fala = qual === "menu" ? ura.menu.fala : ura.menu.falaInvalida;
+    const rotulo = qual === "menu" ? `menu ${ura.menu.nome}` : `tecla inválida do menu ${ura.menu.nome}`;
+    if (!fala) {
+      // O menu sem fala pronta (desenho §4): avisado, e direto para o time padrão.
+      await this.avisarIntocavel(l, rotulo);
+      return this.executarUra(l, ura, { tipo: "fala_falhou" });
+    }
+    const pedida = await this.porFalaNoAr(l, fala, qual, { rotulo, valeTocar: () => l.ura === ura });
+    // `sem_canal` é o cliente desligando: o fim do canal vem atrás e a URA não
+    // decide nada por ele — a ligação vira perdida, sem desfecho de menu.
+    if (pedida !== "pulada") return;
+    return this.executarUra(l, ura, { tipo: "fala_falhou" });
+  }
+
+  /** Um passo da regra, executado. */
+  private async executarUra(l: Recebida, ura: UraEmCurso, evento: EventoDaUra): Promise<void> {
+    if (l.fim || l.ura !== ura) return;
+    const { estado, acao } = passoDaUra(ura.regra, ura.estado, evento);
+    ura.estado = estado;
+    switch (acao.tipo) {
+      case "ignorar":
+        return;
+      case "esperar":
+        return this.armarPrazoDaUra(l, ura, acao.ms, acao.vez);
+      case "tocar":
+        this.pararPrazoDaUra(ura);
+        if (acao.pararAtual) await this.pararFalaAtual(l);
+        return this.tocarNaUra(l, ura, acao.fala);
+      case "encaminhar":
+        this.pararPrazoDaUra(ura);
+        if (acao.pararAtual) await this.pararFalaAtual(l);
+        return this.sairDaUra(l, ura, acao);
+      default: {
+        const _nunca: never = acao;
+        return _nunca;
+      }
+    }
+  }
+
+  /**
+   * Os 5 s depois do menu. O timer guarda a `vez` da ação `esperar` NO MOMENTO
+   * EM QUE É ARMADO e a devolve no `prazo` — nunca a vez do estado na hora do
+   * disparo. O prazo que disparou e esperou na fila serial atrás de uma tecla
+   * chega quando a espera já é outra; com a vez da hora do disparo, ele gastaria
+   * uma repetição que o cliente não teve. Com a vez de quando foi armado, a
+   * regra o reconhece como velho e o ignora.
+   */
+  private armarPrazoDaUra(l: Recebida, ura: UraEmCurso, ms: number, vez: number) {
+    this.pararPrazoDaUra(ura);
+    if (l.fim) return;
+    ura.prazo = setTimeout(() => {
+      ura.prazo = null;
+      if (l.fim || l.ura !== ura) return;
+      void this.emFila(() => this.executarUra(l, ura, { tipo: "prazo", vez })).catch((e) =>
+        this.log.error("telefonia: prazo da URA falhou", { erro: String(e) }),
+      );
+    }, ms);
+  }
+
+  private pararPrazoDaUra(ura: UraEmCurso) {
+    if (ura.prazo) clearTimeout(ura.prazo);
+    ura.prazo = null;
+  }
+
+  /**
+   * A URA decidiu o time: grava a escolha (tecla, desfecho e time numa escrita
+   * só) e a ligação entra na fila dele (§5.2), com tudo o que a fila faz — fora
+   * do horário, aviso de instabilidade, "aguarde", os ramais e "ninguém
+   * atendeu". Os 2 min da fila contam daqui, da entrada nela (§5.1.3).
+   *
+   * Time padrão ARQUIVADO: a ligação segue o mesmo caminho (a fila de um time
+   * que não atende ninguém, e perdida com "Ligar de volta"), mas antes a Central
+   * fica sabendo que o menu precisa de outro time padrão.
+   */
+  private async sairDaUra(l: Recebida, ura: UraEmCurso, acao: Extract<AcaoDaUra, { tipo: "encaminhar" }>): Promise<void> {
+    l.ura = null;
+    l.teamId = acao.teamId;
+    try {
+      const gravou = await this.banco.registrarEscolhaDoMenu(l.org, l.vcId, {
+        digito: acao.digito,
+        desfecho: acao.desfecho,
+        teamId: acao.teamId,
+      });
+      if (!gravou) this.log.warn("telefonia: escolha do menu não achou a ligação nesta organização", { voice_call: l.vcId });
+    } catch (e) {
+      // A ligação não para por isso: o cliente já escolheu, e vai ao time dele.
+      this.log.warn("telefonia: escolha do menu não gravada", { voice_call: l.vcId, erro: mensagemDe(e, 160) });
+    }
+    if (acao.teamId === ura.menu.defaultTeamId && !ura.menu.timePadraoAtivo) {
+      await this.banco
+        .avisarMenuComTimeArquivado(l.org, ura.menu, l.tronco.id)
+        .catch((e) => this.log.warn("telefonia: aviso do menu com time arquivado não gravado", { erro: mensagemDe(e, 160) }));
+    }
+    this.log.info("telefonia: a URA decidiu o time", {
+      voice_call: l.vcId,
+      menu: ura.menu.id,
+      desfecho: acao.desfecho,
+      time: acao.teamId,
+    });
+    return this.entrarNaFila(l);
+  }
+
+  // ─── falas da fila ───────────────────────────────────────────────────────
+
+  /** O "aguarde" só vale enquanto ninguém atendeu e a fila não está se despedindo. */
+  private aindaEspera(l: Recebida): boolean {
+    return !l.atendidaPor && !l.encerrando;
+  }
+
   private async registrarOuviuOAviso(l: Recebida) {
     try {
       if (!(await this.banco.registrarAvisoOuvido(l.org, l.vcId))) {
@@ -802,12 +1059,14 @@ export class ControladorDeChamadas {
         const aguarde = l.falasGerais.aguarde;
         if (!aguarde || l.fim || l.atendidaPor || l.encerrando || l.fala) return;
         let parouAMusica = false;
-        const tocando = await this.tocarNaFila(l, aguarde, "espera", {
-          antesDeTocar: async () => {
-            parouAMusica = true;
-            await this.ari.pararMusica(l.cliente).catch(() => undefined);
-          },
-        });
+        const tocando =
+          (await this.porFalaNoAr(l, aguarde, "espera", {
+            valeTocar: () => this.aindaEspera(l),
+            antesDeTocar: async () => {
+              parouAMusica = true;
+              await this.ari.pararMusica(l.cliente).catch(() => undefined);
+            },
+          })) === "no_ar";
         // Pulado: sem arquivo, a música nem parou e segue; recusado pelo Asterisk, ela volta.
         if (!tocando && parouAMusica && !l.fim && !l.atendidaPor && !l.encerrando) {
           await this.ari.musicaDeEspera(l.cliente).catch(() => undefined);
@@ -824,12 +1083,12 @@ export class ControladorDeChamadas {
     const ninguem = l.falasGerais.ninguem;
     if (
       ninguem &&
-      (await this.tocarNaFila(l, ninguem, "ninguem", {
+      (await this.porFalaNoAr(l, ninguem, "ninguem", {
         antesDeTocar: async () => {
           await this.pararFalaAtual(l);
           if (l.atendidaPelaRede) await this.ari.pararMusica(l.cliente).catch(() => undefined);
         },
-      }))
+      })) === "no_ar"
     ) {
       return;
     }
@@ -875,6 +1134,7 @@ export class ControladorDeChamadas {
     if (l.fim) return;
     l.fim = true;
     this.pararRelogios(l);
+    l.ura = null;
     if (l.fala) this.porReproducao.delete(l.fala.playbackId);
     l.fala = null;
     const outros = [l.cliente, l.ramal?.canal].filter((c): c is string => Boolean(c));
