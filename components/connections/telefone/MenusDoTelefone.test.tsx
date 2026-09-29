@@ -434,6 +434,17 @@ describe("aba Menus — arquivar", () => {
 });
 
 describe("aba Menus — o editor", () => {
+  it("os campos têm os ids FIXOS que a prova pela tela (e2e) procura, cada um com o seu rótulo", async () => {
+    pintar();
+    const editor = await abrirEditor();
+    expect(editor.querySelector("#menu-nome")).toBe(within(editor).getByRole("textbox", { name: "Nome do menu" }));
+    expect(editor.querySelector("#menu-padrao")).toBe(
+      within(editor).getByRole("combobox", { name: "Time padrão (quem não escolhe nada)" }),
+    );
+    expect(editor.querySelector("#menu-texto")).toBe(campoDoMenu(editor));
+    expect(editor.querySelector("#menu-invalida")).toBe(campoDaInvalida(editor));
+  });
+
   it("editar sem mexer na fala: 'Salvar menu' manda o texto e o hash da fala em uso, sem gerar prévia", async () => {
     pintar();
     const editor = await abrirEditor();

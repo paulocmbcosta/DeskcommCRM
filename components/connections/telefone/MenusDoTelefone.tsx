@@ -14,6 +14,10 @@
  * escolhe opção nenhuma, o alerta de `menuConfunde` — a regra é a de
  * `lib/telefonia/ultimos-sete-dias.ts`, não uma cópia aqui.
  *
+ * O cartão REORDENA as opções: a rota as devolve em ordem de texto (o 0 primeiro),
+ * e o cartão e o editor as mostram como a fala as diz, com o 0 por último — a regra
+ * é a do texto do menu (`naOrdemFalada`, texto-do-menu.ts), não uma cópia aqui.
+ *
  * As regras do editor também não são cópias: tecla repetida é `teclaRepetida`,
  * as teclas e o teto do nome espelham os CHECKs do banco (`vocabulario.ts`), e a
  * prévia é a máquina de `usePreviaDaFala` (amarrada à voz atual). Um time
@@ -35,7 +39,7 @@
  * diz quem pode — a rota é a autoridade.
  */
 import Link from "next/link";
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -58,7 +62,7 @@ import { useTimesDoInbox, type TimeDoInbox } from "@/hooks/inbox/useTimesDoInbox
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import { randomId } from "@/lib/random-id";
-import { FRASE_DA_OPCAO, TEXTO_SUGERIDO, montarTextoDoMenu } from "@/lib/telefonia/texto-do-menu";
+import { FRASE_DA_OPCAO, TEXTO_SUGERIDO, montarTextoDoMenu, naOrdemFalada } from "@/lib/telefonia/texto-do-menu";
 import { menuConfunde } from "@/lib/telefonia/ultimos-sete-dias";
 import {
   TAMANHO_MAXIMO_DA_FALA,
@@ -80,14 +84,6 @@ const NOVO = "novo";
 
 /** Qual das duas falas do menu uma recusa diz respeito (`details.fala` da rota). */
 type QualFala = "menu" | "invalida";
-
-/** A ordem falada das teclas (a do vocabulário: 1 a 9, e o 0 por último). */
-const ordemDaTecla = (tecla: string) => {
-  const i = (TECLAS_DO_MENU as readonly string[]).indexOf(tecla);
-  return i === -1 ? TECLAS_DO_MENU.length : i;
-};
-const naOrdemFalada = <T extends { tecla: string }>(opcoes: readonly T[]): T[] =>
-  [...opcoes].sort((a, b) => ordemDaTecla(a.tecla) - ordemDaTecla(b.tecla));
 
 /** O time existe na lista e foi arquivado. Um id que a lista não conhece fica com a rota (`time_invalido`). */
 const estaArquivado = (times: readonly TimeDoInbox[], id: string) => times.some((x) => x.id === id && x.archived);
@@ -365,7 +361,9 @@ function EditorDeMenu({
 }) {
   const t = useT();
   const qc = useQueryClient();
-  const id = useId();
+  // Os ids dos campos são FIXOS (`menu-nome`, `menu-padrao`, `menu-texto`,
+  // `menu-invalida`): a prova pela tela (tests/e2e) os procura, e só um editor
+  // fica aberto por vez, então não colidem.
   const ativos = times.filter((x) => !x.archived);
   const nomeDoTimeAtivo = (timeId: string) => ativos.find((x) => x.id === timeId)?.name ?? "";
   const previaDoMenu = usePreviaDaFala(vozAtual);
@@ -501,9 +499,9 @@ function EditorDeMenu({
     <Card className="space-y-4 p-5" data-editor-de-menu>
       <h3 className="text-sm font-semibold">{menu ? t("Editar menu") : t("Novo menu")}</h3>
       <div className="space-y-1.5">
-        <Label htmlFor={`${id}-nome`}>{t("Nome do menu")}</Label>
+        <Label htmlFor="menu-nome">{t("Nome do menu")}</Label>
         <Input
-          id={`${id}-nome`}
+          id="menu-nome"
           value={r.nome}
           maxLength={TAMANHO_MAXIMO_DO_NOME_DO_MENU}
           disabled={salvando}
@@ -565,13 +563,13 @@ function EditorDeMenu({
       </fieldset>
 
       <div className="space-y-1.5">
-        <Label htmlFor={`${id}-padrao`}>{t("Time padrão (quem não escolhe nada)")}</Label>
+        <Label htmlFor="menu-padrao">{t("Time padrão (quem não escolhe nada)")}</Label>
         <Select
           value={r.time_padrao_id}
           onValueChange={(v) => editar((x) => ({ ...x, time_padrao_id: v }))}
           disabled={salvando}
         >
-          <SelectTrigger id={`${id}-padrao`}>
+          <SelectTrigger id="menu-padrao">
             <SelectValue placeholder={t("Escolha o time")} />
           </SelectTrigger>
           <SelectContent>{itensDeTime(r.time_padrao_id)}</SelectContent>
@@ -579,9 +577,9 @@ function EditorDeMenu({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor={`${id}-texto`}>{nomeDaFalaDoMenu}</Label>
+        <Label htmlFor="menu-texto">{nomeDaFalaDoMenu}</Label>
         <Textarea
-          id={`${id}-texto`}
+          id="menu-texto"
           rows={3}
           maxLength={TAMANHO_MAXIMO_DA_FALA}
           value={textoDoMenu}
@@ -618,9 +616,9 @@ function EditorDeMenu({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor={`${id}-invalida`}>{t("Fala de tecla inválida (opcional)")}</Label>
+        <Label htmlFor="menu-invalida">{t("Fala de tecla inválida (opcional)")}</Label>
         <Textarea
-          id={`${id}-invalida`}
+          id="menu-invalida"
           rows={2}
           maxLength={TAMANHO_MAXIMO_DA_FALA}
           value={r.texto_invalida}

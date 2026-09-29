@@ -4,9 +4,24 @@ import {
   FRASE_DA_OPCAO,
   TEXTO_SUGERIDO,
   montarTextoDoMenu,
+  naOrdemFalada,
   numeroParaFalar,
   textoSugeridoForaDoHorario,
 } from "./texto-do-menu";
+import { TECLAS_DO_MENU } from "./vocabulario";
+
+describe("naOrdemFalada", () => {
+  it("põe as opções na ordem em que a fala as diz — 1 a 9, e o 0 por último — sem mexer na lista original", () => {
+    const opcoes = [{ tecla: "0" }, { tecla: "3" }, { tecla: "1" }];
+    expect(naOrdemFalada(opcoes).map((o) => o.tecla)).toEqual(["1", "3", "0"]);
+    expect(opcoes.map((o) => o.tecla)).toEqual(["0", "3", "1"]);
+  });
+
+  it("a lista de teclas que a tela oferece já está nessa ordem (uma regra só)", () => {
+    const teclas = TECLAS_DO_MENU.map((tecla) => ({ tecla }));
+    expect(naOrdemFalada([...teclas].reverse()).map((o) => o.tecla)).toEqual([...TECLAS_DO_MENU]);
+  });
+});
 
 describe("montarTextoDoMenu", () => {
   it("monta a fala a partir das opções, na ordem das teclas", () => {

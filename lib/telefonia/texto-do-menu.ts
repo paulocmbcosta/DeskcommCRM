@@ -17,13 +17,21 @@ export const FRASE_DA_OPCAO = "Para {time}, digite {tecla}.";
 /** O 0 por último: é, por costume, a tecla de "falar com alguém". */
 const ordemDaTecla = (tecla: string) => (tecla === "0" ? 10 : Number(tecla));
 
+/**
+ * As opções na ordem em que a fala as diz: 1 a 9, e o 0 por último. É a regra da
+ * ordem — a do texto do menu e a do cartão da aba Menus, que mostra as opções como
+ * o cliente as ouve (a rota as devolve em ordem de texto, com o 0 primeiro). Não
+ * mexe na lista recebida.
+ */
+export function naOrdemFalada<T extends { tecla: string }>(opcoes: readonly T[]): T[] {
+  return [...opcoes].sort((a, b) => ordemDaTecla(a.tecla) - ordemDaTecla(b.tecla));
+}
+
 /** Os dois marcadores da frase, numa única passada — ver o comentário de `montarTextoDoMenu`. */
 const MARCADORES_DA_FRASE = /\{time\}|\{tecla\}/g;
 
 export function montarTextoDoMenu(opcoes: readonly OpcaoParaTexto[], frase: string = FRASE_DA_OPCAO): string {
-  return [...opcoes]
-    .filter((o) => /^[0-9]$/.test(o.tecla) && o.nomeDoTime.trim() !== "")
-    .sort((a, b) => ordemDaTecla(a.tecla) - ordemDaTecla(b.tecla))
+  return naOrdemFalada(opcoes.filter((o) => /^[0-9]$/.test(o.tecla) && o.nomeDoTime.trim() !== ""))
     .map((o) => {
       const nome = o.nomeDoTime.trim();
       // Uma função como substituto, nunca uma string: `replaceAll` com string

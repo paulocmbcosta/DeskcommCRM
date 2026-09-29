@@ -40,10 +40,11 @@ export const BUCKET_DAS_FALAS = "phone-prompts";
 export const TAMANHO_MAXIMO_DA_FALA = 1000;
 
 /**
- * As teclas de uma opção do menu de voz, na ordem em que a tela as oferece — o
- * espelho do CHECK `phone_menu_options_digit_check` (`^[0-9]$`). `*` e `#` ficam
- * de fora de propósito (reservadas). O 0 por último: é, por costume, a tecla de
- * "falar com alguém". O tamanho da lista é o teto de opções de um menu.
+ * As teclas de uma opção do menu de voz — o espelho do CHECK
+ * `phone_menu_options_digit_check` (`^[0-9]$`). `*` e `#` ficam de fora de
+ * propósito (reservadas). Escritas na ordem em que a fala as diz (a de
+ * `naOrdemFalada`, texto-do-menu.ts — um teste de lá prende as duas juntas). O
+ * tamanho da lista é o teto de opções de um menu.
  */
 export const TECLAS_DO_MENU = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"] as const;
 
