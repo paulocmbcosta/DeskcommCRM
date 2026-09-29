@@ -107,8 +107,16 @@ export function useActiveOrg(): ActiveOrg | null {
 /**
  * Permission gate based on role rank. Action mapping is intentionally
  * minimal here — feature-specific gates can extend with custom logic.
+ *
+ * A chave é o nome de uma AÇÃO, nunca de um papel — e o tipo garante isso.
+ * Enquanto o parâmetro de `usePermission` era `string`, `usePermission("agent")`
+ * compilava, a busca devolvia `undefined`, e `undefined` vira `false` para todo
+ * mundo menos o administrador da plataforma (que sai na primeira linha sem
+ * consultar a tabela). Foi assim que, em produção, só o dono recebia ramal de
+ * telefone (`components/telefonia/TelefoniaContext.tsx`). Agora a tabela é
+ * `as const satisfies`, e ação que não está aqui não compila.
  */
-const ACTION_MIN_ROLE: Record<string, Role> = {
+const ACTION_MIN_ROLE = {
   "inbox.view": "viewer",
   "inbox.reply": "agent",
   "inbox.claim": "agent",
@@ -148,13 +156,17 @@ const ACTION_MIN_ROLE: Record<string, Role> = {
   // banner de chamada para quem não pode atendê-la é uma promessa falsa, e a
   // sondagem por trás dele levava 403 em toda navegação.
   "voice.call": "agent",
-};
+} as const satisfies Record<string, Role>;
 
-export function usePermission(action: string): boolean {
+/** Só as ações que existem em `ACTION_MIN_ROLE`. Nome de papel não é ação. */
+export type PermissionAction = keyof typeof ACTION_MIN_ROLE;
+
+export function usePermission(action: PermissionAction): boolean {
   const { user, activeOrg } = useAuth();
   if (user.is_platform_admin && !user.support) return true;
   if (!activeOrg) return false;
-  const required = ACTION_MIN_ROLE[action];
+  // Falha fechada mesmo assim: um chamador sem tipo (JS, `as never`) não abre nada.
+  const required: Role | undefined = ACTION_MIN_ROLE[action];
   if (!required) return false;
   return ROLE_RANK[activeOrg.role] >= ROLE_RANK[required];
 }

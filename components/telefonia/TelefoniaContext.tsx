@@ -120,7 +120,13 @@ interface DetalheDaLigacao {
 const RETENTAR_REGISTRO_MS = 15_000;
 
 export function TelefoniaProvider({ children }: { children: ReactNode }) {
-  const podeAtender = usePermission("agent");
+  // `voice.call` (agent+) é a ação de "ligar e atender" — o mesmo piso da rota
+  // `POST /api/v1/telefonia/ramal` (`requireRole("agent")`), e o acompanhamento
+  // somente-leitura, rebaixado a viewer, fica de fora como lá. Era
+  // `usePermission("agent")`: nome de PAPEL onde se espera AÇÃO, `false` para
+  // todo mundo menos o administrador da plataforma — em produção, só o dono
+  // recebia ramal. O tipo de `usePermission` agora recusa isso na compilação.
+  const podeAtender = usePermission("voice.call");
   const [ramal, setRamal] = useState<Ramal | null>(null);
   const [pronto, setPronto] = useState(false);
   const [ligacao, setLigacao] = useState<EstadoDaLigacao | null>(null);
