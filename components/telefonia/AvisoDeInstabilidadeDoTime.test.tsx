@@ -376,6 +376,56 @@ describe("janela do aviso — quando ligar é recusado", () => {
       const j = await abrirJanela();
       await usuario().click(ligarDe(j));
       expect(await within(j).findByRole("alert")).toHaveTextContent(mensagem);
+      // Com a janela aberta, a falha fica ao lado do botão — sem toast repetindo a frase.
+      expect(avisos.erro).not.toHaveBeenCalled();
+    },
+    TETO_MS,
+  );
+
+  it(
+    "enquanto liga, Esc, o X e Cancelar não fecham a janela",
+    async () => {
+      doTime().fala = falaGravada();
+      const put = segurada();
+      trocadas.set(`PUT ${URL_DO_TIME}`, put.rota);
+      const u = usuario();
+      const j = await abrirJanela();
+      await u.click(ligarDe(j));
+      await waitFor(() => expect(ligarDe(j)).toHaveTextContent("Ligando…"));
+
+      await u.keyboard("{Escape}");
+      await u.click(within(j).getByRole("button", { name: "Close" }));
+      expect(within(j).getByRole("button", { name: "Cancelar" })).toBeDisabled();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+      put.soltar(dados({ aviso: structuredClone(doTime()) }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    },
+    TETO_MS,
+  );
+
+  it(
+    "a tela saiu antes da resposta (outra página): a recusa não some — vira toast com a frase da rota",
+    async () => {
+      const mensagem = "Este time está sendo alterado por outra pessoa agora. Tente de novo em instantes.";
+      doTime().fala = falaGravada();
+      const put = segurada();
+      trocadas.set(`PUT ${URL_DO_TIME}`, put.rota);
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const tela = render(
+        <QueryClientProvider client={qc}>
+          <AvisoDeInstabilidadeDoTime teamId="t1" />
+        </QueryClientProvider>,
+      );
+      const u = usuario();
+      await u.click(within(await cartao()).getByRole("button", { name: "Ligar aviso" }));
+      const j = await screen.findByRole("dialog");
+      await u.click(ligarDe(j));
+      await waitFor(() => expect(ligarDe(j)).toHaveTextContent("Ligando…"));
+
+      tela.unmount();
+      put.soltar(recusa(409, "gravacao_em_andamento", mensagem));
+      await waitFor(() => expect(avisos.erro).toHaveBeenCalledWith(mensagem));
     },
     TETO_MS,
   );
@@ -522,6 +572,30 @@ describe("cartão do aviso no time", () => {
     await vi.advanceTimersByTimeAsync(61_000);
     await waitFor(() => expect(document.querySelector('[data-aviso-de-instabilidade="t1"]')).toHaveAttribute("data-ativo", "nao"));
     expect(enviados("GET", URL_DOS_AVISOS)).toHaveLength(2);
+  });
+
+  it("a RELEITURA falhou com o cartão na tela: o cartão fica com o último estado, sem virar a mensagem de falha", async () => {
+    Object.assign(doTime(), { ativa: true, desde: new Date(2026, 8, 29, 11, 30).toISOString(), ligada_por: "Ana" });
+    const qc = pintar();
+    const c = await cartao();
+    await waitFor(() => expect(c).toHaveAttribute("data-ativo", "sim"));
+    trocadas.set(`GET ${URL_DOS_AVISOS}`, proxy);
+    await qc.invalidateQueries();
+    await waitFor(() => expect(qc.getQueryState(["telefonia", "avisos"])?.status).toBe("error"));
+    const depois = await cartao();
+    expect(depois).toHaveAttribute("data-ativo", "sim");
+    expect(depois).not.toHaveAttribute("data-falha-da-leitura");
+    expect(within(depois).getByRole("button", { name: "Desligar agora" })).toBeInTheDocument();
+  });
+
+  it("sem telefonia na instalação e a releitura falhou: o cartão continua sem aparecer", async () => {
+    servidor = { oferecida: false, pode_mudar: true, ligados: [], times: [] };
+    const qc = pintar();
+    await waitFor(() => expect(qc.getQueryState(["telefonia", "avisos"])?.status).toBe("success"));
+    trocadas.set(`GET ${URL_DOS_AVISOS}`, proxy);
+    await qc.invalidateQueries();
+    await waitFor(() => expect(qc.getQueryState(["telefonia", "avisos"])?.status).toBe("error"));
+    expect(document.querySelector("[data-aviso-de-instabilidade]")).toBeNull();
   });
 
   it("a leitura falhou: diz que falhou, sem o HTML do proxy", async () => {

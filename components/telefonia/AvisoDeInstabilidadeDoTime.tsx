@@ -22,7 +22,7 @@
  * Recusas aparecem com a frase da rota (`fraseDaFalhaDaFala`) ao lado do botão —
  * nunca a mensagem crua de uma resposta sem corpo (o HTML de um proxy).
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -53,7 +53,10 @@ export function AvisoDeInstabilidadeDoTime({ teamId }: { teamId: string }) {
   const desligar = useDesligarAviso();
   const [aberto, setAberto] = useState(false);
 
-  if (avisos.isError) {
+  // Só a PRIMEIRA leitura que falha vira a mensagem: com um estado já na tela, a
+  // releitura que falha o mantém (a próxima, de 60 s, confere de novo) em vez de
+  // trocar o cartão inteiro por um erro.
+  if (avisos.isError && !avisos.data) {
     return (
       <Card className="p-4 text-sm text-muted-foreground" data-aviso-de-instabilidade={teamId} data-falha-da-leitura="">
         {t("Não foi possível carregar o aviso de instabilidade do telefone. Recarregue a página.")}
@@ -77,10 +80,13 @@ export function AvisoDeInstabilidadeDoTime({ teamId }: { teamId: string }) {
       </h3>
       {aviso.ativa ? (
         <p className="text-sm font-medium">
-          {aviso.desde ? `${t("Ligado às")} ${hora(aviso.desde)}` : null}
-          {aviso.ligada_por ? ` ${t("por")} ${aviso.ligada_por}` : null}
+          {aviso.desde
+            ? aviso.ligada_por
+              ? t("Ligado às {hora} por {nome}").replace("{hora}", hora(aviso.desde)).replace("{nome}", aviso.ligada_por)
+              : t("Ligado às {hora}").replace("{hora}", hora(aviso.desde))
+            : null}
           {" · "}
-          {aviso.expira_em ? `${t("desliga às")} ${hora(aviso.expira_em)}` : t("até alguém desligar")}
+          {aviso.expira_em ? t("desliga às {hora}").replace("{hora}", hora(aviso.expira_em)) : t("até alguém desligar")}
         </p>
       ) : null}
       {gravada ? (
@@ -123,7 +129,16 @@ function JanelaDoAviso({ aviso, aoFechar }: { aviso: AvisoDoTimePublico; aoFecha
   const [texto, setTexto] = useState(() => emUso?.texto ?? t(TEXTO_SUGERIDO.emergency));
   const [duracao, setDuracao] = useState<DuracaoDaEmergencia>(DURACAO_PADRAO);
   const previa = usePreviaDaFala(null);
-  const ligar = useLigarAviso();
+  // A janela ainda está na tela? Enquanto estiver, a recusa do "Ligar" aparece
+  // aqui; se ela sair antes da resposta, o hook avisa por toast (`useLigarAviso`).
+  const aberta = useRef(true);
+  useEffect(() => {
+    aberta.current = true;
+    return () => {
+      aberta.current = false;
+    };
+  }, []);
+  const ligar = useLigarAviso(aberta);
 
   // §6.3: com o texto mudado, "Ligar" exige "Gerar prévia" E "Ouvir". Com o texto do
   // aviso já gravado, liga direto — ele foi ouvido quando foi gravado.
@@ -154,7 +169,9 @@ function JanelaDoAviso({ aviso, aoFechar }: { aviso: AvisoDoTimePublico; aoFecha
     <Dialog
       open
       onOpenChange={(v) => {
-        if (!v) aoFechar();
+        // Enquanto liga, nem Esc, nem o X, nem o clique fora fecham: a resposta
+        // (ou a recusa) tem de chegar a quem pediu.
+        if (!v && !ligar.isPending) aoFechar();
       }}
     >
       <DialogContent data-janela-do-aviso="">
@@ -235,7 +252,7 @@ function JanelaDoAviso({ aviso, aoFechar }: { aviso: AvisoDoTimePublico; aoFecha
           </p>
         ) : null}
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={aoFechar}>
+          <Button type="button" variant="ghost" onClick={aoFechar} disabled={ligar.isPending}>
             {t("Cancelar")}
           </Button>
           <Button type="button" onClick={ligarAgora} disabled={!podeLigar || previa.gerando || ligar.isPending}>

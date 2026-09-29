@@ -23,6 +23,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { traduzir } from "@/lib/i18n/dicionario";
 import type { AvisoNaFaixa, AvisosNaResposta } from "@/lib/telefonia/vocabulario";
 
 vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (texto: string) => texto }));
@@ -93,6 +94,14 @@ function pintar({ oferecida = true }: { oferecida?: boolean } = {}) {
 
 const usuario = () => userEvent.setup({ delay: null });
 const faixa = () => document.querySelector("[data-faixa-aviso-de-instabilidade]");
+/** Espera a faixa visível — a região viva (`role="status"`) existe sempre, vazia sem aviso. */
+const acharFaixa = () =>
+  waitFor(() => {
+    const f = faixa();
+    expect(f).not.toBeNull();
+    return f as HTMLElement;
+  });
+const regiao = () => screen.queryByRole("status");
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true, now: AGORA });
@@ -113,8 +122,8 @@ afterEach(() => {
 describe("faixa do aviso de instabilidade — o que cada um vê", () => {
   it("atendente vê o time e a hora local em que o aviso desliga, mas não o botão", async () => {
     pintar();
-    const f = await screen.findByRole("status");
-    expect(f).toHaveAttribute("data-faixa-aviso-de-instabilidade");
+    const f = await acharFaixa();
+    expect(regiao()).toContainElement(f);
     expect(f).toHaveTextContent("Aviso de instabilidade ligado no telefone do Suporte");
     expect(f).toHaveTextContent("desliga às 14:05");
     expect(screen.queryByRole("button")).toBeNull();
@@ -126,7 +135,7 @@ describe("faixa do aviso de instabilidade — o que cada um vê", () => {
       aviso({ team_id: "t2", time_nome: "Vendas", arquivado: true }),
     ];
     pintar();
-    const f = await screen.findByRole("status");
+    const f = await acharFaixa();
     const suporte = f.querySelector('[data-aviso-na-faixa="t1"]') as HTMLElement;
     const vendas = f.querySelector('[data-aviso-na-faixa="t2"]') as HTMLElement;
     expect(suporte).toHaveTextContent("até alguém desligar");
@@ -138,10 +147,10 @@ describe("faixa do aviso de instabilidade — o que cada um vê", () => {
   it("o prazo de outro dia leva a data junto da hora", async () => {
     servidor.ligados = [aviso({ expira_em: new Date(2026, 8, 30, 1, 30, 0).toISOString() })];
     pintar();
-    expect(await screen.findByRole("status")).toHaveTextContent("desliga às 30/09 01:30");
+    expect(await acharFaixa()).toHaveTextContent("desliga às 30/09 01:30");
   });
 
-  it("sem aviso ligado, nada aparece", async () => {
+  it("sem aviso ligado, nada aparece — mas a região viva já está montada, vazia, para anunciar o aviso que chegar", async () => {
     servidor.ligados = [];
     pintar();
     await waitFor(() => expect(leituras()).toBe(1));
@@ -149,6 +158,23 @@ describe("faixa do aviso de instabilidade — o que cada um vê", () => {
       await Promise.resolve();
     });
     expect(faixa()).toBeNull();
+    expect(regiao()).toHaveAttribute("aria-live", "polite");
+    expect(regiao()).toBeEmptyDOMElement();
+  });
+
+  it("a frase vem inteira do dicionário, com o nome e a hora no lugar do marcador (o espanhol também)", async () => {
+    for (const [chave, marcador] of [
+      ["Aviso de instabilidade ligado no telefone do {time}", "{time}"],
+      ["desliga às {hora}", "{hora}"],
+      ["Ligado às {hora}", "{hora}"],
+      ["Ligado às {hora} por {nome}", "{nome}"],
+    ] as const) {
+      expect(traduzir(chave, "es"), chave).not.toBe(chave);
+      expect(traduzir(chave, "es"), chave).toContain(marcador);
+    }
+    pintar();
+    const f = await acharFaixa();
+    expect(f.textContent).not.toMatch(/\{(time|hora)\}/);
   });
 });
 
@@ -198,13 +224,44 @@ describe("faixa do aviso de instabilidade — gerente e admin desligam por ela",
 });
 
 describe("faixa do aviso de instabilidade — quanto ela custa e como falha", () => {
-  it("instalação sem telefonia: não pergunta nada à API", async () => {
+  it("instalação sem telefonia: não pergunta nada à API, nem monta a região viva", async () => {
     pintar({ oferecida: false });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(61_000);
     });
     expect(fetchFalso).not.toHaveBeenCalled();
     expect(faixa()).toBeNull();
+    expect(regiao()).toBeNull();
+  });
+
+  it.each([
+    [401, "unauthenticated", "Auth required."],
+    [403, "forbidden_role", "Permissão insuficiente."],
+  ])("a leitura recusada com %i (sessão caiu, acesso mudou): para de reler — nem no minuto, nem no foco", async (status, code, message) => {
+    trocadas.set(`GET ${URL_DA_FAIXA}`, () => recusa(status, code, message));
+    pintar();
+    await waitFor(() => expect(leituras()).toBe(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(121_000);
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event("visibilitychange"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(leituras()).toBe(1);
+    expect(faixa()).toBeNull();
+  });
+
+  it("um prazo distante (30 dias) não dispara a releitura na hora: o relógio respeita o teto do setTimeout", async () => {
+    servidor.ligados = [aviso({ expira_em: new Date(AGORA.getTime() + 30 * 86_400_000).toISOString() })];
+    pintar();
+    await acharFaixa();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(leituras()).toBe(1);
   });
 
   it("sem organização ativa: não pergunta nada à API", async () => {
@@ -229,7 +286,7 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
       await vi.advanceTimersByTimeAsync(2_000);
     });
     await waitFor(() => expect(leituras()).toBe(2));
-    expect(await screen.findByRole("status")).toHaveTextContent("Suporte");
+    expect(await acharFaixa()).toHaveTextContent("Suporte");
   });
 
   it("relê ao voltar o foco", async () => {
@@ -245,13 +302,13 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
       window.dispatchEvent(new Event("visibilitychange"));
     });
     await waitFor(() => expect(leituras()).toBe(2));
-    expect(await screen.findByRole("status")).toHaveTextContent("Suporte");
+    expect(await acharFaixa()).toHaveTextContent("Suporte");
   });
 
   it("o prazo passou: relê na hora e a faixa some, sem esperar o minuto", async () => {
     servidor.ligados = [aviso({ expira_em: new Date(AGORA.getTime() + 5_000).toISOString() })];
     pintar();
-    await screen.findByRole("status");
+    await acharFaixa();
     // A passada do worker desligou o aviso no banco; a leitura seguinte já não o traz.
     servidor.ligados = [];
     await act(async () => {
@@ -293,13 +350,13 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
         await vi.advanceTimersByTimeAsync(61_000);
       });
       await waitFor(() => expect(leituras()).toBe(2));
-      expect(await screen.findByRole("status")).toHaveTextContent("Aviso de instabilidade ligado no telefone do Suporte");
+      expect(await acharFaixa()).toHaveTextContent("Aviso de instabilidade ligado no telefone do Suporte");
     },
   );
 
   it("a releitura falhou com o aviso na tela: a faixa sai, em vez de afirmar o que não dá mais para confirmar", async () => {
     const qc = pintar();
-    await screen.findByRole("status");
+    await acharFaixa();
     trocadas.set(`GET ${URL_DA_FAIXA}`, () => recusa(500, "internal_error", "Erro interno."));
     await act(async () => {
       await qc.invalidateQueries();

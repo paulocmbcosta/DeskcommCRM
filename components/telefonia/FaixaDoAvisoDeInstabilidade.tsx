@@ -14,6 +14,9 @@
  * Não é `sticky` por conta própria: quem gruda no topo é o contêiner do layout
  * que a empilha com a faixa de conexão caída (`data-faixas-do-topo`).
  *
+ * A região viva (`role="status"`) fica montada mesmo sem aviso, vazia: é o que
+ * faz o leitor de tela anunciar a faixa quando ela chega.
+ *
  * A leitura que falha some com a faixa, em silêncio: uma falha não pode derrubar
  * o layout (a faixa roda em toda tela), nem deixar à vista um aviso que já não dá
  * para confirmar — o prazo pode ter passado enquanto a API não respondia.
@@ -32,51 +35,66 @@ export function FaixaDoAvisoDeInstabilidade({ oferecida }: { oferecida: boolean 
   const avisos = useAvisosNaFaixa(oferecida);
   const desligar = useDesligarAviso();
 
+  // Sem telefonia na instalação não há o que anunciar nunca: nada é montado.
+  if (!oferecida) return null;
   const dados = avisos.data;
-  if (!oferecida || avisos.isError || !dados?.oferecida || dados.ligados.length === 0) return null;
+  const ligados = !avisos.isError && dados?.oferecida ? dados.ligados : [];
+  const podeMudar = dados?.pode_mudar === true;
   const agora = new Date();
+  // A frase vem INTEIRA do dicionário, com o nome no lugar do marcador: a ordem
+  // das palavras é do idioma, não da concatenação.
+  const [antesDoNome, depoisDoNome = ""] = t("Aviso de instabilidade ligado no telefone do {time}").split("{time}");
 
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      data-faixa-aviso-de-instabilidade=""
-      className="flex flex-col gap-1 border-b border-amber-300 bg-amber-100/95 px-4 py-2 text-sm text-amber-950 backdrop-blur dark:border-amber-700/60 dark:bg-amber-950/70 dark:text-amber-50"
-    >
-      {dados.ligados.map((a) => {
-        const desligando = desligar.isPending && desligar.variables === a.team_id;
-        return (
-          <div key={a.team_id} data-aviso-na-faixa={a.team_id} className="flex flex-wrap items-center justify-between gap-2">
-            <span className="flex flex-wrap items-center gap-2">
-              <Siren size={16} aria-hidden />
-              <span>
-                {t("Aviso de instabilidade ligado no telefone do")} <strong className="font-semibold">{a.time_nome}</strong>
-              </span>
-              {a.arquivado ? (
-                <Badge variant="outline" data-time-arquivado="" className="border-amber-500/60">
-                  {t("Time arquivado")}
-                </Badge>
-              ) : null}
-              <span>
-                {"· "}
-                {a.expira_em ? `${t("desliga às")} ${horaDoAviso(a.expira_em, agora, locale)}` : t("até alguém desligar")}
-              </span>
-            </span>
-            {dados.pode_mudar ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                aria-label={desligando ? undefined : t("Desligar o aviso do time {time}").replace("{time}", a.time_nome)}
-                onClick={() => desligar.mutate(a.team_id)}
-                disabled={desligar.isPending}
-              >
-                {desligando ? t("Desligando…") : t("Desligar")}
-              </Button>
-            ) : null}
-          </div>
-        );
-      })}
+    // A região viva fica SEMPRE montada (vazia sem aviso): o leitor de tela só
+    // anuncia o que muda DENTRO de uma região que já existia — montada junto com o
+    // conteúdo, a faixa nova passaria em silêncio.
+    <div role="status" aria-live="polite" data-regiao-do-aviso-de-instabilidade="">
+      {ligados.length > 0 ? (
+        <div
+          data-faixa-aviso-de-instabilidade=""
+          className="flex flex-col gap-1 border-b border-amber-300 bg-amber-100/95 px-4 py-2 text-sm text-amber-950 backdrop-blur dark:border-amber-700/60 dark:bg-amber-950/70 dark:text-amber-50"
+        >
+          {ligados.map((a) => {
+            const desligando = desligar.isPending && desligar.variables === a.team_id;
+            return (
+              <div key={a.team_id} data-aviso-na-faixa={a.team_id} className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex flex-wrap items-center gap-2">
+                  <Siren size={16} aria-hidden />
+                  <span>
+                    {antesDoNome}
+                    <strong className="font-semibold">{a.time_nome}</strong>
+                    {depoisDoNome}
+                  </span>
+                  {a.arquivado ? (
+                    <Badge variant="outline" data-time-arquivado="" className="border-amber-500/60">
+                      {t("Time arquivado")}
+                    </Badge>
+                  ) : null}
+                  <span>
+                    {"· "}
+                    {a.expira_em
+                      ? t("desliga às {hora}").replace("{hora}", horaDoAviso(a.expira_em, agora, locale))
+                      : t("até alguém desligar")}
+                  </span>
+                </span>
+                {podeMudar ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    aria-label={desligando ? undefined : t("Desligar o aviso do time {time}").replace("{time}", a.time_nome)}
+                    onClick={() => desligar.mutate(a.team_id)}
+                    disabled={desligar.isPending}
+                  >
+                    {desligando ? t("Desligando…") : t("Desligar")}
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -34,6 +34,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/types";
 import type { DuracaoDaEmergencia } from "@/lib/telefonia/vencimento-da-emergencia";
 import type { AvisoDoTimePublico, AvisoNaFaixa, AvisosNaResposta, FalaParaSalvar } from "@/lib/telefonia/vocabulario";
 
@@ -84,6 +85,11 @@ export function horaDoAviso(iso: string, agora: Date, locale?: Locale): string {
   return format(d, isSameDay(d, agora) ? "HH:mm" : "dd/MM HH:mm", { locale });
 }
 
+/** A rota recusou QUEM lê (401 sessão, 403 acesso): reler não muda a resposta. */
+function leituraRecusada(erro: unknown): boolean {
+  return erro instanceof ApiError && (erro.status === 401 || erro.status === 403);
+}
+
 /** A faixa em todo o CRM: `oferecida` vem do layout (servidor), e sem ela nada é lido. */
 export function useAvisosNaFaixa(oferecida: boolean) {
   return useLeituraDosAvisos(CHAVE_DA_FAIXA, `${URL_DOS_AVISOS}?so=ligados`, oferecida);
@@ -100,18 +106,22 @@ function useLeituraDosAvisos(chave: readonly string[], url: string, ligado: bool
     queryKey: chave,
     enabled: ligado && activeOrg !== null,
     staleTime: 30_000,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: (q) => !leituraRecusada(q.state.error),
     // O relógio depende de `ligado` (a faixa recebe do layout se a instalação tem
     // telefonia), e NÃO de uma leitura boa: se a primeira falhar, não há dado, e o
     // app não repete 500/504 (lib/query/client.ts) — a faixa nunca apareceria para
     // quem fica o dia inteiro com a aba em foco. O dado só DESLIGA o relógio quando
     // diz, com todas as letras, que a instalação não tem telefonia (o cartão do
     // time não recebe `ligado` do servidor e fica sabendo por ele).
-    refetchInterval: (q) => (ligado && q.state.data?.oferecida !== false ? INTERVALO_DA_RELEITURA_MS : false),
+    // E um 401/403 (a sessão caiu, o acesso mudou) PARA a releitura: repetir não
+    // muda a resposta, e cada aba aberta bateria na rota uma vez por minuto à toa.
+    refetchInterval: (q) =>
+      ligado && !leituraRecusada(q.state.error) && q.state.data?.oferecida !== false ? INTERVALO_DA_RELEITURA_MS : false,
     queryFn: async () => (await apiClient.get<{ data: AvisosNaResposta }>(url)).data,
   });
 
-  const prazo = consulta.data ? proximoPrazo(consulta.data.ligados) : null;
+  const recusada = leituraRecusada(consulta.error);
+  const prazo = consulta.data && !recusada ? proximoPrazo(consulta.data.ligados) : null;
   const { refetch } = consulta;
   useEffect(() => {
     if (prazo === null) return;
@@ -145,12 +155,21 @@ export function useDesligarAviso() {
 /**
  * Liga o aviso com o texto e o hash da prévia OUVIDA (ou os da fala em uso, com
  * o texto sem mudança). Ligar não gera fala nem chama a ElevenLabs: a rota confere
- * o hash. A recusa fica com quem chama — a janela a mostra ao lado do botão.
+ * o hash.
+ *
+ * A recusa é de quem chama enquanto a janela está aberta — ela a mostra ao lado do
+ * botão. `janelaAberta` diz isso: se a janela já saiu da tela quando a resposta
+ * chega (a pessoa foi para outra página), a recusa vira toast aqui, em vez de
+ * sumir com a janela.
  */
-export function useLigarAviso() {
+export function useLigarAviso(janelaAberta?: { readonly current: boolean }) {
   const qc = useQueryClient();
   const t = useT();
   return useMutation({
+    onError: (e) => {
+      if (janelaAberta?.current) return;
+      toast.error(fraseDaFalhaDaFala(e, t) ?? t("Não foi possível ligar o aviso. Tente de novo em instantes."));
+    },
     mutationFn: async (p: { teamId: string; fala: FalaParaSalvar; duracao: DuracaoDaEmergencia }) =>
       (await apiClient.put<{ data: { aviso: AvisoDoTimePublico } }>(urlDoTime(p.teamId), { fala: p.fala, duracao: p.duracao }))
         .data,

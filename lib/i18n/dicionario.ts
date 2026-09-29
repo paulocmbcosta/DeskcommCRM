@@ -9901,8 +9901,9 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível carregar os números. Recarregue a página.": { es: "No se pudieron cargar los números. Recarga la página." },
   // Telefonia, fase 2 — o aviso de instabilidade em Configurações › Times e a faixa em todo o CRM
   "Aviso de instabilidade (telefone)": { es: "Aviso de inestabilidad (teléfono)" },
-  "Ligado às": { es: "Activado a las" },
-  "desliga às": { es: "se desactiva a las" },
+  "Ligado às {hora}": { es: "Activado a las {hora}" },
+  "Ligado às {hora} por {nome}": { es: "Activado a las {hora} por {nome}" },
+  "desliga às {hora}": { es: "se desactiva a las {hora}" },
   "até alguém desligar": { es: "hasta que alguien lo desactive" },
   "Desligar agora": { es: "Desactivar ahora" },
   "Nenhum aviso gravado ainda. Toda ligação de fora que entrar na fila deste time ouve o aviso inteiro antes de tocar nos atendentes.": {
@@ -9926,7 +9927,7 @@ export const DICIONARIO: Traducoes = {
   "4 horas": { es: "4 horas" },
   "Até eu desligar": { es: "Hasta que yo lo desactive" },
   "Aviso de instabilidade do time {time}": { es: "Aviso de inestabilidad del equipo {time}" },
-  "Aviso de instabilidade ligado no telefone do": { es: "Aviso de inestabilidad activado en el teléfono de" },
+  "Aviso de instabilidade ligado no telefone do {time}": { es: "Aviso de inestabilidad activado en el teléfono de {time}" },
   "Desligar o aviso do time {time}": { es: "Desactivar el aviso del equipo {time}" },
   "Aviso de instabilidade desligado.": { es: "Aviso de inestabilidad desactivado." },
   "O aviso de instabilidade já estava desligado.": { es: "El aviso de inestabilidad ya estaba desactivado." },
