@@ -38,6 +38,19 @@
  * TELEFONIA_ARI_URL/_PASSWORD no .env.e2e — nada escuta aquela porta, de
  * propósito: esta spec prova a TELA; a ligação de verdade é provada na VPS
  * (plano da fase 2, Task 29).
+ *
+ * ⚠️ ESTA SPEC EXIGE E2E_TELEFONIA=1. O gerador só escreve as variáveis do ARI
+ * com ela (`E2E_TELEFONIA=1 pnpm e2e:env`; é o padrão local), e o CI só a passa
+ * na parte 3 — as outras duas medem o primeiro deploy, sem telefonia. Quem
+ * prende a spec na parte certa é `tests/unit/e2e-telefonia-so-na-parte-3.test.ts`,
+ * que acha as dependentes pelo nome da variável neste arquivo.
+ *
+ * O ÁUDIO: o Chromium do Playwright roda com `--mute-audio` (mudo, mas toca), e
+ * esta spec acrescenta `--autoplay-policy=no-user-gesture-required` pelo mesmo
+ * `launchOptions.args` de `chat-do-site.spec.ts`. O "Ouvir" continua sendo um
+ * clique de verdade — a flag só tira do caminho a política de autoplay, para que
+ * a medida "tocou" (`played` do `<audio>`) não dependa de o CI contar o clique
+ * como gesto. Ela não faz nada tocar sozinho: quem chama `play()` é o botão.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -76,7 +89,11 @@ const ALTURA_DA_TOPBAR = 56;
 /** Arredondamento de subpixel entre caixas vizinhas. */
 const TOLERANCIA = 1;
 
-test.use({ viewport: JANELA });
+test.use({
+  viewport: JANELA,
+  // Ver o cabeçalho ("O ÁUDIO"): o mesmo mecanismo de `chat-do-site.spec.ts`.
+  launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] },
+});
 
 interface Pedido {
   metodo: string;
@@ -105,7 +122,8 @@ function enderecoDaElevenLabsFalsa(): { host: string; porta: number } {
   }
   if (!(process.env.TELEFONIA_ARI_URL ?? "").trim() || !(process.env.TELEFONIA_ARI_PASSWORD ?? "").trim()) {
     throw new Error(
-      "TELEFONIA_ARI_URL/TELEFONIA_ARI_PASSWORD ausentes do .env.e2e — sem elas a instalação não oferece telefonia e as abas do Telefone mostram 'desligada'.",
+      "Esta spec precisa da telefonia oferecida: rode com E2E_TELEFONIA=1 (`E2E_TELEFONIA=1 pnpm e2e:env`). " +
+        "O .env.e2e atual não tem TELEFONIA_ARI_URL/TELEFONIA_ARI_PASSWORD — no CI, só a parte 3 os recebe.",
     );
   }
   const url = new URL(bruto);
@@ -239,6 +257,30 @@ async function medirOTopo(page: Page) {
       alturaDaPagina: document.documentElement.scrollHeight,
     };
   });
+}
+
+/**
+ * Espera `--altura-das-faixas` alcançar a altura do contêiner das faixas, com a
+ * faixa do aviso DENTRO dele. O `ResizeObserver` de `FaixasDoTopo` publica a
+ * variável no quadro SEGUINTE ao aparecimento da faixa: medir a TopBar ou a
+ * Inbox antes disso lê o layout sem o desconto e dá vermelho falso.
+ */
+async function esperarAlturaPublicada(p: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        p.evaluate(() => {
+          const faixas = document.querySelector("[data-faixas-do-topo]");
+          const aviso = document.querySelector("[data-faixa-aviso-de-instabilidade]");
+          if (!faixas || !aviso || aviso.getBoundingClientRect().height <= 0) return Number.POSITIVE_INFINITY;
+          const publicada = Number.parseFloat(
+            getComputedStyle(document.documentElement).getPropertyValue("--altura-das-faixas"),
+          );
+          return Number.isFinite(publicada) ? Math.abs(publicada - faixas.getBoundingClientRect().height) : Number.POSITIVE_INFINITY;
+        }),
+      { timeout: 10_000, message: "--altura-das-faixas não alcançou a altura do contêiner das faixas com o aviso à vista" },
+    )
+    .toBeLessThanOrEqual(TOLERANCIA);
 }
 
 test.describe("telefonia — URA e falas pela tela", () => {
@@ -512,6 +554,19 @@ test.describe("telefonia — URA e falas pela tela", () => {
       await expect(janela.locator("[data-passo-do-aviso]")).toHaveAttribute("data-passo-do-aviso", "falta-ouvir");
       await expect(ligar).toBeDisabled();
       await janela.getByRole("button", { name: "Ouvir", exact: true }).click();
+      // "Ouvir" TOCOU — e não só destravou o "Ligar": o botão marca a prévia como
+      // ouvida antes do `play()` (OuvirPrevia.tsx), então o passo "pronto" sozinho
+      // não prova som nenhum. `played` guarda o trecho tocado mesmo depois do fim.
+      await expect
+        .poll(
+          () =>
+            janela.locator("audio[data-previa-audio]").evaluate((el) => {
+              const a = el as HTMLAudioElement;
+              return a.played.length > 0 || !a.paused;
+            }),
+          { timeout: 15_000, message: "o <audio> da prévia não tocou depois do clique em Ouvir" },
+        )
+        .toBe(true);
       await expect(janela.locator("[data-passo-do-aviso]")).toHaveAttribute("data-passo-do-aviso", "pronto");
       await expect(ligar).toBeEnabled();
       await janela.locator("#aviso-duracao").click();
@@ -533,6 +588,7 @@ test.describe("telefonia — URA e falas pela tela", () => {
       expect(periodo?.segundos).toBe(3600);
 
       // No topo da página, dentro do contêiner das faixas, com a TopBar logo abaixo — medido, não a olho.
+      await esperarAlturaPublicada(page);
       const m = await medirOTopo(page);
       expect(m.faixas, "o contêiner das faixas existe").not.toBeNull();
       expect(m.aviso, "a faixa do aviso está na página").not.toBeNull();
@@ -559,6 +615,7 @@ test.describe("telefonia — URA e falas pela tela", () => {
       await page.goto("/app/connections?aba=telefone&sub=falas");
       await expect(page.locator('[data-fala-geral="after_hours"]')).toBeVisible({ timeout: 20_000 });
       await expect(page.locator("[data-faixa-aviso-de-instabilidade]")).toBeVisible({ timeout: 20_000 });
+      await esperarAlturaPublicada(page);
 
       const antes = await medirOTopo(page);
       expect(antes.faixas && antes.topBar, "faixas e TopBar na página").toBeTruthy();
@@ -595,24 +652,38 @@ test.describe("telefonia — URA e falas pela tela", () => {
         await expect(faixa.getByRole("button", { name: /Desligar/ })).toHaveCount(0);
         const campo = agente.getByRole("textbox", { name: "Mensagem", exact: true });
         await expect(campo).toBeVisible({ timeout: 20_000 });
+        await expect(agente.locator("[data-composer]")).toBeVisible();
+        // A Inbox desconta `--altura-das-faixas`: medir antes de ela chegar é medir o layout sem a faixa.
+        await esperarAlturaPublicada(agente);
 
-        const m = await agente.evaluate(() => {
-          const caixa = (el: Element | null | undefined): Caixa | null => {
-            if (!el) return null;
-            const r = el.getBoundingClientRect();
-            return { top: r.top, bottom: r.bottom, height: r.height };
-          };
-          const textarea = document.querySelector('textarea[aria-label="Mensagem"]');
-          return {
-            faixas: caixa(document.querySelector("[data-faixas-do-topo]")),
-            aviso: caixa(document.querySelector("[data-faixa-aviso-de-instabilidade]")),
-            // A raiz do composer (components/inbox/Composer.tsx): a caixa com a borda de cima.
-            composer: caixa(textarea?.closest(".border-t")),
-            campo: caixa(textarea),
-            janela: window.innerHeight,
-            rolagemDaPagina: document.documentElement.scrollHeight - window.innerHeight,
-          };
-        });
+        const medirAInbox = () =>
+          agente.evaluate(() => {
+            const caixa = (el: Element | null | undefined): Caixa | null => {
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return { top: r.top, bottom: r.bottom, height: r.height };
+            };
+            return {
+              faixas: caixa(document.querySelector("[data-faixas-do-topo]")),
+              aviso: caixa(document.querySelector("[data-faixa-aviso-de-instabilidade]")),
+              // A raiz do composer (components/inbox/Composer.tsx).
+              composer: caixa(document.querySelector("[data-composer]")),
+              campo: caixa(document.querySelector('[data-composer] textarea[aria-label="Mensagem"]')),
+              janela: window.innerHeight,
+              rolagemDaPagina: document.documentElement.scrollHeight - window.innerHeight,
+            };
+          });
+        // O layout assenta sozinho depois da variável: a medida é repetida até assentar, não lida uma vez.
+        await expect
+          .poll(
+            async () => {
+              const x = await medirAInbox();
+              return x.composer ? x.composer.bottom - x.janela : Number.POSITIVE_INFINITY;
+            },
+            { timeout: 10_000, message: "o composer não coube inteiro na janela com a faixa à vista" },
+          )
+          .toBeLessThanOrEqual(TOLERANCIA);
+        const m = await medirAInbox();
         expect(m.aviso?.height ?? 0, "a medida só vale com a faixa à vista").toBeGreaterThan(0);
         expect(m.composer, "a raiz do composer não foi achada").not.toBeNull();
         expect(m.composer!.bottom, "o composer inteiro dentro da janela").toBeLessThanOrEqual(m.janela + TOLERANCIA);

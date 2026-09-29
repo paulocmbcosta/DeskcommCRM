@@ -700,8 +700,9 @@ jobs:
       # organização, com admin e atendente sem MFA, e não toca a organização
       # compartilhada — a vizinhança desta parte não muda por ela. Sobe a
       # ElevenLabs falsa na porta de `ELEVENLABS_API_BASE_URL` (3996, só dela) e
-      # depende de `TELEFONIA_ARI_URL`/`_PASSWORD` no `.env.e2e`, que ligam a
-      # telefonia para a SUÍTE INTEIRA — o porquê está no gerador.
+      # depende de `TELEFONIA_ARI_URL`/`_PASSWORD` no `.env.e2e`, que o gerador
+      # só escreve com `E2E_TELEFONIA=1` — e o passo "Gerar o .env.e2e" só o
+      # passa nesta parte. Spec que dependa da telefonia mora AQUI.
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts
@@ -818,8 +819,17 @@ jobs:
       # No CI o `.env.local` aponta para o Supabase local, então o risco não é o
       # mesmo — mas o contrato é único, e um workflow que contorna o gate seria
       # o começo de ele não valer para ninguém.
+      #
+      # A TELEFONIA só na parte 3, que é onde mora `telefonia-ura-e-falas`. As
+      # partes 1 e 2 geram o `.env.e2e` SEM `TELEFONIA_ARI_URL`/`_PASSWORD`: o
+      # estado de primeiro deploy, que a doutrina de QA manda testar com os
+      # opcionais ausentes. A escolha vai por variável ao GERADOR — nunca por
+      # edição do arquivo depois —, e a fonte do ambiente continua uma só.
+      # Quem prende: tests/unit/e2e-telefonia-so-na-parte-3.test.ts.
       - name: Gerar o .env.e2e (ambiente da suíte)
         run: pnpm e2e:env
+        env:
+          E2E_TELEFONIA: ${{ matrix.parte == 3 && '1' || '0' }}
 
       # E publica o arquivo no ambiente do JOB, para que servidor e testes leiam
       # literalmente a mesma fonte.
