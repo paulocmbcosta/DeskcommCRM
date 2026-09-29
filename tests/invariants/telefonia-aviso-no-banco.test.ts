@@ -18,12 +18,22 @@
  *     a linha travada e também depois do UPDATE do aviso, na mesma transação — e o
  *     CONTROLE com `for update` mostra a ligação caindo no `lock_timeout`;
  *  5. desligar tira o aviso vigente e deixa o texto salvo no time; o já desligado e
- *     o VENCIDO ainda não varrido não são tocados (o vencido é da passada do worker).
+ *     o VENCIDO ainda não varrido não são tocados (o vencido é da passada do worker);
+ *  6. o time ARQUIVADO com aviso vigente segue na leitura (marcado `arquivado`) e
+ *     desliga; ligar nele é recusado com `time_arquivado`;
+ *  7. religar com o texto salvo não vai ao Storage (nem com ele fora do ar), e o
+ *     período substituído volta com quem o tinha ligado.
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { avisosDaOrg, desligarAvisoDoTime, ligarAvisoDoTime, type PedidoDeLigarAviso } from "@/lib/telefonia/emergencias";
+import {
+  avisosDaOrg,
+  avisosLigados,
+  desligarAvisoDoTime,
+  ligarAvisoDoTime,
+  type PedidoDeLigarAviso,
+} from "@/lib/telefonia/emergencias";
 import { caminhoDaFala, hashDaFala } from "@/lib/telefonia/falas";
 import type { ConexaoDaTransacao } from "@/lib/telefonia/transacao";
 
@@ -42,6 +52,7 @@ const ORG_A = "c0de0288-ae00-4000-8000-00000000000a";
 const ORG_B = "c0de0288-ae00-4000-8000-00000000000b";
 const TIME_A = "c0de0288-ae00-4000-8000-0000000000a1";
 const TIME_B = "c0de0288-ae00-4000-8000-0000000000b1";
+const TIME_ARQUIVADO = "c0de0288-ae00-4000-8000-0000000000a2";
 const NUMERO_A = "c0de0288-ae00-4000-8000-0000000000c1";
 const GERENTE = "c0de0288-ae00-4000-8000-0000000000d1";
 const VOZ = "voz-aviso";
@@ -64,6 +75,7 @@ const armazem = {
   baixar: async (caminho: string) => (caminho === caminhoDaFala(ORG_A, HASH) ? new Uint8Array(1600) : null),
 };
 const semNomes = async () => new Map<string, string | null>();
+const lerAvisos = (org: string, agora = new Date()) => avisosDaOrg(pool, org, agora, semNomes, "alguém da equipe");
 
 const pedido = (p: Partial<PedidoDeLigarAviso> = {}): PedidoDeLigarAviso => {
   const desde = new Date();
@@ -169,8 +181,10 @@ beforeAll(() => {
       ('${ORG_A}', 'aviso-no-banco-a', 'Aviso A', 'Aviso A'), ('${ORG_B}', 'aviso-no-banco-b', 'Aviso B', 'Aviso B')
       on conflict (id) do nothing;
     insert into public.attendance_teams (id, organization_id, name, slug) values
-      ('${TIME_A}', '${ORG_A}', 'Suporte', 'suporte-aviso'), ('${TIME_B}', '${ORG_B}', 'Suporte B', 'suporte-aviso')
+      ('${TIME_A}', '${ORG_A}', 'Suporte', 'suporte-aviso'), ('${TIME_B}', '${ORG_B}', 'Suporte B', 'suporte-aviso'),
+      ('${TIME_ARQUIVADO}', '${ORG_A}', 'Antigo', 'antigo-aviso')
       on conflict (id) do nothing;
+    update public.attendance_teams set archived_at = now() where id = '${TIME_ARQUIVADO}';
     insert into public.channel_sessions
       (id, organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number,
        sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted)
@@ -187,7 +201,7 @@ beforeEach(() => {
     update public.attendance_teams
        set phone_emergency_prompt_id = null, phone_emergency_active_since = null,
            phone_emergency_expires_at = null, phone_emergency_activated_by = null
-     where id in ('${TIME_A}', '${TIME_B}');
+     where id in ('${TIME_A}', '${TIME_B}', '${TIME_ARQUIVADO}');
     delete from public.phone_prompts where organization_id in ('${ORG_A}', '${ORG_B}');
     delete from public.phone_settings where organization_id in ('${ORG_A}', '${ORG_B}');
     insert into public.phone_settings (organization_id, voice_id, model_id) values
@@ -214,7 +228,7 @@ describe("ligarAvisoDoTime no Postgres real", () => {
     expect(noBanco.desde!.getTime()).toBe(p.desde.getTime());
     expect(noBanco.expira!.getTime()).toBe(p.expiraEm!.getTime());
 
-    const [aviso] = await avisosDaOrg(pool, ORG_A, new Date(), semNomes);
+    const [aviso] = await lerAvisos(ORG_A);
     expect(aviso).toMatchObject({
       team_id: TIME_A,
       ativa: true,
@@ -223,7 +237,7 @@ describe("ligarAvisoDoTime no Postgres real", () => {
       fala: { id: r.fala.id, tipo: "emergency", texto: TEXTO, hash: HASH, status: "ready", duracao_ms: 200 },
     });
     // B não enxerga o aviso de A; o time de B não é ligado por A.
-    expect((await avisosDaOrg(pool, ORG_B, new Date(), semNomes)).every((a) => !a.ativa && a.team_id === TIME_B)).toBe(true);
+    expect((await lerAvisos(ORG_B)).every((a) => !a.ativa && a.team_id === TIME_B)).toBe(true);
     expect(await ligarAvisoDoTime(pedido({ teamId: TIME_B }))).toEqual({ ok: false, motivo: "nao_encontrado" });
     expect((await avisoNoBanco(TIME_B)).desde).toBeNull();
   });
@@ -231,7 +245,7 @@ describe("ligarAvisoDoTime no Postgres real", () => {
   it("'até eu desligar': o CHECK aceita o prazo nulo, e a leitura diz vigente sem prazo", async () => {
     expect(await ligarAvisoDoTime(pedido({ expiraEm: null }))).toMatchObject({ ok: true });
     expect((await avisoNoBanco()).expira).toBeNull();
-    expect((await avisosDaOrg(pool, ORG_A, new Date(Date.now() + 48 * HORA), semNomes))[0]).toMatchObject({ ativa: true, expira_em: null });
+    expect((await lerAvisos(ORG_A, new Date(Date.now() + 48 * HORA)))[0]).toMatchObject({ ativa: true, expira_em: null });
   });
 
   it("duas primeiras ligações simultâneas do aviso: UMA linha de fala, e o time aponta para ela", async () => {
@@ -338,11 +352,11 @@ describe("desligarAvisoDoTime no Postgres real", () => {
     if (!r.ok) throw new Error("devia ligar");
     expect(await desligarAvisoDoTime(pool, ORG_A, TIME_A, new Date())).toEqual({
       ok: true,
-      desligado: { desde: p.desde.toISOString(), expiraEm: p.expiraEm!.toISOString() },
+      desligado: { desde: p.desde.toISOString(), expiraEm: p.expiraEm!.toISOString(), ligadoPor: GERENTE },
     });
     expect(await avisoNoBanco()).toEqual({ fala_id: r.fala.id, desde: null, expira: null });
     // Desligado, a leitura ainda traz a fala — o cartão mostra o texto salvo.
-    expect((await avisosDaOrg(pool, ORG_A, new Date(), semNomes))[0]).toMatchObject({ ativa: false, fala: { id: r.fala.id } });
+    expect((await lerAvisos(ORG_A))[0]).toMatchObject({ ativa: false, fala: { id: r.fala.id } });
     // Já desligado: nada muda.
     expect(await desligarAvisoDoTime(pool, ORG_A, TIME_A, new Date())).toEqual({ ok: true, desligado: null });
   });
@@ -357,5 +371,63 @@ describe("desligarAvisoDoTime no Postgres real", () => {
     expect(await desligarAvisoDoTime(pool, ORG_A, TIME_A, new Date())).toEqual({ ok: true, desligado: null });
     expect(await avisoNoBanco()).toEqual(antes);
     expect(await desligarAvisoDoTime(pool, ORG_B, TIME_A, new Date())).toEqual({ ok: false, motivo: "nao_encontrado" });
+  });
+});
+
+describe("o time ARQUIVADO com o aviso vigente (Postgres real)", () => {
+  const ligarNoArquivado = (inicio: string, fim: string | null) =>
+    sql(`
+      update public.attendance_teams
+         set phone_emergency_active_since = ${inicio}, phone_emergency_expires_at = ${fim ?? "null"},
+             phone_emergency_activated_by = '${GERENTE}'
+       where id = '${TIME_ARQUIVADO}';
+    `);
+
+  it("segue na leitura, marcado arquivado — na lista do gerente e na faixa; sem aviso vigente, fica de fora", async () => {
+    expect((await lerAvisos(ORG_A)).map((a) => a.team_id)).toEqual([TIME_A]);
+    ligarNoArquivado("now() - interval '10 minutes'", null);
+    const antigo = (await lerAvisos(ORG_A)).find((a) => a.team_id === TIME_ARQUIVADO);
+    expect(antigo).toMatchObject({ arquivado: true, ativa: true, expira_em: null, ligada_por: "alguém da equipe" });
+    expect(await avisosLigados(pool, ORG_A, new Date())).toEqual([
+      { team_id: TIME_ARQUIVADO, time_nome: "Antigo", expira_em: null, arquivado: true },
+    ]);
+    // B nunca vê o arquivado de A.
+    expect((await avisosLigados(pool, ORG_B, new Date())).length).toBe(0);
+  });
+
+  it("desliga do mesmo jeito; ligar nele é recusado com time_arquivado, sem gravar", async () => {
+    ligarNoArquivado("now() - interval '10 minutes'", "now() + interval '1 hour'");
+    expect(await ligarAvisoDoTime(pedido({ teamId: TIME_ARQUIVADO }))).toEqual({ ok: false, motivo: "time_arquivado" });
+    expect(await falasDoAviso(ORG_A)).toHaveLength(0);
+
+    const r = await desligarAvisoDoTime(pool, ORG_A, TIME_ARQUIVADO, new Date());
+    expect(r).toMatchObject({ ok: true, desligado: { ligadoPor: GERENTE } });
+    expect(await avisoNoBanco(TIME_ARQUIVADO)).toMatchObject({ desde: null, expira: null });
+    expect((await lerAvisos(ORG_A)).some((a) => a.team_id === TIME_ARQUIVADO)).toBe(false);
+  });
+});
+
+describe("religar com o texto salvo (Postgres real)", () => {
+  it("não vai ao Storage — nem com ele fora do ar —, estende o prazo e devolve quem tinha ligado o período de antes", async () => {
+    const primeiro = pedido();
+    const r1 = await ligarAvisoDoTime(primeiro);
+    if (!r1.ok) throw new Error("devia ligar");
+
+    const foraDoAr = {
+      baixar: async () => {
+        throw new Error("armazem_download: StorageApiError 503");
+      },
+    };
+    const desde = new Date(primeiro.desde.getTime() + 60_000);
+    const r2 = await ligarAvisoDoTime(pedido({ armazem: foraDoAr, desde, expiraEm: new Date(desde.getTime() + 4 * HORA) }));
+
+    expect(r2).toMatchObject({
+      ok: true,
+      mudou: false,
+      fala: { id: r1.fala.id },
+      anterior: { desde: primeiro.desde.toISOString(), expiraEm: primeiro.expiraEm!.toISOString(), ligadoPor: GERENTE },
+    });
+    expect(await falasDoAviso(ORG_A)).toHaveLength(1);
+    expect((await avisoNoBanco()).expira!.getTime()).toBe(desde.getTime() + 4 * HORA);
   });
 });

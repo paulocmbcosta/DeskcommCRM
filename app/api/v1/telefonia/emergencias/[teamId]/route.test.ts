@@ -1,31 +1,36 @@
 // @vitest-environment node
 /**
  * O AVISO DE INSTABILIDADE PELA ROTA (desenho da fase 2, D7/D8, §4 e §6.3):
- * gerente ou admin; a organização é a da SESSÃO; ligar recebe o texto e o HASH da
- * prévia e nunca chama a ElevenLabs — prévia que não confere não liga nada; o
- * prazo sai da duração escolhida (2 h por padrão, ou "até eu desligar"); ligar
- * audita a duração e se o texto mudou, desligar audita quando havia o que desligar.
+ * gerente ou admin; só com a telefonia oferecida na instalação; a organização é a
+ * da SESSÃO; prévia que não confere não liga nada, e cada recusa tem a mensagem
+ * do LIGAR (nada de "guardar"/"salvar"); o time arquivado é recusado com
+ * mensagem própria; o prazo sai da duração escolhida (2 h por padrão, ou "até eu
+ * desligar"); ligar audita a duração, se o texto mudou e o período substituído
+ * (com quem o ligou), desligar audita quando havia o que desligar.
  *
  * A transação (trava da linha do time, decisão de novo sob ela) é da camada de
  * banco, `lib/telefonia/emergencias.ts`, provada em emergencias.test.ts e no
  * Postgres real (tests/invariants/telefonia-aviso-no-banco.test.ts). Aqui ela é
- * uma porta: o que se prova é o que a ROTA faz com cada desfecho.
+ * uma porta: o que se prova é o que a ROTA faz com cada desfecho. Que ligar não
+ * alcança a ElevenLabs, com a camada de banco DE VERDADE, está em
+ * ligar-sem-elevenlabs.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-import type * as ModuloElevenLabs from "@/lib/telefonia/elevenlabs";
 import type * as ModuloEmergencias from "@/lib/telefonia/emergencias";
 import type * as ModuloServico from "@/lib/telefonia/servico-de-falas";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const OUTRA_ORG = "99999999-9999-4999-8999-999999999999";
 const USUARIO = "11111111-1111-4111-8111-111111111111";
+const BRUNO = "11111111-1111-4111-8111-11111111111b";
 const TIME = "44444444-4444-4444-8444-444444444444";
 const HASH = "c".repeat(64);
 const estado = vi.hoisted(() => ({
   ligar: null as unknown,
   desligar: null as unknown,
+  ari: { baseUrl: "http://asterisk:8088", senha: "x" } as unknown,
 }));
 
 vi.mock("@/lib/auth/require-role", () => ({
@@ -38,23 +43,7 @@ vi.mock("@/lib/auth/require-role", () => ({
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/agent-engine/db/request-pool", () => ({ getRequestPool: vi.fn(() => ({ pool: "da-rota" })) }));
-vi.mock("@/lib/users/nome-do-atendente", () => ({
-  nomesDeExibicao: vi.fn(async (ids: string[]) => new Map(ids.map((id) => [id, "Ana"] as const))),
-}));
-// D15: ligar NUNCA chama a ElevenLabs. As duas chamadas de rede do cliente viram
-// espiãs que lançam — se alguma rodar, o caso fica vermelho duas vezes.
-vi.mock("@/lib/telefonia/elevenlabs", async () => {
-  const real = await vi.importActual<typeof ModuloElevenLabs>("@/lib/telefonia/elevenlabs");
-  return {
-    ...real,
-    sintetizar: vi.fn(() => {
-      throw new Error("ligar o aviso chamou a síntese da ElevenLabs (D15)");
-    }),
-    listarVozes: vi.fn(() => {
-      throw new Error("ligar o aviso chamou a ElevenLabs (D15)");
-    }),
-  };
-});
+vi.mock("@/lib/channels/telefonia/ari", () => ({ configAriDoAmbiente: vi.fn(() => estado.ari) }));
 // O `STATUS_DA_FALHA` é o DE VERDADE: é ele que decide 409, 422 e 502.
 vi.mock("@/lib/telefonia/servico-de-falas", async () => {
   const real = await vi.importActual<typeof ModuloServico>("@/lib/telefonia/servico-de-falas");
@@ -72,9 +61,8 @@ vi.mock("@/lib/telefonia/emergencias", async () => {
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { requireSupportWrite } from "@/lib/impersonate/support";
-import { listarVozes, sintetizar } from "@/lib/telefonia/elevenlabs";
 import { desligarAvisoDoTime, ligarAvisoDoTime } from "@/lib/telefonia/emergencias";
-import { MENSAGEM_DA_FALHA_DA_FALA, MENSAGEM_DO_TEXTO_INVALIDO } from "@/lib/telefonia/vocabulario";
+import { MENSAGEM_DO_TEXTO_INVALIDO } from "@/lib/telefonia/vocabulario";
 
 import { DELETE, PUT } from "./route";
 
@@ -101,14 +89,13 @@ const pedidoDoLigar = () => vi.mocked(ligarAvisoDoTime).mock.calls[0]![0];
 
 beforeEach(() => {
   estado.ligar = { ok: true, time: { id: TIME, nome: "Suporte" }, fala: FALA, mudou: true, anterior: null };
-  estado.desligar = { ok: true, desligado: { desde: "2026-09-28T13:00:00.000Z", expiraEm: null } };
+  estado.desligar = { ok: true, desligado: { desde: "2026-09-28T13:00:00.000Z", expiraEm: null, ligadoPor: BRUNO } };
+  estado.ari = { baseUrl: "http://asterisk:8088", senha: "x" };
   vi.mocked(audit).mockClear();
   vi.mocked(ligarAvisoDoTime).mockClear();
   vi.mocked(desligarAvisoDoTime).mockClear();
   vi.mocked(requireRole).mockClear();
   vi.mocked(requireSupportWrite).mockClear();
-  vi.mocked(sintetizar).mockClear();
-  vi.mocked(listarVozes).mockClear();
 });
 
 describe("PUT /api/v1/telefonia/emergencias/[teamId] — ligar", () => {
@@ -131,25 +118,49 @@ describe("PUT /api/v1/telefonia/emergencias/[teamId] — ligar", () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it("a prévia não confere (o texto mudou depois dela) → 422 com o motivo, e nada auditado", async () => {
-    estado.ligar = { ok: false, motivo: "previa_desatualizada" };
+  it("time ARQUIVADO → 409 com mensagem própria (ele não recebe ligações), e nada auditado", async () => {
+    estado.ligar = { ok: false, motivo: "time_arquivado" };
     const r = await ligar({ fala: PREVIA });
-    expect(r.status).toBe(422);
+    expect(r.status).toBe(409);
     expect(await erroDe(r)).toMatchObject({
-      code: "previa_desatualizada",
-      message: MENSAGEM_DA_FALHA_DA_FALA.previa_desatualizada,
+      code: "time_arquivado",
+      message: "Este time está arquivado e não recebe ligações: o aviso não pode ser ligado nele.",
     });
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it("o Storage falhou ao conferir a prévia → 502; outra mudança do aviso segurou a trava → 409 com mensagem do aviso", async () => {
-    estado.ligar = { ok: false, motivo: "armazenamento" };
-    expect((await ligar({ fala: PREVIA })).status).toBe(502);
+  it.each([
+    ["previa_desatualizada", 422, "A prévia não corresponde a este texto ou à voz atual. Gere a prévia de novo."],
+    ["previa_ausente", 422, "O áudio deste texto não foi encontrado. Gere a prévia de novo antes de ligar."],
+    [
+      "armazenamento",
+      502,
+      "Não conseguimos conferir o áudio do aviso agora. Tente ligar de novo; se continuar, use o texto já salvo.",
+    ],
+  ] as const)("a fala recusada ao LIGAR (%s) → %i com a mensagem do ligar — nada de 'guardar' ou 'salvar'", async (motivo, status, mensagem) => {
+    estado.ligar = { ok: false, motivo };
+    const r = await ligar({ fala: PREVIA });
+    expect(r.status).toBe(status);
+    const erro = await erroDe(r);
+    expect(erro).toMatchObject({ code: motivo, message: mensagem });
+    expect(erro.message).not.toMatch(/guardar|salvar/i);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("a linha do time presa por outra transação (55P03) → 409, sem culpar 'o aviso'", async () => {
     estado.ligar = { ok: false, motivo: "gravacao_em_andamento" };
     const r = await ligar({ fala: PREVIA });
     expect(r.status).toBe(409);
-    expect((await erroDe(r)).message).toMatch(/aviso deste time/);
+    expect((await erroDe(r)).message).toBe("Este time está sendo alterado por outra pessoa agora. Tente de novo em instantes.");
     expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("telefonia não oferecida nesta instalação → 409, sem chegar ao banco", async () => {
+    estado.ari = null;
+    const r = await ligar({ fala: PREVIA });
+    expect(r.status).toBe(409);
+    expect((await erroDe(r)).code).toBe("telefonia_nao_oferecida");
+    expect(ligarAvisoDoTime).not.toHaveBeenCalled();
   });
 
   it("texto recusado pela NOSSA régua nunca diz que a ElevenLabs recusou", async () => {
@@ -201,6 +212,7 @@ describe("PUT /api/v1/telefonia/emergencias/[teamId] — ligar", () => {
     expect(corpo.data.aviso).toEqual({
       team_id: TIME,
       time_nome: "Suporte",
+      arquivado: false,
       ativa: true,
       desde: pedido.desde.toISOString(),
       expira_em: pedido.expiraEm!.toISOString(),
@@ -225,25 +237,26 @@ describe("PUT /api/v1/telefonia/emergencias/[teamId] — ligar", () => {
     expect(((await r.json()) as { data: { aviso: { expira_em: unknown } } }).data.aviso.expira_em).toBeNull();
   });
 
-  it("ligar por cima de um aviso que já estava lá: o de antes vai na auditoria (a trilha não perde o período)", async () => {
-    const anterior = { desde: "2026-09-28T10:00:00.000Z", expiraEm: "2026-09-28T11:00:00.000Z" };
+  it("religar por cima (o mesmo texto e a mesma duração estendem o prazo e trocam o autor): o período de antes, com QUEM o ligou, vai na auditoria", async () => {
+    const anterior = { desde: "2026-09-28T10:00:00.000Z", expiraEm: "2026-09-28T11:00:00.000Z", ligadoPor: BRUNO };
     estado.ligar = { ok: true, time: { id: TIME, nome: "Suporte" }, fala: FALA, mudou: false, anterior };
     await ligar({ fala: PREVIA });
-    expect(vi.mocked(audit).mock.calls[0]![0].metadata).toMatchObject({
-      anterior: { desde: anterior.desde, expira_em: anterior.expiraEm },
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({
+      actorUserId: USUARIO,
+      metadata: { anterior: { desde: anterior.desde, expira_em: anterior.expiraEm, ligado_por: BRUNO } },
     });
   });
 
-  it("D15: nenhum caminho de ligar chama a ElevenLabs", async () => {
-    for (const r of [
-      { ok: true, time: { id: TIME, nome: "Suporte" }, fala: FALA, mudou: true, anterior: null },
-      { ok: false, motivo: "previa_ausente" },
-    ]) {
-      estado.ligar = r;
-      await ligar({ fala: PREVIA });
-    }
-    expect(sintetizar).not.toHaveBeenCalled();
-    expect(listarVozes).not.toHaveBeenCalled();
+  it("quem ligou sem nome cadastrado aparece como 'alguém da equipe' — nunca o e-mail nem o começo dele", async () => {
+    vi.mocked(requireRole).mockResolvedValueOnce({
+      ok: true,
+      user: { id: USUARIO, email: "ana.souza@exemplo.com", full_name: null, idioma: "pt-BR" },
+      org: { orgId: ORG, name: "Org", role: "manager" },
+    } as never);
+    const r = await ligar({ fala: PREVIA });
+    const aviso = ((await r.json()) as { data: { aviso: { ligada_por: string } } }).data.aviso;
+    expect(aviso.ligada_por).toBe("alguém da equipe");
+    expect(JSON.stringify(aviso)).not.toMatch(/ana\.souza/);
   });
 });
 
@@ -257,8 +270,11 @@ describe("DELETE /api/v1/telefonia/emergencias/[teamId] — desligar", () => {
     expect(chamada[3]).toBeInstanceOf(Date);
   });
 
-  it("estava ligado: desliga e audita o período que foi desligado", async () => {
-    estado.desligar = { ok: true, desligado: { desde: "2026-09-28T13:00:00.000Z", expiraEm: "2026-09-28T15:00:00.000Z" } };
+  it("estava ligado: desliga e audita o período que foi desligado, com quem o tinha ligado", async () => {
+    estado.desligar = {
+      ok: true,
+      desligado: { desde: "2026-09-28T13:00:00.000Z", expiraEm: "2026-09-28T15:00:00.000Z", ligadoPor: BRUNO },
+    };
     const r = await desligar();
     expect(r.status).toBe(200);
     expect(((await r.json()) as { data: unknown }).data).toEqual({ desligado: true });
@@ -268,7 +284,7 @@ describe("DELETE /api/v1/telefonia/emergencias/[teamId] — desligar", () => {
       actorUserId: USUARIO,
       resourceType: "attendance_team",
       resourceId: TIME,
-      metadata: { ligado_em: "2026-09-28T13:00:00.000Z", expiraria_em: "2026-09-28T15:00:00.000Z" },
+      metadata: { ligado_em: "2026-09-28T13:00:00.000Z", expiraria_em: "2026-09-28T15:00:00.000Z", ligado_por: BRUNO },
     });
   });
 
@@ -278,6 +294,14 @@ describe("DELETE /api/v1/telefonia/emergencias/[teamId] — desligar", () => {
     expect(r.status).toBe(200);
     expect(((await r.json()) as { data: unknown }).data).toEqual({ desligado: false });
     expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("telefonia não oferecida nesta instalação → 409, sem chegar ao banco", async () => {
+    estado.ari = null;
+    const r = await desligar();
+    expect(r.status).toBe(409);
+    expect((await erroDe(r)).code).toBe("telefonia_nao_oferecida");
+    expect(desligarAvisoDoTime).not.toHaveBeenCalled();
   });
 
   it("time de outra organização → 404; id fora do formato → 404 sem banco; trava ocupada → 409", async () => {

@@ -9625,9 +9625,23 @@ export const DICIONARIO: Traducoes = {
   },
   // Telefonia, fase 2 — o aviso de instabilidade do time
   "Time não encontrado.": { es: "Equipo no encontrado." },
-  "Outra mudança no aviso deste time está em andamento. Tente de novo em instantes.": {
-    es: "Otro cambio en el aviso de este equipo está en curso. Inténtalo de nuevo en unos instantes.",
+  "Este time está arquivado e não recebe ligações: o aviso não pode ser ligado nele.": {
+    es: "Este equipo está archivado y no recibe llamadas: el aviso no se puede activar en él.",
   },
+  "Este time está sendo alterado por outra pessoa agora. Tente de novo em instantes.": {
+    es: "Otra persona está modificando este equipo ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não conseguimos conferir o áudio do aviso agora. Tente ligar de novo; se continuar, use o texto já salvo.": {
+    es: "No pudimos verificar el audio del aviso ahora. Intenta activarlo de nuevo; si continúa, usa el texto ya guardado.",
+  },
+  "O áudio deste texto não foi encontrado. Gere a prévia de novo antes de ligar.": {
+    es: "No se encontró el audio de este texto. Genera la vista previa de nuevo antes de activar.",
+  },
+  "A prévia não corresponde a este texto ou à voz atual. Gere a prévia de novo.": {
+    es: "La vista previa no corresponde a este texto o a la voz actual. Genera la vista previa de nuevo.",
+  },
+  "O telefone não está ligado nesta instalação.": { es: "El teléfono no está activado en esta instalación." },
+  "alguém da equipe": { es: "alguien del equipo" },
 };
 
 /**

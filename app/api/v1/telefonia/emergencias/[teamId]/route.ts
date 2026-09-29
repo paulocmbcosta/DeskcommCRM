@@ -13,13 +13,21 @@
  * Quem exige "Gerar prévia" e "Ouvir" antes de "Ligar" é a tela (§6.3); a rota
  * garante a outra metade.
  *
+ * Com o texto SALVO, sem mudança, ligar nem vai ao Storage — é o caminho do
+ * incidente; com texto novo, a conferência da prévia tem prazo (5 s). Cada recusa
+ * da fala tem a mensagem do LIGAR (`mensagemDaFalhaDoLigar`). Time arquivado não
+ * liga (409 `time_arquivado`); o aviso que ele já tinha desliga normalmente.
+ *
  * A duração vira `expires_at` aqui, com o relógio da requisição (`expiraEm`).
  * Desligar só mexe no aviso vigente: o vencido que o worker ainda não varreu é da
  * passada dele (`phone.emergency_expired`), e a resposta diz `desligado: false`.
+ * Sem a telefonia oferecida nesta instalação, as duas respondem 409
+ * `telefonia_nao_oferecida` sem tocar no banco — como o GET, que devolve a lista vazia.
  *
- * Auditoria: `phone.emergency_activated` com a duração, o prazo, a fala e se o
- * texto mudou (e o período substituído, se havia um); `phone.prompt_saved` quando
- * a fala mudou; `phone.emergency_deactivated` só quando havia o que desligar.
+ * Auditoria: `phone.emergency_activated` com a duração, o prazo, a fala, se o
+ * texto mudou e o período substituído, com quem o tinha ligado (religar com o
+ * mesmo texto estende o prazo e troca o autor); `phone.prompt_saved` quando a
+ * fala mudou; `phone.emergency_deactivated` só quando havia o que desligar.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -29,35 +37,44 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
+import { configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import {
   MENSAGEM_DA_FALHA_DO_AVISO,
+  QUEM_LIGOU_SEM_NOME,
   desligarAvisoDoTime,
   ligarAvisoDoTime,
   ligarAvisoSchema,
+  mensagemDaFalhaDoLigar,
   type FalhaDoAviso,
+  type PeriodoDoAviso,
 } from "@/lib/telefonia/emergencias";
 import { STATUS_DA_FALHA, armazemDaInstalacao } from "@/lib/telefonia/servico-de-falas";
 import { expiraEm } from "@/lib/telefonia/vencimento-da-emergencia";
-import {
-  MENSAGEM_DA_FALHA_DA_FALA,
-  MENSAGEM_DO_TEXTO_INVALIDO,
-  type AvisoDoTimePublico,
-  type FalhaDaFala,
-} from "@/lib/telefonia/vocabulario";
-import { nomesDeExibicao } from "@/lib/users/nome-do-atendente";
+import { MENSAGEM_DO_TEXTO_INVALIDO, type AvisoDoTimePublico, type FalhaDaFala } from "@/lib/telefonia/vocabulario";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const idSchema = z.string().uuid();
 
-/** A recusa própria do aviso: 404 para o time que não é desta organização, 409 para a trava ocupada. */
+/**
+ * A recusa própria do aviso: 404 para o time que não é desta organização; 409
+ * para o time arquivado e para a linha do time presa por outra transação.
+ */
 function falhaDoAviso(motivo: FalhaDoAviso, t: (texto: string) => string, requestId: string): Response {
   if (motivo === "nao_encontrado") return fail("not_found", t(MENSAGEM_DA_FALHA_DO_AVISO.nao_encontrado), 404, { requestId });
   return fail(motivo, t(MENSAGEM_DA_FALHA_DO_AVISO[motivo]), 409, { requestId });
 }
+
+/** Sem a telefonia nesta instalação não há ligação para ouvir aviso nenhum. */
+function semTelefonia(t: (texto: string) => string, requestId: string): Response {
+  return fail("telefonia_nao_oferecida", t("O telefone não está ligado nesta instalação."), 409, { requestId });
+}
+
+/** O período substituído ou desligado, como a auditoria o guarda (snake_case). */
+const periodoNaAuditoria = (p: PeriodoDoAviso) => ({ desde: p.desde, expira_em: p.expiraEm, ligado_por: p.ligadoPor });
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ teamId: string }> }): Promise<Response> {
   const supportDenied = await requireSupportWrite();
@@ -68,6 +85,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ teamId: str
   if (!authz.ok) return authz.response;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
 
+  if (configAriDoAmbiente() === null) return semTelefonia(t, requestId);
   const id = idSchema.safeParse((await ctx.params).teamId);
   if (!id.success) return fail("not_found", t(MENSAGEM_DA_FALHA_DO_AVISO.nao_encontrado), 404, { requestId });
   const parsed = ligarAvisoSchema.safeParse(await req.json().catch(() => null));
@@ -91,11 +109,13 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ teamId: str
     expiraEm: prazo,
   });
   if (!r.ok) {
-    if (r.motivo === "nao_encontrado" || r.motivo === "gravacao_em_andamento") return falhaDoAviso(r.motivo, t, requestId);
-    // Salvar nunca vai à ElevenLabs: o texto recusado foi pela NOSSA régua.
+    if (r.motivo === "nao_encontrado" || r.motivo === "time_arquivado" || r.motivo === "gravacao_em_andamento") {
+      return falhaDoAviso(r.motivo, t, requestId);
+    }
+    // Ligar nunca vai à ElevenLabs: o texto recusado foi pela NOSSA régua.
     if (r.motivo === "texto_recusado") return fail("validation_failed", t(MENSAGEM_DO_TEXTO_INVALIDO), 422, { requestId });
     const motivo: FalhaDaFala = r.motivo;
-    return fail(motivo, t(MENSAGEM_DA_FALHA_DA_FALA[motivo]), STATUS_DA_FALHA[motivo], { requestId });
+    return fail(motivo, t(mensagemDaFalhaDoLigar(motivo)), STATUS_DA_FALHA[motivo], { requestId });
   }
 
   const teamId = r.time.id;
@@ -110,7 +130,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ teamId: str
       expira_em: prazo?.toISOString() ?? null,
       fala_id: r.fala.id,
       texto_mudou: r.mudou,
-      anterior: r.anterior ? { desde: r.anterior.desde, expira_em: r.anterior.expiraEm } : null,
+      anterior: r.anterior ? periodoNaAuditoria(r.anterior) : null,
     },
     requestId,
   });
@@ -126,15 +146,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ teamId: str
     });
   }
 
-  // O nome pela MESMA régua da leitura (GET): quem acabou de ligar vê o que todos verão.
-  const nome = (await nomesDeExibicao([authz.user.id])).get(authz.user.id) ?? null;
+  // A MESMA régua da leitura (GET): só o nome cadastrado; sem ele, o rótulo genérico — nunca o e-mail.
   const aviso: AvisoDoTimePublico = {
     team_id: teamId,
     time_nome: r.time.nome,
+    arquivado: false,
     ativa: true,
     desde: desde.toISOString(),
     expira_em: prazo?.toISOString() ?? null,
-    ligada_por: nome,
+    ligada_por: authz.user.full_name?.trim() || t(QUEM_LIGOU_SEM_NOME),
     fala: r.fala,
   };
   return ok({ aviso }, { requestId });
@@ -149,6 +169,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ teamId:
   if (!authz.ok) return authz.response;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
 
+  if (configAriDoAmbiente() === null) return semTelefonia(t, requestId);
   const id = idSchema.safeParse((await ctx.params).teamId);
   if (!id.success) return fail("not_found", t(MENSAGEM_DA_FALHA_DO_AVISO.nao_encontrado), 404, { requestId });
   const teamId = id.data;
@@ -162,7 +183,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ teamId:
       organizationId: authz.org.orgId,
       resourceType: "attendance_team",
       resourceId: teamId,
-      metadata: { ligado_em: r.desligado.desde, expiraria_em: r.desligado.expiraEm },
+      metadata: { ligado_em: r.desligado.desde, expiraria_em: r.desligado.expiraEm, ligado_por: r.desligado.ligadoPor },
       requestId,
     });
   }

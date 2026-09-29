@@ -16,6 +16,11 @@
  * ausente também é falha (lança), não objeto ausente: sem bucket, a síntese paga
  * não teria onde ficar.
  *
+ * `baixar` aceita um `AbortSignal` (opcional): quem não pode esperar o Storage —
+ * ligar o aviso de instabilidade num incidente — o passa por `comPrazoDeLeitura`,
+ * que desiste no prazo e aborta o pedido. Sem o sinal, a chamada ao storage-js é
+ * a de sempre.
+ *
  * `enviar` NÃO sobrescreve: o primeiro a gravar um caminho vence, e o segundo
  * recebe `"ja_existia"`. Duas prévias do mesmo texto ao mesmo tempo gravam o MESMO
  * caminho; com sobrescrita, a pessoa podia ouvir um áudio e ficar guardado outro.
@@ -46,8 +51,11 @@ export interface PortaDoArmazem {
    * antes, e o objeto guardado é o DELE. Lança se o Storage falhou.
    */
   enviar(caminho: string, bytes: Uint8Array): Promise<"gravado" | "ja_existia">;
-  /** `null` = o objeto não existe. LANÇA se o Storage falhou: falha não é ausência. */
-  baixar(caminho: string): Promise<Uint8Array<ArrayBuffer> | null>;
+  /**
+   * `null` = o objeto não existe. LANÇA se o Storage falhou: falha não é ausência.
+   * Com `signal`, o pedido é abortado quando ele disparar (e isso também LANÇA).
+   */
+  baixar(caminho: string, opcoes?: { signal?: AbortSignal }): Promise<Uint8Array<ArrayBuffer> | null>;
   /** Lança se o Storage recusar: quem limpa precisa saber que não limpou. */
   apagar(caminhos: string[]): Promise<void>;
   /** As pastas do topo do bucket — uma por organização. */
@@ -118,8 +126,11 @@ export function armazemDoSupabase(admin: SupabaseClient): PortaDoArmazem {
       if (jaExiste(error) && !bucketAusente(error)) return "ja_existia";
       throw new Error(`armazem_envio: ${descrever(error)}`);
     },
-    async baixar(caminho) {
-      const { data, error } = await bucket().download(caminho);
+    async baixar(caminho, opcoes) {
+      // Sem sinal, a chamada de sempre (só o caminho); com ele, o `FetchParameters` do storage-js.
+      const { data, error } = opcoes?.signal
+        ? await bucket().download(caminho, {}, { signal: opcoes.signal })
+        : await bucket().download(caminho);
       if (error) {
         if (objetoAusente(error)) return null;
         throw new Error(`armazem_download: ${descrever(error)}`);
@@ -155,6 +166,37 @@ export function armazemDoSupabase(admin: SupabaseClient): PortaDoArmazem {
           if (o.id !== null && o.created_at) objetos.push({ caminho: `${pasta}/${o.name}`, criadoEm: new Date(o.created_at) });
         }
         if (data.length < PAGINA) return objetos;
+      }
+    },
+  };
+}
+
+/**
+ * O armazém com PRAZO na leitura: `baixar` desiste em `ms` — LANÇA
+ * (`armazem_download: prazo de N ms estourado`, que é falha e não ausência) e
+ * ABORTA o pedido em curso pelo `AbortSignal`. A corrida com o relógio vale mesmo
+ * quando o armazém ignora o sinal: o supabase-js não tem prazo próprio, e quem
+ * chama não fica preso a ele.
+ *
+ * Quem usa: ligar o aviso de instabilidade com texto novo
+ * (lib/telefonia/emergencias.ts). Num incidente o Storage pode estar lento junto
+ * com o resto, e o gerente precisa de uma resposta em segundos.
+ */
+export function comPrazoDeLeitura(armazem: Pick<PortaDoArmazem, "baixar">, ms: number): Pick<PortaDoArmazem, "baixar"> {
+  return {
+    async baixar(caminho) {
+      const controle = new AbortController();
+      let relogio: ReturnType<typeof setTimeout> | undefined;
+      const estouro = new Promise<never>((_, rejeitar) => {
+        relogio = setTimeout(() => {
+          controle.abort();
+          rejeitar(new Error(`armazem_download: prazo de ${ms} ms estourado`));
+        }, ms);
+      });
+      try {
+        return await Promise.race([armazem.baixar(caminho, { signal: controle.signal }), estouro]);
+      } finally {
+        clearTimeout(relogio);
       }
     },
   };

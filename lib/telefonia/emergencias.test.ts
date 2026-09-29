@@ -7,14 +7,20 @@
  * fotografa o estado, o `rollback` o devolve):
  *  - recusa barata antes de tudo: time de outra organização ou arquivado e prévia
  *    desatualizada não abrem transação; o time de fora nem lê o Storage;
+ *  - o texto SALVO, sem mudança, liga sem ir ao Storage (nem que ele trave ou
+ *    lance) — num incidente o gerente liga o aviso de qualquer jeito;
+ *  - o texto NOVO confere a prévia no Storage com prazo (5 s), e desiste no prazo
+ *    com `armazenamento`, abortando o pedido;
  *  - o Storage é lido ANTES da conexão da transação — nunca com a trava segura;
  *  - a transação tem prazo de trava, trava a linha do TIME com `for no key update`,
  *    DECIDE DE NOVO com a fala relida sob a trava (outra gravação no meio não deixa
  *    linha órfã) e grava fala e time juntos — recusa ou erro desfazem tudo;
  *  - `55P03` vira `gravacao_em_andamento`;
- *  - desligar só mexe no aviso VIGENTE (o vencido é da passada do worker);
- *  - a leitura calcula "ativa" contra o relógio pedido, e só pede o nome de quem
- *    ligou um aviso vigente;
+ *  - desligar só mexe no aviso VIGENTE (o vencido é da passada do worker), também
+ *    no time arquivado;
+ *  - a leitura calcula "ativa" contra o relógio pedido, traz o aviso vigente de
+ *    time ARQUIVADO (para alguém desligar), só pede o nome de quem ligou um aviso
+ *    vigente — e a faixa de quem não é gerente recebe só time, prazo e arquivado;
  *  - D15: o módulo não carrega o cliente da ElevenLabs.
  * O SQL de verdade (a trava que não segura a ligação, a concorrência, o CHECK) é
  * medido em Postgres real em tests/invariants/telefonia-aviso-no-banco.test.ts.
@@ -24,10 +30,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
 import {
+  PRAZO_DO_STORAGE_AO_LIGAR_MS,
   avisosDaOrg,
+  avisosLigados,
   desligarAvisoDoTime,
   ligarAvisoDoTime,
   ligarAvisoSchema,
+  naFaixa,
   travarTimeDoAviso,
   type PedidoDeLigarAviso,
 } from "./emergencias";
@@ -153,12 +162,21 @@ class Banco {
       const t = this.estado.times.get(p[0] as string);
       if (!t || t.org !== p[1]) return vazio;
       return linhas([
-        { id: p[0], nome: t.nome, fala_id: t.falaId, desde: t.desde, expira_em: t.expira, arquivado: t.arquivado },
+        {
+          id: p[0],
+          nome: t.nome,
+          fala_id: t.falaId,
+          desde: t.desde,
+          expira_em: t.expira,
+          ativado_por: t.ativadoPor,
+          arquivado: t.arquivado,
+        },
       ]);
     }
     if (s.startsWith("select id as team_id, name as time_nome")) {
+      // O time ativo, e o arquivado que ainda tem o aviso na linha (a leitura decide se é vigente).
       const rows = [...e.times]
-        .filter(([, t]) => t.org === p[0] && !t.arquivado)
+        .filter(([, t]) => t.org === p[0] && (!t.arquivado || t.desde !== null))
         .sort(([, a], [, b]) => a.nome.localeCompare(b.nome))
         .map(([id, t]) => ({
           team_id: id,
@@ -167,6 +185,7 @@ class Banco {
           expira_em: t.expira,
           ligada_por_id: t.ativadoPor,
           fala_id: t.falaId,
+          arquivado: t.arquivado,
         }));
       return linhas(rows);
     }
@@ -242,12 +261,20 @@ class Banco {
 /** O Storage em memória: as prévias guardadas. 1600 bytes de μ-law = 200 ms. */
 class Armazem {
   objetos = new Map<string, Uint8Array<ArrayBuffer>>();
+  /** `trava`: o Storage não responde nunca; `lanca`: o Storage falha. */
+  modo: "normal" | "trava" | "lanca" = "normal";
+  sinais: Array<AbortSignal | undefined> = [];
+  chamadas = 0;
   constructor(private readonly banco: Banco) {}
   guardar(org: string, hash: string, bytes = 1600) {
     this.objetos.set(caminhoDaFala(org, hash), new Uint8Array(bytes));
   }
-  baixar = async (caminho: string) => {
+  baixar = async (caminho: string, opcoes?: { signal?: AbortSignal }) => {
+    this.chamadas++;
+    this.sinais.push(opcoes?.signal);
     this.banco.eventos.push(`storage:${caminho}`);
+    if (this.modo === "trava") return new Promise<never>(() => undefined);
+    if (this.modo === "lanca") throw new Error("armazem_download: StorageApiError 503");
     return this.objetos.get(caminho) ?? null;
   };
 }
@@ -297,12 +324,18 @@ describe("ligarAvisoSchema", () => {
 });
 
 describe("ligarAvisoDoTime — fase 1, fora da transação", () => {
-  it("time de outra organização, arquivado ou inexistente: nao_encontrado, sem Storage e sem transação", async () => {
-    for (const teamId of [TIME_DE_FORA, TIME_ARQUIVADO, "44444444-4444-4444-8444-444444444440"]) {
+  it("time de outra organização ou inexistente: nao_encontrado, sem Storage e sem transação", async () => {
+    for (const teamId of [TIME_DE_FORA, "44444444-4444-4444-8444-444444444440"]) {
       expect(await ligarAvisoDoTime(pedido({ teamId }))).toEqual({ ok: false, motivo: "nao_encontrado" });
     }
     expect(banco.eventos).toEqual([]);
     expect(time(TIME_DE_FORA).desde).toBeNull();
+  });
+
+  it("time ARQUIVADO: recusa própria (time_arquivado), sem Storage e sem transação", async () => {
+    expect(await ligarAvisoDoTime(pedido({ teamId: TIME_ARQUIVADO }))).toEqual({ ok: false, motivo: "time_arquivado" });
+    expect(banco.eventos).toEqual([]);
+    expect(time(TIME_ARQUIVADO).desde).toBeNull();
   });
 
   it("a prévia é de outro texto (editado depois dela): previa_desatualizada, sem transação", async () => {
@@ -321,6 +354,60 @@ describe("ligarAvisoDoTime — fase 1, fora da transação", () => {
   it("organização sem voz escolhida: sem_voz", async () => {
     banco.vozes.clear();
     expect(await ligarAvisoDoTime(pedido())).toEqual({ ok: false, motivo: "sem_voz" });
+    expect(banco.eventos).not.toContain("connect");
+  });
+});
+
+describe("ligarAvisoDoTime — o Storage num incidente", () => {
+  const comFalaSalva = () => {
+    const f = banco.novaFala(ORG, TEXTO, HASH);
+    time().falaId = f.id;
+    return f;
+  };
+
+  it.each(["trava", "lanca"] as const)(
+    "texto SALVO, sem mudança, com o Storage que %s: liga com a fala em uso e o Storage é chamado 0 vezes",
+    async (modo) => {
+      const f = comFalaSalva();
+      armazem.modo = modo;
+      const r = await ligarAvisoDoTime(pedido());
+      expect(r).toMatchObject({ ok: true, mudou: false, fala: { id: f.id, hash: HASH } });
+      expect(armazem.chamadas).toBe(0);
+      expect(time()).toMatchObject({ falaId: f.id, desde: AGORA, expira: DUAS_HORAS, ativadoPor: ANA });
+    },
+  );
+
+  it("texto NOVO com o Storage que não responde: desiste no prazo com `armazenamento`, aborta o pedido e não abre transação", async () => {
+    comFalaSalva();
+    armazem.modo = "trava";
+    const inicio = Date.now();
+    const r = await ligarAvisoDoTime(pedido({ fala: { texto: TEXTO_NOVO, hash: HASH_NOVO }, prazoDoStorageMs: 30 }));
+    expect(r).toEqual({ ok: false, motivo: "armazenamento" });
+    expect(Date.now() - inicio).toBeLessThan(1_000);
+    expect(armazem.sinais[0]!.aborted).toBe(true);
+    expect(banco.eventos).not.toContain("connect");
+    expect(time().desde).toBeNull();
+  });
+
+  it("o prazo padrão da conferência é 5 s: aos 4,999 s ainda espera, aos 5 s desiste", async () => {
+    expect(PRAZO_DO_STORAGE_AO_LIGAR_MS).toBe(5_000);
+    vi.useFakeTimers();
+    try {
+      armazem.modo = "trava";
+      let fim: unknown = "esperando";
+      void ligarAvisoDoTime(pedido()).then((r) => (fim = r));
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fim).toBe("esperando");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fim).toEqual({ ok: false, motivo: "armazenamento" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("texto NOVO com o Storage que falha: `armazenamento`, sem transação", async () => {
+    armazem.modo = "lanca";
+    expect(await ligarAvisoDoTime(pedido())).toEqual({ ok: false, motivo: "armazenamento" });
     expect(banco.eventos).not.toContain("connect");
   });
 });
@@ -347,11 +434,12 @@ describe("ligarAvisoDoTime — fase 2, a transação sob a trava do time", () =>
     expect(time()).toMatchObject({ desde: AGORA, expira: null });
   });
 
-  it("o texto de antes, com a prévia de antes: liga com a MESMA fala, sem regravar — mudou = false", async () => {
+  it("o texto de antes, com a prévia de antes: liga com a MESMA fala, sem regravar e sem Storage — mudou = false", async () => {
     const f = banco.novaFala(ORG, TEXTO, HASH);
     time().falaId = f.id;
     const r = await ligarAvisoDoTime(pedido());
     expect(r).toMatchObject({ ok: true, mudou: false, fala: { id: f.id } });
+    expect(banco.eventos).toEqual(["connect", "begin", "commit", "release"]);
     // Sob a trava: relê a fala, aponta o time — e nenhum INSERT/UPDATE em phone_prompts.
     expect(comandosDaTransacao().slice(3)).toEqual(["select id, kind", "update attendance_teams set", "commit"]);
     expect(time()).toMatchObject({ falaId: f.id, desde: AGORA });
@@ -380,11 +468,11 @@ describe("ligarAvisoDoTime — fase 2, a transação sob a trava do time", () =>
     expect(time().falaId).toBe(falasDoTipo()[0]!.id);
   });
 
-  it("o time foi arquivado entre a conferência e a trava: nao_encontrado, e nada gravado (rollback)", async () => {
+  it("o time foi arquivado entre a conferência e a trava: time_arquivado, e nada gravado (rollback)", async () => {
     banco.antesDaTrava = (e) => {
       e.times.get(TIME)!.arquivado = true;
     };
-    expect(await ligarAvisoDoTime(pedido())).toEqual({ ok: false, motivo: "nao_encontrado" });
+    expect(await ligarAvisoDoTime(pedido())).toEqual({ ok: false, motivo: "time_arquivado" });
     expect(banco.eventos).toContain("rollback");
     expect(falasDoTipo()).toHaveLength(0);
     expect(time().desde).toBeNull();
@@ -404,13 +492,16 @@ describe("ligarAvisoDoTime — fase 2, a transação sob a trava do time", () =>
     expect(time().desde).toBeNull();
   });
 
-  it("ligar por cima de um aviso que já estava lá devolve o período de antes (a rota o audita)", async () => {
+  it("ligar por cima de um aviso que já estava lá devolve o período de antes, com QUEM o tinha ligado (a rota o audita)", async () => {
     const f = banco.novaFala(ORG, TEXTO, HASH);
     const antes = new Date("2026-09-28T10:00:00.000Z");
     const vencia = new Date("2026-09-28T11:00:00.000Z");
     Object.assign(time(), { falaId: f.id, desde: antes, expira: vencia, ativadoPor: BRUNO });
     const r = await ligarAvisoDoTime(pedido());
-    expect(r).toMatchObject({ ok: true, anterior: { desde: antes.toISOString(), expiraEm: vencia.toISOString() } });
+    expect(r).toMatchObject({
+      ok: true,
+      anterior: { desde: antes.toISOString(), expiraEm: vencia.toISOString(), ligadoPor: BRUNO },
+    });
     expect(time()).toMatchObject({ desde: AGORA, expira: DUAS_HORAS, ativadoPor: ANA });
   });
 });
@@ -420,7 +511,10 @@ describe("desligarAvisoDoTime", () => {
     const f = banco.novaFala(ORG, TEXTO, HASH);
     Object.assign(time(), { falaId: f.id, desde: AGORA, expira: DUAS_HORAS, ativadoPor: ANA });
     const r = await desligarAvisoDoTime(banco.pool, ORG, TIME, new Date(AGORA.getTime() + 60_000));
-    expect(r).toEqual({ ok: true, desligado: { desde: AGORA.toISOString(), expiraEm: DUAS_HORAS.toISOString() } });
+    expect(r).toEqual({
+      ok: true,
+      desligado: { desde: AGORA.toISOString(), expiraEm: DUAS_HORAS.toISOString(), ligadoPor: ANA },
+    });
     expect(banco.naTransacao[1]).toBe("set local lock_timeout = '4s'");
     expect(banco.naTransacao[2]).toMatch(/from attendance_teams where id = \$1 and organization_id = \$2 for no key update$/);
     expect(time()).toMatchObject({ desde: null, expira: null, ativadoPor: null, falaId: f.id });
@@ -430,8 +524,17 @@ describe("desligarAvisoDoTime", () => {
     Object.assign(time(), { desde: AGORA, expira: null, ativadoPor: ANA });
     expect(await desligarAvisoDoTime(banco.pool, ORG, TIME, DUAS_HORAS)).toEqual({
       ok: true,
-      desligado: { desde: AGORA.toISOString(), expiraEm: null },
+      desligado: { desde: AGORA.toISOString(), expiraEm: null, ligadoPor: ANA },
     });
+  });
+
+  it("time ARQUIVADO com o aviso vigente: desliga do mesmo jeito (a faixa mostra, alguém tem de conseguir desligar)", async () => {
+    Object.assign(time(TIME_ARQUIVADO), { desde: AGORA, expira: null, ativadoPor: BRUNO });
+    expect(await desligarAvisoDoTime(banco.pool, ORG, TIME_ARQUIVADO, AGORA)).toEqual({
+      ok: true,
+      desligado: { desde: AGORA.toISOString(), expiraEm: null, ligadoPor: BRUNO },
+    });
+    expect(time(TIME_ARQUIVADO)).toMatchObject({ desde: null, expira: null, ativadoPor: null });
   });
 
   it("já estava desligado: nada muda (rollback), desligado = null", async () => {
@@ -469,6 +572,7 @@ describe("travarTimeDoAviso", () => {
       falaId: null,
       desde: AGORA,
       expiraEm: DUAS_HORAS,
+      ativadoPor: null,
       arquivado: false,
     });
     expect(await travarTimeDoAviso(banco.pool, ORG, TIME_DE_FORA)).toBeNull();
@@ -485,12 +589,14 @@ describe("avisosDaOrg — o que a faixa e o cartão leem", () => {
     Object.assign(time(TIME_DE_FORA), { desde: AGORA, expira: null, ativadoPor: BRUNO });
     const nomes = vi.fn(async (ids: string[]) => new Map(ids.map((id) => [id, id === ANA ? "Ana" : "Bruno"] as const)));
 
-    const avisos = await avisosDaOrg(banco.pool, ORG, new Date(AGORA.getTime() + 60_000), nomes);
+    const avisos = await avisosDaOrg(banco.pool, ORG, new Date(AGORA.getTime() + 60_000), nomes, "alguém da equipe");
 
+    // O arquivado SEM aviso vigente fica de fora.
     expect(avisos.map((a) => a.time_nome)).toEqual(["Financeiro", "Suporte"]);
     expect(avisos[0]).toEqual({
       team_id: TIME_2,
       time_nome: "Financeiro",
+      arquivado: false,
       ativa: false,
       desde: null,
       expira_em: null,
@@ -499,6 +605,7 @@ describe("avisosDaOrg — o que a faixa e o cartão leem", () => {
     });
     expect(avisos[1]).toMatchObject({
       team_id: TIME,
+      arquivado: false,
       ativa: true,
       desde: AGORA.toISOString(),
       expira_em: DUAS_HORAS.toISOString(),
@@ -509,14 +616,47 @@ describe("avisosDaOrg — o que a faixa e o cartão leem", () => {
     expect(nomes.mock.calls[0]![0]).toEqual([ANA]);
   });
 
-  it("sem aviso vigente, nenhum nome é pedido; nome que não se resolve vira null", async () => {
-    const nomes = vi.fn(async () => new Map<string, string | null>());
-    const avisos = await avisosDaOrg(banco.pool, ORG, AGORA, nomes);
+  it("sem aviso vigente, nenhum nome é pedido; sem nome (sem full_name, ou quem ligou saiu), o rótulo genérico — nunca o e-mail", async () => {
+    const nomes = vi.fn(async () => new Map<string, string | null>([[ANA, null]]));
+    const avisos = await avisosDaOrg(banco.pool, ORG, AGORA, nomes, "alguém da equipe");
     expect(avisos.every((a) => !a.ativa)).toBe(true);
     expect(nomes).not.toHaveBeenCalled();
 
     Object.assign(time(), { desde: AGORA, expira: null, ativadoPor: ANA });
-    const [, suporte] = await avisosDaOrg(banco.pool, ORG, AGORA, nomes);
-    expect(suporte).toMatchObject({ ativa: true, expira_em: null, ligada_por: null });
+    Object.assign(time(TIME_2), { desde: AGORA, expira: null, ativadoPor: null });
+    const [financeiro, suporte] = await avisosDaOrg(banco.pool, ORG, AGORA, nomes, "alguém da equipe");
+    expect(suporte).toMatchObject({ ativa: true, expira_em: null, ligada_por: "alguém da equipe" });
+    expect(financeiro).toMatchObject({ ativa: true, ligada_por: "alguém da equipe" });
+  });
+
+  it("time ARQUIVADO com aviso vigente entra, marcado `arquivado` — a faixa segue mostrando e alguém consegue desligar", async () => {
+    Object.assign(time(TIME_ARQUIVADO), { desde: AGORA, expira: DUAS_HORAS, ativadoPor: BRUNO });
+    const nomes = vi.fn(async (ids: string[]) => new Map(ids.map((id) => [id, "Bruno"] as const)));
+    const antigo = (await avisosDaOrg(banco.pool, ORG, AGORA, nomes, "alguém da equipe")).find((a) => a.team_id === TIME_ARQUIVADO);
+    expect(antigo).toMatchObject({ arquivado: true, ativa: true, expira_em: DUAS_HORAS.toISOString(), ligada_por: "Bruno" });
+    // Vencido, o arquivado sai de novo.
+    const depois = new Date(DUAS_HORAS.getTime() + 1);
+    expect((await avisosDaOrg(banco.pool, ORG, depois, nomes, "x")).some((a) => a.team_id === TIME_ARQUIVADO)).toBe(false);
+  });
+});
+
+describe("avisosLigados / naFaixa — o que QUALQUER membro recebe", () => {
+  it("só os avisos vigentes (o arquivado inclusive), com time, prazo e arquivado — sem quem ligou, sem texto, sem nome pedido", async () => {
+    const f = banco.novaFala(ORG, TEXTO, HASH);
+    Object.assign(time(), { falaId: f.id, desde: AGORA, expira: DUAS_HORAS, ativadoPor: ANA });
+    Object.assign(time(TIME_ARQUIVADO), { desde: AGORA, expira: null, ativadoPor: BRUNO });
+    Object.assign(time(TIME_2), { desde: new Date("2026-09-28T09:00:00Z"), expira: new Date("2026-09-28T10:00:00Z") });
+
+    const ligados = await avisosLigados(banco.pool, ORG, AGORA);
+    expect(ligados).toEqual([
+      { team_id: TIME_ARQUIVADO, time_nome: "Antigo", expira_em: null, arquivado: true },
+      { team_id: TIME, time_nome: "Suporte", expira_em: DUAS_HORAS.toISOString(), arquivado: false },
+    ]);
+    // É leitura: nem Storage nem transação.
+    expect(banco.eventos).toEqual([]);
+
+    // A projeção da lista completa (a do gerente) dá a MESMA faixa.
+    const nomes = vi.fn(async () => new Map<string, string | null>());
+    expect(naFaixa(await avisosDaOrg(banco.pool, ORG, AGORA, nomes, "alguém da equipe"))).toEqual(ligados);
   });
 });

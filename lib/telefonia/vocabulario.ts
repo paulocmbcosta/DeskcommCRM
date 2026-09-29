@@ -172,13 +172,36 @@ export interface MenuPublico {
   ultimos_7_dias: UltimosSeteDias;
 }
 
-export interface AvisoDoTimePublico {
+/**
+ * O que a faixa em todo o CRM mostra de um aviso VIGENTE — tudo o que QUALQUER
+ * membro recebe dele. Quem ligou e o texto ficam para gerente e admin.
+ */
+export interface AvisoNaFaixa {
   team_id: string;
   time_nome: string;
+  /** `null` = até alguém desligar. */
+  expira_em: string | null;
+  /** O time foi arquivado com o aviso ainda ligado: a faixa segue mostrando, para alguém desligar. */
+  arquivado: boolean;
+}
+
+/** O aviso de um time como gerente e admin o veem (o cartão de Configurações › Times). */
+export interface AvisoDoTimePublico extends AvisoNaFaixa {
   /** Ligado e não vencido AGORA (a passada de 60 s do worker desliga os vencidos no banco). */
   ativa: boolean;
   desde: string | null;
-  expira_em: string | null;
+  /** O nome de quem ligou (só o nome cadastrado; sem ele, um rótulo genérico — nunca o e-mail). */
   ligada_por: string | null;
   fala: FalaPublica | null;
+}
+
+/** A resposta de `GET /api/v1/telefonia/emergencias`. */
+export interface AvisosNaResposta {
+  oferecida: boolean;
+  /** Gerente ou admin: liga e desliga, e recebe `times`. */
+  pode_mudar: boolean;
+  /** Os avisos vigentes — o que a faixa mostra, para qualquer membro. */
+  ligados: AvisoNaFaixa[];
+  /** A lista completa, só para gerente e admin; `null` para os outros papéis. */
+  times: AvisoDoTimePublico[] | null;
 }

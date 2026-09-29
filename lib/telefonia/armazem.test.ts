@@ -2,7 +2,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it, vi } from "vitest";
 
-import { armazemDoSupabase } from "./armazem";
+import { armazemDoSupabase, comPrazoDeLeitura, type PortaDoArmazem } from "./armazem";
 
 /**
  * O erro que o storage-js monta a partir de uma resposta HTTP (`StorageApiError`):
@@ -203,5 +203,56 @@ describe("armazemDoSupabase.listarPastas / listarObjetos — para a limpeza do w
     const c = clienteFalso({ falha: { list: erroDoStorage(500, { message: "Internal Server Error" }) } });
     await expect(armazemDoSupabase(c.admin).listarPastas()).rejects.toThrow(/armazem_lista/);
     await expect(armazemDoSupabase(c.admin).listarObjetos("org")).rejects.toThrow(/armazem_lista/);
+  });
+});
+
+describe("armazemDoSupabase.baixar com AbortSignal — o prazo de quem não pode esperar", () => {
+  it("SEM opções, o download é chamado como sempre foi: só com o caminho (os outros chamadores não mudam)", async () => {
+    const c = clienteFalso();
+    c.objetos.set("org/h.ulaw", new Uint8Array([1]));
+    await armazemDoSupabase(c.admin).baixar("org/h.ulaw");
+    expect(c.download.mock.calls[0]).toEqual(["org/h.ulaw"]);
+  });
+
+  it("COM o sinal, ele chega ao download do storage-js (o terceiro parâmetro, `FetchParameters`)", async () => {
+    const c = clienteFalso();
+    c.objetos.set("org/h.ulaw", new Uint8Array([1]));
+    const controle = new AbortController();
+    await armazemDoSupabase(c.admin).baixar("org/h.ulaw", { signal: controle.signal });
+    expect(c.download.mock.calls[0]).toEqual(["org/h.ulaw", {}, { signal: controle.signal }]);
+  });
+
+  it("abortado, o storage-js devolve erro sem status: LANÇA (não é 'o objeto não existe')", async () => {
+    const abortado = Object.assign(new Error("This operation was aborted"), { name: "StorageUnknownError", __isStorageError: true });
+    const c = clienteFalso({ falha: { download: abortado } });
+    await expect(armazemDoSupabase(c.admin).baixar("org/h.ulaw", { signal: AbortSignal.abort() })).rejects.toThrow(/armazem_download/);
+  });
+});
+
+describe("comPrazoDeLeitura — a leitura que desiste", () => {
+  const armazemQue = (baixar: PortaDoArmazem["baixar"]) => ({ baixar: vi.fn(baixar) });
+
+  it("dentro do prazo: devolve o que o armazém devolveu (bytes ou null), com um sinal que NÃO foi abortado", async () => {
+    const a = armazemQue(async () => new Uint8Array([7]));
+    expect(await comPrazoDeLeitura(a, 1_000).baixar("org/h.ulaw")).toEqual(new Uint8Array([7]));
+    const sinal = a.baixar.mock.calls[0]![1]!.signal!;
+    expect(sinal.aborted).toBe(false);
+    const ausente = armazemQue(async () => null);
+    expect(await comPrazoDeLeitura(ausente, 1_000).baixar("org/h.ulaw")).toBeNull();
+  });
+
+  it("o armazém falhou dentro do prazo: a falha sobe como veio", async () => {
+    const a = armazemQue(async () => {
+      throw new Error("armazem_download: StorageApiError 500");
+    });
+    await expect(comPrazoDeLeitura(a, 1_000).baixar("org/h.ulaw")).rejects.toThrow("StorageApiError 500");
+  });
+
+  it("o armazém não responde: desiste no prazo, LANÇA (falha, não ausência) e ABORTA o pedido em curso", async () => {
+    const a = armazemQue(() => new Promise(() => undefined));
+    const inicio = Date.now();
+    await expect(comPrazoDeLeitura(a, 40).baixar("org/h.ulaw")).rejects.toThrow(/armazem_download: .*prazo de 40 ms/);
+    expect(Date.now() - inicio).toBeLessThan(1_000);
+    expect(a.baixar.mock.calls[0]![1]!.signal!.aborted).toBe(true);
   });
 });

@@ -11,11 +11,17 @@
  * LIGAR (`ligarAvisoDoTime`) recebe o texto e o hash da PRÉVIA do aviso (ou os da
  * fala em uso, quando o texto não mudou) e NÃO chama a ElevenLabs (D15). É em
  * duas fases, a forma de `salvarMenuDaOrg` (menus.ts):
- *  1. FORA da transação, sem conexão do pool na mão: o time existe e está ativo
- *     nesta organização, e a prévia confere com o texto e a voz atual e está no
- *     Storage (`conferirFala`). O Storage não tem prazo no supabase-js; lido com a
- *     trava segura, prenderia a linha do time e uma conexão que as rotas da IA e
- *     do MCP também usam.
+ *  1. FORA da transação, sem conexão do pool na mão: o time existe nesta
+ *     organização e não está arquivado, e a fala pedida serve:
+ *      - o texto SALVO, sem mudança (`ehAFalaEmUso`): serve SEM ir ao Storage.
+ *        Ligar o aviso é o que o gerente faz NUM INCIDENTE, quando o Storage
+ *        pode estar lento junto com o resto; se o áudio tiver sumido, o worker
+ *        pula a fala e abre `phone_prompt_unplayable` na Central (§4), e o
+ *        aviso ligado ainda aparece na faixa;
+ *      - o texto NOVO: a prévia confere com o texto e a voz atual e está no
+ *        Storage (`conferirFala`), com PRAZO (`PRAZO_DO_STORAGE_AO_LIGAR_MS`,
+ *        `comPrazoDeLeitura`): o supabase-js não tem prazo próprio, e o
+ *        estouro vira `armazenamento`.
  *  2. Numa transação com `lock_timeout` (`emTransacao`, `PRAZO_DA_TRAVA`): trava a
  *     linha do time (`travarTimeDoAviso`), relê a fala dele e DECIDE DE NOVO
  *     (`reconferirFala`, sem Storage) — outra gravação do mesmo aviso pode ter
@@ -25,10 +31,11 @@
  *
  * DESLIGAR (`desligarAvisoDoTime`) trava a mesma linha e só mexe no aviso
  * VIGENTE (`avisoVigente`: `active_since` preenchido e `expires_at` nulo ou no
- * futuro). O vencido que o worker ainda não varreu fica para a passada dele, que
- * registra o vencimento (`phone.emergency_expired`) e avisa na Central: desligá-lo
- * aqui apagaria esse registro e poria no lugar um "desligado por Fulano" que não
- * aconteceu — o aviso já tinha parado de tocar na hora em que venceu.
+ * futuro) — também no time ARQUIVADO: a faixa o mostra, e alguém tem de
+ * conseguir desligar. O vencido que o worker ainda não varreu fica para a
+ * passada dele, que registra o vencimento (`phone.emergency_expired`) e avisa na
+ * Central: desligá-lo aqui apagaria esse registro e poria no lugar um "desligado
+ * por Fulano" que não aconteceu — o aviso já tinha parado de tocar ao vencer.
  *
  * POR QUE `for no key update` NA LINHA DO TIME: o time é referenciado por FK em
  * tabelas quentes — `voice_calls.team_id` (a ligação que entra), `conversations`,
@@ -41,9 +48,11 @@
  * tests/invariants/telefonia-aviso-no-banco.test.ts mede as duas coisas, com o
  * controle em `for update`.
  *
- * LER (`avisosDaOrg`) é o que a faixa em todo o CRM e o cartão de Configurações ›
- * Times usam: `ativa` é calculada contra o relógio de quem lê, então um aviso
- * vencido que o worker ainda não desligou já aparece desligado.
+ * LER: `avisosDaOrg` (gerente e admin: a lista completa do cartão de
+ * Configurações › Times, com texto e quem ligou) e `avisosLigados` (qualquer
+ * membro: só o que a faixa em todo o CRM mostra — time, prazo e arquivado). As
+ * duas calculam o vigente contra o relógio de quem lê, então um aviso vencido que
+ * o worker ainda não desligou já aparece desligado.
  *
  * Auditoria é da ROTA (ela tem o ator e o request id). O banco é um `Queryable`
  * que ignora a RLS: TODA consulta filtra `organization_id`, e quem chama passa o
@@ -56,23 +65,32 @@ import { z } from "zod";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 
-import type { PortaDoArmazem } from "./armazem";
+import { comPrazoDeLeitura, type PortaDoArmazem } from "./armazem";
 import {
   COLUNAS_DA_FALA,
   PRAZO_DA_TRAVA,
   conferirFala,
+  ehAFalaEmUso,
   falaParaSalvarSchema,
   falaPorId,
   falaPublica,
   gravarFalaConferida,
   reconferirFala,
   vozDaOrganizacao,
+  type FalaConferida,
   type LinhaDaFala,
   type PedidoDeSalvar,
 } from "./falas";
 import { confirmar, desfazer, emTransacao, type PoolDeTransacao } from "./transacao";
 import { DURACAO_PADRAO, DURACOES_DA_EMERGENCIA, avisoVigente } from "./vencimento-da-emergencia";
-import type { AvisoDoTimePublico, FalaPublica, FalaParaSalvar, FalhaDaFala } from "./vocabulario";
+import {
+  MENSAGEM_DA_FALHA_DA_FALA,
+  type AvisoDoTimePublico,
+  type AvisoNaFaixa,
+  type FalaParaSalvar,
+  type FalaPublica,
+  type FalhaDaFala,
+} from "./vocabulario";
 
 export const ligarAvisoSchema = z
   .object({
@@ -84,20 +102,46 @@ export const ligarAvisoSchema = z
 
 export type EntradaDoAviso = z.infer<typeof ligarAvisoSchema>;
 
+/** Quanto ligar espera o Storage para conferir a prévia de um texto NOVO. */
+export const PRAZO_DO_STORAGE_AO_LIGAR_MS = 5_000;
+
 /** As recusas próprias do aviso (as da fala vêm de `FalhaDaFala`). */
-export type FalhaDoAviso = "nao_encontrado" | "gravacao_em_andamento";
+export type FalhaDoAviso = "nao_encontrado" | "time_arquivado" | "gravacao_em_andamento";
 
 /** O que a tela diz de cada recusa do aviso. Em português; a rota passa por `t()`. */
 export const MENSAGEM_DA_FALHA_DO_AVISO: Record<FalhaDoAviso, string> = {
   nao_encontrado: "Time não encontrado.",
-  gravacao_em_andamento: "Outra mudança no aviso deste time está em andamento. Tente de novo em instantes.",
+  time_arquivado: "Este time está arquivado e não recebe ligações: o aviso não pode ser ligado nele.",
+  // O 55P03: outra transação segurou a linha do TIME — pode ser o aviso, o nome, o horário.
+  gravacao_em_andamento: "Este time está sendo alterado por outra pessoa agora. Tente de novo em instantes.",
 };
+
+/**
+ * O que a tela diz quando LIGAR recusa a fala. Ligar não guarda nem salva nada
+ * que a pessoa escreveu à parte — então nada de "não foi possível guardar": diz o
+ * que falhou e o que fazer AGORA, num incidente. O que não está aqui usa a
+ * mensagem geral da fala.
+ */
+const MENSAGEM_DA_FALHA_DO_LIGAR: Partial<Record<FalhaDaFala, string>> = {
+  armazenamento: "Não conseguimos conferir o áudio do aviso agora. Tente ligar de novo; se continuar, use o texto já salvo.",
+  previa_ausente: "O áudio deste texto não foi encontrado. Gere a prévia de novo antes de ligar.",
+  previa_desatualizada: "A prévia não corresponde a este texto ou à voz atual. Gere a prévia de novo.",
+};
+
+export function mensagemDaFalhaDoLigar(motivo: FalhaDaFala): string {
+  return MENSAGEM_DA_FALHA_DO_LIGAR[motivo] ?? MENSAGEM_DA_FALHA_DA_FALA[motivo];
+}
+
+/** Quem ligou, quando não há nome para mostrar: nunca o e-mail (nem o começo dele). Em português; passa por `t()`. */
+export const QUEM_LIGOU_SEM_NOME = "alguém da equipe";
 
 /** Um período em que o aviso esteve ligado, como a auditoria o guarda. */
 export interface PeriodoDoAviso {
   desde: string;
   /** `null` = "até eu desligar". */
   expiraEm: string | null;
+  /** O `auth.users.id` de quem ligou este período (`null` se a pessoa saiu). */
+  ligadoPor: string | null;
 }
 
 /** A linha do time como o aviso a lê (datas chegam do `pg` como `Date`). */
@@ -107,12 +151,13 @@ export interface TimeDoAviso {
   falaId: string | null;
   desde: Date | string | null;
   expiraEm: Date | string | null;
+  ativadoPor: string | null;
   arquivado: boolean;
 }
 
 const COLUNAS_DO_TIME = `id, name as nome, phone_emergency_prompt_id as fala_id,
   phone_emergency_active_since as desde, phone_emergency_expires_at as expira_em,
-  archived_at is not null as arquivado`;
+  phone_emergency_activated_by as ativado_por, archived_at is not null as arquivado`;
 
 async function lerTime(db: Queryable, organizationId: string, teamId: string, travar: boolean): Promise<TimeDoAviso | null> {
   const { rows } = await db.query<{
@@ -121,6 +166,7 @@ async function lerTime(db: Queryable, organizationId: string, teamId: string, tr
     fala_id: string | null;
     desde: Date | string | null;
     expira_em: Date | string | null;
+    ativado_por: string | null;
     arquivado: boolean;
   }>(
     `select ${COLUNAS_DO_TIME} from attendance_teams
@@ -128,7 +174,9 @@ async function lerTime(db: Queryable, organizationId: string, teamId: string, tr
     [teamId, organizationId],
   );
   const r = rows[0];
-  return r ? { id: r.id, nome: r.nome, falaId: r.fala_id, desde: r.desde, expiraEm: r.expira_em, arquivado: r.arquivado } : null;
+  return r
+    ? { id: r.id, nome: r.nome, falaId: r.fala_id, desde: r.desde, expiraEm: r.expira_em, ativadoPor: r.ativado_por, arquivado: r.arquivado }
+    : null;
 }
 
 /**
@@ -146,7 +194,11 @@ export function travarTimeDoAviso(cliente: Queryable, organizationId: string, te
 
 function periodoDe(t: TimeDoAviso): PeriodoDoAviso | null {
   if (!t.desde) return null;
-  return { desde: new Date(t.desde).toISOString(), expiraEm: t.expiraEm ? new Date(t.expiraEm).toISOString() : null };
+  return {
+    desde: new Date(t.desde).toISOString(),
+    expiraEm: t.expiraEm ? new Date(t.expiraEm).toISOString() : null,
+    ligadoPor: t.ativadoPor,
+  };
 }
 
 export interface PedidoDeLigarAviso {
@@ -163,6 +215,8 @@ export interface PedidoDeLigarAviso {
   desde: Date;
   /** `expiraEm(duracao, desde)`; `null` = até alguém desligar. */
   expiraEm: Date | null;
+  /** Prazo da conferência da prévia no Storage (texto novo). Padrão: `PRAZO_DO_STORAGE_AO_LIGAR_MS`. */
+  prazoDoStorageMs?: number;
 }
 
 export type ResultadoDoLigar =
@@ -174,9 +228,10 @@ export type ResultadoDoLigar =
       mudou: boolean;
       /**
        * O período que estava na linha quando ela foi travada — ligado, ou vencido
-       * e ainda não varrido pelo worker —, ou `null` se estava desligado. Ligar por
-       * cima o substitui; a rota o põe na auditoria para a trilha não perder o fim
-       * dele.
+       * e ainda não varrido pelo worker —, com quem o ligou, ou `null` se estava
+       * desligado. Ligar por cima o substitui (o prazo recomeça e o autor passa a
+       * ser quem ligou agora); a rota o põe na auditoria para a trilha não perder
+       * o fim dele nem o autor.
        */
       anterior: PeriodoDoAviso | null;
     }
@@ -195,7 +250,8 @@ export async function ligarAvisoDoTime(p: PedidoDeLigarAviso): Promise<Resultado
 
   // ── Fase 1: fora da transação ────────────────────────────────────────────
   const time = await lerTime(pool, org, p.teamId, false);
-  if (!time || time.arquivado) return { ok: false, motivo: "nao_encontrado" };
+  if (!time) return { ok: false, motivo: "nao_encontrado" };
+  if (time.arquivado) return { ok: false, motivo: "time_arquivado" };
   const voz = await vozDaOrganizacao(pool, org);
   const pedidoDaFala = (db: Queryable, armazem: Pick<PortaDoArmazem, "baixar">, falaAtualId: string | null): PedidoDeSalvar => ({
     db,
@@ -208,13 +264,24 @@ export async function ligarAvisoDoTime(p: PedidoDeLigarAviso): Promise<Resultado
     falaAtualId,
     voz,
   });
-  const aprovada = await conferirFala(pedidoDaFala(pool, p.armazem, time.falaId));
-  if (!aprovada.ok) return aprovada;
+
+  const emUso = time.falaId ? await falaPorId(pool, org, time.falaId) : null;
+  let aprovada: Extract<FalaConferida, { ok: true }>;
+  if (ehAFalaEmUso({ tipo: "emergency", texto: p.fala.texto, hash: p.fala.hash }, emUso) && emUso.duracao_ms !== null) {
+    // O texto salvo, sem mudança: a fala em uso serve como está — sem Storage.
+    aprovada = { ok: true, atual: emUso, nova: null };
+  } else {
+    const armazem = comPrazoDeLeitura(p.armazem, p.prazoDoStorageMs ?? PRAZO_DO_STORAGE_AO_LIGAR_MS);
+    const c = await conferirFala(pedidoDaFala(pool, armazem, time.falaId));
+    if (!c.ok) return c;
+    aprovada = c;
+  }
 
   // ── Fase 2: a transação, sob a trava do time ─────────────────────────────
   return emTransacao<ResultadoDoLigar>(pool, PRAZO_DA_TRAVA, async (conexao) => {
     const travado = await travarTimeDoAviso(conexao, org, p.teamId);
-    if (!travado || travado.arquivado) return desfazer({ ok: false, motivo: "nao_encontrado" });
+    if (!travado) return desfazer({ ok: false, motivo: "nao_encontrado" });
+    if (travado.arquivado) return desfazer({ ok: false, motivo: "time_arquivado" });
 
     const pedido = pedidoDaFala(conexao, SEM_STORAGE_SOB_A_TRAVA, travado.falaId);
     const lida = travado.falaId ? await falaPorId(conexao, org, travado.falaId) : null;
@@ -239,12 +306,12 @@ export type ResultadoDoDesligar =
       /** O período que foi desligado, ou `null` se não havia aviso vigente (nada mudou, nada a auditar). */
       desligado: PeriodoDoAviso | null;
     }
-  | { ok: false; motivo: FalhaDoAviso };
+  | { ok: false; motivo: Exclude<FalhaDoAviso, "time_arquivado"> };
 
 /**
- * Desliga o aviso VIGENTE do time, sob a trava da linha dele. `agora` é o relógio
- * da requisição — o mesmo com que `avisosDaOrg` decide o que a tela mostra ligado.
- * O texto (`phone_emergency_prompt_id`) fica. Não audita.
+ * Desliga o aviso VIGENTE do time — arquivado ou não —, sob a trava da linha
+ * dele. `agora` é o relógio da requisição — o mesmo com que a leitura decide o
+ * que a tela mostra ligado. O texto (`phone_emergency_prompt_id`) fica. Não audita.
  */
 export async function desligarAvisoDoTime(
   pool: PoolDeTransacao,
@@ -269,43 +336,65 @@ export async function desligarAvisoDoTime(
 }
 
 /**
- * Resolve o nome de EXIBIÇÃO de quem ligou (`nomesDeExibicao`, em
- * lib/users/nome-do-atendente.ts, na rota). Entra como porta: este arquivo não
- * carrega o cliente de serviço, e o nome não sai de `auth.users` por SQL — a
- * conexão do app pode ser uma role com grants só em `public`, e o e-mail inteiro
- * de quem ligou não vai para a tela de todo membro.
+ * Resolve o nome de quem ligou — `nomesDosAtendentes` (lib/users/nome-do-atendente.ts),
+ * na rota: SÓ o `full_name`, nunca o e-mail nem o começo dele. Entra como porta:
+ * este arquivo não carrega o cliente de serviço, e o nome não sai de `auth.users`
+ * por SQL (a conexão do app pode ser uma role com grants só em `public`).
  */
 export type NomesDeQuemLigou = (userIds: string[]) => Promise<Map<string, string | null>>;
 
+interface LinhaDoAviso {
+  team_id: string;
+  time_nome: string;
+  desde: Date | string | null;
+  expira_em: Date | string | null;
+  ligada_por_id: string | null;
+  fala_id: string | null;
+  arquivado: boolean;
+  /** `avisoVigente` contra o relógio de quem lê. */
+  ativa: boolean;
+}
+
 /**
- * O aviso de cada time ATIVO da organização, em ordem de nome. `ativa` é
- * `avisoVigente` contra `agora`; desligado ou vencido, `desde`, `expira_em` e
- * `ligada_por` voltam nulos. A fala salva do time vem sempre (o cartão a mostra
- * desligado). O nome só é pedido para quem ligou um aviso VIGENTE — sem aviso
- * ligado, nenhuma chamada.
+ * Os times que a leitura mostra, em ordem de nome: todo time ativo, e o
+ * ARQUIVADO só enquanto o aviso dele estiver vigente (a faixa segue mostrando, e
+ * alguém consegue desligar). O SQL traz o arquivado com o aviso na linha; o
+ * vigente é decidido aqui, com o relógio de quem lê.
+ */
+async function lerAvisos(db: Queryable, organizationId: string, agora: Date): Promise<LinhaDoAviso[]> {
+  const { rows } = await db.query<Omit<LinhaDoAviso, "ativa">>(
+    `select id as team_id, name as time_nome,
+            phone_emergency_active_since as desde, phone_emergency_expires_at as expira_em,
+            phone_emergency_activated_by as ligada_por_id, phone_emergency_prompt_id as fala_id,
+            archived_at is not null as arquivado
+       from attendance_teams
+      where organization_id = $1 and (archived_at is null or phone_emergency_active_since is not null)
+      order by name`,
+    [organizationId],
+  );
+  return rows
+    .map((r) => ({ ...r, ativa: avisoVigente({ desde: r.desde, expiraEm: r.expira_em }, agora) }))
+    .filter((r) => !r.arquivado || r.ativa);
+}
+
+const iso = (d: Date | string | null): string | null => (d ? new Date(d).toISOString() : null);
+
+/**
+ * A lista COMPLETA — gerente e admin (o cartão de Configurações › Times e o
+ * "Desligar"). `ativa` é `avisoVigente` contra `agora`; desligado ou vencido,
+ * `desde`, `expira_em` e `ligada_por` voltam nulos. A fala salva do time vem
+ * sempre (o cartão a mostra desligado). O nome só é pedido para quem ligou um
+ * aviso VIGENTE — sem aviso ligado, nenhuma chamada —, e sem nome (sem
+ * `full_name`, ou a pessoa saiu) vale `semNome`.
  */
 export async function avisosDaOrg(
   db: Queryable,
   organizationId: string,
   agora: Date,
   nomes: NomesDeQuemLigou,
+  semNome: string,
 ): Promise<AvisoDoTimePublico[]> {
-  const { rows } = await db.query<{
-    team_id: string;
-    time_nome: string;
-    desde: Date | string | null;
-    expira_em: Date | string | null;
-    ligada_por_id: string | null;
-    fala_id: string | null;
-  }>(
-    `select id as team_id, name as time_nome,
-            phone_emergency_active_since as desde, phone_emergency_expires_at as expira_em,
-            phone_emergency_activated_by as ligada_por_id, phone_emergency_prompt_id as fala_id
-       from attendance_teams
-      where organization_id = $1 and archived_at is null
-      order by name`,
-    [organizationId],
-  );
+  const rows = await lerAvisos(db, organizationId, agora);
 
   const ids = rows.map((r) => r.fala_id).filter((id): id is string => Boolean(id));
   const falas = new Map<string, FalaPublica>();
@@ -317,20 +406,35 @@ export async function avisosDaOrg(
     for (const l of linhas) falas.set(l.id, falaPublica(l));
   }
 
-  const vigentes = rows.map((r) => avisoVigente({ desde: r.desde, expiraEm: r.expira_em }, agora));
-  const quemLigou = [...new Set(rows.filter((r, i) => vigentes[i] && r.ligada_por_id).map((r) => r.ligada_por_id!))];
+  const quemLigou = [...new Set(rows.filter((r) => r.ativa && r.ligada_por_id).map((r) => r.ligada_por_id!))];
   const nomeDe = quemLigou.length > 0 ? await nomes(quemLigou) : new Map<string, string | null>();
 
-  return rows.map((r, i) => {
-    const ativa = vigentes[i]!;
-    return {
-      team_id: r.team_id,
-      time_nome: r.time_nome,
-      ativa,
-      desde: ativa && r.desde ? new Date(r.desde).toISOString() : null,
-      expira_em: ativa && r.expira_em ? new Date(r.expira_em).toISOString() : null,
-      ligada_por: ativa && r.ligada_por_id ? (nomeDe.get(r.ligada_por_id) ?? null) : null,
-      fala: r.fala_id ? (falas.get(r.fala_id) ?? null) : null,
-    };
-  });
+  return rows.map((r) => ({
+    team_id: r.team_id,
+    time_nome: r.time_nome,
+    arquivado: r.arquivado,
+    ativa: r.ativa,
+    desde: r.ativa ? iso(r.desde) : null,
+    expira_em: r.ativa ? iso(r.expira_em) : null,
+    ligada_por: r.ativa ? ((r.ligada_por_id ? nomeDe.get(r.ligada_por_id) : null) ?? semNome) : null,
+    fala: r.fala_id ? (falas.get(r.fala_id) ?? null) : null,
+  }));
+}
+
+/** A faixa a partir da lista completa: só os vigentes, só time, prazo e arquivado. */
+export function naFaixa(avisos: readonly AvisoDoTimePublico[]): AvisoNaFaixa[] {
+  return avisos
+    .filter((a) => a.ativa)
+    .map((a) => ({ team_id: a.team_id, time_nome: a.time_nome, expira_em: a.expira_em, arquivado: a.arquivado }));
+}
+
+/**
+ * O que QUALQUER membro recebe — a faixa em todo o CRM: os avisos vigentes, com
+ * o time, o prazo e se o time foi arquivado. Sem quem ligou, sem o texto, sem a
+ * fala: isso é do gerente (`avisosDaOrg`). Uma consulta, nenhum nome pedido.
+ */
+export async function avisosLigados(db: Queryable, organizationId: string, agora: Date): Promise<AvisoNaFaixa[]> {
+  return (await lerAvisos(db, organizationId, agora))
+    .filter((r) => r.ativa)
+    .map((r) => ({ team_id: r.team_id, time_nome: r.time_nome, expira_em: iso(r.expira_em), arquivado: r.arquivado }));
 }

@@ -322,14 +322,31 @@ type ExigenciaDaFala =
 /** O que a decisão lê do pedido — sem banco nem Storage. */
 export type PedidoDaDecisao = Pick<PedidoDeSalvar, "organizationId" | "tipo" | "texto" | "hash" | "voz">;
 
+/**
+ * A prévia pedida É a fala em uso: mesmo tipo, pronta, mesmo hash e mesmo texto.
+ * A régua ÚNICA do "nada mudou" — `exigenciaDaFala` decide com ela, e o aviso de
+ * instabilidade (emergencias.ts) a usa para ligar com o texto salvo sem ir ao
+ * Storage. Pura.
+ */
+export function ehAFalaEmUso(
+  p: Pick<PedidoDaDecisao, "tipo" | "texto" | "hash">,
+  lida: LinhaDaFala | null,
+): lida is LinhaDaFala {
+  return (
+    lida !== null &&
+    lida.tipo === p.tipo &&
+    lida.status === "ready" &&
+    lida.content_hash === p.hash &&
+    lida.texto === p.texto.trim()
+  );
+}
+
 function exigenciaDaFala(p: PedidoDaDecisao, lida: LinhaDaFala | null): ExigenciaDaFala {
   const texto = p.texto.trim();
   // Uma fala de OUTRO tipo não é "a atual" desta: nem vale como "nada mudou", nem
   // é regravada (a coluna `kind` não muda no UPDATE) — nasce uma linha do tipo pedido.
   const atual = lida && lida.tipo === p.tipo ? lida : null;
-  if (atual && atual.status === "ready" && atual.content_hash === p.hash && atual.texto === texto) {
-    return { tipo: "manter", atual };
-  }
+  if (ehAFalaEmUso(p, atual)) return { tipo: "manter", atual };
   if (!p.voz) return { tipo: "recusa", motivo: "sem_voz" };
   const { voiceId, modelId } = p.voz;
   if (p.hash !== hashDaFala(texto, voiceId, modelId)) return { tipo: "recusa", motivo: "previa_desatualizada" };
