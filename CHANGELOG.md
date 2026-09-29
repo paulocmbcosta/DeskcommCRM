@@ -8,6 +8,19 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.50.1] — 2026-09-29
+
+### Corrigido
+
+- **Atendentes voltam a receber ligações pelo navegador** Os membros da equipe com papel de atendente não recebiam ligações pelo navegador. Só o
+  administrador da plataforma recebia. O telefone não aparecia no topo da tela deles e o
+  navegador não se registrava como ramal. Com isso, quando um cliente ligava, a URA dizia
+  que não havia ninguém disponível, mesmo com atendentes on-line. Agora quem tem papel de
+  atendente, gerente ou administrador recebe o ramal assim que abre o sistema. Quem só tem
+  acesso de leitura, ou está num acompanhamento somente-leitura, continua sem telefone,
+  como antes. Você não precisa fazer nada: basta que os atendentes recarreguem a página
+  depois da atualização.
+
 ## [1.50.0] — 2026-09-29
 
 ### Adicionado
@@ -5770,7 +5783,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.1...HEAD
+[1.50.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.49.1...v1.50.0
 [1.49.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.49.0...v1.49.1
 [1.49.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.48.0...v1.49.0
