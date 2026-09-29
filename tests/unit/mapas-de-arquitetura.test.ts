@@ -179,6 +179,89 @@ describe("mapas de arquitetura — coerência interna", () => {
       expect(grau(peca), `${peca} com menos de 2 arestas — é ilha pelo invariante 1`).toBeGreaterThanOrEqual(2);
     }
   });
+
+  it("a URA e as falas do telefone estão no mapa da telefonia, e nenhuma peça nova é ilha", () => {
+    // O caso concreto do DoD 13 para a fase 2, versão 1 (migration 0288). As
+    // cadeias são as do §8 do desenho
+    // (docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md):
+    // a fala vai da ElevenLabs ao Storage, ao volume e ao Asterisk; o menu sai
+    // do número, passa pela URA e chega à fila do time; o aviso vencido, a fala
+    // que não tocou e o menu com time arquivado viram item da Central.
+    const m = JSON.parse(
+      fs.readFileSync(path.join(DIR, "telefonia.architecture.json"), "utf8"),
+    ) as Mapa & { cards?: Array<{ title: string; items: string[] }> };
+    const grau = (id: string) =>
+      (m.edges ?? []).filter((e) => e.from === id || e.to === id).length;
+    const PECAS_DA_V1 = [
+      "elevenlabs",
+      "volume_falas",
+      "falas_no_disco",
+      "fala_no_ar",
+      "ura",
+      "rota_chave",
+      "rota_previa",
+      "rota_voz",
+      "rota_menus",
+      "rota_emergencias",
+      "sete_dias",
+      "cartao_elevenlabs",
+      "aba_voz",
+      "aba_menus",
+      "cartao_aviso",
+      "faixa_aviso",
+      "t_credenciais",
+      "bucket_falas",
+      "t_prompts",
+      "t_menus",
+      "t_times",
+    ];
+    for (const peca of PECAS_DA_V1) {
+      expect(grau(peca), `${peca} com menos de 2 arestas — é ilha pelo invariante 1`).toBeGreaterThanOrEqual(2);
+    }
+
+    const arestas = (m.edges ?? []).map((e) => `${e.from}→${e.to}`);
+    // A fala chega ao Asterisk pelo volume, só de leitura — nunca pela rede; a
+    // prévia é a única síntese; a limpeza do Storage é do worker; e o laço de
+    // retorno fecha: o "últimos 7 dias" volta à aba dos menus, e cada aviso novo
+    // da Central leva à tela onde se conserta.
+    expect(arestas).toEqual(
+      expect.arrayContaining([
+        "rota_previa→elevenlabs",
+        "rota_previa→bucket_falas",
+        "bucket_falas→falas_no_disco",
+        "falas_no_disco→volume_falas",
+        "falas_no_disco→bucket_falas",
+        "compose→volume_falas",
+        "volume_falas→asterisk_core",
+        "fala_no_ar→falas_no_disco",
+        "t_sessions→t_menus",
+        "controle→ura",
+        "ura→controle",
+        "t_voice_calls→sete_dias",
+        "sete_dias→aba_menus",
+        "central→aba_voz",
+        "central→aba_menus",
+        "central→cartao_aviso",
+      ]),
+    );
+
+    // A NÃO-ligação que é a decisão D15: nenhuma peça do worker (o caminho da
+    // ligação) chega à ElevenLabs. Derivado da lane, e não de uma lista: peça
+    // nova do worker entra na régua sem ninguém lembrar dela. É o espelho, no
+    // mapa, de tests/unit/ligacao-nunca-chama-elevenlabs.test.ts.
+    const doWorker = new Set(m.nodes!.filter((n) => n.lane === "worker").map((n) => n.id));
+    expect(doWorker.size, "o mapa perdeu a lane do worker — ENSINE ESTE TESTE").toBeGreaterThan(3);
+    expect(
+      (m.edges ?? []).filter((e) => e.to === "elevenlabs" && doWorker.has(e.from)).map((e) => e.from),
+      "uma peça do worker aponta para a ElevenLabs: a ligação nunca sintetiza (D15)\n",
+    ).toEqual([]);
+
+    // O invariante 7 declarado no próprio mapa, e não só na prosa do desenho.
+    expect(
+      (m.cards ?? []).some((c) => /URA/.test(c.title) && /invariante 7/.test(c.title) && c.items.length > 0),
+      "falta o cartão do laço de retorno da URA e das falas",
+    ).toBe(true);
+  });
 });
 
 /**

@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Telefonia SIP — o número da operadora como canal, a ligação como conversa",
-    "subtitle": "O Asterisk só carrega o áudio; o CRM é a fonte da verdade dos números e decide quem atende. Números cadastrados pela tela (senha cifrada, nunca devolvida), empurrados para a MEMÓRIA do Asterisk pela ARI. O worker é a aplicação Stasis `crm`: na recebida toca um ramal por vez (menos RECEBIDAS atendidas hoje primeiro, 20 s, 2 voltas, fila de 2 min); na feita só disca com um pedido criado pela API para aquele atendente há menos de 60 s. Provider `sip_trunk` (transporte, só em lib/channels) × meio `phone` (conversas.channel). Migration 0286. Spec 20.",
+    "subtitle": "O Asterisk só carrega o áudio; o CRM é a fonte da verdade dos números e decide quem atende. Números cadastrados pela tela (senha cifrada, nunca devolvida), empurrados para a MEMÓRIA do Asterisk pela ARI. O worker é a aplicação Stasis `crm`: na recebida toca um ramal por vez (menos RECEBIDAS atendidas hoje primeiro, 20 s, 2 voltas, fila de 2 min); na feita só disca com um pedido criado pela API para aquele atendente há menos de 60 s. Provider `sip_trunk` (transporte, só em lib/channels) × meio `phone` (conversas.channel). Migration 0286. Spec 20. Fase 2, versão 1 (migration 0288): URA por tecla, falas gravadas (a ElevenLabs só na PRÉVIA da tela, nunca numa ligação — D15), levadas do Storage ao volume `telefonia-falas` que o Asterisk lê, e aviso de instabilidade por time com faixa em todo o CRM. Desenho: docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md.",
     "output": "telefonia.html",
     "quality_profile": "standard"
   },
@@ -56,7 +56,7 @@
       "lane": "infra",
       "col": 3,
       "type": "backend",
-      "label": "Serviço `asterisk` em `docker-compose.prod.yml`: profile `telefonia` (desligado por padrão), 256 MB, só a faixa de áudio `20000-20039/udp` publicada, só IPv4"
+      "label": "Serviço `asterisk` em `docker-compose.prod.yml`: profile `telefonia` (desligado por padrão), 256 MB, só a faixa de áudio `20000-20039/udp` publicada, só IPv4; o volume `telefonia-falas` montado SÓ LEITURA (fase 2)"
     },
     {
       "id": "proxy_ws",
@@ -98,7 +98,7 @@
       "lane": "worker",
       "col": 1,
       "type": "backend",
-      "label": "`lib/channels/telefonia/laco.ts` — conecta na ARI, fila SERIAL de eventos, reconexão com backoff até 30 s; sem `TELEFONIA_ARI_URL`/`_PASSWORD` não sobe (info, sem erro)"
+      "label": "`lib/channels/telefonia/laco.ts` — conecta na ARI, fila SERIAL de eventos, reconexão com backoff até 30 s; sem `TELEFONIA_ARI_URL`/`_PASSWORD` não sobe (info, sem erro). Ao lado da fila, a passada de 60 s do telefone (`passadaDoTelefone`, fase 2), que não depende da ARI: avisos vencidos com guarda própria, e as falas do Storage para o volume"
     },
     {
       "id": "sincronizador",
@@ -112,7 +112,7 @@
       "lane": "worker",
       "col": 3,
       "type": "backend",
-      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: toca UM ramal por vez e faz a ponte; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s), monta o destino com o prefixo DO TRONCO (`enderecoDeSaida`) e disca; a perna que acaba sem atender vira motivo pela regra de `fim-da-saida.ts`, e o chamar local para antes de o ramal cair; `recuperar()` após reinício do worker"
+      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: se o número toca um MENU, a URA (fase 2); depois a FILA DO TIME: fora do horário com a fala pronta → a fala e desliga (`after_hours`, sem Central); aviso de instabilidade vigente → tocado INTEIRO; \"aguarde\" e música, o aguarde de novo a cada ~40 s; esgotou → \"ninguém atendeu\"; toca UM ramal por vez e faz a ponte; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s), monta o destino com o prefixo DO TRONCO (`enderecoDeSaida`) e disca; a perna que acaba sem atender vira motivo pela regra de `fim-da-saida.ts`, e o chamar local para antes de o ramal cair; `recuperar()` após reinício do worker"
     },
     {
       "id": "distribuicao",
@@ -189,7 +189,7 @@
       "lane": "tela",
       "col": 1,
       "type": "frontend",
-      "label": "Conexões › Telefone (`CanalTelefoneClient` em `ConexoesShell`) — adicionar, editar, remover; time que recebe; prefixo de discagem opcional por número (mostrado no cartão; mudar só ele não pede a senha); estado ao vivo (Conectando / Conectado / Falhou + motivo), relido a cada 3 s enquanto conecta. Telefonia desligada: diz como ligar"
+      "label": "Conexões › Telefone (`CanalTelefoneClient` em `ConexoesShell`) — adicionar, editar, remover; time que recebe; prefixo de discagem opcional por número (mostrado no cartão; mudar só ele não pede a senha); estado ao vivo (Conectando / Conectado / Falhou + motivo), relido a cada 3 s enquanto conecta. Telefonia desligada: diz como ligar. Fase 2: \"Quando ligarem\" — tocar no time OU tocar o menu (menu arquivado aparece com o selo) —, e as sub-abas Menus e Voz e falas"
     },
     {
       "id": "ramal_nav",
@@ -217,14 +217,14 @@
       "lane": "tela",
       "col": 5,
       "type": "frontend",
-      "label": "Inbox — card com ícone `PhoneCall` (`data-meio=\"phone\"`), `Composer` só em nota interna (`somenteNota`), `CartaoDaLigacao` no chat (sentido, quem atendeu, duração, desfecho)"
+      "label": "Inbox — card com ícone `PhoneCall` (`data-meio=\"phone\"`), `Composer` só em nota interna (`somenteNota`), `CartaoDaLigacao` no chat (sentido, quem atendeu, duração, desfecho); fase 2: o que a URA fez (\"No menu X, digitou 1 e foi para o time Y\"; \"…digitou uma tecla que não existe e foi para o time padrão, Y\"; \"Desligou no menu X, antes de escolher\"), \"Ouviu o aviso de instabilidade\" e \"Ligação fora do horário\""
     },
     {
       "id": "central",
       "lane": "tela",
       "col": 6,
       "type": "frontend",
-      "label": "Central (`/app/ai/inbox`) — `voice_call_missed` com o botão \"Ligar de volta\", que abre a ficha do contato"
+      "label": "Central (`/app/ai/inbox`) — `voice_call_missed` com o botão \"Ligar de volta\", que abre a ficha do contato; fase 2: `phone_prompt_unplayable` (uma fala não tocou), `phone_emergency_expired` (o aviso desligou sozinho) e `phone_menu_team_archived` (o menu manda para time arquivado), cada um com o link da tela que conserta"
     },
     {
       "id": "timeline",
@@ -238,7 +238,7 @@
       "lane": "tela",
       "col": 8,
       "type": "frontend",
-      "label": "Audit Log (`/app/audit`) — `channel.phone_trunk_created` / `_updated` / `_archived` (servidor, usuário, time; nunca a senha), `phone_call.started` e `phone_extension.credential_issued` (ramal entregue a um navegador; nunca a senha)"
+      "label": "Audit Log (`/app/audit`) — `channel.phone_trunk_created` / `_updated` / `_archived` (servidor, usuário, time; nunca a senha), `phone_call.started` e `phone_extension.credential_issued` (ramal entregue a um navegador; nunca a senha); fase 2: `phone.voice_changed`, `phone.prompt_previewed`, `phone.prompt_saved`, `phone.menu_saved`, `phone.menu_archived`, `phone.number_destination_changed`, `phone.emergency_activated` / `_deactivated` / `_expired` e `ai.credential_created` da chave de voz (nunca a chave nem o áudio)"
     },
     {
       "id": "t_sessions",
@@ -259,7 +259,7 @@
       "lane": "banco",
       "col": 3,
       "type": "database",
-      "label": "`voice_calls` — `provider = sip_trunk`, `sip_call_ref` único por org (idempotência), `ringing_user_id`, `conversation_id`, `team_id`, `answered_at`, `end_reason`"
+      "label": "`voice_calls` — `provider = sip_trunk`, `sip_call_ref` único por org (idempotência), `ringing_user_id`, `conversation_id`, `team_id`, `answered_at`, `end_reason` (fase 2: `after_hours`); `menu_id`, `menu_digit`, `menu_outcome` (`chosen` / `default_no_input` / `default_invalid`) e `emergency_heard_at` (0288)"
     },
     {
       "id": "t_contacts",
@@ -280,14 +280,14 @@
       "lane": "banco",
       "col": 6,
       "type": "database",
-      "label": "`messages` — o registro da ligação: `type=system`, `direction=outbound` (não emite `message.received`: não acorda a IA nem o termômetro), `external_id = ligacao:<id>`, `metadata.voice_call`"
+      "label": "`messages` — o registro da ligação: `type=system`, `direction=outbound` (não emite `message.received`: não acorda a IA nem o termômetro), `external_id = ligacao:<id>`, `metadata.voice_call` (fase 2: `motivo`, `menu` — o schema `MenuDaLigacao` de `lib/telefonia/vocabulario.ts`, com os nomes daquela hora — e `ouviu_aviso`)"
     },
     {
       "id": "t_inbox",
       "lane": "banco",
       "col": 7,
       "type": "database",
-      "label": "`agent_inbox_items` — recebida que ninguém atendeu vira `voice_call_missed` (kind que já existia, da voz do WhatsApp)"
+      "label": "`agent_inbox_items` — recebida que ninguém atendeu vira `voice_call_missed` (kind que já existia, da voz do WhatsApp); fase 2 (0288): `phone_prompt_unplayable`, `phone_emergency_expired`, `phone_menu_team_archived`"
     },
     {
       "id": "t_activities",
@@ -330,6 +330,153 @@
       "col": 11,
       "type": "backend",
       "label": "`lib/telefonia/fim-da-saida.ts` — puro, usado pelo worker E pelo navegador: a perna que acabou sem atender vira `nao_completada_<causa>` (nunca tocou, ou causa de recusa), `ocupado_17` ou `sem_resposta_<causa>`; e o mesmo motivo vira o aviso que o atendente lê. Medido num Asterisk 20.11.1: a recusa com 404 + `Reason` cause 16 chega sem causa no StasisEnd e sem RINGING"
+    },
+    {
+      "id": "elevenlabs",
+      "lane": "fora",
+      "col": 2,
+      "type": "external",
+      "label": "ElevenLabs — a conta da PRÓPRIA organização. Duas chamadas, as duas feitas pela API e nenhuma pelo worker: listar as vozes (`GET /v1/voices`, que também valida a chave) e sintetizar a PRÉVIA de uma fala em μ-law 8 kHz (`output_format=ulaw_8000`, modelo `eleven_multilingual_v2`). A chave vai só no header `xi-api-key`; `ELEVENLABS_API_BASE_URL` existe só para o e2e"
+    },
+    {
+      "id": "volume_falas",
+      "lane": "infra",
+      "col": 5,
+      "type": "backend",
+      "label": "Volume `telefonia-falas` (`docker-compose.prod.yml`), montado em `/var/lib/telefonia/falas` no `worker` (escrita) e no `asterisk` (`:ro`) — o MESMO caminho nos dois, porque é o caminho absoluto que a ARI manda tocar; sem o nome do produto (marca própria). Montado no worker mesmo com a telefonia desligada, e vazio"
+    },
+    {
+      "id": "falas_no_disco",
+      "lane": "worker",
+      "col": 6,
+      "type": "backend",
+      "label": "`falas-no-disco.ts` — Storage → volume. `sincronizar` (a cada 60 s) baixa as falas `ready` que faltam, escrita atômica (tmp + rename), caminho conferido pela régua `<org>/<hash>.ulaw`; órfão no disco sai 15 min depois de visto órfão; download que falha tenta de novo em 1, 5, 30 e 60 min. `garantir(fala)` antes de tocar: nunca lança, espera no máximo 3 s, `null` = a ligação pula a fala. `limparStorage` (freio próprio de 10 min): sai do bucket o objeto criado há mais de 24 h que nenhuma linha referencia, reconferido logo antes de cada apagar; bucket ausente aborta a passada sem apagar nada"
+    },
+    {
+      "id": "fala_no_ar",
+      "lane": "worker",
+      "col": 7,
+      "type": "backend",
+      "label": "`fala-no-ar.ts` — a mecânica de UMA fala no canal do cliente, comum à URA e à fila: garante o arquivo, pede `tocarFala`, para a que está no ar (`pararFala`; 404 = já acabou) e conclui no `PlaybackFinished` OU no relógio de segurança (duração + 5 s: um evento perdido não prende a ligação). A que não toca é PULADA e avisada na Central; a que termina `failed` depois de o cliente desligar é ignorada"
+    },
+    {
+      "id": "ura",
+      "lane": "worker",
+      "col": 8,
+      "type": "backend",
+      "label": "`lib/telefonia/ura.ts` — a URA como regra PURA: estado (`tocando` / `esperando` / `decidida`, que é final) + evento (tecla, fim da fala, prazo de 5 s com a `vez` que o armou, `fala_falhou`) → UMA ação (tocar / esperar / encaminhar / ignorar). Qualquer tecla interrompe o menu; o menu toca no máximo 3 vezes; depois, o time padrão com `default_invalid` (houve tecla errada) ou `default_no_input`. O menu que não toca vai direto ao time padrão"
+    },
+    {
+      "id": "rota_chave",
+      "lane": "api",
+      "col": 12,
+      "type": "backend",
+      "label": "`/api/v1/telefonia/voz/chave` — GET estado (gerente+) / PUT chave (admin): valida listando as vozes ANTES de gravar, cifra, devolve só os 4 últimos dígitos. O `revalidate` genérico da credencial separa chave recusada (zera `validated_at`) de ElevenLabs fora do ar e sem crédito (mantêm a chave validada)"
+    },
+    {
+      "id": "rota_previa",
+      "lane": "api",
+      "col": 13,
+      "type": "backend",
+      "label": "`POST /api/v1/telefonia/falas/previa` (gerente+) + `previa.ts` / `servico-de-falas.ts` / `elevenlabs.ts` — a ÚNICA síntese do produto (D15). Hash = sha256(texto + voz + modelo): objeto já no Storage é reaproveitado sem ElevenLabs e sem gastar cota; senão sintetiza UMA vez e grava. 30 prévias por hora por organização (`checkRateLimit`, janela fixa) → 429 `limite_de_previas` com `Retry-After`; falha da ElevenLabs → 422/502. Devolve o hash e o áudio em base64 — não cria fala nenhuma"
+    },
+    {
+      "id": "rota_voz",
+      "lane": "api",
+      "col": 14,
+      "type": "backend",
+      "label": "`/api/v1/telefonia/{voz, voz/vozes, falas/gerais/[tipo], falas/[id]/audio}` — a voz da organização e as vozes da conta (admin); o \"Salvar e usar\" da fala geral (admin): confere a prévia no Storage, trava a linha de `phone_settings` e aponta a fala para o hash, sem ElevenLabs; e o áudio μ-law da fala SALVA para o \"Ouvir\" (qualquer membro, com ETag). Organização sempre da SESSÃO"
+    },
+    {
+      "id": "rota_menus",
+      "lane": "api",
+      "col": 15,
+      "type": "backend",
+      "label": "`/api/v1/telefonia/menus` (GET / POST com `Idempotency-Key`) e `…/[id]` (PATCH / DELETE arquiva), admin — `menus.ts`: Zod do menu, gravação numa transação só (`emTransacao`; trava `for no key update`, que não segura o INSERT da ligação), falas do menu e de tecla inválida conferidas (`previa_ausente` / `armazenamento` quando o áudio sumiu); arquivar menu em uso → `menu_em_uso`; arquivar apaga as falas dele"
+    },
+    {
+      "id": "rota_emergencias",
+      "lane": "api",
+      "col": 16,
+      "type": "backend",
+      "label": "`/api/v1/telefonia/emergencias` — GET (membro; `?so=ligados` é a leitura barata da faixa: só `ligados` e `pode_mudar`, sem nome pedido à Auth) e, por time, PUT liga com o texto, o hash da prévia e o prazo (1 h, 2 h, 4 h ou até desligar) / DELETE desliga o VIGENTE (gerente+). Texto igual ao gravado não vai ao Storage; trava ocupada → 409 `gravacao_em_andamento`; viewer e agent não recebem o texto nem quem ligou"
+    },
+    {
+      "id": "sete_dias",
+      "lane": "api",
+      "col": 17,
+      "type": "backend",
+      "label": "`lib/telefonia/ultimos-sete-dias.ts`, na leitura do GET dos menus — só ligações ENCERRADAS dos últimos 7 dias: escolhas por tecla, sem escolha, tecla errada, quem desligou no menu, e o alerta \"menu que confunde\" quando muita gente cai no time padrão. É o laço de retorno da URA"
+    },
+    {
+      "id": "cartao_elevenlabs",
+      "lane": "tela",
+      "col": 9,
+      "type": "frontend",
+      "label": "Credenciais de IA › cartão \"ElevenLabs (voz da URA)\" (`CartaoElevenLabs.tsx`), só com a telefonia oferecida: a chave entra, é validada e nunca volta (só os 4 últimos dígitos); \"Testar\" lê o MOTIVO (recusada × fora do ar × sem crédito). Fora das listas e seletores de modelo por um predicado central (`lib/ai/pontos/provedores.ts`). Sem \"Remover\" pela tela na v1"
+    },
+    {
+      "id": "aba_voz",
+      "lane": "tela",
+      "col": 10,
+      "type": "frontend",
+      "label": "Conexões › Telefone › Voz e falas (`?aba=telefone&sub=falas`, `VozEFalas.tsx`): a voz da conta com \"Ouvir amostra\"; as três falas gerais (aguarde, ninguém atendeu, fora do horário — o sugerido traz o WhatsApp conectado) com Gerar prévia → Ouvir (μ-law → WAV no navegador) → Salvar e usar, e o selo do estado (em uso / prévia não salva / falhou, com o motivo). Sem chave: o link para Credenciais de IA. Erro sem corpo (504, HTML do proxy) nunca aparece cru"
+    },
+    {
+      "id": "aba_menus",
+      "lane": "tela",
+      "col": 11,
+      "type": "frontend",
+      "label": "Conexões › Telefone › Menus (`?sub=menus`, `MenusDoTelefone.tsx` + `EditorDeMenu.tsx`): opções tecla → time, time padrão, a fala montada das opções (\"Para X, digite 1.\"), editável, a de tecla inválida opcional, o que falta para salvar, e o bloco \"últimos 7 dias\" de cada menu"
+    },
+    {
+      "id": "cartao_aviso",
+      "lane": "tela",
+      "col": 12,
+      "type": "frontend",
+      "label": "Configurações › Times › \"Aviso de instabilidade (telefone)\" (`AvisoDeInstabilidadeDoTime.tsx`): \"Ligar aviso\" (texto novo só depois de \"Gerar prévia\" e \"Ouvir\"), prazo (2 horas por padrão), \"Ligado às HH:MM por Fulano · desliga às HH:MM\", \"Desligar agora\". Botões só com `pode_mudar` (gerente+)"
+    },
+    {
+      "id": "faixa_aviso",
+      "lane": "tela",
+      "col": 13,
+      "type": "frontend",
+      "label": "Faixa \"Aviso de instabilidade ligado no telefone do <time>\" em todo o CRM (`FaixaDoAvisoDeInstabilidade.tsx`, dentro de `FaixasDoTopo`, que publica `--altura-das-faixas`: TopBar, barra lateral, casca e Inbox descontam dela). Relê a cada 60 s e na volta do foco — a 1ª leitura que falha e o 401 passageiro não a apagam; selo \"Time arquivado\"; \"Desligar\" só para gerente+"
+    },
+    {
+      "id": "t_credenciais",
+      "lane": "banco",
+      "col": 11,
+      "type": "database",
+      "label": "`ai_provider_credentials` com `provider = 'elevenlabs'` (coluna de vocabulário aberto) — a chave cifrada (`AI_CRED_AES_KEY`), `last4`, `validated_at` / `validation_error`; uma por organização"
+    },
+    {
+      "id": "bucket_falas",
+      "lane": "banco",
+      "col": 12,
+      "type": "database",
+      "label": "Storage `phone-prompts` (PRIVADO): `<org>/<hash>.ulaw`. Só o cliente de serviço lê e escreve — a API com a organização da SESSÃO, e o worker. É a mesma cota de Storage do cliente: daí a limpeza"
+    },
+    {
+      "id": "t_prompts",
+      "lane": "banco",
+      "col": 13,
+      "type": "database",
+      "label": "`phone_prompts` (kind `menu` / `invalid` / `waiting` / `nobody` / `after_hours` / `emergency`; texto, voz, modelo, hash, caminho, duração, `ready` / `failed` — nenhuma `failed` nasce na v1) + `phone_settings` (voz, modelo e as três falas gerais). Migration 0288: RLS `_select`, FK compostas por organização"
+    },
+    {
+      "id": "t_menus",
+      "lane": "banco",
+      "col": 14,
+      "type": "database",
+      "label": "`phone_menus` (nome, fala do menu, fala de tecla inválida, time padrão, `accepts_extension` reservado à v3, `archived_at`) + `phone_menu_options` (tecla `^[0-9]$` → time, única por menu); `channel_sessions.sip_menu_id` (CHECK: time OU menu)"
+    },
+    {
+      "id": "t_times",
+      "lane": "banco",
+      "col": 15,
+      "type": "database",
+      "label": "`attendance_teams.phone_emergency_*` — o aviso de instabilidade do time: fala, desde, até (nulo = até desligar), quem ligou. Vigente = `active_since` preenchido e `expires_at` nulo ou no futuro"
     }
   ],
   "edges": [
@@ -345,7 +492,7 @@
     { "from": "asterisk_core", "to": "operadora", "label": "REGISTER a cada 300 s, qualify 25 s · INVITE de saída (407 → autenticada) · RTP G.711" },
     { "from": "asterisk_core", "to": "dialplan", "label": "contexto do endpoint" },
     { "from": "dialplan", "to": "ari", "label": "`Stasis(crm,…)`" },
-    { "from": "ari", "to": "laco", "label": "WebSocket: StasisStart, Dial, ChannelHangupRequest, ChannelDestroyed" },
+    { "from": "ari", "to": "laco", "label": "WebSocket: StasisStart, Dial, ChannelHangupRequest, ChannelDestroyed; fase 2: PlaybackFinished, ChannelDtmfReceived" },
     { "from": "ari", "to": "asterisk_core", "label": "executa: originar ramal, ponte, música, discar tronco, gravar endpoint" },
     { "from": "laco", "to": "controle", "label": "cada evento, EM ORDEM" },
     { "from": "laco", "to": "sincronizador", "label": "completa a cada conexão + a cada 60 s" },
@@ -361,11 +508,11 @@
     { "from": "t_sessions", "to": "t_disponibilidade", "label": "`sip_team_id` escolhe o time que recebe" },
     { "from": "t_voice_calls", "to": "repositorio", "label": "RECEBIDAS atendidas hoje (fuso da org) e quem já está em ligação — o laço da distribuição" },
     { "from": "repositorio", "to": "distribuicao", "label": "`CandidatoAoToque[]`" },
-    { "from": "repositorio", "to": "t_voice_calls", "label": "cria · `ringing_user_id` · atendida · encerrada (idempotente)" },
+    { "from": "repositorio", "to": "t_voice_calls", "label": "cria · `ringing_user_id` · atendida · encerrada (idempotente) · escolha do menu (`registrarEscolhaDoMenu`) · aviso ouvido — sempre com o filtro da organização" },
     { "from": "repositorio", "to": "t_contacts", "label": "acha pelo número ou cria" },
-    { "from": "repositorio", "to": "t_conversations", "label": "acha ou cria a `phone`; atribui a quem atendeu (`fn_conversation_assign` claim)" },
-    { "from": "repositorio", "to": "t_messages", "label": "registro da ligação, uma vez" },
-    { "from": "repositorio", "to": "t_inbox", "label": "recebida perdida → `voice_call_missed`" },
+    { "from": "repositorio", "to": "t_conversations", "label": "acha ou cria a `phone`; atribui a quem atendeu (`fn_conversation_assign` claim); com a URA, leva a conversa ao time ESCOLHIDO — nunca a de dono humano, nunca a time arquivado" },
+    { "from": "repositorio", "to": "t_messages", "label": "registro da ligação, uma vez; o menu com os nomes daquela hora" },
+    { "from": "repositorio", "to": "t_inbox", "label": "recebida perdida → `voice_call_missed`, no idioma da organização e com o time (\"Ninguém do time X atendeu.\" / \"O cliente desligou no menu do telefone.\"); fala que não tocou, aviso vencido, menu com time padrão arquivado" },
     { "from": "repositorio", "to": "t_activities", "label": "`emitAgentActivityForContact`" },
     { "from": "aba", "to": "rota_numeros", "label": "adicionar · editar · remover" },
     { "from": "rota_numeros", "to": "t_sessions", "label": "insert/update com `organization_id` da SESSÃO; senha cifrada" },
@@ -394,14 +541,14 @@
     { "from": "rota_chamadas", "to": "t_conversations", "label": "acha/cria a `phone` e atribui a quem liga" },
     { "from": "rota_chamadas", "to": "t_audit", "label": "`phone_call.started`" },
     { "from": "t_conversations", "to": "inbox", "label": "`channel = phone` decide ícone e compositor" },
-    { "from": "t_messages", "to": "inbox", "label": "`metadata.voice_call` → `CartaoDaLigacao`" },
+    { "from": "t_messages", "to": "inbox", "label": "`metadata.voice_call` → `CartaoDaLigacao` (o menu só por `menuDaLigacao`, nunca pelo path cru)" },
     { "from": "capacidades", "to": "inbox", "label": "`meioDoCanal` → `phone`; janela `sem_restricao`" },
     { "from": "capacidades", "to": "recusa_envio", "label": "`canalConhecidoSemMensagem`" },
     { "from": "recusa_envio", "to": "inbox", "label": "422 com a mensagem traduzida" },
     { "from": "t_sessions", "to": "capacidades", "label": "provider `sip_trunk` da conversa" },
     { "from": "inbox", "to": "recusa_envio", "label": "resposta de texto que escapar do compositor → 422" },
     { "from": "inbox", "to": "botao_ligar", "label": "faixa: \"Para falar com o cliente, ligue\"" },
-    { "from": "t_inbox", "to": "central", "label": "aviso \"Ligar de volta\"" },
+    { "from": "t_inbox", "to": "central", "label": "aviso \"Ligar de volta\" e os três avisos do telefone da fase 2" },
     { "from": "central", "to": "botao_ligar", "label": "abre a ficha do contato, onde está o botão" },
     { "from": "t_activities", "to": "timeline", "label": "rótulo pelo tipo; `voice_call` quebra o silêncio do negócio" },
     { "from": "timeline", "to": "inbox", "label": "o Radar leva à conversa do negócio que esfriou" },
@@ -418,7 +565,66 @@
     { "from": "controle", "to": "fim_da_saida", "label": "perna acabou sem atender: desfecho + motivo (`end_reason`)" },
     { "from": "fim_da_saida", "to": "ramal_nav", "label": "`avisoDoFimDaSaida`: o motivo lido do banco vira aviso na tela" },
     { "from": "conta_sip", "to": "controle", "label": "`enderecoDeSaida`: prefixo fora da régua não vira destino (`tronco_configuracao_invalida`)" },
-    { "from": "t_sessions", "to": "controle", "label": "`sip_dial_prefix` do tronco usado, lido junto com ele" }
+    { "from": "t_sessions", "to": "controle", "label": "`sip_dial_prefix` do tronco usado, lido junto com ele" },
+    { "from": "cartao_elevenlabs", "to": "rota_chave", "label": "salvar e testar a chave — só no corpo, nunca na URL" },
+    { "from": "rota_chave", "to": "elevenlabs", "label": "valida listando as vozes" },
+    { "from": "rota_chave", "to": "t_credenciais", "label": "guarda cifrada; só `last4` volta" },
+    { "from": "rota_chave", "to": "t_audit", "label": "`ai.credential_created` com `provider = elevenlabs` — sem a chave" },
+    { "from": "aba", "to": "aba_voz", "label": "sub-aba `?sub=falas`" },
+    { "from": "aba", "to": "aba_menus", "label": "sub-aba `?sub=menus`" },
+    { "from": "aba_voz", "to": "cartao_elevenlabs", "label": "sem chave: \"Cadastrar a chave em Credenciais de IA\"" },
+    { "from": "aba_voz", "to": "rota_voz", "label": "voz, falas gerais, \"Salvar e usar\", \"Ouvir\" a fala salva" },
+    { "from": "aba_voz", "to": "rota_previa", "label": "\"Gerar prévia\" de cada fala geral" },
+    { "from": "aba_menus", "to": "rota_menus", "label": "criar, editar, arquivar" },
+    { "from": "aba_menus", "to": "rota_previa", "label": "\"Gerar prévia\" da fala do menu e da de tecla inválida" },
+    { "from": "cartao_aviso", "to": "rota_previa", "label": "texto novo: \"Gerar prévia\" e \"Ouvir\" antes de ligar" },
+    { "from": "cartao_aviso", "to": "rota_emergencias", "label": "ligar com prazo · desligar agora" },
+    { "from": "faixa_aviso", "to": "rota_emergencias", "label": "GET `?so=ligados` a cada 60 s e na volta do foco · desligar" },
+    { "from": "rota_emergencias", "to": "faixa_aviso", "label": "`ligados` + `pode_mudar`" },
+    { "from": "rota_previa", "to": "t_credenciais", "label": "chave decifrada só para sintetizar" },
+    { "from": "rota_previa", "to": "elevenlabs", "label": "SÓ aqui: texto + voz → `ulaw_8000`, uma vez por hash" },
+    { "from": "rota_previa", "to": "bucket_falas", "label": "grava `<org>/<hash>.ulaw`; o mesmo hash é reaproveitado sem pagar" },
+    { "from": "rota_previa", "to": "t_audit", "label": "`phone.prompt_previewed` — só a que foi à ElevenLabs, inclusive a paga que o Storage não guardou" },
+    { "from": "rota_voz", "to": "elevenlabs", "label": "lista as vozes da conta — não sintetiza" },
+    { "from": "rota_voz", "to": "t_credenciais", "label": "chave decifrada para listar as vozes" },
+    { "from": "rota_voz", "to": "bucket_falas", "label": "\"Salvar e usar\" confere a prévia; o \"Ouvir\" da fala salva lê o áudio" },
+    { "from": "rota_voz", "to": "t_prompts", "label": "a fala aponta para o hash (`ready`), sob a trava de `phone_settings`" },
+    { "from": "rota_voz", "to": "t_audit", "label": "`phone.voice_changed`, `phone.prompt_saved`" },
+    { "from": "rota_menus", "to": "t_menus", "label": "menu e opções numa transação" },
+    { "from": "rota_menus", "to": "t_prompts", "label": "falas do menu, reconferidas sob a trava (`reconferirFala`)" },
+    { "from": "rota_menus", "to": "bucket_falas", "label": "confere o áudio das falas: sem ele, `previa_ausente`" },
+    { "from": "rota_menus", "to": "t_audit", "label": "`phone.menu_saved`, `phone.menu_archived`" },
+    { "from": "rota_numeros", "to": "t_menus", "label": "\"Quando ligarem\": `sip_menu_id` só para menu ativo (`travarMenuAtivo`); `phone.number_destination_changed`" },
+    { "from": "rota_emergencias", "to": "t_times", "label": "liga com prazo / desliga o vigente" },
+    { "from": "rota_emergencias", "to": "t_prompts", "label": "a fala `emergency` do time" },
+    { "from": "rota_emergencias", "to": "bucket_falas", "label": "texto novo: confere a prévia na pasta da organização" },
+    { "from": "rota_emergencias", "to": "t_audit", "label": "`phone.emergency_activated` / `phone.emergency_deactivated`" },
+    { "from": "t_prompts", "to": "falas_no_disco", "label": "quais falas estão `ready` e quais objetos ainda têm referência" },
+    { "from": "bucket_falas", "to": "falas_no_disco", "label": "baixa as falas prontas (service role)" },
+    { "from": "falas_no_disco", "to": "bucket_falas", "label": "apaga o objeto com mais de 24 h de CRIAÇÃO e sem referência" },
+    { "from": "falas_no_disco", "to": "volume_falas", "label": "escreve `.ulaw` (tmp + rename); o órfão sai 15 min depois de visto" },
+    { "from": "laco", "to": "falas_no_disco", "label": "passada de 60 s: `sincronizar` e `limparStorage`" },
+    { "from": "compose", "to": "volume_falas", "label": "declara o volume; worker com escrita, asterisk `:ro`" },
+    { "from": "kit", "to": "volume_falas", "label": "o `dc up -d` do `update.sh` cria o volume sozinho — nada a editar" },
+    { "from": "volume_falas", "to": "asterisk_core", "label": "`sound:/var/lib/telefonia/falas/<org>/<hash>` — só leitura" },
+    { "from": "controle", "to": "fala_no_ar", "label": "`porNoAr(fala, papel)`: menu, tecla inválida, fora do horário, aviso, aguarde, ninguém atendeu" },
+    { "from": "fala_no_ar", "to": "controle", "label": "fim da fala (ou o relógio) devolve a vez: `aposFala` com o papel" },
+    { "from": "fala_no_ar", "to": "falas_no_disco", "label": "`garantir` o arquivo antes de tocar (até 3 s; nunca a ElevenLabs)" },
+    { "from": "fala_no_ar", "to": "ari", "label": "`tocarFala` / `pararFala`; a música de espera para e volta" },
+    { "from": "controle", "to": "ura", "label": "tecla (`ChannelDtmfReceived`, só com o MENU no ar), fim da fala, prazo de 5 s, `fala_falhou`" },
+    { "from": "ura", "to": "controle", "label": "tocar · esperar · encaminhar ao time (escolhido ou padrão) · ignorar" },
+    { "from": "t_sessions", "to": "t_menus", "label": "`sip_menu_id`: o número toca o menu" },
+    { "from": "t_menus", "to": "repositorio", "label": "`menuPorId`: opções, falas e se o time padrão está ativo" },
+    { "from": "t_prompts", "to": "repositorio", "label": "falas gerais, a do menu e a do aviso, com a duração" },
+    { "from": "t_times", "to": "repositorio", "label": "`timeParaAFila`: aberto / fora do horário / indisponível + o aviso VIGENTE (lê `expires_at`, não espera a passada)" },
+    { "from": "repositorio", "to": "t_times", "label": "`desligarAvisosVencidos` (`for no key update skip locked`), também de time arquivado" },
+    { "from": "laco", "to": "repositorio", "label": "passada de 60 s: os avisos vencidos, com guarda própria (não esperam o Storage)" },
+    { "from": "repositorio", "to": "t_audit", "label": "`phone.emergency_expired`, sem ator" },
+    { "from": "t_voice_calls", "to": "sete_dias", "label": "`menu_digit` / `menu_outcome` das ligações ENCERRADAS com menu" },
+    { "from": "sete_dias", "to": "aba_menus", "label": "o bloco \"últimos 7 dias\" e o alerta \"menu que confunde\"" },
+    { "from": "central", "to": "aba_voz", "label": "`phone_prompt_unplayable` → \"Revisar as falas do telefone\"" },
+    { "from": "central", "to": "aba_menus", "label": "`phone_menu_team_archived` → \"Revisar os menus do telefone\"" },
+    { "from": "central", "to": "cartao_aviso", "label": "`phone_emergency_expired` → \"Abrir os times\"" }
   ],
   "cards": [
     {
@@ -438,7 +644,21 @@
         "O painel da voz do WhatsApp (`useVoiceCallSession`, `/api/v1/voice/calls/history`, `resolveVoiceCall`) filtra `provider = wacalls`: a ligação de telefone mora na mesma `voice_calls` e NÃO aparece nele — adotá-la abria o \"Ouvir aqui\" por cima do painel do telefone e disputava o microfone",
         "`voice_call.ended` no `event_log` nasce `done` e não tem consumidor: é registro, não comando (mesmo desenho da ponte do WaCalls)",
         "O agente de IA não participa: o registro da ligação é `outbound`/`system` e não acorda turno nenhum; o contexto do agente não lê ligação nem a nota interna da conversa `phone`",
-        "A senha do número só entra (POST/PATCH) e só sai decifrada para o worker e para o Asterisk; nenhuma rota a devolve ao navegador — e o PATCH que troca servidor, porta, transporte ou usuário exige a senha de novo", "O rodízio de conversas NÃO distribui a conversa `phone`: fecha o pedido como `skipped_voice_channel`. Dono da conversa de uma ligação é quem atendeu (`claim`) ou quem ligou; a perdida fica sem dono, no time do número"
+        "A senha do número só entra (POST/PATCH) e só sai decifrada para o worker e para o Asterisk; nenhuma rota a devolve ao navegador — e o PATCH que troca servidor, porta, transporte ou usuário exige a senha de novo", "O rodízio de conversas NÃO distribui a conversa `phone`: fecha o pedido como `skipped_voice_channel`. Dono da conversa de uma ligação é quem atendeu (`claim`) ou quem ligou; a perdida fica sem dono, no time do número",
+        "A fila não trata tecla: o DTMF só vale com o MENU no ar, e o aviso de instabilidade toca inteiro. E não há transferência na v1: `allow_transfer=no` no ramal fecha o REFER — a v2 será pela ARI, nunca por REFER"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Fase 2, versão 1 — URA e falas: o laço de retorno (invariante 7)",
+      "items": [
+        "Menu que confunde: o bloco \"últimos 7 dias\" de cada menu (só ligações encerradas) conta escolhas por tecla, sem escolha, tecla errada e quem desligou no menu, e avisa quando muita gente cai no time padrão — quem administra reescreve a fala ou as opções",
+        "Fala que não toca (arquivo ausente no disco e no Storage, ou recusado pelo Asterisk): a ligação segue sem ela — o menu que não toca vai ao time padrão — e a Central recebe `phone_prompt_unplayable`, com o link para Voz e falas; \"Salvar e usar\" de novo conserta",
+        "Menu que manda para time ARQUIVADO: a ligação segue a fila (e acaba perdida), e a Central recebe `phone_menu_team_archived`, com o link para Menus",
+        "Aviso de instabilidade esquecido: vence no prazo escolhido. Na hora da ligação o worker lê `expires_at` e não depende da passada; a passada de 60 s o desliga, audita `phone.emergency_expired` e avisa na Central (`phone_emergency_expired`)",
+        "A ligação nunca chama a ElevenLabs (D15): só a prévia sintetiza, 30 por hora por organização, e o mesmo texto com a mesma voz não é pago de novo. `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` reprova módulo de `lib/channels/telefonia/` ou `workers/` que alcance o cliente; neste mapa, nenhuma peça do worker tem aresta para `elevenlabs` (`tests/unit/mapas-de-arquitetura.test.ts`)",
+        "Prévia que ninguém salvou não fica para sempre no Storage, que é a mesma cota do cliente: sai 24 h depois de CRIADA, junto com o áudio que nenhuma fala usa. Limitação aceita na v1: a idade conta da criação, não do último uso — a prévia que reaproveita um objeto antigo sem referência (voltar ao texto anterior) pode sumir antes do \"Salvar e usar\", que recusa com `previa_ausente`; gerar de novo paga uma síntese",
+        "Fora do horário SEM a fala pronta segue a fase 1 (fila de 2 min → perdida com \"Ligar de volta\"): desligar calado seria beco sem saída para quem ainda não cadastrou a chave"
       ]
     }
   ]
