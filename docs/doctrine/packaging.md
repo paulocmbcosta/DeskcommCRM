@@ -142,9 +142,16 @@ seria recusar instalar por não conseguir resolver um número:
 2. **Quem preenche o `.env` à mão** a partir do template recebe `stable` — o piso seguro
    para quem não vai rodar a entrevista. `--yes` com o template preserva esse valor.
 
-O que **nenhum** caminho faz é pinar numa versão sem antes conferir que as imagens dela
-existem lá: a tag do git nasce minutos antes das imagens, e `deskcomm-worker:1.2.1` nunca
-vai existir porque a v1.2.1 é anterior à criação desse pacote.
+Antes de pinar, o `install.sh` confere no registro que as imagens existem naquela versão —
+`trio_publicado`, em `hostgator-setup-kit/_common.sh`; sem elas, desce para `stable`. A tag do
+git nasce minutos antes das imagens, e `deskcomm-worker:1.2.1` nunca vai existir porque a
+v1.2.1 é anterior à criação desse pacote. Quais imagens a conferência pergunta:
+`grep -A3 '^trio_publicado()' hostgator-setup-kit/_common.sh | grep 'for i in'`.
+
+A conferência tem duas lacunas, e elas são do código, não desta prosa: a imagem do Asterisk
+(`deskcomm-asterisk`) fica **fora** dela, embora `gravar_imagens` a fixe na mesma versão que
+as outras; e o `update.sh` não confere imagem nenhuma antes de fixar — chama `gravar_imagens`
+direto (`grep -n 'gravar_imagens\|trio_publicado' hostgator-setup-kit/update.sh`).
 
 - **Por quê:** três consequências de uma só causa. **(a)** A versão do cliente para de mudar
   por acidente — um `up -d` rodado à mão semanas depois não troca o app sob o banco. **(b)**
