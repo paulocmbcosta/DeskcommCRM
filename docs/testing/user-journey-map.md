@@ -3069,7 +3069,8 @@ WebRTC pelo JsSIP).
 ## J36 — URA e falas do telefone: o cliente escolhe o time pela tecla `[P0]` (2026-09-29)
 
 Pedido do dono (DYD-10, fase 2, versão 1): quem liga para a empresa ouve um menu gravado com a
-voz escolhida e vai para o time certo; quem espera ouve "aguarde"; fora do horário e em
+voz escolhida e vai para o time certo; enquanto o ramal de um atendente toca, ouve o som de
+chamando, e só quem não tem ninguém livre ouve "aguarde" (DYD-52, 1.50.2); fora do horário e em
 instabilidade, ouve o aviso certo. Desenho em
 `docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`; plano em
 `docs/superpowers/plans/2026-09-28-telefonia-fase2-v1-ura.md`; mapa em
@@ -3103,14 +3104,14 @@ J36.7 é coberto por ela.
 | J36.4 Em Números, "Quando ligarem" → "Tocar o menu": o cartão diz "Quando ligarem: menu <nome>", e o banco guarda só o menu (`sip_team_id` nulo) | `[P0]` | **PASS** (e2e, execução 36576512233, passo 4) |
 | J36.5 Aviso de instabilidade com texto novo: "Ligar" só destrava depois de "Gerar prévia" e "Ouvir"; ligado por 1 hora, o cartão diz "Ligado às …" e a faixa "Aviso de instabilidade ligado no telefone do <time>" aparece para o atendente, em outra tela, sem o botão; o gerente desliga pela faixa e ela some sem recarregar | `[P0]` | **PASS** (e2e, execução 36576512233, passos 5, 7 e 8; o prazo escolhido e as auditorias conferidos no banco) |
 | J36.6 Com a faixa à vista, a TopBar gruda logo abaixo das faixas ao rolar, e o composer da Inbox fica inteiro na janela | `[P0]` | **PASS** (e2e, execução 36576512233, passos 6 e 7, medido por `getBoundingClientRect` com a faixa visível). A barra lateral, que também desconta as faixas, só em jsdom (`components/shell/Sidebar.faixas.test.tsx`) |
-| J36.7 Ligação real, opção 1: o cliente ouve o menu, digita 1 e toca no time da opção 1; o cartão diz "No menu X, digitou 1 e foi para o time Y" | `[P0]` | pendente — prova na VPS (Task 29) |
+| J36.7 Ligação real, opção 1: o cliente ouve o menu, digita 1 e toca no time da opção 1 — com atendente livre, **ouve o som de chamando ("tu… tu…") enquanto o ramal toca, sem "aguarde" nem música**; o cartão diz "No menu X, digitou 1 e foi para o time Y" | `[P0]` | **FAIL medido em produção na 1.50.1** (menu → tecla 2 → Suporte Técnico: o atendente atendeu em 16 s, mas o cliente ouviu "Todos os nossos atendentes estão ocupados…" enquanto o ramal tocava) → consertado na 1.50.2 (DYD-52), em unidade (`lib/channels/telefonia/controle.test.ts`, bloco "o som de chamando na fila"); o SOM, pendente — prova na VPS depois do deploy |
 | J36.8 Ligação real, opção 2: toca no time da opção 2, e a conversa passa a esse time — quem é só dele a enxerga | `[P0]` | pendente — prova na VPS; a conversa no time escolhido está provada no Postgres real, com o JWT de uma atendente só do time 2 (`tests/invariants/telefonia-repositorio-da-ura.test.ts`) |
 | J36.9 Tecla errada: ouve a fala de tecla inválida (se houver) e o menu de novo; depois do terceiro toque do menu, o time padrão; o cartão diz "No menu X, digitou uma tecla que não existe e foi para o time padrão, Y" | `[P0]` | pendente — prova na VPS; a regra em `lib/telefonia/ura.test.ts`, o texto em `components/telefonia/CartaoDaLigacao.test.tsx` |
 | J36.10 Sem tecla: o menu repete e a ligação vai ao time padrão; o cartão diz "No menu X, não digitou nada e foi para o time padrão, Y" | `[P0]` | pendente — prova na VPS |
 | J36.11 Desligar no menu: vira perdida no time padrão; a Central diz "O cliente desligou no menu do telefone. Ligue de volta pela conversa." e o cartão, "Desligou no menu X, antes de escolher" | `[P1]` | pendente — prova na VPS |
 | J36.12 Aviso de instabilidade ligado: o cliente ouve o aviso inteiro (tecla não interrompe) e segue para a fila; o cartão diz "Ouviu o aviso de instabilidade"; desligado, não ouve | `[P0]` | pendente — prova na VPS |
 | J36.13 Fora do horário do time, com a fala pronta: ouve a fala e a ligação cai; o cartão diz "Ligação fora do horário", e a Central não recebe aviso. Sem a fala, a fila da fase 1 | `[P0]` | pendente — prova na VPS |
-| J36.14 Ninguém atende: "aguarde" a cada ~40 s entre a música; em 2 min, "ninguém atendeu", e a Central diz "Ninguém do time X atendeu. Ligue de volta pela conversa." | `[P1]` | pendente — prova na VPS |
+| J36.14 Ninguém livre: "aguarde" a cada ~40 s entre a música; em 2 min, "ninguém atendeu", e a Central diz "Ninguém do time X atendeu. Ligue de volta pela conversa." Com atendente livre que não atende: o som de chamando nas duas voltas e então "ninguém atendeu" — nunca o "aguarde" | `[P1]` | pendente — prova na VPS |
 | J36.15 O "fora do horário" sugerido já traz o número do WhatsApp conectado da organização, e segue editável | `[P1]` | em unidade (`components/connections/telefone/VozEFalas.test.tsx`); pela tela, pendente |
 | J36.16 Fala que não toca (sem arquivo no disco nem no Storage): a ligação segue sem ela, o menu que não toca vai ao time padrão, e a Central recebe "Uma fala do telefone não tocou", com "Revisar as falas do telefone" | `[P1]` | em unidade (`lib/channels/telefonia/controle.test.ts`) e no Postgres real; pela tela, pendente |
 | J36.17 O aviso vence no prazo: desliga sozinho na passada de 60 s, audita `phone.emergency_expired`, e a Central diz "O aviso de instabilidade do telefone desligou sozinho", com "Abrir os times" | `[P1]` | no Postgres real (`tests/invariants/telefonia-repositorio-da-ura.test.ts`) e em `lib/channels/telefonia/laco.test.ts`; pela tela, pendente |
@@ -3149,8 +3150,20 @@ J36.7 é coberto por ela.
 9. **Quem desligou no menu recebia "Ninguém do time X atendeu"** — ninguém chegou a tocar
    (`e6fddb63`).
 
+**Achado em produção, depois da 1.50.1 (DYD-52):**
+
+10. **Com atendente livre, o cliente ouvia "todos ocupados" enquanto o ramal tocava.** Ligação
+    real, menu → tecla 2 → Suporte Técnico: o atendente atendeu em 16 s, e o cliente ouviu o
+    "aguarde" ("Todos os nossos atendentes estão ocupados…") e a música durante o toque. A fila
+    segurava na linha toda ligação já atendida pela rede — e a URA sempre atende —, com gente
+    livre ou não. Consertado na 1.50.2: com atendente sendo chamado, o som de chamando (o tom
+    `ring` da zona `br`, em banda); o "aguarde" só sem ninguém livre. O teste do controlador que
+    dizia "depois do aviso, quem espera o ramal ouve o 'aguarde'" afirmava o defeito e mudou junto.
+
 **Não medido:** a qualidade da voz no celular do cliente (G.711 da operadora); a tecla em
 outras operadoras além da da Totus (RFC 4733, medido no passo zero B do plano); o cliente que
 digita durante o aviso em aparelho que manda a tecla dentro do áudio; o fim da fala quando o
 cliente desliga chegar como `PlaybackFinished` `failed` (lido no código do Asterisk); se a
-música de espera recomeça do início a cada "aguarde"; a limpeza do Storage numa VPS real.
+música de espera recomeça do início a cada "aguarde"; a limpeza do Storage numa VPS real. Do
+som de chamando (1.50.2), tudo o que é áudio: o tom no canal do cliente da operadora, sem
+soluço de um ramal ao próximo, e a ponte se formando depois de ele parar — só na VPS.

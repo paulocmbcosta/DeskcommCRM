@@ -15,10 +15,14 @@
  *             time fora do horário, com a fala pronta → "fora do horário" e
  *             desliga (sem "Ligar de volta"); aviso de instabilidade vigente →
  *             toca o aviso INTEIRO; então toca UM ramal por vez, quem atendeu
- *             menos hoje primeiro, 20 s cada, 2 voltas → ponte. Quem espera
- *             ouve "aguarde", música, e o "aguarde" de novo a cada ~40 s, até
- *             2 min contados da entrada na fila. Esgotou: "ninguém atendeu" e
- *             desliga, e a ligação vira "Ligar de volta" na Central.
+ *             menos hoje primeiro, 20 s cada, 2 voltas → ponte. Enquanto um
+ *             ramal toca, quem ligou ouve o SOM DE CHAMANDO (DYD-52): o da
+ *             operadora, na ligação ainda não atendida; o tom `ring` da zona
+ *             `br`, em banda, na já atendida (URA, aviso, ou a régua dos 45 s).
+ *             Sem ninguém livre, e só então: "aguarde", música, e o "aguarde"
+ *             de novo a cada ~40 s, até 2 min contados da entrada na fila.
+ *             Esgotou: "ninguém atendeu" e desliga, e a ligação vira "Ligar de
+ *             volta" na Central.
  *   FEITA     o ramal disca `c-<voice_call_id>` → confere que a API criou essa
  *             ligação para ESTE atendente há menos de 60 s → cria a perna da
  *             operadora, põe as duas numa ponte e disca.
@@ -66,7 +70,7 @@ import {
 } from "@/lib/telefonia/ura";
 import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 
-import type { CanalAri } from "./ari";
+import { ErroAri, type CanalAri } from "./ari";
 import { FalasNoAr, semFalaNoAr, type FalaDaLigacao, type PortaFalas } from "./fala-no-ar";
 import { donoDoEndpoint, endpointDoCanal, enderecoDeSaida, idDoRamal } from "./pjsip";
 import type { PoliticaDeGravacao } from "./repositorio-das-gravacoes";
@@ -276,13 +280,30 @@ interface FilaDaLigacao {
   avisoPendente: FalaDoBanco | null;
   /**
    * Quando os TOQUES começaram (depois do aviso de instabilidade, §5.1.3) — a
-   * régua do "tocou demais sem atender: atende e segura".
+   * régua do "tocou demais sem atender: atende e segue chamando em banda".
    */
   inicioDosToques: number;
   toque: EstadoDoToque;
   /** O ramal que está tocando agora. */
   ramal: { canal: string; userId: string } | null;
-  /** Segurando na linha ("aguarde" e música): o cliente já está esperando. */
+  /**
+   * O playback do SOM DE CHAMANDO no canal do cliente (o tom `ring` da zona
+   * `br`), enquanto um ramal toca na ligação já atendida (DYD-52). Um só do
+   * primeiro ramal ao último: trocar de atendente não o reinicia.
+   */
+  chamando: string | null;
+  /** Quando o chamar no ar começou, e quantas vezes seguidas ele acabou sozinho cedo demais. */
+  inicioDoChamar: number;
+  chamarCurto: number;
+  /**
+   * O Asterisk não tocou o som de chamando: a música entrou no lugar dele —
+   * nunca o "aguarde", que diria "todos ocupados" a quem está sendo chamado.
+   */
+  musicaNoChamar: boolean;
+  /**
+   * Segurando na linha ("aguarde" e música): ninguém estava livre. Dali em
+   * diante a música fica, mesmo quando alguém fica livre e o ramal toca.
+   */
   segurando: boolean;
   /** Sem ninguém disponível, esperando a vez. */
   esperando: boolean;
@@ -367,14 +388,25 @@ interface Recuperada {
 
 type Ligacao = Recebida | Feita | Recuperada;
 
-/** Depois de tocar tanto sem atender, a rede pode derrubar a ligação: atende e segue na fila. */
-const ATENDER_E_SEGURAR_APOS_MS = 45_000;
+/**
+ * Depois de tocar tanto sem atender, a rede pode derrubar a ligação: atende e
+ * segue na fila — com o som de chamando em banda, não com a fala de espera.
+ */
+const ATENDER_E_CHAMAR_APOS_MS = 45_000;
 /** Ligação de saída: prazo para a pessoa do outro lado atender. */
 const PRAZO_DA_SAIDA_S = 60;
 /** A API cria a voice_calls e o navegador disca logo em seguida — mais que isto é reuso. */
 const VALIDADE_DO_PEDIDO_DE_SAIDA_MS = 60_000;
 /** Música entre um "aguarde" e o próximo (desenho §5.2.4: ~40 s). */
 export const REPETIR_AGUARDE_MS = 40_000;
+
+/**
+ * O chamar que acaba `done` sozinho em menos que isto não chegou a tocar de
+ * verdade (o tom `ring` é contínuo: só acaba parado). Recomeçar sem teto
+ * inundaria a ARI; no `RECOMECOS_RAPIDOS_DO_CHAMAR`-ésimo seguido, música.
+ */
+const CHAMAR_CURTO_MS = 2_000;
+const RECOMECOS_RAPIDOS_DO_CHAMAR = 3;
 
 const SEM_FALAS_GERAIS: FalasGerais = Object.freeze({ aguarde: null, ninguem: null, foraDoHorario: null });
 
@@ -386,6 +418,13 @@ export class ControladorDeChamadas {
   private readonly porId = new Map<string, Ligacao>();
   /** Última causa Q.850 vista por canal (ChannelHangupRequest), para quando o fim chega sem ela. */
   private readonly causas = new Map<string, number>();
+  /**
+   * A que ligação pertence cada SOM DE CHAMANDO no ar. Mapa próprio, fora da
+   * mecânica da fala: o `PlaybackFinished` do chamar nunca chega a `FalasNoAr`
+   * enquanto está aqui, e o do chamar que paramos (já fora daqui) cai lá num
+   * mapa em que nunca esteve — não é, em caminho nenhum, o fim de uma fala.
+   */
+  private readonly chamandoPorReproducao = new Map<string, Recebida>();
   /**
    * Por onde os relógios (toque vencido, reavaliar a fila, repetir o "aguarde")
    * entram. O laço do worker troca por sua fila serial, para um relógio nunca
@@ -433,6 +472,11 @@ export class ControladorDeChamadas {
     return this.falaNoAr.noAr;
   }
 
+  /** Quantos sons de chamando estão no ar (para testes: o mapa esvazia). */
+  get chamandosNoAr(): number {
+    return this.chamandoPorReproducao.size;
+  }
+
   async tratar(ev: EventoAri): Promise<void> {
     try {
       switch (ev.type) {
@@ -454,8 +498,12 @@ export class ControladorDeChamadas {
         }
         case "Dial":
           return await this.aoDiscar(ev as Extract<EventoAri, { type: "Dial" }>);
-        case "PlaybackFinished":
-          return await this.falaNoAr.aoTerminar(ev as Extract<EventoAri, { type: "PlaybackFinished" }>);
+        case "PlaybackFinished": {
+          const fim = ev as Extract<EventoAri, { type: "PlaybackFinished" }>;
+          const id = fim.playback?.id;
+          if (id && this.chamandoPorReproducao.has(id)) return await this.aoTerminarOChamar(fim);
+          return await this.falaNoAr.aoTerminar(fim);
+        }
         case "ChannelDtmfReceived":
           return await this.aoReceberTecla(ev as Extract<EventoAri, { type: "ChannelDtmfReceived" }>);
         default:
@@ -548,6 +596,10 @@ export class ControladorDeChamadas {
         inicioDosToques: this.agora(),
         toque: ESTADO_INICIAL,
         ramal: null,
+        chamando: null,
+        inicioDoChamar: 0,
+        chamarCurto: 0,
+        musicaNoChamar: false,
         segurando: false,
         esperando: false,
         inicioDaEspera: null,
@@ -691,7 +743,7 @@ export class ControladorDeChamadas {
     return this.comecarOsToques(l);
   }
 
-  /** Os ramais. A régua dos 45 s ("atende e segura") conta daqui, depois do aviso. */
+  /** Os ramais. A régua dos 45 s ("atende e chama em banda") conta daqui, depois do aviso. */
   private async comecarOsToques(l: Recebida): Promise<void> {
     if (l.fim) return;
     l.fila.inicioDosToques = this.agora();
@@ -711,16 +763,115 @@ export class ControladorDeChamadas {
     await this.ari.atender(l.cliente);
   }
 
-  /** O cliente vai esperar: "aguarde" (se tocar) e a música no fim dele; sem "aguarde", música direto. */
+  /**
+   * O cliente vai esperar — ninguém está livre: "aguarde" (se tocar) e a música
+   * no fim dele; sem "aguarde", música direto. Vindo do chamar (a lista
+   * esvaziou enquanto um ramal tocava), o chamar para logo antes do "aguarde":
+   * na ARI, um playback pedido com outro no ar entra na fila atrás dele, e o
+   * chamar só acaba quando é parado.
+   */
   private async segurarNaLinha(l: Recebida) {
     if (l.fila.segurando || l.fim) return;
     l.fila.segurando = true;
     const aguarde = l.fila.falasGerais.aguarde;
-    if (aguarde && (await this.falaNoAr.porNoAr(l, aguarde, "espera", { valeTocar: () => this.aindaEspera(l) })) === "no_ar") {
+    const pararOChamar = async () => {
+      await this.pararChamando(l);
+      if (l.fila.musicaNoChamar) await this.ari.pararMusica(l.cliente).catch(() => undefined);
+    };
+    if (
+      aguarde &&
+      (await this.falaNoAr.porNoAr(l, aguarde, "espera", { valeTocar: () => this.aindaEspera(l), antesDeTocar: pararOChamar })) ===
+        "no_ar"
+    ) {
       return;
     }
     if (l.fim || l.atendidaPor) return;
+    await this.pararChamando(l);
     await this.garantirAtendida(l);
+    await this.ari.musicaDeEspera(l.cliente).catch(() => undefined);
+  }
+
+  /**
+   * Há um ramal tocando e a ligação precisa de som EM BANDA — já foi atendida
+   * (URA, aviso) ou vai ser agora (régua dos 45 s, segunda volta): o SOM DE
+   * CHAMANDO, o tom `ring` da zona `br` (o mesmo "tu… tu…" da operadora, e o
+   * mesmo da ligação feita), no canal do cliente. Nunca o "aguarde": ele diz
+   * "todos ocupados" a quem está sendo chamado (DYD-52, medido em produção).
+   *
+   * Não faz nada se o chamar já está no ar (trocar de atendente não o
+   * reinicia) nem se o cliente já está com música — quem esperou porque
+   * ninguém estava livre segue com ela quando alguém fica livre.
+   */
+  private async chamarNaLinha(l: Recebida): Promise<void> {
+    if (l.fim || l.fila.segurando || l.fila.chamando || l.fila.musicaNoChamar) return;
+    await this.garantirAtendida(l);
+    let id: string;
+    try {
+      ({ id } = await this.ari.tocarTom(l.cliente, "ring"));
+    } catch (e) {
+      // Canal que sumiu (404) ou saiu do Stasis (409) é o cliente desligando:
+      // a ligação acaba agora, pelo fim normal, como na fala (`canalSumiu`).
+      if (e instanceof ErroAri && (e.status === 404 || e.status === 409)) {
+        return this.encerrarRecebida(l, l.encerrando ?? "cliente_desligou");
+      }
+      return this.musicaNoLugarDoChamar(l, mensagemDe(e, 160));
+    }
+    if (l.fim) {
+      await this.ari.pararReproducao(id).catch(() => undefined);
+      return;
+    }
+    l.fila.chamando = id;
+    l.fila.inicioDoChamar = this.agora();
+    this.chamandoPorReproducao.set(id, l);
+  }
+
+  /** O chamar sai do ar. O `PlaybackFinished` dele, que chega depois, já não o acha no mapa. */
+  private async pararChamando(l: Recebida): Promise<void> {
+    const id = l.fila.chamando;
+    if (!id) return;
+    l.fila.chamando = null;
+    this.chamandoPorReproducao.delete(id);
+    await this.ari
+      .pararReproducao(id)
+      .catch((e) => this.log.warn("telefonia: som de chamando não parado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
+  }
+
+  /**
+   * O fim do playback do CHAMAR que ainda estava no ar — nunca o de uma fala.
+   * O tom só acaba quando é parado (ou quando o canal cai), então isto é raro:
+   *  - o cliente desligando (`failed` depois do pedido de desligar): nada, o fim vem atrás;
+   *  - `failed` sem o cliente sair: o Asterisk não tocou — a música no lugar;
+   *  - acabou sozinho e ainda está chamando: recomeça — mas o que acaba logo ao
+   *    começar, `RECOMECOS_RAPIDOS_DO_CHAMAR` vezes seguidas, vira música (não
+   *    inunda a ARI com um pedido atrás do outro).
+   */
+  private async aoTerminarOChamar(ev: Extract<EventoAri, { type: "PlaybackFinished" }>): Promise<void> {
+    const id = ev.playback.id;
+    const l = this.chamandoPorReproducao.get(id);
+    this.chamandoPorReproducao.delete(id);
+    if (!l || l.fim || l.fila.chamando !== id) return;
+    l.fila.chamando = null;
+    if (l.clienteSaindo || l.atendidaPor || l.encerrando || l.fila.segurando) return;
+    if (ev.playback.state === "failed") return this.musicaNoLugarDoChamar(l, "o playback do tom terminou 'failed'");
+    l.fila.chamarCurto = this.agora() - l.fila.inicioDoChamar < CHAMAR_CURTO_MS ? l.fila.chamarCurto + 1 : 0;
+    if (l.fila.chamarCurto >= RECOMECOS_RAPIDOS_DO_CHAMAR) {
+      return this.musicaNoLugarDoChamar(
+        l,
+        `o tom acabou sozinho ${l.fila.chamarCurto} vezes seguidas, cada uma em menos de ${CHAMAR_CURTO_MS} ms`,
+      );
+    }
+    return this.chamarNaLinha(l);
+  }
+
+  /**
+   * O Asterisk não tocou o som de chamando: a MÚSICA no lugar dele, para o
+   * cliente não ficar em silêncio com o ramal tocando. Não insiste no tom — o
+   * próximo ramal segue com a música —, e o "aguarde" continua sendo só de
+   * quem não tem ninguém livre (`segurarNaLinha` para a música antes dele).
+   */
+  private async musicaNoLugarDoChamar(l: Recebida, erro: string): Promise<void> {
+    this.log.warn("telefonia: o Asterisk não tocou o som de chamando — música no lugar", { voice_call: l.vcId, erro });
+    l.fila.musicaNoChamar = true;
     await this.ari.musicaDeEspera(l.cliente).catch(() => undefined);
   }
 
@@ -759,12 +910,14 @@ export class ControladorDeChamadas {
     }
 
     l.fila.toque = p.estado;
-    // Tocou demais sem ninguém pegar (ou começou a segunda volta): atende e
-    // segura — a rede costuma derrubar ligação que só chama. E a ligação que já
-    // foi atendida (pelo aviso, pela URA) não espera o ramal em silêncio.
-    if (l.atendidaPelaRede || p.estado.volta > 1 || this.agora() - l.fila.inicioDosToques >= ATENDER_E_SEGURAR_APOS_MS) {
-      await this.segurarNaLinha(l);
-      // O "aguarde" pode ter encontrado o canal do cliente já fechado: não toca ramal para ninguém.
+    // Há quem chamar: o cliente ouve o SOM DE CHAMANDO, nunca o "aguarde" (DYD-52).
+    // Ainda não atendida, o chamar é o da operadora (o 180 de `indicarChamando`)
+    // — até tocar demais sem ninguém pegar, ou começar a segunda volta: a rede
+    // costuma derrubar ligação que só chama, então atende e passa ao chamar em
+    // banda. A ligação já atendida (pelo aviso, pela URA) o ouve desde o 1º ramal.
+    if (l.atendidaPelaRede || p.estado.volta > 1 || this.agora() - l.fila.inicioDosToques >= ATENDER_E_CHAMAR_APOS_MS) {
+      await this.chamarNaLinha(l);
+      // O chamar pode ter encontrado o canal do cliente já fechado: não toca ramal para ninguém.
       if (l.fim) return;
     }
 
@@ -1036,7 +1189,10 @@ export class ControladorDeChamadas {
     }
   }
 
-  /** Daqui a ~40 s: para a música, toca o "aguarde" de novo, e a música volta no fim dele. */
+  /**
+   * Daqui a ~40 s: para a música, toca o "aguarde" de novo, e a música volta no
+   * fim dele. Com um ramal tocando nessa hora, não fala: rearma para o próximo ciclo.
+   */
   private armarEspera(l: Recebida) {
     pararRelogio(l.fila.relogios, "aguarde");
     if (l.fim) return;
@@ -1046,6 +1202,10 @@ export class ControladorDeChamadas {
       void this.emFila(async () => {
         const aguarde = l.fila.falasGerais.aguarde;
         if (!aguarde || l.fim || l.atendidaPor || l.encerrando || l.fala.atual) return;
+        // Alguém ficou livre e o ramal dele está tocando: o "aguarde" diria "todos
+        // ocupados" a quem está sendo chamado. A música segue, e o relógio tenta de
+        // novo no próximo ciclo — se a lista tiver esvaziado, aí ele fala.
+        if (l.fila.ramal) return this.armarEspera(l);
         let parouAMusica = false;
         const tocando =
           (await this.falaNoAr.porNoAr(l, aguarde, "espera", {
@@ -1074,6 +1234,8 @@ export class ControladorDeChamadas {
       (await this.falaNoAr.porNoAr(l, ninguem, "ninguem", {
         antesDeTocar: async () => {
           await this.falaNoAr.pararAtual(l);
+          // O chamar só acaba parado: pedida com ele no ar, a fala esperaria atrás dele para sempre.
+          await this.pararChamando(l);
           if (l.atendidaPelaRede) await this.ari.pararMusica(l.cliente).catch(() => undefined);
         },
       })) === "no_ar"
@@ -1095,8 +1257,12 @@ export class ControladorDeChamadas {
     this.pararRelogios(l);
     l.atendidaPor = l.fila.ramal.userId;
 
-    // Atendeu no meio do "aguarde": a fala para, e a ponte se forma.
+    // Atendeu no meio do "aguarde": a fala para, e a ponte se forma. O chamar
+    // também para ANTES da ponte: os comandos de um canal na ARI rodam em fila,
+    // e a entrada na ponte esperaria o fim do playback no ar — que, no chamar,
+    // só vem quando ele é parado (lido no código do Asterisk, não medido).
     await this.falaNoAr.pararAtual(l);
+    await this.pararChamando(l);
     if (l.atendidaPelaRede) {
       await this.ari
         .pararMusica(l.cliente)
@@ -1129,6 +1295,9 @@ export class ControladorDeChamadas {
     l.ura = null;
     this.falaNoAr.esquecer(l);
     if (l.gravacao?.gravando) await this.pararGravacao(l.vcId);
+    // O chamar ANTES dos canais: derrubar o canal com o tom tocando faz o
+    // Asterisk registrar "Playback failed" (medido na ligação feita, `encerrarFeita`).
+    await this.pararChamando(l);
     const outros = [l.cliente, l.fila.ramal?.canal].filter((c): c is string => Boolean(c));
     for (const c of outros) {
       this.porCanal.delete(c);

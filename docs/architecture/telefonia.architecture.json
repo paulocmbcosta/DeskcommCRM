@@ -112,7 +112,7 @@
       "lane": "worker",
       "col": 3,
       "type": "backend",
-      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: se o número toca um MENU, a URA (fase 2); depois a FILA DO TIME: fora do horário com a fala pronta → a fala e desliga (`after_hours`, sem Central); aviso de instabilidade vigente → tocado INTEIRO; \"aguarde\" e música, o aguarde de novo a cada ~40 s; esgotou → \"ninguém atendeu\"; toca UM ramal por vez e faz a ponte; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s), monta o destino com o prefixo DO TRONCO (`enderecoDeSaida`) e disca; a perna que acaba sem atender vira motivo pela regra de `fim-da-saida.ts`, e o chamar local para antes de o ramal cair; `recuperar()` após reinício do worker"
+      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: se o número toca um MENU, a URA (fase 2); depois a FILA DO TIME: fora do horário com a fala pronta → a fala e desliga (`after_hours`, sem Central); aviso de instabilidade vigente → tocado INTEIRO; toca UM ramal por vez e faz a ponte — enquanto toca, o SOM DE CHAMANDO (o da operadora, ou o tom `ring` da zona `br` em banda na ligação já atendida; DYD-52); sem ninguém livre, e só então, \"aguarde\" e música, o aguarde de novo a cada ~40 s; esgotou → \"ninguém atendeu\"; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s), monta o destino com o prefixo DO TRONCO (`enderecoDeSaida`) e disca; a perna que acaba sem atender vira motivo pela regra de `fim-da-saida.ts`, e o chamar local para antes de o ramal cair; `recuperar()` após reinício do worker"
     },
     {
       "id": "distribuicao",
