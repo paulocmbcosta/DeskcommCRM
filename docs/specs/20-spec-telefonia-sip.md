@@ -139,7 +139,27 @@ Navegador do atendente (JsSIP) ────────────────�
    passa para o próximo. São 2 voltas.
 5. Ninguém disponível: `answer` + música em espera, reavaliando a cada 5 s, até 2 min.
 6. Fim: `ended`, duração, registro na conversa, atividade no lead. Perdida vira
-   `agent_inbox_items` `voice_call_missed`.
+   `agent_inbox_items` `voice_call_missed`, cujo texto nomeia o time que ficou com a ligação
+   ("Ninguém do time X atendeu. Ligue de volta pela conversa."), no idioma da organização —
+   desde a fase 2, para TODA perdida, e não só a que passou por menu.
+
+**Recebida com a fase 2, versão 1 (URA e falas, migration 0288).** O desenho inteiro está em
+[`docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`](../superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md)
+(§4 e §5); o que muda nos passos acima:
+- O número aponta para um time **ou** para um menu (`channel_sessions.sip_menu_id`, CHECK:
+  nunca os dois). Com menu, o worker atende e entrega a ligação à URA, uma regra pura
+  (`lib/telefonia/ura.ts`): a tecla escolhe o time; o silêncio e a tecla errada repetem o
+  menu, que toca no máximo 3 vezes, e depois vai ao time padrão (`default_no_input` ou
+  `default_invalid`). A conversa acompanha o time escolhido, salvo se já tem atendente humano.
+- Na fila do time, antes do passo 3: fora do horário com a fala pronta → a fala e desliga
+  (`end_reason = after_hours`, sem aviso na Central; sem a fala, segue como acima); aviso de
+  instabilidade vigente → tocado inteiro. No passo 5, "aguarde" a cada ~40 s entre a música;
+  esgotou → "ninguém atendeu" e desliga.
+- As falas são arquivos μ-law no volume `telefonia-falas` (`/var/lib/telefonia/falas`), que o
+  worker copia do Storage e o Asterisk lê só leitura. **A ligação nunca chama a ElevenLabs**:
+  só a prévia da tela sintetiza (D15, vigiado por
+  `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`). Fala sem arquivo é pulada e vira
+  `phone_prompt_unplayable` na Central.
 
 **Feita**
 1. `POST /api/v1/telefonia/chamadas` com `{ contact_id | numero, numero_da_empresa_id? }`. A
@@ -247,8 +267,22 @@ Navegador do atendente (JsSIP) ────────────────�
 - O registro da ligação na conversa é uma `messages` `type=system`, `sent_via=system`,
   `direction=outbound`, `status=sent`, `external_id = ligacao:<voice_call_id>` (entra uma
   vez só), com `metadata.voice_call` (`id`, `direcao`, `desfecho`, `duracao_ms`,
-  `atendente_id`, `atendente_nome`). Não é `inbound` de propósito: `inbound` emite
-  `message.received`, que acorda o agente de IA e o termômetro de espera.
+  `atendente_id`, `atendente_nome` e, desde a fase 2, `motivo` — o `end_reason`, que com
+  `after_hours` muda o cartão —, `menu` e `ouviu_aviso`). `menu` é nulo quando a ligação não
+  passou por menu; senão segue o schema `MenuDaLigacao` de `lib/telefonia/vocabulario.ts`:
+  `nome` do menu e `time_nome` DAQUELA hora (renomear ou arquivar depois não reescreve a
+  história), `desfecho` (`chosen` / `default_no_input` / `default_invalid`, nulo quando a
+  URA não decidiu), `tecla` e `desligou` (o cliente desligou no menu). Quem escreve é
+  `registrarNaConversa` (`lib/channels/telefonia/repositorio.ts`); quem lê o menu passa
+  SEMPRE por `menuDaLigacao`, que devolve `null` para registro malformado em vez de contar
+  uma história errada — nunca pelo path cru. Os campos da fase 1 não mudaram. Não é `inbound`
+  de propósito: `inbound` emite `message.received`, que acorda o agente de IA e o termômetro
+  de espera.
+- **Fase 2, versão 1 (migration 0288):** `phone_prompts` e `phone_settings` (as falas e a
+  voz), `phone_menus` e `phone_menu_options`, `channel_sessions.sip_menu_id`,
+  `attendance_teams.phone_emergency_*`, `voice_calls.menu_id` / `menu_digit` / `menu_outcome`
+  / `emergency_heard_at`, e o bucket privado `phone-prompts`. RLS `_select` e FK composta
+  `(organization_id, coluna)` em toda referência nova. Colunas e razões no §3.1 do desenho.
 
 ## 6. Política de número (antifraude)
 
@@ -303,14 +337,25 @@ Navegador do atendente (JsSIP) ────────────────�
   onde o atendente registra o que foi falado), faixa "Para falar com o cliente, ligue" com o
   Botão Ligar, e o cartão da ligação (sentido, quem atendeu, duração, desfecho). Uma resposta
   de texto que escape do compositor é recusada pela API com 422 antes de gravar.
+- **Fase 2, versão 1** (nenhuma rota de tela nova; §6 do desenho): em Conexões › Telefone, as
+  sub-abas **Menus** e **Voz e falas** (`?aba=telefone&sub=menus|falas`) e, em Números,
+  "Quando ligarem": tocar no time ou tocar o menu; em Credenciais de IA, o cartão
+  "ElevenLabs (voz da URA)"; em Configurações › Times, o cartão "Aviso de instabilidade
+  (telefone)"; a faixa do aviso no topo de todo o CRM; e o cartão da ligação conta o que a
+  URA fez ("No menu X, digitou uma tecla que não existe e foi para o time padrão, Y"), se o
+  cliente ouviu o aviso e a ligação fora do horário. As telas da telefonia nunca mostram a
+  mensagem crua de um erro sem corpo (504, página HTML do proxy): o `apiClient` o entrega
+  como `ApiErrorSemCorpo`, e a frase vem de `mensagemDoServidor`.
 
 ## 8. Fases
 
 | Fase | Conteúdo | Estado |
 |---|---|---|
 | F0 | Prova de conceito | medida (§1) |
-| **F1 + distribuição** (release A) | §4–§7 | em implementação |
-| F2 | URA configurável, horário do time e mensagem de fora do horário com WhatsApp, anúncio de "ninguém disponível", transferência | a fazer |
+| **F1 + distribuição** (release A) | §4–§7 | publicada — para saber em que versão: `awk '/^## \[/{v=$2} /Telefone no CRM — fazer e receber/{print v; exit}' CHANGELOG.md` |
+| F2 v1 | URA e falas: menu por tecla com time padrão, "aguarde", "ninguém atendeu", fora do horário pela agenda do time (o texto sugerido traz o WhatsApp), aviso de instabilidade por time. Desenho: `docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`; plano: `docs/superpowers/plans/2026-09-28-telefonia-fase2-v1-ura.md`; migration 0288 | implementada; prova na VPS pendente (J36 do mapa de jornadas) — publicada? `grep -n 'Menu de voz (URA)' CHANGELOG.md` |
+| F2 v2 | Transferência direta e consultada (§5.3 do mesmo desenho) | a fazer |
+| F2 v3 | Ramais (§5.4 do mesmo desenho) | a fazer |
 | F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada | a fazer |
 | F4 | Transcrição em português dentro da conversa | a fazer |
 | F5 | Relatórios por time | a fazer |
@@ -332,6 +377,13 @@ Navegador do atendente (JsSIP) ────────────────�
   script, com `docker` dublado; que o `up -d` cria o Asterisk com o profile ligado é o
   comportamento do docker compose, medido só com `docker compose config --services`.
 - Comportamento com mais de um registro da mesma conta ao mesmo tempo (dev + produção).
+- **Fase 2, versão 1** (a prova na VPS é a Task 29 do plano; casos na J36 do mapa de
+  jornadas): a URA numa ligação real (tecla, repetição, time padrão, desligar no menu); as
+  falas tocadas pelo Asterisk de produção a partir do volume; o fim da fala quando o cliente
+  desliga chegar como `PlaybackFinished` com `state: "failed"` (lido no código do Asterisk,
+  não medido); se a música de espera recomeça do início a cada "aguarde"; a qualidade da voz
+  no celular do cliente. Medido antes de escrever a URA: a fala toca por caminho absoluto num
+  volume só leitura, e as teclas da operadora da Totus chegam por RFC 4733 (§2 do desenho).
 
 ## 10. Living System Checklist — F1 + distribuição
 

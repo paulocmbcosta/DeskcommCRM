@@ -31,13 +31,15 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
 
 1. **O Asterisk toca o nosso arquivo?**
    - Onde: contêiner da imagem `deskcomm-asterisk`, local, sem SIP e sem operadora.
-   - O que: gerar um `.ulaw` na ElevenLabs (`output_format=ulaw_8000`), montar num volume e tocar pela ARI com caminho absoluto (`sound:/var/lib/deskcomm/falas/<org>/<hash>`).
+   - O que: gerar um `.ulaw` na ElevenLabs (`output_format=ulaw_8000`), montar num volume e tocar pela ARI com caminho absoluto (`sound:/var/lib/telefonia/falas/<org>/<hash>`).
    - Critério: sai `PlaybackFinished` sem erro, com o `format_pcm` carregado e o arquivo legível pelo usuário do Asterisk.
-   - Se o caminho absoluto falhar, montar o volume dentro de `astdatadir` (`/usr/share/asterisk/sounds/deskcomm`) e tocar por caminho relativo.
+   - Se o caminho absoluto falhasse, o plano B era montar o volume dentro de `astdatadir` e tocar por caminho relativo.
+   - **Medido em 2026-09-28 (plano, Task 0): o caminho absoluto funciona** (ramo A), num volume só leitura; o plano B não foi usado. A medição usou `/var/lib/deskcomm/falas`; a implementação trocou para **`/var/lib/telefonia/falas`**, sem o nome do produto (marca própria: o caminho aparece em log, em `docker inspect` e no endereço que a ARI manda tocar, e `tests/unit/branding.test.ts` reprovava). O que a medição provou — caminho absoluto num volume só leitura — vale igual. Onde está: `grep -n "telefonia-falas" docker-compose.prod.yml`.
 2. **As teclas da operadora chegam como `ChannelDtmfReceived`?**
    - Onde: numa ligação real para o 3686-1503, com o log de DTMF ligado no Asterisk de produção. É só log, nada muda no atendimento.
    - Pré-requisitos: autorização do dono e o dono teclando durante a ligação.
    - O tronco anuncia `dtmf_mode=rfc4733`. Se a operadora mandar o DTMF na banda do áudio ou por SIP INFO, a URA precisa de `dtmf_mode=auto` ou `info`, e isso se mede aqui, não na prova final.
+   - **Medido em 2026-09-28 (plano, Task 0B):** as teclas da operadora da Totus chegam por RFC 4733 (`telephone-event/8000`), e o `dtmf_mode=rfc4733` serve. Outras operadoras não foram medidas.
 
 ## 3. Dados
 
@@ -110,21 +112,22 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
    - A rota calcula `content_hash` = sha256 de texto + voz + modelo.
    - Se o objeto `<org>/<hash>.ulaw` já existe no Storage, **reaproveita e não chama a ElevenLabs**.
    - Senão, chama a ElevenLabs uma vez (`POST /v1/text-to-speech/{voice_id}?output_format=ulaw_8000`, header `xi-api-key`, modelo `eleven_multilingual_v2`) e grava o objeto.
-   - Limite de 30 prévias por hora por organização, contra clique repetido, com o limitador Upstash que o CRM já usa.
+   - Limite de 30 prévias por hora por organização, contra clique repetido, com o limitador que o CRM já usa (`checkRateLimit`, janela fixa). Passou do limite: 429 `limite_de_previas` com `Retry-After` — e o `apiClient` do navegador, com `Retry-After` acima de 10 s, não espera nem repete: mostra a mensagem na hora. Reaproveitar do Storage não gasta cota.
 2. **Ouvir.** A tela recebe o áudio da prévia: o navegador converte μ-law em PCM16 e monta um WAV para o `<audio>`. Ouvir de novo não custa nada.
 3. **Salvar e usar.**
    - A linha de `phone_prompts` passa a apontar para o hash da prévia e fica `ready`. Não há chamada à ElevenLabs aqui.
    - A partir desse momento, as ligações tocam o áudio novo.
    - A API recusa salvar um hash cujo objeto não existe no Storage.
 4. **Limpeza.**
-   - Prévia não salva: sai do Storage depois de 24 h.
-   - Áudio antigo: sai quando nenhuma linha o referencia.
-   - Quem limpa é a passada do worker.
+   - Uma regra só cobre os dois casos (prévia não salva e áudio antigo): sai do Storage o objeto **criado há mais de 24 h** que **nenhuma linha de `phone_prompts` referencia**, visto órfão há pelo menos 15 min e reconferido logo antes de cada apagar. Nunca a pasta de uma organização inteira; bucket ausente aborta a passada sem apagar nada.
+   - Quem limpa é a passada do worker, pela API do Storage (cliente de serviço), no máximo a cada 10 min — ela lista o bucket inteiro.
+   - **Limitação aceita na v1:** as 24 h contam da CRIAÇÃO do objeto, não do último uso (§11).
 5. **Levar ao Asterisk.** O volume nomeado `telefonia-falas` é montado com leitura e escrita no `worker` e só leitura no `asterisk`. A passada de 60 s que já reconcilia os troncos passa a:
    - baixar do Storage as falas `ready` que faltam no volume;
-   - apagar do volume os arquivos que nenhuma linha referencia mais.
+   - apagar do volume os arquivos que nenhuma linha referencia mais, 15 min depois de vistos órfãos (a ligação em curso guardou a fala no início, e um "Salvar e usar" no meio dela não pode tirar o arquivo de baixo dela).
+   - O volume é montado no MESMO caminho nos dois serviços, `/var/lib/telefonia/falas`.
 6. **Antes de tocar.** O worker confere se o arquivo existe; se faltar, baixa do Storage na hora. Isso nunca chama a ElevenLabs.
-   - Se não conseguir, a ligação **pula a fala** e segue.
+   - Se não conseguir em até 3 s, a ligação **pula a fala** e segue.
    - Um menu sem áudio manda direto para o time padrão.
    - Abre um item na Central, `phone_prompt_unplayable`.
 7. **Validação na API.** A API recusa apontar um número para um menu enquanto alguma fala dele não estiver `ready`.
@@ -145,19 +148,20 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
    - Opção inválida: toca `invalid`, se houver, e repete.
    - Sem tecla: repete.
    - Depois de 2 repetições: fila do time padrão, com `default_invalid` ou `default_no_input`.
-   - Se o cliente desliga no menu, a ligação vira **perdida**, com aviso "Ligar de volta" no time padrão.
+   - Se o cliente desliga no menu, a ligação vira **perdida**, com aviso "Ligar de volta" no time padrão. O aviso diz o que houve: "O cliente desligou no menu do telefone. Ligue de volta pela conversa." — dizer que o time não atendeu seria falso, porque nada chegou a tocar.
+   - A conversa da ligação **acompanha o time escolhido** (a visibilidade por time, 0281, esconderia do time escolhido a conversa que ficasse no padrão). Conversa com atendente humano não é mexida, e time arquivado não recebe conversa.
 3. **Relógio.** Os 2 min de fila começam a contar na entrada da fila (5.2), não no início da ligação.
 
 ### 5.2 Fila do time (ligação vinda de fora)
 
-1. **Time fora do horário**, pela agenda do time, a mesma que `disponiveisNoTime` já lê: toca `after_hours` e desliga.
+1. **Time fora do horário**, pela agenda do time, a mesma que `disponiveisNoTime` já lê: toca `after_hours` e desliga. **Só com a fala pronta e tocando** (plano, "Decisões de implementação"): sem ela, a ligação segue a fila da fase 1 e acaba perdida com "Ligar de volta" — desligar calado seria beco sem saída para quem ainda não cadastrou a chave.
    - `end_reason=after_hours`, sem aviso na Central.
    - É preciso separar "time fora do horário" de "ninguém disponível", que hoje devolvem a mesma lista vazia.
 2. **Emergência ligada e não vencida** (`active_since` preenchido e `expires_at` nulo ou no futuro): toca o aviso **inteiro**, sem que a tecla interrompa, e segue.
 3. **Toque nos atendentes:** a regra atual fica intacta (rodízio, 20 s, 2 voltas, 120 s de fila).
 4. **Se o cliente precisa esperar:** toca `waiting`, depois a música, e repete `waiting` a cada ~40 s (para a música, toca a fala, volta a música).
 5. **Se um atendente atende no meio de uma fala:** a fala para e a ponte se forma.
-6. **Esgotou:** toca `nobody` e desliga. Vira perdida com aviso, como hoje.
+6. **Esgotou:** toca `nobody` e desliga. Vira perdida com aviso, como hoje — e o aviso passou a nomear o time que ficou com a ligação ("Ninguém do time X atendeu. Ligue de volta pela conversa."), no idioma da organização. Isso vale para toda ligação perdida, inclusive a do número que aponta direto para um time.
 
 ### 5.3 Transferência (versão 2)
 
@@ -218,7 +222,7 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
 1. **Credenciais de IA** (`/app/ai/credentials`):
    - cartão "ElevenLabs (voz da URA)";
    - a chave é validada listando as vozes da conta, e a tela mostra os 4 últimos dígitos.
-2. **Conexões › Telefone** (`/app/connections`), com abas **Números · Menus · Voz e falas** (`?aba=`):
+2. **Conexões › Telefone** (`/app/connections`), com abas **Números · Menus · Voz e falas** (`?aba=telefone&sub=menus|falas` — `?aba=` já escolhe o canal, então a aba de dentro mora em `?sub=`, como em `?aba=oficial&sub=templates`):
    - **Voz e falas:**
      - escolha da voz numa lista das vozes da conta, com "Ouvir amostra";
      - as três falas gerais, com texto sugerido, "Gerar prévia", "Ouvir" e "Salvar e usar" (§4), e o estado (em uso, prévia não salva, falhou com motivo);
@@ -239,7 +243,7 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
    - aparece para todos os membros da organização enquanto houver aviso ligado;
    - texto: "Aviso de instabilidade ligado no telefone do <time> · desliga às HH:MM";
    - para gerente e admin, tem [Desligar];
-   - aparece e some sem recarregar a página.
+   - aparece e some sem recarregar a página: relida a cada 60 s e na volta do foco (`GET /api/v1/telefonia/emergencias?so=ligados`, a leitura barata), e na hora na aba de quem liga ou desliga. Polling, não Realtime: `attendance_teams` não está na publicação do Realtime (plano, "Decisões de implementação").
 5. **Painel do telefone** (versão 2):
    - **Transferir:** busca por nome ou ramal.
      - As pessoas aparecem como disponível, em ligação ou offline; só as disponíveis podem ser escolhidas.
@@ -249,12 +253,12 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
    - **Quem recebe** vê "Transferida por Ana · cliente João".
    - **Quem recebe de volta** vê "Bruno não atendeu, o cliente voltou".
 6. **Cartão da ligação** (`CartaoDaLigacao`):
-   - a escolha no menu, ou "sem escolha → <time padrão>";
-   - "ouviu o aviso de instabilidade";
+   - a escolha no menu, ou a queda no time padrão. Os textos que a implementação usa (`components/telefonia/CartaoDaLigacao.tsx`): "No menu X, digitou 1 e foi para o time Y"; "No menu X, não digitou nada e foi para o time padrão, Y" (`default_no_input`); "No menu X, digitou uma tecla que não existe e foi para o time padrão, Y" (`default_invalid`); "Desligou no menu X, antes de escolher". Os nomes são os daquela hora, gravados no fim da ligação em `metadata.voice_call.menu` (schema `MenuDaLigacao`, `lib/telefonia/vocabulario.ts`);
+   - "Ouviu o aviso de instabilidade";
    - a corrente de transferências;
-   - o motivo "fora do horário".
+   - o motivo "fora do horário" (título "Ligação fora do horário", sem aviso na Central).
 7. **Membros** (versão 3): coluna "Ramal", editável pelo admin. O painel do telefone mostra "Seu ramal: 201".
-8. **Central:** `phone_prompt_unplayable` e `phone_emergency_expired`, além do `voice_call_missed` que já existe.
+8. **Central:** `phone_prompt_unplayable`, `phone_emergency_expired` e `phone_menu_team_archived` (o menu manda quem não escolhe para um time padrão arquivado — acrescentado na implementação), além do `voice_call_missed` que já existe. Cada um leva à tela que conserta.
 
 ## 7. Segurança
 
@@ -264,6 +268,7 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
   - é cifrada com `AI_CRED_AES_KEY`.
 - **Papéis:**
   - menus, falas e a escolha do destino do número: **admin**, a mesma régua das rotas de `numeros`;
+  - gerar a prévia: **gerente ou admin** (o aviso de emergência precisa dela); ouvir uma fala salva: qualquer membro;
   - aviso de emergência: **gerente ou admin**;
   - transferir: dono atual da ligação, ou gerente ou admin.
 - **Quem manda no worker:**
@@ -273,9 +278,9 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
   - `allow_transfer=no` nos ramais;
   - canais que não são `PJSIP/` continuam sendo derrubados.
 - **Storage e texto:**
-  - o bucket é privado e só o worker lê, com o cliente de serviço;
+  - o bucket é privado e só o cliente de serviço lê e escreve: o worker, e a API com a organização da SESSÃO (a prévia, a conferência do salvar e o áudio da fala salva);
   - o texto das falas passa pelo Zod (tamanho máximo, sem texto vazio).
-- **Auditoria** das mutações: `phone.prompt_saved`, `phone.menu_saved`, `phone.number_destination_changed`, `phone.emergency_activated`, `phone.emergency_deactivated`, `phone.emergency_expired`, `phone.call_transferred` e `phone.extension_changed`.
+- **Auditoria** das mutações: `phone.voice_changed`, `phone.prompt_previewed` (a prévia que foi à ElevenLabs), `phone.prompt_saved`, `phone.menu_saved`, `phone.menu_archived`, `phone.number_destination_changed`, `phone.emergency_activated`, `phone.emergency_deactivated` e `phone.emergency_expired` na versão 1; `phone.call_transferred` e `phone.extension_changed` nas versões 2 e 3. A chave da ElevenLabs é auditada como `ai.credential_created`, sem a chave. Para ver as que estão em vigor: `grep -n '"phone\.' lib/audit/actions.ts`.
 
 ## 8. Living System Checklist
 
@@ -337,3 +342,4 @@ As peças novas do mapa e suas arestas:
 - **Worker reiniciando** no meio de uma URA ou de uma transferência perde o estado daquela ligação. É a mesma limitação das ligações de hoje.
 - **OOM do worker** (investigação separada): a fase 2 acrescenta pouco uso de memória. O paliativo `NODE_OPTIONS` segue valendo.
 - **Ordem da tela perdida** se o worker reiniciar naquele segundo. O atendente clica de novo; a API responde em sucesso só depois de emitir, e o painel reflete o estado real da ligação.
+- **Janela de 24 h do Storage conta da criação** (versão 1, registrado na revisão de segurança): a limpeza apaga o objeto criado há mais de 24 h sem referência, não o sem USO há 24 h. Uma prévia que reaproveita um áudio antigo sem referência — voltar ao texto anterior, por exemplo — pode ser apagada antes do "Salvar e usar". O salvar recusa com `previa_ausente`, e a pessoa gera a prévia de novo, pagando uma síntese. Melhoria futura: usar `last_accessed_at` do Storage, se ele for atualizado no download, ou renovar a idade ao reaproveitar.
