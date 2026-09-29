@@ -120,6 +120,30 @@ export function ehProvedorSuportado(id: string): boolean {
 export const PROVEDOR_DE_VOZ = "elevenlabs";
 
 /**
+ * O rótulo fixo da linha de voz — a outra metade do UNIQUE
+ * `(organization_id, provider, label)` que faz "trocar a chave" substituir em
+ * vez de somar (`lib/telefonia/chave-elevenlabs.ts`, que reexporta esta
+ * constante e a usa nas duas consultas que leem a linha). Mora aqui, ao lado
+ * de `PROVEDOR_DE_VOZ`, pela mesma razão: client-safe, sem import nenhum.
+ */
+export const ROTULO_DA_CHAVE_DE_VOZ = "ElevenLabs";
+
+/**
+ * O CRITÉRIO ÚNICO de "esta linha de `ai_provider_credentials` é a chave de
+ * voz da organização": o provider E o rótulo — nunca só o provider, porque a
+ * coluna é de vocabulário aberto (um clone pode ter outra linha com
+ * `provider = "elevenlabs"` e outro rótulo, e ela não seria a chave de voz).
+ *
+ * `is_active` é OPCIONAL: quem já filtrou por ele na própria consulta SQL
+ * (`estadoDaChaveDeVoz`/`chaveDeVoz`, que já fazem `is_active = true` no
+ * `where`) não precisa repetir aqui; quem filtra um array já carregado na
+ * memória (o cartão da ElevenLabs em Credenciais de IA) sempre o passa.
+ */
+export function ehLinhaDaChaveDeVoz(c: { provider: string; label: string; is_active?: boolean }): boolean {
+  return c.provider === PROVEDOR_DE_VOZ && c.label === ROTULO_DA_CHAVE_DE_VOZ && (c.is_active ?? true);
+}
+
+/**
  * Os `provider` que têm linha em `ai_provider_credentials` e NÃO executam
  * modelo de linguagem. Este é o critério ÚNICO: quem lista credencial para
  * escolher modelo filtra por `ehProvedorDeModelo`/`credenciaisDeModelo`, nunca

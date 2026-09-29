@@ -9701,6 +9701,9 @@ export const DICIONARIO: Traducoes = {
   "A ElevenLabs recusou por limite de uso da conta, e a chave não foi salva. Tente de novo mais tarde.": {
     es: "ElevenLabs rechazó por límite de uso de la cuenta, y la clave no se guardó. Inténtalo de nuevo más tarde.",
   },
+  "Não foi possível confirmar o resultado deste teste. Tente de novo em instantes.": {
+    es: "No se pudo confirmar el resultado de esta prueba. Inténtalo de nuevo en unos instantes.",
+  },
   "Chave da ElevenLabs salva e validada.": { es: "Clave de ElevenLabs guardada y validada." },
   "A ElevenLabs aceitou a chave.": { es: "ElevenLabs aceptó la clave." },
   "Não foi possível salvar a chave. Tente de novo.": { es: "No se pudo guardar la clave. Inténtalo de nuevo." },

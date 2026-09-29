@@ -135,6 +135,20 @@ describe("os estados da chave, com texto claro", () => {
     expect(await screen.findByText("Não cadastrada")).toBeInTheDocument();
     expect(screen.queryByText("…9999")).toBeNull();
   });
+
+  it("outra_falha com motivo CONHECIDO (limite_de_uso) mostra a mensagem própria do motivo", async () => {
+    pintar([linhaDeVoz({ validation_error: "limite_de_uso" })], true);
+    expect(await screen.findByText("Falha no teste")).toBeInTheDocument();
+    expect(screen.getByText(/pediu para esperar um pouco/)).toBeInTheDocument();
+  });
+
+  it("motivo DESCONHECIDO no último teste: nunca mostra o código cru ao usuário", async () => {
+    pintar([linhaDeVoz({ validation_error: "codigo_que_o_cartao_nao_conhece" })], true);
+    expect(await screen.findByText("Falha no teste")).toBeInTheDocument();
+    // Nem o código cru, nem os parênteses que o envolviam antes desta correção.
+    expect(screen.queryByText(/codigo_que_o_cartao_nao_conhece/)).toBeNull();
+    expect(document.body.textContent).not.toContain("codigo_que_o_cartao_nao_conhece");
+  });
 });
 
 describe("Testar usa o revalidate e lê o motivo que ele devolve", () => {
@@ -159,6 +173,18 @@ describe("Testar usa o revalidate e lê o motivo que ele devolve", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Testar" }));
     expect(await screen.findByText("Validada")).toBeInTheDocument();
     expect(efeitos.toastSucesso).toHaveBeenCalledWith("A ElevenLabs aceitou a chave.");
+  });
+
+  it("Testar: se a própria chamada falhar (rede, 500), o erro vai pelo showApiError e o botão volta a habilitar", async () => {
+    pintar([linhaDeVoz()], true);
+    api.post.mockRejectedValueOnce(new ApiError(500, "internal_error", undefined, "req-5", "Erro interno."));
+    const botao = await screen.findByRole("button", { name: "Testar" });
+    await userEvent.click(botao);
+    await waitFor(() => expect(efeitos.erroDaApi).toHaveBeenCalledTimes(1));
+    expect(efeitos.toastSucesso).not.toHaveBeenCalled();
+    // Não trava em "Testando…": o estado da chave (validada) segue o mesmo de antes.
+    expect(await screen.findByRole("button", { name: "Testar" })).toBeEnabled();
+    expect(screen.getByText("Validada")).toBeInTheDocument();
   });
 });
 

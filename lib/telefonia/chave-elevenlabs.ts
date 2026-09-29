@@ -17,14 +17,15 @@
  * chama passa o da sessão — nunca um valor vindo do corpo do pedido.
  */
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
-import { PROVEDOR_DE_VOZ } from "@/lib/ai/pontos/provedores";
+import { PROVEDOR_DE_VOZ, ROTULO_DA_CHAVE_DE_VOZ } from "@/lib/ai/pontos/provedores";
 import { byteaToBuffer, decryptKey, encryptKey } from "@/lib/crypto/aes_gcm";
 import { logger } from "@/lib/logger";
 
-// O texto do provider mora no vocabulário de provedores (é de lá que as listas
-// de modelo sabem excluí-lo); aqui ele só é reexportado.
-export { PROVEDOR_DE_VOZ };
-export const ROTULO_DA_CHAVE_DE_VOZ = "ElevenLabs";
+// O provider e o rótulo moram em `lib/ai/pontos/provedores.ts` (client-safe —
+// é de lá que as listas de modelo sabem excluir o provider, e que o cartão da
+// ElevenLabs em Credenciais de IA lê o MESMO critério via `ehLinhaDaChaveDeVoz`);
+// aqui os dois só são reexportados, para quem já importava deste módulo.
+export { PROVEDOR_DE_VOZ, ROTULO_DA_CHAVE_DE_VOZ };
 
 export interface EstadoDaChaveDeVoz {
   cadastrada: boolean;

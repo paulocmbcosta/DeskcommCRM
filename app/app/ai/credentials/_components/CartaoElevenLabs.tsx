@@ -33,30 +33,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { credentialsListQueryKey, useCredentialsList, type CredentialRow } from "@/hooks/ai/useCredentials";
 import { useT } from "@/hooks/i18n/useT";
-import { PROVEDOR_DE_VOZ } from "@/lib/ai/pontos/provedores";
+import { ehLinhaDaChaveDeVoz } from "@/lib/ai/pontos/provedores";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
 import { ehFalhaDaFala, MENSAGEM_DA_FALHA_DA_FALA, type MotivoDoErroDaElevenLabs } from "@/lib/telefonia/vocabulario";
 import { ArrowsClockwise, Key } from "@/lib/ui/icons";
 
 /**
- * O rótulo fixo da linha de voz. É o MESMO valor de `ROTULO_DA_CHAVE_DE_VOZ`
- * (`lib/telefonia/chave-elevenlabs.ts`) — mas não importado daquele módulo:
- * ele é server-only (usa `node:crypto` para cifrar/decifrar a chave), e este
- * arquivo é `"use client"`. Mantenha os dois iguais.
+ * A chave de voz é a linha deste provider COM este rótulo — o MESMO critério
+ * (`ehLinhaDaChaveDeVoz`, em `lib/ai/pontos/provedores.ts`, client-safe) que
+ * `estadoDaChaveDeVoz`/`chaveDeVoz` (`lib/telefonia/chave-elevenlabs.ts`)
+ * passam para a consulta SQL. Um único predicado: antes, o rótulo "ElevenLabs"
+ * vivia duplicado (uma cópia ali, outra solta aqui).
  */
-const ROTULO_DA_CHAVE_DE_VOZ = "ElevenLabs";
-
-/**
- * A chave de voz é a linha deste provider COM este rótulo — o mesmo critério de
- * `estadoDaChaveDeVoz`/`chaveDeVoz` (chave-elevenlabs.ts), que filtram as duas
- * colunas antes de `is_active`. Só o provider não bastava: a coluna é de
- * vocabulário aberto, e uma linha com `provider = "elevenlabs"` e outro rótulo
- * não é a chave de voz da instalação.
- */
-function ehChaveDeVoz(c: { provider: string; label: string; is_active: boolean }): boolean {
-  return c.provider === PROVEDOR_DE_VOZ && c.label === ROTULO_DA_CHAVE_DE_VOZ && c.is_active;
-}
+const ehChaveDeVoz = ehLinhaDaChaveDeVoz;
 
 type EstadoDaChave =
   | "nao_cadastrada"
@@ -176,12 +166,16 @@ export function CartaoElevenLabs({ credenciaisIniciais, podeEditar }: Props) {
   const estado = estadoDaChave(credencial);
   const motivo = credencial?.validation_error ?? null;
 
+  // Um motivo que NEM `ehFalhaDaFala` reconhece (código novo da ElevenLabs, ou
+  // legado de um clone) não pode aparecer cru na tela — "(unknown_provider)"
+  // não ajuda quem opera, e o código nunca deveria vazar pela interface. A
+  // frase genérica não leva o valor de `motivo`.
   const frase =
     estado !== "outra_falha"
       ? t(FRASE_DO_ESTADO[estado])
       : motivo && ehFalhaDaFala(motivo)
         ? t(MENSAGEM_DA_FALHA_DA_FALA[motivo])
-        : `${t("Falha na validação")} (${motivo ?? ""}).`;
+        : t("Não foi possível confirmar o resultado deste teste. Tente de novo em instantes.");
 
   const salvar = useMutation({
     // A chave vai no corpo desta chamada e só nela: não é `variables` da
