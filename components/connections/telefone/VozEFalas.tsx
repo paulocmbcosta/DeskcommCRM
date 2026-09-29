@@ -63,12 +63,15 @@ const TITULO: Record<FalaGeral, string> = {
   waiting: "Aguarde",
   nobody: "Ninguém atendeu",
   after_hours: "Fora do horário",
+  recording_notice: "Aviso de gravação",
 };
 
 const QUANDO_TOCA: Record<FalaGeral, string> = {
   waiting: "Toca quando o cliente precisa esperar na fila, e de novo a cada 40 segundos, entre a música.",
   nobody: "Toca antes de desligar, quando ninguém do time atendeu a tempo.",
   after_hours: "Toca quando o time está fora do horário, e a ligação é encerrada em seguida.",
+  recording_notice:
+    "Toca no começo de toda ligação gravada: antes do menu, para quem liga; ao atender, para quem recebe a ligação do atendente. Sem este aviso pronto, a gravação não liga.",
 };
 
 /**

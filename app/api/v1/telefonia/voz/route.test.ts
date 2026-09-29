@@ -56,7 +56,7 @@ vi.mock("@/lib/telefonia/elevenlabs", async () => {
 vi.mock("@/lib/telefonia/falas", async () => ({
   ...(await vi.importActual<typeof ModuloFalas>("@/lib/telefonia/falas")),
   vozDaOrganizacao: vi.fn(async () => estado.anterior),
-  falasGeraisDaOrg: vi.fn(async () => ({ waiting: null, nobody: null, after_hours: null })),
+  falasGeraisDaOrg: vi.fn(async () => ({ waiting: null, nobody: null, after_hours: null, recording_notice: null })),
 }));
 
 import { audit } from "@/lib/audit";
@@ -88,7 +88,7 @@ describe("GET /api/v1/telefonia/voz", () => {
       data: {
         chave: { cadastrada: true, last4: "1234" },
         voz: { voice_id: "v1", model_id: "eleven_multilingual_v2" },
-        falas: { waiting: null, nobody: null, after_hours: null },
+        falas: { waiting: null, nobody: null, after_hours: null, recording_notice: null },
       },
     });
   });

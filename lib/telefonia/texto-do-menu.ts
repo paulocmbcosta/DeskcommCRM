@@ -60,6 +60,7 @@ export const TEXTO_SUGERIDO: Record<FalaGeral | "emergency" | "invalid", string>
   after_hours: "Nosso atendimento está fechado agora. Ligue de novo no nosso horário de atendimento. Obrigado pela ligação.",
   emergency: "Estamos com uma instabilidade no momento e já estamos trabalhando para resolver. Obrigado pela paciência.",
   invalid: "Opção inválida.",
+  recording_notice: "Esta ligação poderá ser gravada para garantir a qualidade do atendimento.",
 };
 
 /** O "fora do horário" quando a organização tem um WhatsApp conectado (desenho §4). `{numero}` é trocado. */

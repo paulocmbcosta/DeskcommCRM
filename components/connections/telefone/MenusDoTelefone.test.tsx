@@ -266,7 +266,7 @@ beforeEach(() => {
       oferecida: true,
       chave: { cadastrada: true, last4: "1234" },
       voz: { voice_id: "v1", model_id: "eleven_multilingual_v2" },
-      falas: { waiting: null, nobody: null, after_hours: null },
+      falas: { waiting: null, nobody: null, after_hours: null, recording_notice: null },
     },
     times: [time(T_SUPORTE, "Suporte"), time(T_FINANCEIRO, "Financeiro"), time(T_ANTIGO, "Cobrança antiga", true)],
   };

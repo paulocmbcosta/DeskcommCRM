@@ -9959,6 +9959,9 @@ export const DICIONARIO: Traducoes = {
   "A gravação de uma ligação não foi salva": { es: "La grabación de una llamada no se guardó" },
   "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.": { es: "Verifica que el servicio de telefonía esté funcionando. Las próximas llamadas se siguen grabando; esta grabación se perdió." },
   "Abrir a gravação do telefone": { es: "Abrir la grabación del teléfono" },
+  "Aviso de gravação": { es: "Aviso de grabación" },
+  "Toca no começo de toda ligação gravada: antes do menu, para quem liga; ao atender, para quem recebe a ligação do atendente. Sem este aviso pronto, a gravação não liga.": { es: "Suena al comienzo de toda llamada grabada: antes del menú, para quien llama; al contestar, para quien recibe la llamada del agente. Sin este aviso listo, la grabación no se activa." },
+  "Esta ligação poderá ser gravada para garantir a qualidade do atendimento.": { es: "Esta llamada podrá ser grabada para garantizar la calidad de la atención." },
 };
 
 /**
