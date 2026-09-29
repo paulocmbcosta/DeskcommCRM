@@ -772,6 +772,18 @@ describe("rotuloDoNumero e mensagemDoMenuEmUso", () => {
     );
   });
 
+  it("o nome do número com `$&` e `$\`` sai literal na recusa", () => {
+    expect(mensagemDoMenuEmUso([{ nome: "Loja A$&B", numero: null }])).toBe(
+      "Este menu está em uso por: Loja A$&B. Troque o destino do número antes de arquivar.",
+    );
+    expect(
+      mensagemDoMenuEmUso([
+        { nome: "Ana $` X", numero: null },
+        { nome: "Loja A$&B", numero: null },
+      ]),
+    ).toBe("Este menu está em uso por: Ana $` X, Loja A$&B. Troque o destino dos números antes de arquivar.");
+  });
+
   it("traduz o MODELO antes de pôr o rótulo: a chave do dicionário é o texto com o marcador", () => {
     const vistos: string[] = [];
     const t = (texto: string) => {

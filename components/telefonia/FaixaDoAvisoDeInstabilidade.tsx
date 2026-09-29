@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { Siren } from "@/lib/ui/icons";
 
 import { horaDoAviso, useAvisosNaFaixa, useDesligarAviso } from "./useAvisosDeInstabilidade";
@@ -74,7 +75,7 @@ export function FaixaDoAvisoDeInstabilidade({ oferecida }: { oferecida: boolean 
                   <span>
                     {"· "}
                     {a.expira_em
-                      ? t("desliga às {hora}").replace("{hora}", horaDoAviso(a.expira_em, agora, locale))
+                      ? trocarMarcador(t("desliga às {hora}"), "{hora}", horaDoAviso(a.expira_em, agora, locale))
                       : t("até alguém desligar")}
                   </span>
                 </span>
@@ -83,7 +84,7 @@ export function FaixaDoAvisoDeInstabilidade({ oferecida }: { oferecida: boolean 
                     type="button"
                     size="sm"
                     variant="outline"
-                    aria-label={desligando ? undefined : t("Desligar o aviso do time {time}").replace("{time}", a.time_nome)}
+                    aria-label={desligando ? undefined : trocarMarcador(t("Desligar o aviso do time {time}"), "{time}", a.time_nome)}
                     onClick={() => desligar.mutate(a.team_id)}
                     disabled={desligar.isPending}
                   >

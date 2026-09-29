@@ -141,6 +141,21 @@ describe("os tocadores dizem de qual fala são", () => {
   });
 });
 
+describe("os tocadores com um nome que traz `$&` ou `$\``: o rótulo sai literal", () => {
+  it("OuvirFala", async () => {
+    fetchFalso.mockResolvedValue(new Response(new Uint8Array([0xff]), { status: 200 }));
+    render(<OuvirFala falaId="fala-7" nome="Ana $` X" />);
+    await userEvent.click(screen.getByRole("button", { name: "Ouvir: Ana $` X" }));
+    expect(await screen.findByLabelText("Áudio salvo da fala: Ana $` X")).toBeInstanceOf(HTMLAudioElement);
+  });
+
+  it("OuvirPrevia", () => {
+    render(<OuvirPrevia audio={new Uint8Array([0xff])} nome="A$&B" />);
+    expect(screen.getByLabelText("Prévia da fala: A$&B")).toBeInstanceOf(HTMLAudioElement);
+    expect(screen.getByRole("button", { name: "Ouvir: A$&B" })).toBeInTheDocument();
+  });
+});
+
 describe("OuvirPrevia — o áudio que está na memória da aba", () => {
   it("toca o WAV da prévia sem ir à rede, e 'Ouvir' avisa que a pessoa ouviu", async () => {
     const aoOuvir = vi.fn();

@@ -13,6 +13,7 @@ import { useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useT } from "@/hooks/i18n/useT";
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { ulawParaWav } from "@/lib/telefonia/ulaw";
 import { Play } from "@/lib/ui/icons";
 
@@ -41,7 +42,7 @@ export function OuvirPrevia({
         type="button"
         variant="outline"
         size="sm"
-        aria-label={nome ? t("Ouvir: {fala}").replace("{fala}", nome) : undefined}
+        aria-label={nome ? trocarMarcador(t("Ouvir: {fala}"), "{fala}", nome) : undefined}
         onClick={() => {
           aoOuvir?.();
           void Promise.resolve(el.current?.play()).catch(() => undefined);
@@ -52,7 +53,7 @@ export function OuvirPrevia({
       <audio
         ref={el}
         controls
-        aria-label={nome ? t("Prévia da fala: {fala}").replace("{fala}", nome) : t("Prévia da fala")}
+        aria-label={nome ? trocarMarcador(t("Prévia da fala: {fala}"), "{fala}", nome) : t("Prévia da fala")}
         data-previa-audio
         onPlay={() => aoOuvir?.()}
         className="h-8 max-w-full"

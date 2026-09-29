@@ -44,7 +44,7 @@ import { ehChatDoSite, useChannelSessions, type ChannelSession } from "@/hooks/c
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/types";
-import { TEXTO_SUGERIDO, textoSugeridoForaDoHorario } from "@/lib/telefonia/texto-do-menu";
+import { TEXTO_SUGERIDO, textoSugeridoForaDoHorario, trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import {
   FALAS_GERAIS,
   TAMANHO_MAXIMO_DA_FALA,
@@ -268,7 +268,7 @@ function CartaoDaFalaGeral({
       </div>
       <p className="text-xs text-muted-foreground">{t(QUANDO_TOCA[tipo])}</p>
       <Label htmlFor={idDoCampo} className="sr-only">
-        {t("Texto da fala: {fala}").replace("{fala}", nome)}
+        {trocarMarcador(t("Texto da fala: {fala}"), "{fala}", nome)}
       </Label>
       <Textarea
         id={idDoCampo}

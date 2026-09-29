@@ -29,6 +29,9 @@ describe("trocarMarcador", () => {
     expect(trocarMarcador("Time arquivado ({times}).", "{times}", "A$&B")).toBe("Time arquivado (A$&B).");
     expect(trocarMarcador("{n} e {n}", "{n}", "Cobrança $$")).toBe("Cobrança $$ e Cobrança $$");
     expect(trocarMarcador("sem marcador", "{n}", "x")).toBe("sem marcador");
+    // `$\`` (o que vem ANTES do marcador) e `$'` (o que vem depois) também são literais.
+    expect(trocarMarcador("Ligado às 11:30 por {nome}.", "{nome}", "Ana $` X")).toBe("Ligado às 11:30 por Ana $` X.");
+    expect(trocarMarcador("{n} fim", "{n}", "A$'B")).toBe("A$'B fim");
   });
 });
 

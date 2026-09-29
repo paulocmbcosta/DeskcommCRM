@@ -33,7 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { ApiError } from "@/lib/api/types";
-import { TEXTO_SUGERIDO } from "@/lib/telefonia/texto-do-menu";
+import { TEXTO_SUGERIDO, trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { DURACAO_PADRAO, type DuracaoDaEmergencia } from "@/lib/telefonia/vencimento-da-emergencia";
 import { TAMANHO_MAXIMO_DA_FALA, type AvisoDoTimePublico } from "@/lib/telefonia/vocabulario";
 import { Play, Siren } from "@/lib/ui/icons";
@@ -82,11 +82,12 @@ export function AvisoDeInstabilidadeDoTime({ teamId }: { teamId: string }) {
         <p className="text-sm font-medium">
           {aviso.desde
             ? aviso.ligada_por
-              ? t("Ligado às {hora} por {nome}").replace("{hora}", hora(aviso.desde)).replace("{nome}", aviso.ligada_por)
-              : t("Ligado às {hora}").replace("{hora}", hora(aviso.desde))
+              ? // A hora entra ANTES do nome: um nome com "{hora}" não é trocado.
+                trocarMarcador(trocarMarcador(t("Ligado às {hora} por {nome}"), "{hora}", hora(aviso.desde)), "{nome}", aviso.ligada_por)
+              : trocarMarcador(t("Ligado às {hora}"), "{hora}", hora(aviso.desde))
             : null}
           {" · "}
-          {aviso.expira_em ? t("desliga às {hora}").replace("{hora}", hora(aviso.expira_em)) : t("até alguém desligar")}
+          {aviso.expira_em ? trocarMarcador(t("desliga às {hora}"), "{hora}", hora(aviso.expira_em)) : t("até alguém desligar")}
         </p>
       ) : null}
       {gravada ? (
@@ -94,7 +95,7 @@ export function AvisoDeInstabilidadeDoTime({ teamId }: { teamId: string }) {
           <q className="text-sm text-muted-foreground">{gravada.texto}</q>
           <OuvirFala
             falaId={gravada.id}
-            nome={t("Aviso de instabilidade do time {time}").replace("{time}", aviso.time_nome)}
+            nome={trocarMarcador(t("Aviso de instabilidade do time {time}"), "{time}", aviso.time_nome)}
           />
         </div>
       ) : aviso.ativa ? null : (

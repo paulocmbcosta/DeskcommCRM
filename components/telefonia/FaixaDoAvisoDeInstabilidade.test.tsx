@@ -191,6 +191,12 @@ describe("faixa do aviso de instabilidade — gerente e admin desligam por ela",
     expect(avisos.sucesso).toHaveBeenCalledWith("Aviso de instabilidade desligado.");
   });
 
+  it("o nome do time com `$&` e `$\`` sai literal no rótulo do botão", async () => {
+    servidor.ligados = [aviso({ time_nome: "A$&B $` C" })];
+    pintar();
+    expect(await screen.findByRole("button", { name: "Desligar o aviso do time A$&B $` C" })).toBeInTheDocument();
+  });
+
   it("o aviso já tinha sido desligado por outra pessoa: diz isso, e a faixa some", async () => {
     trocadas.set(`DELETE ${URL_DOS_AVISOS}/t1`, () => {
       servidor.ligados = [];

@@ -521,6 +521,22 @@ describe("cartão do aviso no time", () => {
     TETO_MS,
   );
 
+  it("nome de quem ligou e do time com `$\`` e `$&` saem como foram escritos (o `replace` com string os lia como padrão)", async () => {
+    Object.assign(doTime(), {
+      time_nome: "A$&B",
+      ativa: true,
+      desde: new Date(2026, 8, 29, 11, 30).toISOString(),
+      expira_em: new Date(2026, 8, 29, 13, 30).toISOString(),
+      ligada_por: "Ana $` X",
+      fala: falaGravada(),
+    });
+    pintar();
+    const c = await cartao();
+    await waitFor(() => expect(c).toHaveAttribute("data-ativo", "sim"));
+    expect(c).toHaveTextContent("Ligado às 11:30 por Ana $` X · desliga às 13:30");
+    expect(c.querySelector('[data-ouvir-fala="f9"]')).toHaveAttribute("data-nome", "Aviso de instabilidade do time A$&B");
+  });
+
   it("desligado e sem texto gravado: explica o que o aviso faz", async () => {
     pintar();
     const c = await cartao();

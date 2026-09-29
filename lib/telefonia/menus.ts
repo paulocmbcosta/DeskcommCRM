@@ -55,7 +55,7 @@ import {
   type FalaConferida,
   type PedidoDeSalvar,
 } from "./falas";
-import { numeroParaFalar } from "./texto-do-menu";
+import { numeroParaFalar, trocarMarcador } from "./texto-do-menu";
 import { confirmar, desfazer, emTransacao, type PoolDeTransacao } from "./transacao";
 import { somarUltimosSeteDias, type LinhaDoMenuNaSemana } from "./ultimos-sete-dias";
 import {
@@ -158,8 +158,8 @@ export const MENSAGEM_DO_MENU_EM_USO = {
 export function mensagemDoMenuEmUso(numeros: readonly NumeroDoMenu[], t: (texto: string) => string = (x) => x): string {
   const rotulos = numeros.map(rotuloDoNumero).filter(Boolean);
   if (rotulos.length === 0) return t(MENSAGEM_DA_FALHA_DO_MENU.menu_em_uso);
-  if (rotulos.length === 1) return t(MENSAGEM_DO_MENU_EM_USO.um).replaceAll("{numero}", rotulos[0]!);
-  return t(MENSAGEM_DO_MENU_EM_USO.varios).replaceAll("{numeros}", rotulos.join(", "));
+  if (rotulos.length === 1) return trocarMarcador(t(MENSAGEM_DO_MENU_EM_USO.um), "{numero}", rotulos[0]!);
+  return trocarMarcador(t(MENSAGEM_DO_MENU_EM_USO.varios), "{numeros}", rotulos.join(", "));
 }
 
 /** Todos os times são desta organização e não estão arquivados. Repetidos contam uma vez. */

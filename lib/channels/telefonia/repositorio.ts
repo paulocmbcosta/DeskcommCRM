@@ -20,6 +20,7 @@ import { logger } from "@/lib/logger";
 import { normalizarIdioma, type Idioma } from "@/lib/i18n/idiomas";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { avisoVigente } from "@/lib/telefonia/vencimento-da-emergencia";
 import { MOTIVO_FORA_DO_HORARIO, type DesfechoDoMenu, type MenuDaLigacao } from "@/lib/telefonia/vocabulario";
 
@@ -1023,9 +1024,9 @@ export function textoDoAvisoDePerdida(p: {
   desligouNoMenu: boolean;
   idioma: Idioma;
 }): { titulo: string; corpo: string } {
-  // Substituição por FUNÇÃO: com uma string no 2º argumento, `$&`, `$$` e `$'`
-  // no nome do time (ou no número) viram padrões do `replace` e saem deturpados.
-  const titulo = traduzir("Ligação perdida de {numero}", p.idioma).replace("{numero}", () => p.numero);
+  // Troca LITERAL (`trocarMarcador`): com uma string no 2º argumento do `replace`,
+  // `$&`, `$$` e `$'` no nome do time (ou no número) viram padrões e saem deturpados.
+  const titulo = trocarMarcador(traduzir("Ligação perdida de {numero}", p.idioma), "{numero}", p.numero);
   if (p.desligouNoMenu) {
     return { titulo, corpo: traduzir("O cliente desligou no menu do telefone. Ligue de volta pela conversa.", p.idioma) };
   }
@@ -1033,10 +1034,7 @@ export function textoDoAvisoDePerdida(p: {
   if (nomeDoTime) {
     return {
       titulo,
-      corpo: traduzir("Ninguém do time {time} atendeu. Ligue de volta pela conversa.", p.idioma).replace(
-        "{time}",
-        () => nomeDoTime,
-      ),
+      corpo: trocarMarcador(traduzir("Ninguém do time {time} atendeu. Ligue de volta pela conversa.", p.idioma), "{time}", nomeDoTime),
     };
   }
   return { titulo, corpo: traduzir("Ninguém atendeu. Ligue de volta pela conversa.", p.idioma) };

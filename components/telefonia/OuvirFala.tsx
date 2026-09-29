@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useT } from "@/hooks/i18n/useT";
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { ulawParaWav } from "@/lib/telefonia/ulaw";
 import { Play } from "@/lib/ui/icons";
 
@@ -106,7 +107,7 @@ export function OuvirFala({
       });
   };
 
-  const rotuloDoAudio = nome ? t("Áudio salvo da fala: {fala}").replace("{fala}", nome) : t("Áudio salvo da fala");
+  const rotuloDoAudio = nome ? trocarMarcador(t("Áudio salvo da fala: {fala}"), "{fala}", nome) : t("Áudio salvo da fala");
   if (atual?.fase === "pronto") {
     return (
       <audio
@@ -128,7 +129,7 @@ export function OuvirFala({
         size="sm"
         onClick={ouvir}
         disabled={carregando}
-        aria-label={nome && !carregando ? t("Ouvir: {fala}").replace("{fala}", nome) : undefined}
+        aria-label={nome && !carregando ? trocarMarcador(t("Ouvir: {fala}"), "{fala}", nome) : undefined}
       >
         <Play size={14} aria-hidden /> {carregando ? t("Carregando o áudio…") : t("Ouvir")}
       </Button>

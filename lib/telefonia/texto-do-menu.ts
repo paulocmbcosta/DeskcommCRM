@@ -91,5 +91,5 @@ export function textoSugeridoForaDoHorario(
 ): string {
   const numero = numeroParaFalar(numeroDoWhatsApp);
   if (!numero) return traduzir(TEXTO_SUGERIDO.after_hours);
-  return traduzir(TEXTO_SUGERIDO_FORA_DO_HORARIO_COM_WHATSAPP).replaceAll("{numero}", numero);
+  return trocarMarcador(traduzir(TEXTO_SUGERIDO_FORA_DO_HORARIO_COM_WHATSAPP), "{numero}", numero);
 }
