@@ -91,6 +91,8 @@ vi.mock("./falas-no-disco", async (importOriginal) => ({
   ...(await importOriginal<typeof ModuloFalas>()),
   falasDoWorker: vi.fn(),
 }));
+// As gravações (F3) têm teste próprio (gravacoes.test.ts); aqui, só a passada que as chama.
+vi.mock("./gravacoes", () => ({ gravacoesDoWorker: vi.fn(() => ({ passada: vi.fn(async () => undefined) })) }));
 vi.mock("./repositorio", async (importOriginal) => ({
   ...(await importOriginal<typeof ModuloRepositorio>()),
   desligarAvisosVencidos: vi.fn(),
@@ -213,6 +215,27 @@ describe("passadaDoTelefone — as três etapas de 60 s", () => {
     expect(log.info).toHaveBeenCalledTimes(1);
     expect(log.info).toHaveBeenCalledWith(`telefonia: a passada de ${etapa} voltou a funcionar`);
     expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("as gravações das ligações (F3): rodam em cada passada; lançando, não derrubam as outras etapas e o log registra só a transição", async () => {
+    const falas = falasFalsas();
+    const desligar = vi.fn(async (_: Date): Promise<AvisoDesligado[]> => []);
+    const gravacoes = { passada: vi.fn(async () => undefined) };
+    const log = registro();
+    const passada = passadaDoTelefone({ falas, gravacoes, desligarAvisosVencidos: desligar, log });
+
+    await passada();
+    expect(gravacoes.passada).toHaveBeenCalledTimes(1);
+
+    gravacoes.passada.mockRejectedValue(new Error("ari 503"));
+    await passada();
+    await passada();
+    expect(falas.sincronizar).toHaveBeenCalledTimes(3);
+    expect(desligar).toHaveBeenCalledTimes(3);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith("telefonia: a passada de gravações das ligações falhou — tenta de novo a cada minuto", {
+      erro: "Error: ari 503",
+    });
   });
 
   it("não reentra: o Storage lento não empilha outra sincronização — e a seguinte, depois dele, roda inteira", async () => {
