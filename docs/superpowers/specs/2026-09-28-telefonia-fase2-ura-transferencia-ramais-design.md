@@ -291,8 +291,8 @@ Na versão 1 nenhuma rota de tela é criada; tudo entra em telas que já têm po
 | Aparece na tela | O cartão da ligação, a faixa de emergência, o bloco "últimos 7 dias" do menu e o painel do telefone |
 | Porta na navegação | Abas em Conexões › Telefone, o cartão em Configurações › Times e o cartão em Credenciais de IA, todas telas já catalogadas |
 | Anti-morte | A emergência vence sozinha; a fala ausente é pulada e avisada; a transferência não atendida volta a quem transferiu; o cliente sem escolha vai ao time padrão |
-| Laço de retorno (inv. 7) | **Menu que confunde:** muitos `default_no_input` aparecem no "últimos 7 dias", e o dono reescreve a fala. **Transferência que não pega:** muitos `returned` aparecem na corrente do cartão |
-| Mapa vivo | `docs/architecture/telefonia.architecture.json` ganha as peças novas, com as arestas descritas abaixo |
+| Laço de retorno (inv. 7) | **Menu que confunde:** muitos `default_no_input` aparecem no "últimos 7 dias", e o dono reescreve a fala. **Transferência que não pega:** muitos `returned` aparecem na corrente do cartão. **Na versão 1, também:** fala que não toca → `phone_prompt_unplayable` na Central → Voz e falas; menu com time padrão arquivado → `phone_menu_team_archived` → Menus; aviso esquecido → vence sozinho → `phone_emergency_expired` → Configurações › Times. O cartão do invariante 7 do mapa vivo declara os quatro |
+| Mapa vivo | `docs/architecture/telefonia.architecture.json` ganha as peças novas, com as arestas descritas abaixo. O caso "a URA e as falas do telefone estão no mapa" de `tests/unit/mapas-de-arquitetura.test.ts` cobra grau ≥2 de cada peça da versão 1 e que nenhuma peça do worker aponte para a ElevenLabs. Para contar: `python3 -c "import json; m=json.load(open('docs/architecture/telefonia.architecture.json')); print(len(m['nodes']), 'peças,', len(m['edges']), 'arestas')"` |
 
 As peças novas do mapa e suas arestas:
 - `phone_prompts`: ElevenLabs → Storage → volume → Asterisk;
