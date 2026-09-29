@@ -39,9 +39,23 @@ import { ApiError } from "@/lib/api/types";
 import { ehFalhaDaFala, MENSAGEM_DA_FALHA_DA_FALA, type MotivoDoErroDaElevenLabs } from "@/lib/telefonia/vocabulario";
 import { ArrowsClockwise, Key } from "@/lib/ui/icons";
 
-/** A chave de voz é a linha deste provider; o texto dele mora no vocabulário central. */
-function ehChaveDeVoz(c: { provider: string; is_active: boolean }): boolean {
-  return c.provider === PROVEDOR_DE_VOZ && c.is_active;
+/**
+ * O rótulo fixo da linha de voz. É o MESMO valor de `ROTULO_DA_CHAVE_DE_VOZ`
+ * (`lib/telefonia/chave-elevenlabs.ts`) — mas não importado daquele módulo:
+ * ele é server-only (usa `node:crypto` para cifrar/decifrar a chave), e este
+ * arquivo é `"use client"`. Mantenha os dois iguais.
+ */
+const ROTULO_DA_CHAVE_DE_VOZ = "ElevenLabs";
+
+/**
+ * A chave de voz é a linha deste provider COM este rótulo — o mesmo critério de
+ * `estadoDaChaveDeVoz`/`chaveDeVoz` (chave-elevenlabs.ts), que filtram as duas
+ * colunas antes de `is_active`. Só o provider não bastava: a coluna é de
+ * vocabulário aberto, e uma linha com `provider = "elevenlabs"` e outro rótulo
+ * não é a chave de voz da instalação.
+ */
+function ehChaveDeVoz(c: { provider: string; label: string; is_active: boolean }): boolean {
+  return c.provider === PROVEDOR_DE_VOZ && c.label === ROTULO_DA_CHAVE_DE_VOZ && c.is_active;
 }
 
 type EstadoDaChave =
@@ -124,16 +138,20 @@ const FRASE_DO_ESTADO: Record<Exclude<EstadoDaChave, "outra_falha">, string> = {
  */
 type RecusaConhecida = Extract<
   MotivoDoErroDaElevenLabs,
-  "chave_invalida" | "sem_credito" | "sem_resposta" | "erro_do_provedor"
+  "chave_invalida" | "sem_credito" | "sem_resposta" | "erro_do_provedor" | "limite_de_uso"
 >;
 
 const FRASE_DA_RECUSA_AO_SALVAR: Record<RecusaConhecida, string> = {
   chave_invalida:
-    "A ElevenLabs recusou esta chave, e ela não foi salva. Confira se copiou a chave inteira, ou gere uma nova na sua conta da ElevenLabs.",
+    "A ElevenLabs recusou a chave, e ela não foi salva. Confira se copiou a chave inteira, ou gere uma nova na sua conta da ElevenLabs.",
   sem_credito:
     "A conta desta chave está sem crédito na ElevenLabs, e ela não foi salva. Recarregue a conta e salve de novo.",
   sem_resposta: "A ElevenLabs não respondeu, e a chave não foi salva. Tente de novo em instantes.",
   erro_do_provedor: "A ElevenLabs devolveu um erro, e a chave não foi salva. Tente de novo em instantes.",
+  // 429 da PRÓPRIA ElevenLabs ao listar as vozes para validar a chave (não é a
+  // cota NOSSA de prévias, que nem chega aqui): a mensagem genérica do motivo
+  // ("pediu para esperar um pouco") não diz que a chave colada foi descartada.
+  limite_de_uso: "A ElevenLabs recusou por limite de uso da conta, e a chave não foi salva. Tente de novo mais tarde.",
 };
 
 function ehRecusaConhecida(codigo: string): codigo is RecusaConhecida {

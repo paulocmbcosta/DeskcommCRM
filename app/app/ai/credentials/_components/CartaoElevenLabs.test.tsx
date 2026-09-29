@@ -129,6 +129,12 @@ describe("os estados da chave, com texto claro", () => {
     expect(screen.getByText(/recarregue a conta/)).toBeInTheDocument();
     expect(screen.queryByText("Chave recusada")).toBeNull();
   });
+
+  it("provider elevenlabs com OUTRO rótulo não é a chave de voz (mesmo critério de estadoDaChaveDeVoz/chaveDeVoz)", async () => {
+    pintar([linhaDeVoz({ label: "Outra coisa", api_key_last4: "9999" })], true);
+    expect(await screen.findByText("Não cadastrada")).toBeInTheDocument();
+    expect(screen.queryByText("…9999")).toBeNull();
+  });
 });
 
 describe("Testar usa o revalidate e lê o motivo que ele devolve", () => {
@@ -217,7 +223,8 @@ describe("a chave colada", () => {
     await userEvent.type(await screen.findByLabelText("Trocar a chave"), "sk_errada_000000");
     await userEvent.click(screen.getByRole("button", { name: "Salvar chave" }));
     const alerta = await screen.findByRole("alert");
-    expect(alerta).toHaveTextContent("A ElevenLabs recusou esta chave, e ela não foi salva.");
+    // Literal "recusou a chave" (sem "esta"): é o que o e2e da Task 23 confere.
+    expect(alerta).toHaveTextContent("A ElevenLabs recusou a chave, e ela não foi salva.");
     expect(screen.getByLabelText("Trocar a chave")).toHaveAttribute("aria-invalid", "true");
     // A chave guardada antes continua a mesma.
     expect(screen.getByText("…1234")).toBeInTheDocument();
@@ -231,6 +238,22 @@ describe("a chave colada", () => {
     await userEvent.type(await screen.findByLabelText("Chave da ElevenLabs"), "sk_qualquer_000000");
     await userEvent.click(screen.getByRole("button", { name: "Salvar chave" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("A ElevenLabs não respondeu, e a chave não foi salva.");
+  });
+
+  it("limite de uso no PUT: diz que a chave não foi salva, não só 'espere um pouco'", async () => {
+    pintar([], true);
+    // A mensagem que a ROTA manda hoje para `limite_de_uso` é a genérica do
+    // motivo (`MENSAGEM_DA_FALHA_DA_FALA.limite_de_uso`), que não fala em
+    // salvar nada — quem só mostrasse `e.message` diria "espere um pouco" e
+    // deixaria a pessoa achando que a chave foi guardada.
+    api.put.mockRejectedValueOnce(
+      new ApiError(422, "limite_de_uso", undefined, "req-4", "A ElevenLabs pediu para esperar um pouco. Tente de novo em instantes."),
+    );
+    await userEvent.type(await screen.findByLabelText("Chave da ElevenLabs"), "sk_qualquer_000000");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar chave" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A ElevenLabs recusou por limite de uso da conta, e a chave não foi salva.",
+    );
   });
 
   it("recusa que o cartão não conhece: mostra a mensagem da rota", async () => {

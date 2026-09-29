@@ -9686,8 +9686,8 @@ export const DICIONARIO: Traducoes = {
   "A conta da ElevenLabs está sem crédito. As falas já geradas continuam tocando; para gerar falas novas, recarregue a conta.": {
     es: "La cuenta de ElevenLabs no tiene crédito. Las locuciones ya generadas siguen sonando; para generar locuciones nuevas, recarga la cuenta.",
   },
-  "A ElevenLabs recusou esta chave, e ela não foi salva. Confira se copiou a chave inteira, ou gere uma nova na sua conta da ElevenLabs.": {
-    es: "ElevenLabs rechazó esta clave y no se guardó. Revisa si copiaste la clave completa o genera una nueva en tu cuenta de ElevenLabs.",
+  "A ElevenLabs recusou a chave, e ela não foi salva. Confira se copiou a chave inteira, ou gere uma nova na sua conta da ElevenLabs.": {
+    es: "ElevenLabs rechazó la clave y no se guardó. Revisa si copiaste la clave completa o genera una nueva en tu cuenta de ElevenLabs.",
   },
   "A conta desta chave está sem crédito na ElevenLabs, e ela não foi salva. Recarregue a conta e salve de novo.": {
     es: "La cuenta de esta clave no tiene crédito en ElevenLabs y no se guardó. Recarga la cuenta y guarda de nuevo.",
@@ -9697,6 +9697,9 @@ export const DICIONARIO: Traducoes = {
   },
   "A ElevenLabs devolveu um erro, e a chave não foi salva. Tente de novo em instantes.": {
     es: "ElevenLabs devolvió un error y la clave no se guardó. Inténtalo de nuevo en unos instantes.",
+  },
+  "A ElevenLabs recusou por limite de uso da conta, e a chave não foi salva. Tente de novo mais tarde.": {
+    es: "ElevenLabs rechazó por límite de uso de la cuenta, y la clave no se guardó. Inténtalo de nuevo más tarde.",
   },
   "Chave da ElevenLabs salva e validada.": { es: "Clave de ElevenLabs guardada y validada." },
   "A ElevenLabs aceitou a chave.": { es: "ElevenLabs aceptó la clave." },
