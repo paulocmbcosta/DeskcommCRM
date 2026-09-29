@@ -50,6 +50,11 @@ vi.mock("@/lib/env", () => ({
 }));
 const auditou = vi.fn();
 vi.mock("@/lib/audit", () => ({ audit: (...args: unknown[]) => auditou(...args) }));
+// A poda das gravações das ligações (F3) roda no mesmo cron, pelo pool do servidor:
+// aqui, sem nenhuma vencida — o que ela faz é medido em poda-das-gravacoes.test.ts.
+vi.mock("@/lib/agent-engine/db/request-pool", () => ({
+  getRequestPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+}));
 
 /** O banco que o handler do cron enxerga nesta rodada. */
 let bancoDoCron: { cliente: ClienteDaCascata } | null = null;

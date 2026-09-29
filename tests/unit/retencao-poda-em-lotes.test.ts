@@ -29,6 +29,11 @@ vi.mock("@/lib/env", () => ({
 }));
 const auditou = vi.fn();
 vi.mock("@/lib/audit", () => ({ audit: (...args: unknown[]) => auditou(...args) }));
+// A poda das gravações das ligações (F3) roda no mesmo cron, pelo pool do servidor:
+// aqui, sem nenhuma vencida — o que ela faz é medido em poda-das-gravacoes.test.ts.
+vi.mock("@/lib/agent-engine/db/request-pool", () => ({
+  getRequestPool: () => ({ query: async () => ({ rows: [], rowCount: 0 }) }),
+}));
 
 /** O que o `rpc` do admin client devolve nesta rodada (o handler HTTP usa isto). */
 let respostaRpc: { data: number | null; error: { message: string } | null } = {

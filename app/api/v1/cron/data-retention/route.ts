@@ -69,6 +69,9 @@ import {
   type ClienteDaCascata,
   type ResultadoDaVarredura,
 } from "@/lib/lgpd/cascata";
+import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
+import { BUCKET_DAS_GRAVACOES } from "@/lib/telefonia/gravacao";
+import { podarGravacoesVencidas, type ResultadoDaPodaDasGravacoes } from "@/lib/telefonia/poda-das-gravacoes";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -227,6 +230,7 @@ async function handle(req: NextRequest): Promise<Response> {
   }
 
   let resultado: ResultadoDaRetencao;
+  let gravacoes: ResultadoDaPodaDasGravacoes = { porOrganizacao: new Map(), temResto: false, falhas: [] };
   let varredura: ResultadoDaVarredura = {
     examinados: 0,
     comResiduo: 0,
@@ -272,6 +276,26 @@ async function handle(req: NextRequest): Promise<Response> {
     } catch (err) {
       varredura.falhas.push(err instanceof Error ? err.message : String(err));
     }
+    // ── As gravações das ligações vencidas pela retenção (F3) ────────────
+    //
+    // Aqui pelo mesmo motivo da cascata acima: é o varredor diário que TODO
+    // clone já roda, e a retenção de gravação é obrigação — tem de acontecer
+    // mesmo com a telefonia desligada depois de gravar. Try próprio: a poda do
+    // histórico e a das gravações dividem o relógio, não o desfecho.
+    try {
+      gravacoes = await podarGravacoesVencidas({
+        db: getRequestPool(),
+        agora: new Date(),
+        storage: {
+          async remover(caminhos) {
+            const { error } = await admin.storage.from(BUCKET_DAS_GRAVACOES).remove(caminhos);
+            if (error) throw new Error(`storage_remove: ${error.message}`);
+          },
+        },
+      });
+    } catch (err) {
+      gravacoes.falhas.push(err instanceof Error ? err.message : String(err));
+    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     logger.error("[data-retention] poda falhou", { error: detail, requestId });
@@ -312,6 +336,25 @@ async function handle(req: NextRequest): Promise<Response> {
     logger.error("[data-retention] retomada de anonimização falhou", { falha, requestId });
   }
 
+  for (const falha of gravacoes.falhas) {
+    logger.error("[data-retention] poda das gravações das ligações falhou", { falha, requestId });
+  }
+  // Uma linha por ORGANIZAÇÃO que teve gravação apagada: é o administrador dela
+  // quem precisa ver que a retenção agiu. Rodada sem gravação vencida não audita.
+  for (const [organizationId, quantidade] of gravacoes.porOrganizacao) {
+    if (quantidade > 0) {
+      void audit({
+        action: "phone.recordings_expired",
+        organizationId,
+        bypassedRls: true,
+        resourceType: "phone_settings",
+        resourceId: organizationId,
+        requestId,
+        metadata: { quantidade, origem: "cron.data-retention" },
+      });
+    }
+  }
+
   // Uma linha POR CONTATO, na org dele: é a auditoria que responde ao titular, e
   // uma linha global `retention.sweep_run` não responde a ninguém em particular.
   // Ela aparece em `/app/audit` como qualquer outra (a tela filtra por `action`
@@ -345,6 +388,8 @@ async function handle(req: NextRequest): Promise<Response> {
       anonimizacoes_examinadas: varredura.examinados,
       anonimizacoes_completadas: varredura.completados.length,
       anonimizacoes_tem_resto: varredura.temResto,
+      gravacoes_expiradas: [...gravacoes.porOrganizacao.values()].reduce((a, n) => a + n, 0),
+      gravacoes_tem_resto: gravacoes.temResto,
     },
     { requestId },
   );

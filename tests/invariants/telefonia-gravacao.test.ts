@@ -16,13 +16,16 @@
  *  4. mensagem anonimizada no meio do caminho: nada é escrito;
  *  5. perdida: `failed`, projeção "falhou" e UM aviso na Central para duas falhas;
  *  6. a anonimização do contato apaga o arquivo da gravação (a cascata da 0235
- *     põe o caminho na fila de remoção do Storage) — sem mudar a função.
+ *     põe o caminho na fila de remoção do Storage) — sem mudar a função;
+ *  7. a poda diária só alcança a gravação GUARDADA há mais dias que a retenção
+ *     da organização (90 sem linha), e a marcação limpa a mídia e mescla "expirada".
  */
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import * as repo from "@/lib/channels/telefonia/repositorio";
 import * as gravacoes from "@/lib/channels/telefonia/repositorio-das-gravacoes";
+import * as poda from "@/lib/telefonia/poda-das-gravacoes";
 
 if (!process.env.TEST_DB_CONTAINER) {
   throw new Error("TEST_DB_CONTAINER not set — rode via `pnpm test:db` (scripts/test-db.sh)");
@@ -329,5 +332,59 @@ describe("LGPD — anonimizar o contato apaga a gravação", () => {
     const depois = await metadadoDa(ORG, vcId);
     expect(depois?.media_storage_path).toBeNull();
     expect(depois?.metadata).toEqual({});
+  });
+});
+
+describe("retenção — a poda diária das gravações vencidas", () => {
+  it("vencida é só a GUARDADA há mais dias que a retenção da organização; marcar limpa a mídia e mescla 'expirada'", async () => {
+    await pool.query("update phone_settings set recording_retention_days = 30 where organization_id = $1", [ORG]);
+    const velha = await ligacao(ORG, NUMERO);
+    const nova = await ligacao(ORG, NUMERO);
+    for (const l of [velha, nova]) {
+      await gravacoes.marcarGravando(pool, ORG, l.vcId, new Date());
+      await encerrarERegistrar(ORG, l.vcId);
+      const msg = await gravacoes.mensagemDaLigacao(pool, ORG, l.vcId);
+      await gravacoes.anexarGravacao(pool, {
+        organizationId: ORG,
+        vcId: l.vcId,
+        mensagemId: msg!.id,
+        caminho: `${ORG}/${msg!.conversationId}/${msg!.id}.mp3`,
+        bytes: 10,
+        duracaoMs: 42_000,
+      });
+    }
+    await pool.query("update voice_calls set ended_at = now() - interval '31 days' where id = $1", [velha.vcId]);
+    await pool.query("update voice_calls set ended_at = now() - interval '29 days' where id = $1", [nova.vcId]);
+
+    const vencidas = await poda.gravacoesVencidas(pool, new Date(), 100);
+    const ids = vencidas.map((v) => v.vcId);
+    expect(ids).toContain(velha.vcId);
+    expect(ids).not.toContain(nova.vcId);
+    const v = vencidas.find((x) => x.vcId === velha.vcId)!;
+    expect(v.organizationId).toBe(ORG);
+    expect(v.caminho).toMatch(/\.mp3$/);
+
+    await poda.marcarExpirada(pool, v);
+    expect((await estadoDa(velha.vcId))?.recording_status).toBe("expired");
+    const m = await metadadoDa(ORG, velha.vcId);
+    expect(m?.media_storage_path).toBeNull();
+    const vc = m?.metadata.voice_call as Record<string, unknown>;
+    expect(vc.gravacao).toEqual({ situacao: "expirada", duracao_ms: 42_000 });
+    expect(vc.id).toBe(velha.vcId);
+    // A de 29 dias segue guardada e apontada.
+    expect((await estadoDa(nova.vcId))?.recording_status).toBe("stored");
+    expect((await poda.gravacoesVencidas(pool, new Date(), 100)).map((x) => x.vcId)).not.toContain(velha.vcId);
+  });
+
+  it("organização sem linha em phone_settings usa os 90 dias do padrão", async () => {
+    const { vcId } = await ligacao(OUTRA, NUMERO_OUTRA);
+    await gravacoes.marcarGravando(pool, OUTRA, vcId, new Date());
+    await encerrarERegistrar(OUTRA, vcId);
+    await pool.query("update voice_calls set recording_status = 'stored', ended_at = now() - interval '60 days' where id = $1", [
+      vcId,
+    ]);
+    expect((await poda.gravacoesVencidas(pool, new Date(), 100)).map((x) => x.vcId)).not.toContain(vcId);
+    await pool.query("update voice_calls set ended_at = now() - interval '91 days' where id = $1", [vcId]);
+    expect((await poda.gravacoesVencidas(pool, new Date(), 100)).map((x) => x.vcId)).toContain(vcId);
   });
 });

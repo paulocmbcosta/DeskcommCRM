@@ -664,6 +664,10 @@ export const AUDIT_ACTIONS = [
   // Alguém pediu para OUVIR uma gravação (a "escuta auditada" da spec 20): uma
   // linha por URL assinada entregue. `metadata`: a conversa; nunca o caminho do arquivo.
   "phone.recording_listened",
+  // A poda diária (cron data-retention) apagou gravações vencidas pela retenção
+  // da organização. Uma linha por organização e rodada com efeito; `metadata`:
+  // quantas. Sem ator (sistema).
+  "phone.recordings_expired",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */
