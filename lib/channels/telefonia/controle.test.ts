@@ -299,7 +299,7 @@ class FalasFalsas implements PortaFalas {
   };
 }
 
-const log = { info: () => undefined, warn: () => undefined, error: vi.fn() };
+const log = { info: () => undefined, warn: vi.fn(), error: vi.fn() };
 
 let ari: AriFalso;
 let banco: BancoFalso;
@@ -314,6 +314,7 @@ beforeEach(() => {
   falas = new FalasFalsas();
   ctl = new ControladorDeChamadas(ari, banco, log, () => Date.now(), falas);
   log.error.mockClear();
+  log.warn.mockClear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -2055,6 +2056,40 @@ describe("o som de chamando na fila (DYD-52): com atendente livre, o chamar — 
       expect(ari.chamadas).not.toContainEqual(["pararReproducao", "tom-1"]);
     });
 
+    it("o chamar que acaba 'done' logo ao começar, de novo e de novo: no 3º recomeço rápido, a música no lugar — não inunda a ARI", async () => {
+      livres(ANA);
+      await escolheuO2();
+      await oChamarTerminou("tom-1"); // 1º fim rápido → tom-2
+      await oChamarTerminou("tom-2"); // 2º → tom-3
+      expect(ari.tons()).toHaveLength(3);
+      expect(ari.nomes()).not.toContain("musicaDeEspera");
+
+      await oChamarTerminou("tom-3"); // 3º → teto: música
+      expect(ari.tons()).toHaveLength(3);
+      expect(ari.chamadas.at(-1)).toEqual(["musicaDeEspera", "cli-1"]);
+      expect(ari.falas()).toEqual([SOM_MENU]); // nunca o "aguarde" com ramal tocando
+      expect(ctl.chamandosNoAr).toBe(0);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("som de chamando"),
+        expect.objectContaining({ voice_call: "vc-1", erro: expect.stringContaining("3") }),
+      );
+
+      // O próximo ramal não volta a tentar o chamar: a música segue.
+      await destruir("ramal-canal-1", 19);
+      expect(ari.tons()).toHaveLength(3);
+    });
+
+    it("o chamar que acaba 'done' depois de tocar um bom tempo recomeça sempre — o teto é só para o fim rápido", async () => {
+      livres(ANA);
+      await escolheuO2();
+      for (let i = 1; i <= 4; i++) {
+        await vi.advanceTimersByTimeAsync(6_000);
+        await oChamarTerminou(`tom-${i}`);
+      }
+      expect(ari.tons()).toHaveLength(5);
+      expect(ari.nomes()).not.toContain("musicaDeEspera");
+    });
+
     it("o Asterisk não toca o chamar (failed, sem o cliente sair): a música no lugar do silêncio — nunca o 'aguarde' com ramal tocando", async () => {
       livres(ANA, BIA);
       await escolheuO2();
@@ -2100,6 +2135,33 @@ describe("o som de chamando na fila (DYD-52): com atendente livre, o chamar — 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(ari.chamadas.slice(n)).toEqual([["originar", `PJSIP/ramal-${ANA}`, "oferta,vc-1"]]);
     expect(ari.tons()).toEqual([]);
+  });
+
+  it("(9b) esperando com música, alguém fica livre e o ramal toca: o 'aguarde' dos ~40 s NÃO volta enquanto o ramal toca — volta quando a lista esvazia de novo", async () => {
+    // Achado da revisão: o relógio do "aguarde" não olhava o ramal, e aos ~40 s o cliente
+    // ouvia "todos ocupados" de novo com o ramal da Ana tocando.
+    await escolheuO2(); //                  t = 0: ninguém livre — fala-2, o "aguarde"
+    await terminou("fala-2"); //            a música; a repetição fica para t = 40 s
+    livres(ANA);
+    await vi.advanceTimersByTimeAsync(5_000); // t = 5 s: o ramal da Ana começa a tocar
+    expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+
+    await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS); // t = 45 s: o ciclo passou com o ramal tocando
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_AGUARDE]);
+    expect(ari.nomes()).not.toContain("pararMusica"); // a música segue, sem soluço
+    expect(ari.tons()).toEqual([]);
+
+    banco.disponiveis = []; //              a Ana não atendeu, e ninguém mais está livre
+    await destruir("ramal-canal-1", 19);
+    expect(ari.falas()).toEqual([SOM_MENU, SOM_AGUARDE]); // nada na hora: a música segue até o ciclo
+
+    const n = ari.chamadas.length;
+    await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS); // t = 85 s: o ciclo rearmado (80 s) acha a lista vazia
+    expect(ari.chamadas.slice(n)).toEqual([
+      ["pararMusica", "cli-1"],
+      ["tocarFala", "cli-1", SOM_AGUARDE],
+    ]);
+    expect(banco.tem("encerrada")).toEqual([]);
   });
 
   it("o cliente desliga enquanto chama: o fim 'failed' do chamar não vira 'aguarde' nem música; perdida, e nada sobra", async () => {

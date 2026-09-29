@@ -163,8 +163,10 @@ Navegador do atendente (JsSIP) ────────────────�
   item 5 abaixo), UM só do primeiro ramal ao último, sem recomeçar ao trocar de atendente. Ele
   para antes da ponte, do "aguarde" (a lista esvaziou), do "ninguém atendeu" e do fim da
   ligação, e o fim do playback dele nunca é lido como fim de fala. O "aguarde" e a música são só
-  de quem não tem ninguém livre; quem já está com música segue com ela quando alguém fica livre.
-  Se o Asterisk não tocar o tom, entra a música no lugar — nunca o "aguarde". Até a 1.50.1, a
+  de quem não tem ninguém livre; quem já está com música segue com ela quando alguém fica livre,
+  e o "aguarde" dos ~40 s não fala enquanto esse ramal toca — rearma e fala no ciclo seguinte,
+  se a lista tiver esvaziado. Se o Asterisk não tocar o tom (`failed`, ou o tom que acaba
+  sozinho em menos de 2 s três vezes seguidas), entra a música no lugar — nunca o "aguarde". Até a 1.50.1, a
   ligação atendida pela URA ouvia "Todos os nossos atendentes estão ocupados…" com o ramal do
   atendente tocando (medido em produção: o atendente atendeu em 16 s). Prova do som na VPS
   pendente (J36.7 do mapa de jornadas).

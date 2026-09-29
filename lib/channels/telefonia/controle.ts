@@ -255,6 +255,9 @@ interface FilaDaLigacao {
    * primeiro ramal ao último: trocar de atendente não o reinicia.
    */
   chamando: string | null;
+  /** Quando o chamar no ar começou, e quantas vezes seguidas ele acabou sozinho cedo demais. */
+  inicioDoChamar: number;
+  chamarCurto: number;
   /**
    * O Asterisk não tocou o som de chamando: a música entrou no lugar dele —
    * nunca o "aguarde", que diria "todos ocupados" a quem está sendo chamado.
@@ -351,6 +354,14 @@ const PRAZO_DA_SAIDA_S = 60;
 const VALIDADE_DO_PEDIDO_DE_SAIDA_MS = 60_000;
 /** Música entre um "aguarde" e o próximo (desenho §5.2.4: ~40 s). */
 export const REPETIR_AGUARDE_MS = 40_000;
+
+/**
+ * O chamar que acaba `done` sozinho em menos que isto não chegou a tocar de
+ * verdade (o tom `ring` é contínuo: só acaba parado). Recomeçar sem teto
+ * inundaria a ARI; no `RECOMECOS_RAPIDOS_DO_CHAMAR`-ésimo seguido, música.
+ */
+const CHAMAR_CURTO_MS = 2_000;
+const RECOMECOS_RAPIDOS_DO_CHAMAR = 3;
 
 const SEM_FALAS_GERAIS: FalasGerais = Object.freeze({ aguarde: null, ninguem: null, foraDoHorario: null });
 
@@ -540,6 +551,8 @@ export class ControladorDeChamadas {
         toque: ESTADO_INICIAL,
         ramal: null,
         chamando: null,
+        inicioDoChamar: 0,
+        chamarCurto: 0,
         musicaNoChamar: false,
         segurando: false,
         esperando: false,
@@ -708,6 +721,7 @@ export class ControladorDeChamadas {
       return;
     }
     l.fila.chamando = id;
+    l.fila.inicioDoChamar = this.agora();
     this.chamandoPorReproducao.set(id, l);
   }
 
@@ -727,7 +741,9 @@ export class ControladorDeChamadas {
    * O tom só acaba quando é parado (ou quando o canal cai), então isto é raro:
    *  - o cliente desligando (`failed` depois do pedido de desligar): nada, o fim vem atrás;
    *  - `failed` sem o cliente sair: o Asterisk não tocou — a música no lugar;
-   *  - acabou sozinho e ainda está chamando: recomeça.
+   *  - acabou sozinho e ainda está chamando: recomeça — mas o que acaba logo ao
+   *    começar, `RECOMECOS_RAPIDOS_DO_CHAMAR` vezes seguidas, vira música (não
+   *    inunda a ARI com um pedido atrás do outro).
    */
   private async aoTerminarOChamar(ev: Extract<EventoAri, { type: "PlaybackFinished" }>): Promise<void> {
     const id = ev.playback.id;
@@ -737,6 +753,13 @@ export class ControladorDeChamadas {
     l.fila.chamando = null;
     if (l.clienteSaindo || l.atendidaPor || l.encerrando || l.fila.segurando) return;
     if (ev.playback.state === "failed") return this.musicaNoLugarDoChamar(l, "o playback do tom terminou 'failed'");
+    l.fila.chamarCurto = this.agora() - l.fila.inicioDoChamar < CHAMAR_CURTO_MS ? l.fila.chamarCurto + 1 : 0;
+    if (l.fila.chamarCurto >= RECOMECOS_RAPIDOS_DO_CHAMAR) {
+      return this.musicaNoLugarDoChamar(
+        l,
+        `o tom acabou sozinho ${l.fila.chamarCurto} vezes seguidas, cada uma em menos de ${CHAMAR_CURTO_MS} ms`,
+      );
+    }
     return this.chamarNaLinha(l);
   }
 
@@ -1058,7 +1081,10 @@ export class ControladorDeChamadas {
     }
   }
 
-  /** Daqui a ~40 s: para a música, toca o "aguarde" de novo, e a música volta no fim dele. */
+  /**
+   * Daqui a ~40 s: para a música, toca o "aguarde" de novo, e a música volta no
+   * fim dele. Com um ramal tocando nessa hora, não fala: rearma para o próximo ciclo.
+   */
   private armarEspera(l: Recebida) {
     pararRelogio(l.fila.relogios, "aguarde");
     if (l.fim) return;
@@ -1068,6 +1094,10 @@ export class ControladorDeChamadas {
       void this.emFila(async () => {
         const aguarde = l.fila.falasGerais.aguarde;
         if (!aguarde || l.fim || l.atendidaPor || l.encerrando || l.fala.atual) return;
+        // Alguém ficou livre e o ramal dele está tocando: o "aguarde" diria "todos
+        // ocupados" a quem está sendo chamado. A música segue, e o relógio tenta de
+        // novo no próximo ciclo — se a lista tiver esvaziado, aí ele fala.
+        if (l.fila.ramal) return this.armarEspera(l);
         let parouAMusica = false;
         const tocando =
           (await this.falaNoAr.porNoAr(l, aguarde, "espera", {

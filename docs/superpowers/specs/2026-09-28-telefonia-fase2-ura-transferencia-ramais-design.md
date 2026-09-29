@@ -162,7 +162,7 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
    - ligação ainda não atendida (número que toca direto no time): o chamar da operadora, como na fase 1;
    - ligação já atendida (depois da URA ou do aviso), ou atendida agora porque tocou 45 s ou começou a 2ª volta (a rede derruba ligação que só chama): o tom `tone:ring;tonezone=br` em banda, no canal do cliente — um só do primeiro ramal ao último, sem recomeçar ao trocar de atendente;
    - o tom para antes da ponte, de `waiting`, de `nobody` e do fim da ligação; se o Asterisk não o tocar, entra a música no lugar, nunca `waiting`.
-4. **Se o cliente precisa esperar — ninguém está livre, e só então:** toca `waiting`, depois a música, e repete `waiting` a cada ~40 s (para a música, toca a fala, volta a música). Vindo do chamar (a lista esvaziou), o tom para e aí toca `waiting`. Quem já está com música segue com ela quando alguém fica livre e o ramal toca.
+4. **Se o cliente precisa esperar — ninguém está livre, e só então:** toca `waiting`, depois a música, e repete `waiting` a cada ~40 s (para a música, toca a fala, volta a música). Vindo do chamar (a lista esvaziou), o tom para e aí toca `waiting`. Quem já está com música segue com ela quando alguém fica livre e o ramal toca, e a repetição de `waiting` não fala enquanto esse ramal toca (fica para o ciclo seguinte).
 5. **Se um atendente atende no meio de uma fala:** a fala para e a ponte se forma.
 6. **Esgotou:** toca `nobody` e desliga. Vira perdida com aviso, como hoje — e o aviso passou a nomear o time que ficou com a ligação ("Ninguém do time X atendeu. Ligue de volta pela conversa."), no idioma da organização. Isso vale para toda ligação perdida, inclusive a do número que aponta direto para um time.
 
