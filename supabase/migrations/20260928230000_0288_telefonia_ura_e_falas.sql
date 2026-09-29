@@ -29,8 +29,10 @@
 --    quando o cliente ouviu o aviso inteiro (`emergency_heard_at`). `end_reason`
 --    ganha `after_hours` sem migration: é coluna de vocabulário aberto.
 -- 7. `agent_inbox_items.kind` ganha `phone_prompt_unplayable` (a fala não tocou
---    e a ligação seguiu sem ela) e `phone_emergency_expired` (o aviso venceu e
---    desligou sozinho). No baseline, quem muda é o bloco ÚNICO da constraint.
+--    e a ligação seguiu sem ela), `phone_emergency_expired` (o aviso venceu e
+--    desligou sozinho) e `phone_menu_team_archived` (quem ligou caiu no time
+--    padrão de um menu, e esse time está arquivado). No baseline, quem muda é o
+--    bloco ÚNICO da constraint.
 -- 8. Bucket PRIVADO `phone-prompts`, sem policy em `storage.objects`: só o
 --    cliente de serviço (API e worker) lê e grava.
 --
@@ -606,6 +608,7 @@ alter table public.agent_inbox_items add constraint agent_inbox_items_kind_check
   'case_stale',
   'phone_prompt_unplayable',
   'phone_emergency_expired',
+  'phone_menu_team_archived',
   'other'
 ));
 

@@ -78,6 +78,9 @@ export const KIND_LABEL = {
   // "erro de áudio" — quem lê precisa saber que o cliente não ouviu o menu ou o aviso.
   phone_prompt_unplayable: "Uma fala do telefone não tocou",
   phone_emergency_expired: "O aviso de instabilidade do telefone desligou sozinho",
+  // Fala de TELEFONE, não de assistente: quem lê precisa saber que o menu de voz
+  // manda gente para um time que ninguém atende.
+  phone_menu_team_archived: "Menu do telefone manda para time arquivado",
   other: "Aviso do assistente",
 } as const satisfies Record<InboxKind, string>;
 

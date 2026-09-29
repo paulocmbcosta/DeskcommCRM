@@ -61,7 +61,7 @@ function portaBanco(pool: pg.Pool): PortaBanco {
     falasGerais: (org) => repo.falasGerais(pool, org),
     menuPorId: (org, id) => repo.menuPorId(pool, org, id),
     registrarEscolhaDoMenu: (org, id, e) => repo.registrarEscolhaDoMenu(pool, org, id, e),
-    avisarMenuComTimeArquivado: (org, menu, tronco) => repo.avisarMenuComTimeArquivado(pool, org, menu, tronco),
+    avisarMenuComTimeArquivado: (org, menu) => repo.avisarMenuComTimeArquivado(pool, org, menu),
     registrarAvisoOuvido: (org, id) => repo.registrarAvisoOuvido(pool, org, id),
     avisarFalaIntocavel: (org, rotulo) => repo.avisarFalaIntocavel(pool, org, rotulo),
     acharOuCriarContato: (org, e164, nome) => repo.acharOuCriarContato(pool, org, e164, nome),

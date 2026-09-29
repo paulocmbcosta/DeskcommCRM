@@ -10132,10 +10132,12 @@ alter table public.agent_inbox_items
     'voice_call_missed',
     'case_stale',
     -- (migration 0288) Telefonia, fase 2: a fala do telefone não tocou (a ligação
-    -- seguiu sem ela) e o aviso de instabilidade de um time venceu e desligou
-    -- sozinho. Entram NESTA lista, no fim, pela mesma razão das de cima.
+    -- seguiu sem ela), o aviso de instabilidade de um time venceu e desligou
+    -- sozinho, e quem ligou caiu no time padrão de um menu que está arquivado.
+    -- Entram NESTA lista, no fim, pela mesma razão das de cima.
     'phone_prompt_unplayable',
     'phone_emergency_expired',
+    'phone_menu_team_archived',
     'other'
   ));
 

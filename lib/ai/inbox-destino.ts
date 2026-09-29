@@ -77,6 +77,12 @@ export const POLITICAS_DE_AVISO = {
     orientacao: "Gere a fala de novo em Conexões › Telefone. Enquanto isso, as ligações seguem sem ela.",
     geral: { papel: "admin", href: "/app/connections?aba=telefone&sub=falas", rotulo: "Revisar as falas do telefone" },
   },
+  // Sem referência, como a fala que não tocou: o menu se conserta na aba dos menus.
+  phone_menu_team_archived: {
+    refs: [],
+    orientacao: "Escolha outro time padrão para o menu. Enquanto isso, quem não escolhe uma opção cai num time que ninguém atende.",
+    geral: { papel: "admin", href: "/app/connections?aba=telefone&sub=menus", rotulo: "Revisar os menus do telefone" },
+  },
   phone_emergency_expired: {
     refs: [],
     orientacao: "Se a instabilidade continua, ligue o aviso de novo no time.",

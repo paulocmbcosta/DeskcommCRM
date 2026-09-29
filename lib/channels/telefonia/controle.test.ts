@@ -165,8 +165,8 @@ class BancoFalso implements PortaBanco {
     if (this.falharMenu) throw new Error("banco fora do ar");
     return this.menus.get(id) ?? null;
   };
-  avisarMenuComTimeArquivado = async (org: string, menu: Pick<MenuDoBanco, "id" | "nome">, troncoId: string) => {
-    this.eventos.push(["menu_time_arquivado", org, menu.nome, troncoId]);
+  avisarMenuComTimeArquivado = async (org: string, menu: Pick<MenuDoBanco, "id" | "nome">) => {
+    this.eventos.push(["menu_time_arquivado", org, menu.nome]);
   };
   registrarEscolhaDoMenu = async (org: string, id: string, e: EscolhaDoMenu) => {
     this.eventos.push(["escolha", org, id, e.digito, e.desfecho, e.teamId]);
@@ -1619,7 +1619,7 @@ describe("URA (§5.1)", () => {
 
       await vi.advanceTimersByTimeAsync(5_000);
       expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
-      expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento", TRONCO]]);
+      expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento"]]);
       // "Antes" da fila: o aviso nasce antes de a ligação pedir a situação do time.
       const iAviso = banco.eventos.findIndex((e) => e[0] === "menu_time_arquivado");
       const iEscolha = banco.eventos.findIndex((e) => e[0] === "escolha");
@@ -1643,7 +1643,7 @@ describe("URA (§5.1)", () => {
       falas.semArquivo.add(FALA_MENU.id);
       await entrar();
       expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "menu Atendimento"]]);
-      expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento", TRONCO]]);
+      expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento"]]);
     });
   });
 

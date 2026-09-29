@@ -9505,6 +9505,11 @@ export const DICIONARIO: Traducoes = {
     es: "Si la inestabilidad continúa, vuelve a activar el aviso en el equipo.",
   },
   "Abrir os times": { es: "Abrir los equipos" },
+  "Menu do telefone manda para time arquivado": { es: "El menú del teléfono envía a un equipo archivado" },
+  "Escolha outro time padrão para o menu. Enquanto isso, quem não escolhe uma opção cai num time que ninguém atende.": {
+    es: "Elige otro equipo predeterminado para el menú. Mientras tanto, quien no elige una opción cae en un equipo que nadie atiende.",
+  },
+  "Revisar os menus do telefone": { es: "Revisar los menús del teléfono" },
   // Os textos sugeridos das falas (lib/telefonia/texto-do-menu.ts), passados por t()
   "Todos os nossos atendentes estão ocupados no momento. Por favor, aguarde na linha que já vamos atender você.": {
     es: "Todos nuestros agentes están ocupados en este momento. Por favor, espere en línea que enseguida le atenderemos.",

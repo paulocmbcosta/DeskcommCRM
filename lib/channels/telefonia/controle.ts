@@ -114,8 +114,8 @@ export interface PortaBanco {
   /** A URA (§5.1): o menu do número e o que o cliente escolheu nele. */
   menuPorId(org: string, menuId: string): Promise<MenuDoBanco | null>;
   registrarEscolhaDoMenu(org: string, id: string, e: EscolhaDoMenu): Promise<boolean>;
-  /** O cliente caiu no time padrão do menu, e ele está ARQUIVADO: a Central fica sabendo. */
-  avisarMenuComTimeArquivado(org: string, menu: Pick<MenuDoBanco, "id" | "nome">, troncoId: string): Promise<void>;
+  /** O cliente caiu no time padrão do menu, e ele está ARQUIVADO: `phone_menu_team_archived` na Central. */
+  avisarMenuComTimeArquivado(org: string, menu: Pick<MenuDoBanco, "id" | "nome">): Promise<void>;
   /** O cliente ouviu o aviso de instabilidade INTEIRO (`emergency_heard_at`). */
   registrarAvisoOuvido(org: string, id: string): Promise<boolean>;
   /** A fala não tocou e a ligação seguiu sem ela: `phone_prompt_unplayable` na Central. */
@@ -1018,7 +1018,7 @@ export class ControladorDeChamadas {
     }
     if (acao.teamId === ura.menu.defaultTeamId && !ura.menu.timePadraoAtivo) {
       await this.banco
-        .avisarMenuComTimeArquivado(l.org, ura.menu, l.tronco.id)
+        .avisarMenuComTimeArquivado(l.org, ura.menu)
         .catch((e) => this.log.warn("telefonia: aviso do menu com time arquivado não gravado", { erro: mensagemDe(e, 160) }));
     }
     this.log.info("telefonia: a URA decidiu o time", {
