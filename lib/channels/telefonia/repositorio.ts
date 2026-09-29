@@ -173,6 +173,7 @@ interface LinhaDoTimeNaFila {
   aviso_expira_em: Date | string | null;
   aviso_fala_id: string | null;
   aviso_fala_caminho: string | null;
+  aviso_fala_duracao: number | null;
 }
 
 /** UMA leitura da linha do time DESTA organização — `undefined` se ele não existe nela. */
@@ -180,7 +181,7 @@ async function lerTimeNaFila(db: Queryable, organizationId: string, teamId: stri
   const { rows } = await db.query<LinhaDoTimeNaFila>(
     `select t.schedule, t.archived_at,
             t.phone_emergency_active_since as aviso_desde, t.phone_emergency_expires_at as aviso_expira_em,
-            p.id as aviso_fala_id, p.storage_path as aviso_fala_caminho
+            p.id as aviso_fala_id, p.storage_path as aviso_fala_caminho, p.duration_ms as aviso_fala_duracao
        from attendance_teams t
        left join phone_prompts p
          on p.id = t.phone_emergency_prompt_id and p.organization_id = t.organization_id and p.status = 'ready'
@@ -332,10 +333,16 @@ export async function acharOuCriarConversa(
 // a instalação inteira de propósito (como `troncosAtivos` e `ligacoesVivas`) e
 // grava cada efeito na organização da PRÓPRIA linha.
 
-/** Uma fala PRONTA para tocar: só o que o worker precisa para garantir o arquivo. */
+/** Uma fala PRONTA para tocar: o que o worker precisa para garantir o arquivo e vigiar o fim dela. */
 export interface FalaDoBanco {
   id: string;
   storagePath: string;
+  /**
+   * A duração do áudio (`phone_prompts.duration_ms`, obrigatória na fala
+   * `ready` pelo CHECK `phone_prompts_ready_check`). O controlador arma com ela
+   * o relógio que segue a ligação se o `PlaybackFinished` se perder.
+   */
+  duracaoMs: number;
 }
 
 export interface FalasGerais {
@@ -366,8 +373,8 @@ export interface MenuDoBanco {
   opcoes: Array<{ digito: string; teamId: string }>;
 }
 
-const falaOuNada = (id: string | null, caminho: string | null): FalaDoBanco | null =>
-  id && caminho ? { id, storagePath: caminho } : null;
+const falaOuNada = (id: string | null, caminho: string | null, duracaoMs: number | null): FalaDoBanco | null =>
+  id && caminho && duracaoMs && duracaoMs > 0 ? { id, storagePath: caminho, duracaoMs } : null;
 
 /**
  * O menu DESTA organização, se não arquivado — só falas prontas, só opções de
@@ -381,14 +388,16 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     time_padrao_ativo: boolean;
     fala_id: string | null;
     fala_caminho: string | null;
+    fala_duracao: number | null;
     invalida_id: string | null;
     invalida_caminho: string | null;
+    invalida_duracao: number | null;
     opcoes: Array<{ digito: string; teamId: string }>;
   }>(
     `select m.id, m.name as nome, m.default_team_id,
             (d.id is not null and d.archived_at is null) as time_padrao_ativo,
-            p.id as fala_id, p.storage_path as fala_caminho,
-            i.id as invalida_id, i.storage_path as invalida_caminho,
+            p.id as fala_id, p.storage_path as fala_caminho, p.duration_ms as fala_duracao,
+            i.id as invalida_id, i.storage_path as invalida_caminho, i.duration_ms as invalida_duracao,
             coalesce((
               select jsonb_agg(jsonb_build_object('digito', o.digit, 'teamId', o.team_id) order by o.digit)
                 from phone_menu_options o
@@ -413,8 +422,8 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     nome: r.nome,
     defaultTeamId: r.default_team_id,
     timePadraoAtivo: r.time_padrao_ativo,
-    fala: falaOuNada(r.fala_id, r.fala_caminho),
-    falaInvalida: falaOuNada(r.invalida_id, r.invalida_caminho),
+    fala: falaOuNada(r.fala_id, r.fala_caminho, r.fala_duracao),
+    falaInvalida: falaOuNada(r.invalida_id, r.invalida_caminho, r.invalida_duracao),
     opcoes: r.opcoes,
   };
 }
@@ -424,14 +433,17 @@ export async function falasGerais(db: Queryable, organizationId: string): Promis
   const { rows } = await db.query<{
     aguarde_id: string | null;
     aguarde_caminho: string | null;
+    aguarde_duracao: number | null;
     ninguem_id: string | null;
     ninguem_caminho: string | null;
+    ninguem_duracao: number | null;
     fora_id: string | null;
     fora_caminho: string | null;
+    fora_duracao: number | null;
   }>(
-    `select w.id as aguarde_id, w.storage_path as aguarde_caminho,
-            n.id as ninguem_id, n.storage_path as ninguem_caminho,
-            a.id as fora_id, a.storage_path as fora_caminho
+    `select w.id as aguarde_id, w.storage_path as aguarde_caminho, w.duration_ms as aguarde_duracao,
+            n.id as ninguem_id, n.storage_path as ninguem_caminho, n.duration_ms as ninguem_duracao,
+            a.id as fora_id, a.storage_path as fora_caminho, a.duration_ms as fora_duracao
        from phone_settings s
        left join phone_prompts w
          on w.id = s.waiting_prompt_id and w.organization_id = s.organization_id and w.status = 'ready'
@@ -444,9 +456,9 @@ export async function falasGerais(db: Queryable, organizationId: string): Promis
   );
   const r = rows[0];
   return {
-    aguarde: falaOuNada(r?.aguarde_id ?? null, r?.aguarde_caminho ?? null),
-    ninguem: falaOuNada(r?.ninguem_id ?? null, r?.ninguem_caminho ?? null),
-    foraDoHorario: falaOuNada(r?.fora_id ?? null, r?.fora_caminho ?? null),
+    aguarde: falaOuNada(r?.aguarde_id ?? null, r?.aguarde_caminho ?? null, r?.aguarde_duracao ?? null),
+    ninguem: falaOuNada(r?.ninguem_id ?? null, r?.ninguem_caminho ?? null, r?.ninguem_duracao ?? null),
+    foraDoHorario: falaOuNada(r?.fora_id ?? null, r?.fora_caminho ?? null, r?.fora_duracao ?? null),
   };
 }
 
@@ -481,7 +493,7 @@ export async function timeParaAFila(
   if (!t || t.archived_at || !avisoVigente({ desde: t.aviso_desde, expiraEm: t.aviso_expira_em }, agora)) {
     return { situacao, aviso: null };
   }
-  return { situacao, aviso: falaOuNada(t.aviso_fala_id, t.aviso_fala_caminho) };
+  return { situacao, aviso: falaOuNada(t.aviso_fala_id, t.aviso_fala_caminho, t.aviso_fala_duracao) };
 }
 
 /** O que a URA decidiu: a tecla (nula = nenhuma tecla válida), o desfecho e o time para onde a ligação vai. */

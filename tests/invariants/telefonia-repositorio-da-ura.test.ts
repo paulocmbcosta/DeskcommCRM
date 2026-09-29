@@ -244,7 +244,7 @@ describe("menuPorId e o menu do número", () => {
       nome: "Principal",
       defaultTeamId: ABERTO,
       timePadraoAtivo: true,
-      fala: { id: PRONTA, storagePath: caminho(ORG, "a") },
+      fala: { id: PRONTA, storagePath: caminho(ORG, "a"), duracaoMs: 1500 },
       falaInvalida: null,
       opcoes: [
         { digito: "1", teamId: ABERTO },
@@ -279,7 +279,7 @@ describe("menuPorId e o menu do número", () => {
     expect(await repo.menuPorId(pool, OUTRA, MENU)).toBeNull();
     expect(await repo.menuPorId(pool, ORG, MENU_OUTRA)).toBeNull();
     expect(await repo.menuPorId(pool, ORG, MENU_ARQUIVADO)).toBeNull();
-    expect((await repo.menuPorId(pool, OUTRA, MENU_OUTRA))?.fala).toEqual({ id: PRONTA_OUTRA, storagePath: caminho(OUTRA, "a") });
+    expect((await repo.menuPorId(pool, OUTRA, MENU_OUTRA))?.fala).toEqual({ id: PRONTA_OUTRA, storagePath: caminho(OUTRA, "a"), duracaoMs: 1500 });
   });
 
   it("o tronco carrega o menu do número (e o de time, nenhum)", async () => {
@@ -311,7 +311,7 @@ describe("falas gerais e aviso do time", () => {
   it("fala 'failed' não toca: só a pronta volta; e cada organização só vê as suas", async () => {
     expect(await repo.falasGerais(pool, ORG)).toEqual({
       aguarde: null,
-      ninguem: { id: NINGUEM, storagePath: caminho(ORG, "d") },
+      ninguem: { id: NINGUEM, storagePath: caminho(ORG, "d"), duracaoMs: 1800 },
       foraDoHorario: null,
     });
     expect(await repo.falasGerais(pool, OUTRA)).toEqual({ aguarde: null, ninguem: null, foraDoHorario: null });
@@ -322,7 +322,7 @@ describe("falas gerais e aviso do time", () => {
     // Uma leitura: o time aberto E o aviso vigente.
     expect(await repo.timeParaAFila(pool, ORG, ABERTO, AGORA)).toEqual({
       situacao: "aberto",
-      aviso: { id: AVISO, storagePath: caminho(ORG, "c") },
+      aviso: { id: AVISO, storagePath: caminho(ORG, "c"), duracaoMs: 2000 },
     });
     // Vence exatamente em AGORA + 1 h: nesse instante já não toca (`avisoVigente`: expires_at > agora).
     expect(await aviso(ORG, ABERTO, new Date(AGORA.getTime() + HORA))).toBeNull();
@@ -337,7 +337,7 @@ describe("falas gerais e aviso do time", () => {
     // antes do aviso, desenho §5.2) é do controlador, não da leitura.
     expect(await repo.timeParaAFila(pool, ORG, FECHADO, new Date(AGORA.getTime() + 48 * HORA))).toEqual({
       situacao: "fora_do_horario",
-      aviso: { id: AVISO, storagePath: caminho(ORG, "c") },
+      aviso: { id: AVISO, storagePath: caminho(ORG, "c"), duracaoMs: 2000 },
     });
     await ligarAviso(ARQUIVADO, AVISO, new Date(AGORA.getTime() - HORA), null);
     expect(await repo.timeParaAFila(pool, ORG, ARQUIVADO, AGORA)).toEqual({ situacao: "indisponivel", aviso: null });

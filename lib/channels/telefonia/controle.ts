@@ -123,7 +123,7 @@ export interface PortaBanco {
  * lança e espera no máximo 3 s (`PRAZO_DO_GARANTIR_MS`).
  */
 export interface PortaFalas {
-  garantir(fala: FalaDoBanco): Promise<string | null>;
+  garantir(fala: Pick<FalaDoBanco, "id" | "storagePath">): Promise<string | null>;
 }
 
 /**
@@ -214,6 +214,12 @@ interface Recebida {
   relogio: ReturnType<typeof setTimeout> | null;
   /** A repetição do "aguarde" (~40 s de música entre um e outro). */
   relogioDaEspera: ReturnType<typeof setTimeout> | null;
+  /**
+   * O fim da fala no ar, se o `PlaybackFinished` não chegar (WebSocket da ARI
+   * caído, evento perdido): duração da fala + `FOLGA_DO_FIM_DA_FALA_MS`. Próprio,
+   * porque o relógio da fila corre em paralelo durante o "aguarde".
+   */
+  relogioDaFala: ReturnType<typeof setTimeout> | null;
   /** O time da fila: o do número (com a URA, o escolhido no menu). */
   teamId: string | null;
   /** Lidas na entrada da fila; todas `null` = a fila da fase 1. */
@@ -269,6 +275,13 @@ const PRAZO_DA_SAIDA_S = 60;
 const VALIDADE_DO_PEDIDO_DE_SAIDA_MS = 60_000;
 /** Música entre um "aguarde" e o próximo (desenho §5.2.4: ~40 s). */
 export const REPETIR_AGUARDE_MS = 40_000;
+/**
+ * Quanto além da duração da fala o controlador espera pelo `PlaybackFinished`
+ * antes de seguir sem ele. Sem este relógio, um evento perdido deixava a
+ * ligação parada para sempre — o cliente em silêncio no meio do aviso de
+ * instabilidade, sem nunca chegar ao atendente.
+ */
+export const FOLGA_DO_FIM_DA_FALA_MS = 5_000;
 
 const SEM_FALAS_GERAIS: FalasGerais = Object.freeze({ aguarde: null, ninguem: null, foraDoHorario: null });
 
@@ -304,6 +317,11 @@ export class ControladorDeChamadas {
   /** Quantas ligações o controlador está acompanhando (para /healthz e testes). */
   get ativas(): number {
     return this.porId.size;
+  }
+
+  /** Quantas falas estão no ar, à espera do `PlaybackFinished` (para testes: o mapa esvazia). */
+  get falasNoAr(): number {
+    return this.porReproducao.size;
   }
 
   async tratar(ev: EventoAri): Promise<void> {
@@ -415,6 +433,7 @@ export class ControladorDeChamadas {
       ponte: null,
       relogio: null,
       relogioDaEspera: null,
+      relogioDaFala: null,
       teamId,
       falasGerais: SEM_FALAS_GERAIS,
       avisoPendente: null,
@@ -509,7 +528,19 @@ export class ControladorDeChamadas {
 
   private async tocarProximo(l: Recebida): Promise<void> {
     if (l.fim || l.atendidaPor || l.encerrando) return;
-    const disponiveis = await this.disponiveisComRamal(l);
+    let disponiveis: CandidatoAoToque[];
+    try {
+      disponiveis = await this.disponiveisComRamal(l);
+    } catch (e) {
+      // Sem a lista, ninguém toca AGORA: a fila espera e pergunta de novo em 5 s
+      // (e esgota em 2 min, como sempre). Lançar daqui deixava a ligação parada
+      // sem relógio nenhum — logo depois do aviso, o cliente em silêncio.
+      this.log.warn("telefonia: disponíveis do time não lidos — a fila espera e pergunta de novo", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      disponiveis = [];
+    }
     const p = proximoToque(disponiveis, l.estado);
 
     if (p.tipo === "desistir") return this.encerrarComFala(l, "ninguem_atendeu");
@@ -519,7 +550,7 @@ export class ControladorDeChamadas {
         l.naFila = true;
         l.inicioFila = this.agora();
         await this.segurarNaLinha(l);
-        await this.banco.marcarTocando(l.vcId, null);
+        await this.marcarTocando(l, null);
       }
       if (this.agora() - (l.inicioFila ?? this.agora()) >= ESPERA_NA_FILA_MS) {
         return this.encerrarComFala(l, "fila_esgotada");
@@ -555,12 +586,19 @@ export class ControladorDeChamadas {
     }
     l.ramal = { canal: canalDoRamal.id, userId: p.userId };
     this.porCanal.set(canalDoRamal.id, l);
-    await this.banco.marcarTocando(l.vcId, p.userId);
+    await this.marcarTocando(l, p.userId);
     // Rede de segurança: se o Asterisk não derrubar o toque no prazo, derrubamos.
     const canalEsperado = canalDoRamal.id;
     this.armar(l, TOQUE_POR_ATENDENTE_MS + 3_000, async () => {
       if (l.ramal?.canal === canalEsperado && !l.atendidaPor) await this.ari.desligar(canalEsperado, "no_answer");
     });
+  }
+
+  /** O estado na tela ("tocando para Fulano"). Não gravar não pode parar a fila: o relógio vem depois. */
+  private async marcarTocando(l: Recebida, userId: string | null) {
+    await this.banco
+      .marcarTocando(l.vcId, userId)
+      .catch((e) => this.log.warn("telefonia: 'tocando' não gravado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
   }
 
   private armar(l: Recebida, ms: number, fn: () => Promise<unknown>) {
@@ -581,6 +619,37 @@ export class ControladorDeChamadas {
     l.relogio = null;
     if (l.relogioDaEspera) clearTimeout(l.relogioDaEspera);
     l.relogioDaEspera = null;
+    this.pararRelogioDaFala(l);
+  }
+
+  private pararRelogioDaFala(l: Recebida) {
+    if (l.relogioDaFala) clearTimeout(l.relogioDaFala);
+    l.relogioDaFala = null;
+  }
+
+  /**
+   * Se o `PlaybackFinished` desta fala não chegar até a duração dela + a folga,
+   * a fala é parada e a ligação segue EXATAMENTE como se ela tivesse terminado
+   * bem. O fim que chegar atrasado já não a encontra no mapa e é ignorado.
+   */
+  private armarRelogioDaFala(l: Recebida, playbackId: string, duracaoMs: number) {
+    this.pararRelogioDaFala(l);
+    if (l.fim) return;
+    l.relogioDaFala = setTimeout(() => {
+      l.relogioDaFala = null;
+      if (l.fim) return;
+      void this.emFila(async () => {
+        if (l.fim || l.fala?.playbackId !== playbackId) return;
+        this.log.warn("telefonia: o fim da fala não chegou — a ligação segue sem ele", {
+          voice_call: l.vcId,
+          papel: l.fala.papel,
+        });
+        await this.ari
+          .pararFala(playbackId)
+          .catch((e) => this.log.warn("telefonia: fala não parada", { erro: mensagemDe(e, 160) }));
+        await this.concluirFala(l, playbackId, true);
+      }).catch((e) => this.log.error("telefonia: relógio da fala falhou", { erro: String(e) }));
+    }, duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
   }
 
   // ─── falas da fila ───────────────────────────────────────────────────────
@@ -604,8 +673,12 @@ export class ControladorDeChamadas {
     } = {},
   ): Promise<boolean> {
     const rotulo = opcoes.rotulo ?? ROTULO_DA_FALA[papel];
+    // Com o arquivo no disco, é um `stat`. Sem ele, baixa do Storage com prazo de
+    // até 3 s, e a fila SERIAL do laço fica parada esse tempo — todas as
+    // ligações esperam. Custo aceito na v1: só acontece quando uma fala
+    // recém-salva toca antes da passada de 60 s levá-la ao disco. A conferência
+    // abaixo é defesa para quem chama sem a fila (os testes).
     const midia = await this.falas.garantir(fala).catch(() => null);
-    // O disco pode levar até 3 s: a ligação pode ter acabado, ou (o "aguarde") ter sido atendida.
     if (l.fim || (papel === "espera" && (l.atendidaPor || l.encerrando))) return false;
     if (!midia) {
       this.log.warn("telefonia: fala sem arquivo no disco — pulada", { voice_call: l.vcId, fala: fala.id, papel });
@@ -632,6 +705,7 @@ export class ControladorDeChamadas {
     if (l.fim) return false;
     l.fala = { playbackId, papel, rotulo };
     this.porReproducao.set(playbackId, l);
+    this.armarRelogioDaFala(l, playbackId, fala.duracaoMs);
     return true;
   }
 
@@ -647,21 +721,27 @@ export class ControladorDeChamadas {
     const id = l.fala.playbackId;
     l.fala = null;
     this.porReproducao.delete(id);
+    this.pararRelogioDaFala(l);
     await this.ari.pararFala(id).catch((e) => this.log.warn("telefonia: fala não parada", { erro: mensagemDe(e, 160) }));
   }
 
   private async aoTerminarFala(ev: Extract<EventoAri, { type: "PlaybackFinished" }>) {
     const id = ev.playback?.id;
     const l = id ? this.porReproducao.get(id) : undefined;
-    // Fala que paramos, ou de ligação que já acabou: nada a fazer.
+    // Fala que paramos (ou cujo relógio já seguiu sem ela), ou de ligação que já acabou: nada a fazer.
     if (!l || !id) return;
+    return this.concluirFala(l, id, ev.playback.state !== "failed");
+  }
+
+  /** O fim de uma fala — pelo `PlaybackFinished` ou pelo relógio dela. */
+  private async concluirFala(l: Recebida, id: string, tocou: boolean): Promise<void> {
     this.porReproducao.delete(id);
     if (l.fim || l.fala?.playbackId !== id) return;
     const fala = l.fala;
     l.fala = null;
+    this.pararRelogioDaFala(l);
     // Cortada porque o cliente desligou: quem encerra é o StasisEnd que vem atrás.
     if (l.clienteSaindo) return;
-    const tocou = ev.playback.state !== "failed";
     if (!tocou) {
       this.log.warn("telefonia: o Asterisk não tocou a fala — pulada", { voice_call: l.vcId, papel: fala.papel });
       await this.avisarIntocavel(l, fala.rotulo);
@@ -951,7 +1031,7 @@ export class ControladorDeChamadas {
         l.ramal = null;
         if (l.relogio) clearTimeout(l.relogio);
         l.relogio = null;
-        await this.banco.marcarTocando(l.vcId, null);
+        await this.marcarTocando(l, null);
         return this.tocarProximo(l);
       }
       return;

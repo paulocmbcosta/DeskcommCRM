@@ -268,7 +268,7 @@ export class FalasNoDisco {
    * curso pela passada, desiste no próprio prazo e deixa o download terminar para
    * a próxima vez. Não respeita a escada das ausentes — tenta sempre. Nunca lança.
    */
-  async garantir(fala: FalaDoBanco): Promise<string | null> {
+  async garantir(fala: Pick<FalaDoBanco, "id" | "storagePath">): Promise<string | null> {
     try {
       if (!caminhoValido(fala.storagePath)) {
         this.avisarForaDaRegua(fala.storagePath, { fala: fala.id });
