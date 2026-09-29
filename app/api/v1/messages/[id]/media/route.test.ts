@@ -52,6 +52,13 @@ describe("GET /api/v1/messages/[id]/media", () => {
     expect(estado.assinados).toEqual([`${ORG}/c/m1.jpg`]);
   });
 
+  it("arquivo de OUTRA organização na linha (escrita pela REST): 404, nada assinado", async () => {
+    estado.mensagem = { id: "m1", media_url: null, media_mime: "image/jpeg", media_storage_path: "outra-org/c/m1.jpg", external_id: "wamid.2" };
+    const r = await pedir();
+    expect(r.status).toBe(404);
+    expect(estado.assinados).toEqual([]);
+  });
+
   it("a gravação de uma ligação: 404, nada assinado — ela só sai pela escuta auditada", async () => {
     estado.mensagem = {
       id: "m1",

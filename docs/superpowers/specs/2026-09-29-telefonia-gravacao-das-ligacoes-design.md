@@ -142,6 +142,14 @@ organização), e a gravação passou a depender de três colunas dessa tabela.
 | O relógio de reserva dava o aviso como ouvido; o aviso da feita que falhasse depois de aceito não era visto | Para o papel `gravacao`, o relógio conta "não tocou" (sem aviso na Central); na feita, o `PlaybackFinished failed` do aviso descarta a gravação. |
 | Sem prazo no ffmpeg/upload, N conversões em paralelo, órfãs sem estado nunca apagadas | Prazos (10 min / 5 min), uma conversão por vez, e a órfã de ligação encerrada sem marca é apagada. |
 | O cartão montava a URL com um id vindo do metadado | Só uuid vira pedido, codificado. |
+| (2ª passada) Preservar coluna por coluna deixava o `id` trocável — reabria o caminho do arquivo e furava a retenção | Alterar a mensagem da ligação pela REST passou a ser IGNORADO por inteiro (nenhum fluxo do produto a altera como usuário). |
+| (2ª passada) Apagar a conversa/contato levava a mensagem da ligação pela cascata e o arquivo ficava órfão | Trigger `trg_gravacao_da_mensagem_apagada` põe o arquivo na `storage_redaction_queue` (drenada pelo cron `storage-redaction`). |
+| (2ª passada) Upload que termina depois do prazo deixava MP3 sem ponteiro | Ao dar a gravação como perdida, o caminho canônico é apagado do Storage. |
+| (2ª passada) A rota genérica assinava qualquer caminho do bucket | Só caminho DESTA organização (o da conversa não: a fusão de contatos move a mensagem sem mudar o caminho). |
+
+Residual aceito: a checagem "este arquivo é de uma gravação" do trigger roda sob a RLS
+de quem escreve — só pega gravações que a pessoa enxerga. Explorar exigiria o id de uma
+mensagem numa conversa invisível, que nada expõe.
 
 ## 5. Fora da v1 (e onde encaixa)
 

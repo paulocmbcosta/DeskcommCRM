@@ -288,6 +288,15 @@ export class GravacoesDaTelefonia implements PortaGravacao {
       return "esperando";
     }
     await this.p.ari.apagarGravacao(nomeNoAsterisk(g.vcId)).catch(() => undefined);
+    // Um upload que estourou o prazo pode ter terminado DEPOIS: o arquivo ficaria
+    // no Storage sem ponteiro (a poda só olha `stored`). Apagar o que não existe
+    // não é erro.
+    const msg = await this.p.banco.mensagemDaLigacao(g.organizationId, g.vcId).catch(() => null);
+    if (msg) {
+      await this.p.storage
+        .apagar(storagePathFor(g.organizationId, msg.conversationId, msg.id, MIME_DA_GRAVACAO))
+        .catch(() => undefined);
+    }
     return "perdida";
   }
 

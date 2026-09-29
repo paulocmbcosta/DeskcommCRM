@@ -132,10 +132,13 @@ comment on column public.voice_calls.recording_notice_at is
 -- `authenticated`/`anon`); o worker (postgres), o app (service_role) e as funções
 -- security definer — a cascata LGPD inclusive — escrevem como sempre:
 --  - criar mensagem `ligacao:*`: recusado;
---  - alterar a mensagem da ligação: as colunas que a identificam e apontam o
---    arquivo são mantidas (o resto — lida, status — segue alterável, e um UPDATE em
---    lote não quebra por causa dela);
---  - apagar a mensagem da ligação: ignorado (o arquivo ficaria sem dono);
+--  - alterar a mensagem da ligação: ignorado, a linha inteira (nenhum fluxo do
+--    produto a altera como usuário; preservar coluna por coluna deixava de fora o
+--    `id` — a segunda revisão mostrou que trocá-lo reabria o caminho do arquivo); um
+--    UPDATE em lote não quebra por causa dela, só não a alcança;
+--  - apagar a mensagem da ligação: ignorado (o arquivo ficaria sem dono). A que sai
+--    pela cascata de apagar a conversa ou o contato (feita como dono da tabela) leva o
+--    arquivo para a fila de remoção do Storage — trigger seguinte;
 --  - pôr como mídia de outra mensagem o arquivo de uma gravação: recusado.
 create or replace function public.fn_mensagem_de_ligacao_e_do_sistema()
 returns trigger language plpgsql set search_path = public as $$
@@ -152,18 +155,7 @@ begin
     return old;
   end if;
   if tg_op = 'UPDATE' and old.external_id like 'ligacao:%' then
-    new.organization_id := old.organization_id;
-    new.conversation_id := old.conversation_id;
-    new.contact_id := old.contact_id;
-    new.external_id := old.external_id;
-    new.type := old.type;
-    new.body := old.body;
-    new.metadata := old.metadata;
-    new.media_url := old.media_url;
-    new.media_mime := old.media_mime;
-    new.media_size_bytes := old.media_size_bytes;
-    new.media_storage_path := old.media_storage_path;
-    return new;
+    return null;
   end if;
   if new.external_id like 'ligacao:%' then
     raise exception 'a mensagem de uma ligação só é escrita pelo sistema' using errcode = '42501';
@@ -188,6 +180,29 @@ drop trigger if exists trg_mensagem_de_ligacao_e_do_sistema on public.messages;
 create trigger trg_mensagem_de_ligacao_e_do_sistema
   before insert or update or delete on public.messages
   for each row execute function public.fn_mensagem_de_ligacao_e_do_sistema();
+
+-- A mensagem da ligação que SAI (a cascata de apagar a conversa ou o contato, o
+-- sistema) leva o arquivo da gravação para a fila de remoção do Storage — a mesma
+-- que a anonimização usa e que o cron `storage-redaction` drena. Sem isto, o
+-- arquivo ficaria no bucket para sempre: a poda o procura pela mensagem, e a
+-- anonimização, pela conversa do contato.
+create or replace function public.fn_gravacao_da_mensagem_apagada()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if old.external_id like 'ligacao:%' and old.media_storage_path is not null then
+    insert into public.storage_redaction_queue (organization_id, request_id, bucket, object_path)
+    values (old.organization_id, null, 'whatsapp-media', old.media_storage_path)
+    on conflict (bucket, object_path) do nothing;
+  end if;
+  return old;
+end $$;
+revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon;
+grant execute on function public.fn_gravacao_da_mensagem_apagada() to authenticated, service_role;
+
+drop trigger if exists trg_gravacao_da_mensagem_apagada on public.messages;
+create trigger trg_gravacao_da_mensagem_apagada
+  after delete on public.messages
+  for each row execute function public.fn_gravacao_da_mensagem_apagada();
 
 -- 4. agent_inbox_items.kind — a LISTA INTEIRA: a última migration que reconstrói
 --    a constraint termina igual ao baseline (tests/unit/kind-check-migration-x-baseline.test.ts).

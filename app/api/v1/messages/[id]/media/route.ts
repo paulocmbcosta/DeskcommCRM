@@ -71,6 +71,13 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
   if (typeof msg.external_id === "string" && msg.external_id.startsWith("ligacao:")) {
     return fail("not_found", t("Mensagem sem mídia."), 404, { requestId });
   }
+  // O arquivo tem de ser DESTA organização: a service key assina qualquer caminho
+  // do bucket, e a linha da mensagem é escrita também pela REST. Só o prefixo da
+  // organização, que nunca muda — o da conversa não serve, porque a fusão de
+  // contatos move a mensagem sem mudar o caminho do arquivo.
+  if (msg.media_storage_path && !msg.media_storage_path.startsWith(`${activeOrg.orgId}/`)) {
+    return fail("not_found", t("Mensagem sem mídia."), 404, { requestId });
+  }
 
   if (msg.media_storage_path) {
     const admin = createAdminClient();
