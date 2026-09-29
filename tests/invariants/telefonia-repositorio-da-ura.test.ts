@@ -7,17 +7,22 @@
  * organizações: o worker usa `pg.Pool` FORA da RLS, e a única catraca é o
  * `organization_id` que cada consulta filtra à mão.
  *
- *  1. "fora do horário" separado de "ninguém disponível" (`situacaoDoTime`), sem
- *     mudar o que `disponiveisNoTime` devolve aos chamadores da fase 1;
+ *  1. "fora do horário" separado de "ninguém disponível" (`timeParaAFila`, UMA
+ *     leitura da linha do time com a situação e o aviso), sem mudar o que
+ *     `disponiveisNoTime` devolve aos chamadores da fase 1;
  *  2. menu, falas gerais e aviso só voltam PRONTOS e da organização pedida; o
  *     aviso só toca com o time ATIVO e o aviso VIGENTE (`avisoVigente`), sem
  *     depender da passada;
- *  3. a passada desliga só o vencido — também o do time ARQUIVADO —, audita e
- *     avisa na Central uma vez, em cada organização; pula a linha que um gerente
- *     segura (skip locked) e, travando em `for no key update`, não faz a LIGAÇÃO
- *     esperar (o CONTROLE com `for update` mostra a ligação caindo no lock_timeout);
- *  4. a ligação guarda o que a URA fez (menu, tecla, desfecho, time, aviso ouvido),
- *     com toda escrita presa à organização, e o cartão da conversa o mostra;
+ *  3. a passada desliga só o vencido — também o do time ARQUIVADO —, audita (como
+ *     auditoria de sistema, `bypassed_rls`) e avisa na Central uma vez, em cada
+ *     organização — também com duas passadas SIMULTÂNEAS (o CONTROLE sem trava
+ *     mostra a auditoria em dobro); pula a linha que um gerente segura (skip
+ *     locked) e, travando em `for no key update`, não faz a LIGAÇÃO esperar (o
+ *     CONTROLE com `for update` mostra a ligação caindo no lock_timeout). Nenhuma
+ *     prova aqui mede relógio: "não esperou" é "não levou 55P03 com lock_timeout";
+ *  4. a ligação guarda o que a URA fez (menu, tecla, desfecho e time numa escrita
+ *     só, aviso ouvido), com toda escrita presa à organização, e o cartão da
+ *     conversa o mostra;
  *  5. o aviso de fala intocável não se repete enquanto o anterior está aberto.
  */
 import pg from "pg";
@@ -180,16 +185,33 @@ afterAll(async () => {
   await pool.end();
 });
 
+/** A situação do time pela leitura da entrada na fila. */
+const situacao = async (org: string, teamId: string, agora = AGORA) => (await repo.timeParaAFila(pool, org, teamId, agora)).situacao;
+/** O aviso que a ligação ouviria ao entrar na fila do time. */
+const aviso = async (org: string, teamId: string, agora = AGORA) => (await repo.timeParaAFila(pool, org, teamId, agora)).aviso;
+
 describe("situação do time — 'fora do horário' separado de 'ninguém disponível'", () => {
   it("aberto, fora do horário, arquivado, agenda ilegível e de outra organização", async () => {
-    expect(await repo.situacaoDoTime(pool, ORG, ABERTO, AGORA)).toBe("aberto");
-    expect(await repo.situacaoDoTime(pool, ORG, FECHADO, AGORA)).toBe("fora_do_horario");
-    expect(await repo.situacaoDoTime(pool, ORG, ARQUIVADO, AGORA)).toBe("indisponivel");
+    expect(await situacao(ORG, ABERTO)).toBe("aberto");
+    expect(await situacao(ORG, FECHADO)).toBe("fora_do_horario");
+    expect(await situacao(ORG, ARQUIVADO)).toBe("indisponivel");
     // Agenda que o parser não lê NÃO é "fora do horário": a ligação segue a fila e vira "Ligar de volta".
-    expect(await repo.situacaoDoTime(pool, ORG, AGENDA_RUIM, AGORA)).toBe("indisponivel");
+    expect(await situacao(ORG, AGENDA_RUIM)).toBe("indisponivel");
     // O time de B visto de A não existe; visto de B, está aberto.
-    expect(await repo.situacaoDoTime(pool, ORG, TIME_OUTRA, AGORA)).toBe("indisponivel");
-    expect(await repo.situacaoDoTime(pool, OUTRA, TIME_OUTRA, AGORA)).toBe("aberto");
+    expect(await situacao(ORG, TIME_OUTRA)).toBe("indisponivel");
+    expect(await situacao(OUTRA, TIME_OUTRA)).toBe("aberto");
+  });
+
+  it("a entrada na fila lê a linha do time UMA vez, e dela sai a situação e o aviso", async () => {
+    const textos: string[] = [];
+    const espiao: Queryable = {
+      query: ((t: string, v?: unknown[]) => {
+        textos.push(t);
+        return pool.query(t, v);
+      }) as Queryable["query"],
+    };
+    expect(await repo.timeParaAFila(espiao, ORG, FECHADO, AGORA)).toEqual({ situacao: "fora_do_horario", aviso: null });
+    expect(textos).toHaveLength(1);
   });
 
   it("as duas perguntas agora se distinguem; disponiveisNoTime segue igual para os chamadores da fase 1", async () => {
@@ -197,13 +219,13 @@ describe("situação do time — 'fora do horário' separado de 'ninguém dispon
     expect((await repo.disponiveisNoTime(pool, ORG, ABERTO, AGORA)).map((c) => c.userId)).toEqual([ANA]);
     // ...o Financeiro, fora do horário, devolve a MESMA lista vazia de antes — e a situação diz por quê.
     expect(await repo.disponiveisNoTime(pool, ORG, FECHADO, AGORA)).toEqual([]);
-    expect(await repo.situacaoDoTime(pool, ORG, FECHADO, AGORA)).toBe("fora_do_horario");
+    expect(await situacao(ORG, FECHADO)).toBe("fora_do_horario");
 
     // "Ninguém disponível": time aberto, Ana em pausa.
     await pool.query("update attendant_availability set is_available = false where organization_id = $1 and user_id = $2", [ORG, ANA]);
     try {
       expect(await repo.disponiveisNoTime(pool, ORG, ABERTO, AGORA)).toEqual([]);
-      expect(await repo.situacaoDoTime(pool, ORG, ABERTO, AGORA)).toBe("aberto");
+      expect(await situacao(ORG, ABERTO)).toBe("aberto");
     } finally {
       await pool.query("update attendant_availability set is_available = true where organization_id = $1 and user_id = $2", [ORG, ANA]);
     }
@@ -297,22 +319,28 @@ describe("falas gerais e aviso do time", () => {
 
   it("o aviso toca enquanto vigente e para no instante em que vence — sem depender da passada", async () => {
     await ligarAviso(ABERTO, AVISO, new Date(AGORA.getTime() - HORA), new Date(AGORA.getTime() + HORA));
-    expect(await repo.emergenciaDoTime(pool, ORG, ABERTO, AGORA)).toEqual({ id: AVISO, storagePath: caminho(ORG, "c") });
+    // Uma leitura: o time aberto E o aviso vigente.
+    expect(await repo.timeParaAFila(pool, ORG, ABERTO, AGORA)).toEqual({
+      situacao: "aberto",
+      aviso: { id: AVISO, storagePath: caminho(ORG, "c") },
+    });
     // Vence exatamente em AGORA + 1 h: nesse instante já não toca (`avisoVigente`: expires_at > agora).
-    expect(await repo.emergenciaDoTime(pool, ORG, ABERTO, new Date(AGORA.getTime() + HORA))).toBeNull();
-    expect(await repo.emergenciaDoTime(pool, ORG, ABERTO, new Date(AGORA.getTime() + 2 * HORA))).toBeNull();
+    expect(await aviso(ORG, ABERTO, new Date(AGORA.getTime() + HORA))).toBeNull();
+    expect(await aviso(ORG, ABERTO, new Date(AGORA.getTime() + 2 * HORA))).toBeNull();
     // A organização de fora não ouve o aviso do time de A.
-    expect(await repo.emergenciaDoTime(pool, OUTRA, ABERTO, AGORA)).toBeNull();
+    expect(await repo.timeParaAFila(pool, OUTRA, ABERTO, AGORA)).toEqual({ situacao: "indisponivel", aviso: null });
   });
 
   it("'até alguém desligar' toca sempre; o do time ARQUIVADO nunca toca, mesmo vigente", async () => {
     await ligarAviso(FECHADO, AVISO, new Date(AGORA.getTime() - HORA), null);
-    expect(await repo.emergenciaDoTime(pool, ORG, FECHADO, new Date(AGORA.getTime() + 48 * HORA))).toEqual({
-      id: AVISO,
-      storagePath: caminho(ORG, "c"),
+    // O aviso vem com a situação que for — fora do horário, aqui: a ordem (fora do horário
+    // antes do aviso, desenho §5.2) é do controlador, não da leitura.
+    expect(await repo.timeParaAFila(pool, ORG, FECHADO, new Date(AGORA.getTime() + 48 * HORA))).toEqual({
+      situacao: "fora_do_horario",
+      aviso: { id: AVISO, storagePath: caminho(ORG, "c") },
     });
     await ligarAviso(ARQUIVADO, AVISO, new Date(AGORA.getTime() - HORA), null);
-    expect(await repo.emergenciaDoTime(pool, ORG, ARQUIVADO, AGORA)).toBeNull();
+    expect(await repo.timeParaAFila(pool, ORG, ARQUIVADO, AGORA)).toEqual({ situacao: "indisponivel", aviso: null });
   });
 });
 
@@ -357,8 +385,13 @@ describe("a passada dos avisos vencidos", () => {
   /** As auditorias de vencimento do time, da mais velha para a mais nova (o estado vale para o arquivo inteiro: conte deltas). */
   const auditorias = async (teamId: string) =>
     (
-      await pool.query<{ organization_id: string; metadata: Record<string, unknown>; actor_user_id: string | null }>(
-        `select organization_id, metadata, actor_user_id from public.api_audit_log
+      await pool.query<{
+        organization_id: string;
+        metadata: Record<string, unknown>;
+        actor_user_id: string | null;
+        bypassed_rls: boolean;
+      }>(
+        `select organization_id, metadata, actor_user_id, bypassed_rls from public.api_audit_log
           where action = 'phone.emergency_expired' and resource_type = 'attendance_team' and resource_id = $1
           order by created_at, id`,
         [teamId],
@@ -401,6 +434,8 @@ describe("a passada dos avisos vencidos", () => {
       const nova = a.at(-1)!;
       expect(nova.organization_id).toBe(org);
       expect(nova.actor_user_id).toBeNull();
+      // Auditoria de SISTEMA (o worker escreve fora da RLS), como a do alarme de SLA da LGPD.
+      expect(nova.bypassed_rls).toBe(true);
       expect(nova.metadata).toMatchObject({ ligado_por: quem });
       expect(new Date(nova.metadata.expirou_em as string).getTime()).toBe(AGORA.getTime() + HORA);
     }
@@ -417,15 +452,34 @@ describe("a passada dos avisos vencidos", () => {
     expect((await avisos(ORG)).length - antesA).toBe(2);
   });
 
+  /**
+   * A passada numa transação própria com `lock_timeout`: se ela ESPERASSE uma
+   * trava, levaria 55P03 — "não esperou" é prova de comportamento, sem relógio.
+   */
+  const passadaSemEsperar = async (): Promise<repo.AvisoDesligado[] | string> => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      await c.query("set local lock_timeout = '1s'");
+      const r = await repo.desligarAvisosVencidos(c, depois);
+      await c.query("commit");
+      return r;
+    } catch (e) {
+      await c.query("rollback").catch(() => undefined);
+      return (e as { code?: string }).code ?? "erro";
+    } finally {
+      c.release();
+    }
+  };
+
   it("a linha que um gerente segura é PULADA (skip locked), sem esperar; a passada seguinte a desliga", async () => {
     const auditadoAntes = (await auditorias(ABERTO)).length;
     const gerente = await pool.connect();
     try {
       await gerente.query("begin");
       await gerente.query("select 1 from public.attendance_teams where id = $1 for no key update", [ABERTO]);
-      const inicio = Date.now();
-      const desligados = await repo.desligarAvisosVencidos(pool, depois);
-      expect(Date.now() - inicio).toBeLessThan(1_500);
+      const desligados = await passadaSemEsperar();
+      if (!Array.isArray(desligados)) throw new Error(`a passada esperou a trava do gerente: ${desligados}`);
       expect(desligados.map((d) => d.id)).not.toContain(ABERTO);
       expect(desligados.map((d) => d.id)).toContain(TIME_OUTRA);
       expect(await ligados()).toContain(ABERTO);
@@ -476,13 +530,88 @@ describe("a passada dos avisos vencidos", () => {
         const db: Queryable = { query: ((t: string, v?: unknown[]) => passada.query(trocar(t), v)) as Queryable["query"] };
         const desligados = await repo.desligarAvisosVencidos(db, depois);
         expect(desligados.map((d) => d.id)).toContain(ABERTO);
-        const inicio = Date.now();
+        // "entrou" = o INSERT foi feito sem 55P03 dentro do lock_timeout de 1 s — sem medir relógio.
         expect(await inserirLigacao(ABERTO)).toBe(esperado);
-        if (esperado === "entrou") expect(Date.now() - inicio).toBeLessThan(900);
       } finally {
         await passada.query("rollback");
         passada.release();
       }
+    });
+  }
+
+  /** A conexão está parada esperando uma trava (o ponto de encontro das duas passadas). */
+  const esperandoTrava = async (pid: number) =>
+    (
+      await pool.query<{ esperando: boolean }>(
+        "select coalesce(bool_or(wait_event_type = 'Lock'), false) as esperando from pg_stat_activity where pid = $1",
+        [pid],
+      )
+    ).rows[0]!.esperando;
+
+  /**
+   * Duas passadas SIMULTÂNEAS, com ponto de encontro. A passada A desliga os
+   * vencidos e fica com a transação ABERTA. A passada B começa. Só quando B está
+   * dentro do comando dela, parada na trava de A ou já terminada, A confirma. Sem
+   * o encontro, B podia começar depois de A confirmar e achar tudo desligado: o
+   * teste passaria mesmo sem trava nenhuma.
+   */
+  async function passadasSimultaneas(trocar: (t: string) => string) {
+    const a = await pool.connect();
+    const b = await pool.connect();
+    try {
+      await a.query("begin");
+      await b.query("begin");
+      // Rede de segurança: se algo der errado, B desiste em vez de pendurar o arquivo.
+      await b.query("set local lock_timeout = '10s'");
+      const pidB = (await b.query<{ pid: number }>("select pg_backend_pid() as pid")).rows[0]!.pid;
+      const comTroca = (c: pg.PoolClient): Queryable => ({
+        query: ((t: string, v?: unknown[]) => c.query(trocar(t), v)) as Queryable["query"],
+      });
+
+      const ra = await repo.desligarAvisosVencidos(comTroca(a), depois);
+      let bTerminou = false;
+      const pb = repo.desligarAvisosVencidos(comTroca(b), depois).finally(() => {
+        bTerminou = true;
+      });
+      pb.catch(() => undefined);
+      for (let i = 0; !bTerminou && !(await esperandoTrava(pidB)); i++) {
+        if (i > 1_000) throw new Error("a passada B não chegou à trava de A nem terminou");
+        await esperar(10);
+      }
+      await a.query("commit");
+      const rb = await pb;
+      await b.query("commit");
+      return { ra, rb };
+    } finally {
+      await a.query("rollback").catch(() => undefined);
+      await b.query("rollback").catch(() => undefined);
+      a.release();
+      b.release();
+    }
+  }
+
+  for (const [nome, trocar, vezes] of [
+    ["duas passadas simultâneas: UMA auditoria e UM item na Central por aviso", (t: string) => t, 1],
+    [
+      "CONTROLE — sem a trava, as mesmas duas passadas auditam e avisam em dobro (o teste enxerga o defeito que diz prender)",
+      (t: string) => t.replace(/\s*for no key update skip locked/i, ""),
+      2,
+    ],
+  ] as const) {
+    it(nome, async () => {
+      const times = [ABERTO, ARQUIVADO, TIME_OUTRA] as const;
+      const auditadosAntes = new Map<string, number>();
+      for (const t of times) auditadosAntes.set(t, (await auditorias(t)).length);
+      const antesA = (await avisos(ORG)).length;
+      const antesB = (await avisos(OUTRA)).length;
+
+      const { ra, rb } = await passadasSimultaneas(trocar);
+      expect(ra.map((d) => d.id).sort()).toEqual([...times].sort());
+      expect(rb).toHaveLength(vezes === 1 ? 0 : times.length);
+
+      for (const t of times) expect(await auditorias(t)).toHaveLength(auditadosAntes.get(t)! + vezes);
+      expect((await avisos(ORG)).length - antesA).toBe(2 * vezes);
+      expect((await avisos(OUTRA)).length - antesB).toBe(vezes);
     });
   }
 
@@ -570,8 +699,7 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
 
   it("menu, tecla, desfecho, time escolhido e o aviso ouvido chegam ao metadado da mensagem", async () => {
     const id = await ligacao(ORG, NUMERO, "ura-repo-1", ABERTO, MENU);
-    expect(await repo.registrarMenu(pool, ORG, id, { digito: "2", desfecho: "chosen" })).toBe(true);
-    expect(await repo.definirTimeDaLigacao(pool, ORG, id, FECHADO)).toBe(true);
+    expect(await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "2", desfecho: "chosen", teamId: FECHADO })).toBe(true);
     expect(await repo.registrarAvisoOuvido(pool, ORG, id)).toBe(true);
     const primeiraVez = (await naLinha(id)).emergency_heard_at;
     // Ouvir de novo não move o instante da primeira vez.
@@ -598,18 +726,18 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
 
   it("as escritas da URA ficam presas à organização: a de fora não mexe, o time de fora não entra", async () => {
     const id = await ligacao(ORG, NUMERO, "ura-repo-3", ABERTO, MENU);
-    expect(await repo.registrarMenu(pool, OUTRA, id, { digito: "1", desfecho: "chosen" })).toBe(false);
-    expect(await repo.definirTimeDaLigacao(pool, OUTRA, id, ABERTO)).toBe(false);
+    expect(await repo.registrarEscolhaDoMenu(pool, OUTRA, id, { digito: "1", desfecho: "chosen", teamId: ABERTO })).toBe(false);
     expect(await repo.registrarAvisoOuvido(pool, OUTRA, id)).toBe(false);
-    // O id da ligação é de A, o time é de B: o ponteiro não cruza.
-    expect(await repo.definirTimeDaLigacao(pool, ORG, id, TIME_OUTRA)).toBe(false);
+    // O id da ligação é de A, o time é de B: o ponteiro não cruza — e o desfecho não entra
+    // sozinho, sem o time (uma escrita só: os dois ficam coerentes).
+    expect(await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "1", desfecho: "chosen", teamId: TIME_OUTRA })).toBe(false);
     expect(await naLinha(id)).toEqual({ menu_id: MENU, menu_digit: null, menu_outcome: null, team_id: ABERTO, emergency_heard_at: null });
     // A recuperação do worker (ligações vivas) enxerga o menu da ligação.
     expect((await repo.ligacoesVivas(pool)).find((v) => v.id === id)).toMatchObject({ menu_id: MENU, menu_outcome: null });
 
-    // Sem tecla: o desfecho vai, a tecla fica nula.
-    expect(await repo.registrarMenu(pool, ORG, id, { digito: null, desfecho: "default_no_input" })).toBe(true);
-    expect(await naLinha(id)).toMatchObject({ menu_digit: null, menu_outcome: "default_no_input" });
+    // Sem tecla: o desfecho e o time padrão vão juntos, a tecla fica nula.
+    expect(await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: null, desfecho: "default_no_input", teamId: FECHADO })).toBe(true);
+    expect(await naLinha(id)).toMatchObject({ menu_digit: null, menu_outcome: "default_no_input", team_id: FECHADO });
   });
 
   it("o banco recusa a ligação de A com o menu de B (FK composta), e a de B com o menu de B entra", async () => {

@@ -9,6 +9,7 @@
  */
 import type pg from "pg";
 
+import { insertInboxItem } from "@/lib/agent-engine/db/repository";
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { emitAgentActivityForContact } from "@/lib/leads/agent-activity";
 import { isWithinSchedule } from "@/lib/routing/eligibility";
@@ -138,7 +139,7 @@ async function fusoDaOrg(db: Queryable, organizationId: string): Promise<string>
  * fora do horário e desliga — desenho da fase 2, §5.2) de "ninguém disponível"
  * (fila) — antes, as duas perguntas voltavam como a mesma lista vazia de
  * `disponiveisNoTime`, que segue devolvendo `[]` nos dois casos: os chamadores
- * da fase 1 não mudam.
+ * da fase 1 não mudam. Quem pergunta na entrada da fila é `timeParaAFila`.
  *
  * - `indisponivel`: o time não existe NESTA organização, foi arquivado, ou a
  *   agenda dele é algo que o parser não lê. Agenda ilegível NÃO é "fora do
@@ -164,17 +165,29 @@ export function situacaoDaLinhaDoTime(
   return isWithinSchedule(agenda, agora) ? "aberto" : "fora_do_horario";
 }
 
-export async function situacaoDoTime(
-  db: Queryable,
-  organizationId: string,
-  teamId: string,
-  agora: Date,
-): Promise<SituacaoDoTime> {
-  const { rows } = await db.query<{ schedule: unknown; archived_at: string | Date | null }>(
-    "select schedule, archived_at from attendance_teams where id = $1 and organization_id = $2",
+/** A linha do time como a fila a lê: a agenda, se está arquivado e o aviso de instabilidade com a fala pronta. */
+interface LinhaDoTimeNaFila {
+  schedule: unknown;
+  archived_at: string | Date | null;
+  aviso_desde: Date | string | null;
+  aviso_expira_em: Date | string | null;
+  aviso_fala_id: string | null;
+  aviso_fala_caminho: string | null;
+}
+
+/** UMA leitura da linha do time DESTA organização — `undefined` se ele não existe nela. */
+async function lerTimeNaFila(db: Queryable, organizationId: string, teamId: string): Promise<LinhaDoTimeNaFila | undefined> {
+  const { rows } = await db.query<LinhaDoTimeNaFila>(
+    `select t.schedule, t.archived_at,
+            t.phone_emergency_active_since as aviso_desde, t.phone_emergency_expires_at as aviso_expira_em,
+            p.id as aviso_fala_id, p.storage_path as aviso_fala_caminho
+       from attendance_teams t
+       left join phone_prompts p
+         on p.id = t.phone_emergency_prompt_id and p.organization_id = t.organization_id and p.status = 'ready'
+      where t.id = $1 and t.organization_id = $2`,
     [teamId, organizationId],
   );
-  return situacaoDaLinhaDoTime(rows[0], agora);
+  return rows[0];
 }
 
 /**
@@ -198,8 +211,10 @@ export async function disponiveisNoTime(
   agora: Date,
 ): Promise<CandidatoAoToque[]> {
   // Fora do horário, arquivado ou de outra organização: ninguém. QUAL dos três é
-  // a pergunta de `situacaoDoTime`; aqui a resposta segue a mesma lista vazia.
-  if ((await situacaoDoTime(db, organizationId, teamId, agora)) !== "aberto") return [];
+  // a pergunta de `timeParaAFila`; aqui a resposta segue a mesma lista vazia.
+  // Relido a cada chamada, e não guardado da entrada na fila: o time pode fechar
+  // no meio dos 2 minutos de espera.
+  if (situacaoDaLinhaDoTime(await lerTimeNaFila(db, organizationId, teamId), agora) !== "aberto") return [];
 
   const fuso = await fusoDaOrg(db, organizationId);
   const { rows } = await db.query<{
@@ -435,77 +450,66 @@ export async function falasGerais(db: Queryable, organizationId: string): Promis
   };
 }
 
+/** O que a ligação encontra ao entrar na fila do time. */
+export interface TimeParaAFila {
+  situacao: SituacaoDoTime;
+  /**
+   * O aviso de instabilidade a tocar antes dos atendentes — ou `null`. Vem com a
+   * situação que for: a ordem (fora do horário antes do aviso, desenho §5.2) é
+   * do controlador, não desta leitura.
+   */
+  aviso: FalaDoBanco | null;
+}
+
 /**
- * O aviso de instabilidade que a ligação deve ouvir ao entrar na fila do time —
- * ou `null`. Toca só com o time ATIVO (não arquivado) e o aviso VIGENTE
- * (`avisoVigente`, a mesma régua da tela: `active_since` preenchido e
- * `expires_at` nulo ou depois de `agora`), com a fala pronta. Decidido contra o
- * relógio da ligação, a cada ligação: o aviso vencido para de tocar na hora, sem
- * esperar a passada de 60 s desligá-lo no banco (desenho §5.5).
+ * A entrada na fila do time numa leitura só da linha dele: a situação
+ * (`situacaoDaLinhaDoTime`) e o aviso de instabilidade. O aviso toca só com o
+ * time ATIVO (não arquivado) e VIGENTE (`avisoVigente`, a mesma régua da tela:
+ * `active_since` preenchido e `expires_at` nulo ou depois de `agora`), com a
+ * fala pronta. Decidido contra o relógio da ligação, a cada ligação: o aviso
+ * vencido para de tocar na hora, sem esperar a passada de 60 s desligá-lo no
+ * banco (desenho §5.5). Time de outra organização: `indisponivel`, sem aviso.
  */
-export async function emergenciaDoTime(
+export async function timeParaAFila(
   db: Queryable,
   organizationId: string,
   teamId: string,
   agora: Date,
-): Promise<FalaDoBanco | null> {
-  const { rows } = await db.query<{
-    desde: Date | string | null;
-    expira_em: Date | string | null;
-    arquivado: boolean;
-    fala_id: string | null;
-    fala_caminho: string | null;
-  }>(
-    `select t.phone_emergency_active_since as desde, t.phone_emergency_expires_at as expira_em,
-            t.archived_at is not null as arquivado,
-            p.id as fala_id, p.storage_path as fala_caminho
-       from attendance_teams t
-       left join phone_prompts p
-         on p.id = t.phone_emergency_prompt_id and p.organization_id = t.organization_id and p.status = 'ready'
-      where t.id = $1 and t.organization_id = $2`,
-    [teamId, organizationId],
-  );
-  const t = rows[0];
-  if (!t || t.arquivado || !avisoVigente({ desde: t.desde, expiraEm: t.expira_em }, agora)) return null;
-  return falaOuNada(t.fala_id, t.fala_caminho);
+): Promise<TimeParaAFila> {
+  const t = await lerTimeNaFila(db, organizationId, teamId);
+  const situacao = situacaoDaLinhaDoTime(t, agora);
+  if (!t || t.archived_at || !avisoVigente({ desde: t.aviso_desde, expiraEm: t.aviso_expira_em }, agora)) {
+    return { situacao, aviso: null };
+  }
+  return { situacao, aviso: falaOuNada(t.aviso_fala_id, t.aviso_fala_caminho) };
+}
+
+/** O que a URA decidiu: a tecla (nula = nenhuma tecla válida), o desfecho e o time para onde a ligação vai. */
+export interface EscolhaDoMenu {
+  digito: string | null;
+  desfecho: DesfechoDoMenu;
+  teamId: string;
 }
 
 /**
- * O que o cliente fez no menu (`menu_digit`, `menu_outcome`). `digito` nulo =
- * nenhuma tecla válida (o desfecho diz se houve tecla errada). Devolve `false`
- * se a ligação não é desta organização — nada muda.
+ * Grava o que o cliente fez no menu (`menu_digit`, `menu_outcome`) e o time que
+ * a URA escolheu (`team_id` — o que o "Ligar de volta", a distribuição e o
+ * cartão leem) num UPDATE só: o desfecho e o time nunca ficam um sem o outro.
+ * A ligação E o time têm de ser desta organização (a FK de `voice_calls.team_id`
+ * é simples e não confere isso); senão, `false` e nada muda.
  */
-export async function registrarMenu(
+export async function registrarEscolhaDoMenu(
   db: Queryable,
   organizationId: string,
   id: string,
-  m: { digito: string | null; desfecho: DesfechoDoMenu },
+  e: EscolhaDoMenu,
 ): Promise<boolean> {
   const { rowCount } = await db.query(
-    `update voice_calls set menu_digit = $3, menu_outcome = $4, updated_at = now()
-      where id = $1 and organization_id = $2`,
-    [id, organizationId, m.digito, m.desfecho],
-  );
-  return (rowCount ?? 0) > 0;
-}
-
-/**
- * O time da ligação passa a ser o que a URA escolheu — é o que o "Ligar de
- * volta", a distribuição e o cartão leem. A ligação E o time têm de ser desta
- * organização (a FK de `voice_calls.team_id` é simples e não confere isso);
- * senão, `false` e nada muda.
- */
-export async function definirTimeDaLigacao(
-  db: Queryable,
-  organizationId: string,
-  id: string,
-  teamId: string,
-): Promise<boolean> {
-  const { rowCount } = await db.query(
-    `update voice_calls set team_id = $3, updated_at = now()
+    `update voice_calls
+        set menu_digit = $3, menu_outcome = $4, team_id = $5, updated_at = now()
       where id = $1 and organization_id = $2
-        and exists (select 1 from attendance_teams t where t.id = $3 and t.organization_id = $2)`,
-    [id, organizationId, teamId],
+        and exists (select 1 from attendance_teams t where t.id = $5 and t.organization_id = $2)`,
+    [id, organizationId, e.digito, e.desfecho, e.teamId],
   );
   return (rowCount ?? 0) > 0;
 }
@@ -531,21 +535,26 @@ export async function registrarAvisoOuvido(db: Queryable, organizationId: string
  * `rotulo` diz qual fala ("menu Principal", "aguarde"): é ele que distingue um
  * aviso do outro.
  *
- * O "não existe" e o INSERT são um comando só; duas chamadas SIMULTÂNEAS da mesma
- * fala poderiam abrir dois, e é aceito: a fila do laço (`laco.ts`) serializa os
- * eventos das ligações, e um aviso a mais não esconde nada.
+ * É o dedup `kind_e_titulo` de `insertInboxItem` (a função da Central que todos
+ * usam): o "não existe" e o INSERT são um comando só; duas chamadas SIMULTÂNEAS
+ * da mesma fala poderiam abrir dois, e é aceito: a fila do laço (`laco.ts`)
+ * serializa os eventos das ligações, e um aviso a mais não esconde nada.
  */
-export async function avisarFalaIntocavel(db: Queryable, organizationId: string, rotulo: string): Promise<void> {
-  const titulo = `Uma fala do telefone não tocou: ${rotulo}`.slice(0, 200);
-  await db.query(
-    `insert into agent_inbox_items (organization_id, kind, severity, title, body)
-     select $1::uuid, 'phone_prompt_unplayable', 'warn', $2::text,
-            'A ligação seguiu sem ela. Gere a fala de novo em Conexões › Telefone e confira se o serviço de telefonia está de pé.'
-      where not exists (
-        select 1 from agent_inbox_items
-         where organization_id = $1::uuid and kind = 'phone_prompt_unplayable' and status = 'open' and title = $2::text
-      )`,
-    [organizationId, titulo],
+export async function avisarFalaIntocavel(
+  db: Pick<pg.Pool, "query">,
+  organizationId: string,
+  rotulo: string,
+): Promise<void> {
+  await insertInboxItem(
+    db,
+    organizationId,
+    {
+      kind: "phone_prompt_unplayable",
+      severity: "warn",
+      title: `Uma fala do telefone não tocou: ${rotulo}`.slice(0, 200),
+      body: "A ligação seguiu sem ela. Gere a fala de novo em Conexões › Telefone e confira se o serviço de telefonia está de pé.",
+    },
+    "kind_e_titulo",
   );
 }
 
@@ -559,7 +568,8 @@ export interface AvisoDesligado {
 /**
  * A passada de 60 s (desenho §5.5): desliga os avisos de instabilidade VENCIDOS
  * — de TODA a instalação, também o do time ARQUIVADO que ficou com prazo —,
- * grava a auditoria `phone.emergency_expired` (sem ator: o aviso venceu sozinho)
+ * grava a auditoria `phone.emergency_expired` (de SISTEMA: sem ator, o aviso
+ * venceu sozinho, e `bypassed_rls`, como `lib/lgpd/sla-alarm.ts`)
  * e abre `phone_emergency_expired` na Central, na organização de cada time. Um
  * comando só: a auditoria e o aviso não se perdem se o worker cair no meio, e a
  * segunda passada não acha o mesmo aviso de novo. O texto
@@ -594,8 +604,8 @@ export async function desligarAvisosVencidos(db: Queryable, agora: Date): Promis
         where t.id = v.id and t.organization_id = v.organization_id
         returning v.id, v.organization_id, v.name, v.desde, v.expirou_em, v.ligado_por
      ), auditados as (
-       insert into api_audit_log (organization_id, action, resource_type, resource_id, metadata)
-       select organization_id, 'phone.emergency_expired', 'attendance_team', id,
+       insert into api_audit_log (organization_id, action, resource_type, resource_id, bypassed_rls, metadata)
+       select organization_id, 'phone.emergency_expired', 'attendance_team', id, true,
               jsonb_build_object('time', name, 'ligado_em', desde, 'expirou_em', expirou_em, 'ligado_por', ligado_por)
          from desligados
        returning 1
