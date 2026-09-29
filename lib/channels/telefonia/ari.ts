@@ -12,6 +12,11 @@
  * e quem pergunta recebe `null`, nunca uma exceção.
  */
 
+import { createWriteStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+
 /**
  * Nomes neutros de propósito: a marca do produto é configurável (white-label),
  * e estes são identificadores técnicos entre o worker e o Asterisk.
@@ -29,6 +34,15 @@ export function configAriDoAmbiente(env: NodeJS.ProcessEnv = process.env): Confi
   const senha = (env.TELEFONIA_ARI_PASSWORD ?? "").trim();
   if (!baseUrl || !senha) return null;
   return { baseUrl, senha };
+}
+
+/**
+ * O nome de uma gravação vai no CAMINHO da ARI: só letras, dígitos, `-` e `_`.
+ * Uma barra ou `..` apontaria para outro recurso (ou outro arquivo) do Asterisk.
+ */
+function nomeDeGravacao(nome: string): string {
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(nome)) throw new Error(`nome de gravação inválido: ${nome.slice(0, 40)}`);
+  return nome;
 }
 
 export class ErroAri extends Error {
@@ -243,6 +257,82 @@ export class ClienteAri {
 
   listarCanais() {
     return this.pedir<CanalAri[]>("GET", "/channels");
+  }
+
+  // ─── gravação da ponte (F3; medido na VPS em 2026-09-29) ─────────────────
+  //
+  // O Asterisk grava a PONTE (os dois lados misturados) em WAV, no diretório de
+  // gravações dele; o worker baixa o arquivo pela própria ARI — nenhum volume
+  // compartilhado — e o apaga depois de guardá-lo no Storage.
+
+  /**
+   * Começa a gravar a ponte. `ifExists=overwrite`: o nome é o da ligação, e um
+   * resto de uma tentativa anterior não pode travar a gravação nova. Sem bipe e
+   * sem tecla que encerre — quem avisa é a fala do aviso de gravação.
+   */
+  gravarPonte(ponteId: string, nome: string, tetoS: number) {
+    return this.pedir("POST", `/bridges/${ponteId}/record`, {
+      query: {
+        name: nomeDeGravacao(nome),
+        format: "wav",
+        maxDurationSeconds: tetoS,
+        ifExists: "overwrite",
+        beep: "false",
+        terminateOn: "none",
+      },
+    });
+  }
+
+  /** Para a gravação e fecha o arquivo. 404 = já parada (a ponte caiu antes): o estado desejado. */
+  async pararGravacao(nome: string) {
+    try {
+      await this.pedir("POST", `/recordings/live/${nomeDeGravacao(nome)}/stop`);
+    } catch (e) {
+      if (e instanceof ErroAri && e.status === 404) return;
+      throw e;
+    }
+  }
+
+  /** Toca uma mídia para TODOS na ponte (o aviso de gravação da ligação feita). */
+  tocarNaPonte(ponteId: string, midia: string) {
+    return this.pedir<{ id: string }>("POST", `/bridges/${ponteId}/play`, { query: { media: midia } });
+  }
+
+  /**
+   * Baixa o arquivo guardado para `destino`, em stream: uma ligação de 2 h tem
+   * ~115 MB de WAV, e o worker vive com 512 MB. 404 = o Asterisk não tem o
+   * arquivo (ainda não fechou, ou se perdeu num reinício): `"ausente"`.
+   */
+  async baixarGravacao(nome: string, destino: string, prazoMs = 120_000): Promise<{ bytes: number } | "ausente"> {
+    const caminho = `/recordings/stored/${nomeDeGravacao(nome)}/file`;
+    const resp = await fetch(new URL(`${this.config.baseUrl}/ari${caminho}`), {
+      method: "GET",
+      headers: { Authorization: this.auth },
+      signal: AbortSignal.timeout(prazoMs),
+    });
+    if (resp.status === 404) {
+      await resp.body?.cancel().catch(() => undefined);
+      return "ausente";
+    }
+    if (!resp.ok || !resp.body) throw new ErroAri(resp.status, await resp.text().catch(() => ""), caminho);
+    await pipeline(Readable.fromWeb(resp.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(destino));
+    return { bytes: (await stat(destino)).size };
+  }
+
+  /** Apaga o arquivo guardado. 404 = já apagado: o estado desejado. */
+  async apagarGravacao(nome: string) {
+    try {
+      await this.pedir("DELETE", `/recordings/stored/${nomeDeGravacao(nome)}`);
+    } catch (e) {
+      if (e instanceof ErroAri && e.status === 404) return;
+      throw e;
+    }
+  }
+
+  /** Os nomes das gravações guardadas no Asterisk (a passada acha as órfãs por aqui). */
+  async listarGravacoes(): Promise<string[]> {
+    const lista = await this.pedir<Array<{ name: string }>>("GET", "/recordings/stored");
+    return (lista ?? []).map((g) => g.name);
   }
 
   /** WebSocket de eventos da aplicação Stasis. Quem reconecta é o laço do worker. */
