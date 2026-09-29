@@ -18,7 +18,10 @@
  *     organização é FK COMPOSTA `(organization_id, coluna)`: o BANCO recusa o
  *     número que aponta para o menu de outra organização — também pela REST, com o
  *     JWT de um admin —, e não só a leitura o ignora. Apagar o alvo solta só a
- *     coluna (`on delete set null (coluna)`), nunca o `organization_id`.
+ *     coluna (`on delete set null (coluna)`), nunca o `organization_id`. O time do
+ *     número (`channel_sessions.sip_team_id`, FK SIMPLES desde a 0286) é convertido
+ *     pela 0288 na mesma forma: o destino do número é um time OU um menu, e as duas
+ *     metades têm a mesma catraca.
  *  5. O bucket é privado.
  *  6. O bloco do apêndice — lido do `baseline.sql` pelo rótulo, não copiado à mão
  *     — reaplica sem erro e SEM derrubar os CHECKs (mesmo oid, todos validados),
@@ -56,6 +59,9 @@ const MENU_B = "c0de0288-4444-4000-8000-00000000000b";
 const NUMERO_A = "c0de0288-5555-4000-8000-00000000000a";
 const FALA_EXTRA = "c0de0288-3333-4000-8000-0000000000ee";
 const MENU_EXTRA = "c0de0288-4444-4000-8000-0000000000ee";
+const TIME_EXTRA = "c0de0288-2222-4000-8000-0000000000ee";
+const NUMERO_EXTRA = "c0de0288-5555-4000-8000-0000000000ee";
+const NUMERO_CLONE = "c0de0288-5555-4000-8000-0000000000cc";
 const HASH = "a".repeat(64);
 const TABELAS = ["phone_prompts", "phone_settings", "phone_menus", "phone_menu_options"] as const;
 const LISTA_SQL = TABELAS.map((t) => `'${t}'`).join(", ");
@@ -137,10 +143,15 @@ function checksDa0288(): string[] {
 }
 const TODOS_VALIDADOS = (linhas: string[]) => linhas.map((l) => l.split(":").slice(0, 2).join(":"));
 
-/** Toda referência nova e a FK que a guarda: `tabela.coluna:chaves:on delete:colunas anuladas`. */
+/**
+ * Toda referência que a 0288 guarda e a FK que a guarda: `tabela.coluna:chaves:on
+ * delete:colunas anuladas`. As novas, e o time do número (FK simples da 0286,
+ * convertida aqui com o mesmo `set null` que ela tinha, agora só da coluna).
+ */
 const FKS_ESPERADAS = [
   "attendance_teams.phone_emergency_prompt_id:2:n:phone_emergency_prompt_id",
   "channel_sessions.sip_menu_id:2:n:sip_menu_id",
+  "channel_sessions.sip_team_id:2:n:sip_team_id",
   "phone_menu_options.menu_id:2:c:-",
   "phone_menu_options.team_id:2:a:-",
   "phone_menus.default_team_id:2:a:-",
@@ -351,6 +362,8 @@ describe("as catracas do schema", () => {
       expect(tenta(comando)).toMatch(new RegExp(`violates foreign key constraint "${fk}"`));
     recusa(`update public.channel_sessions set sip_team_id = null, sip_menu_id = '${MENU_B}' where id = '${NUMERO_A}';`,
       "channel_sessions_sip_menu_id_org_fkey");
+    recusa(`update public.channel_sessions set sip_menu_id = null, sip_team_id = '${TIME_B}' where id = '${NUMERO_A}';`,
+      "channel_sessions_sip_team_id_org_fkey");
     recusa(`insert into public.voice_calls
               (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status, menu_id)
             values ('${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'ref-0288-cruzada', 'inbound', '+5561999990288', 'ended', '${MENU_B}');`,
@@ -378,6 +391,13 @@ describe("as catracas do schema", () => {
     expect(
       comoMembro(ADMIN_A, `update public.channel_sessions set sip_team_id = null, sip_menu_id = '${MENU_B}' where id = '${NUMERO_A}'`),
     ).toMatch(/violates foreign key constraint "channel_sessions_sip_menu_id_org_fkey"/);
+    // O mesmo para o time do número: o admin de A não o aponta para o time de B.
+    expect(
+      comoMembro(ADMIN_A, `update public.channel_sessions set sip_menu_id = null, sip_team_id = '${TIME_A}' where id = '${NUMERO_A}'`),
+    ).toBeNull();
+    expect(
+      comoMembro(ADMIN_A, `update public.channel_sessions set sip_menu_id = null, sip_team_id = '${TIME_B}' where id = '${NUMERO_A}'`),
+    ).toMatch(/violates foreign key constraint "channel_sessions_sip_team_id_org_fkey"/);
     // voice_calls é gravável por agent. O GRANT já vem do default ACL do baseline;
     // o grant explícito só deixa a pré-condição à vista (e desfaz no rollback).
     const ligacao = (menu: string) =>
@@ -418,6 +438,20 @@ describe("as catracas do schema", () => {
     expect(tenta(`delete from public.phone_menus where id = '${MENU_EXTRA}';`)).toBeNull();
     expect(
       sql(`select coalesce(menu_id::text, '-') || '|' || organization_id from public.voice_calls where sip_call_ref = 'ref-0288-extra';`),
+    ).toBe(`-|${ORG_A}`);
+
+    // O time do número: apagar o time solta o número dele (como na 0286), e o número fica na organização.
+    sql(`
+      insert into public.attendance_teams (id, organization_id, name, slug) values ('${TIME_EXTRA}', '${ORG_A}', 'Extra', 'extra-0288');
+      insert into public.channel_sessions
+        (id, organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number,
+         sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted, sip_team_id)
+      values ('${NUMERO_EXTRA}', '${ORG_A}', 'sip_trunk', '\\x00', 'STARTING', 'Extra', '+556130000289',
+              'voip.exemplo-0288.com.br', 5060, 'udp', 'u0288-extra', '\\x00', '${TIME_EXTRA}');
+    `);
+    expect(tenta(`delete from public.attendance_teams where id = '${TIME_EXTRA}';`)).toBeNull();
+    expect(
+      sql(`select coalesce(sip_team_id::text, '-') || '|' || organization_id from public.channel_sessions where id = '${NUMERO_EXTRA}';`),
     ).toBe(`-|${ORG_A}`);
   });
 
@@ -530,6 +564,16 @@ describe("o bucket e o apêndice", () => {
       insert into public.phone_menu_options (organization_id, menu_id, digit, team_id)
       values ('${ORG_A}', '${MENU_A}', '#', '${TIME_A}');
 
+      -- O time do número como a 0286 o deixou: FK SIMPLES, que aceita o time de outra organização.
+      alter table public.channel_sessions drop constraint channel_sessions_sip_team_id_org_fkey;
+      alter table public.channel_sessions add constraint channel_sessions_sip_team_id_fkey
+        foreign key (sip_team_id) references public.attendance_teams(id) on delete set null;
+      insert into public.channel_sessions
+        (id, organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number,
+         sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted, sip_team_id)
+      values ('${NUMERO_CLONE}', '${ORG_A}', 'sip_trunk', '\\x00', 'STARTING', 'Clone', '+556130000290',
+              'voip.exemplo-0288.com.br', 5060, 'udp', 'u0288-clone', '\\x00', '${TIME_B}');
+
       -- Um clone que rodou um rascunho com FK SIMPLES, e um ponteiro cruzado que ela deixou entrar.
       alter table public.channel_sessions drop constraint channel_sessions_sip_menu_id_org_fkey;
       alter table public.channel_sessions add constraint channel_sessions_sip_menu_id_fkey
@@ -568,6 +612,9 @@ describe("o bucket e o apêndice", () => {
     expect(sql(`select count(*) from public.voice_calls where menu_outcome = 'talvez';`)).toBe("0");
     // A FK simples saiu, a composta entrou, e o ponteiro cruzado virou nulo antes dela.
     expect(fksDasReferencias()).toEqual(FKS_ESPERADAS);
+    expect(sql(`select coalesce(sip_team_id::text, '-') from public.channel_sessions where id = '${NUMERO_CLONE}';`)).toBe("-");
+    // …e o time da MESMA organização ficou (a cura só solta o que cruza).
+    expect(sql(`select coalesce(sip_team_id::text, '-') from public.channel_sessions where id = '${NUMERO_A}';`)).toBe(TIME_A);
     expect(sql(`select coalesce(waiting_prompt_id::text, '-') from public.phone_settings where organization_id = '${ORG_A}';`)).toBe("-");
     expect(
       sql(`select coalesce(menu_id::text, '-') || '|' || organization_id from public.voice_calls where sip_call_ref = 'ref-0288-cruzada-clone';`),
@@ -604,13 +651,14 @@ describe("apagar uma organização com tudo ligado", () => {
   const ORG_D = "c0de0288-0000-4000-8000-00000000000d";
   const id = (bloco: string, n: number, sufixo: string) => `c0de0288-${bloco}-4000-8000-0000000000${n}${sufixo}`;
 
-  /** Uma organização com TUDO da 0288 ligado: número → menu, opções, falas, configuração, aviso, ligação. */
+  /** Uma organização com TUDO da 0288 ligado: número → menu, número → time, opções, falas, configuração, aviso, ligação. */
   function semear(org: string, sufixo: string): void {
     const u = id("1111", 1, sufixo);
     const [t1, t2] = [id("2222", 1, sufixo), id("2222", 2, sufixo)];
     const [f1, f2, f3] = [id("3333", 1, sufixo), id("3333", 2, sufixo), id("3333", 3, sufixo)];
     const menu = id("4444", 1, sufixo);
     const numero = id("5555", 1, sufixo);
+    const numeroDoTime = id("5555", 2, sufixo);
     const caminho = (h: string) => `'${org}/${h.repeat(64)}.ulaw'`;
     sql(`
       insert into auth.users (id, email) values ('${u}', 'ura-0288-${sufixo}@invariant.test') on conflict do nothing;
@@ -639,6 +687,11 @@ describe("apagar uma organização com tudo ligado", () => {
          sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted, sip_menu_id)
       values ('${numero}', '${org}', 'sip_trunk', '\\x00', 'STARTING', 'URA ${sufixo}', '+55613000028${sufixo === "c" ? 1 : 2}',
               'voip.exemplo-0288-${sufixo}.com.br', 5060, 'udp', 'u0288${sufixo}', '\\x00', '${menu}');
+      insert into public.channel_sessions
+        (id, organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number,
+         sip_server, sip_port, sip_transport, sip_username, sip_password_encrypted, sip_team_id)
+      values ('${numeroDoTime}', '${org}', 'sip_trunk', '\\x00', 'STARTING', 'Time ${sufixo}', '+55613000029${sufixo === "c" ? 1 : 2}',
+              'voip.exemplo-0288-${sufixo}.com.br', 5060, 'udp', 'u0288${sufixo}-time', '\\x00', '${t1}');
       insert into public.voice_calls
         (organization_id, channel_session_id, provider, sip_call_ref, direction, peer_phone, status,
          menu_id, menu_digit, menu_outcome, emergency_heard_at, team_id)
@@ -657,7 +710,7 @@ describe("apagar uma organização com tudo ligado", () => {
       'times=' || (select count(*) from public.attendance_teams where organization_id = '${org}'),
       'numeros=' || (select count(*) from public.channel_sessions where organization_id = '${org}'),
       'ligacoes=' || (select count(*) from public.voice_calls where organization_id = '${org}'));`;
-  const CHEIA = "org=1 falas=3 config=1 menus=1 opcoes=2 times=2 numeros=1 ligacoes=1";
+  const CHEIA = "org=1 falas=3 config=1 menus=1 opcoes=2 times=2 numeros=2 ligacoes=1";
   const VAZIA = "org=0 falas=0 config=0 menus=0 opcoes=0 times=0 numeros=0 ligacoes=0";
   const linhas = (out: string) => out.split("\n").filter((l) => l.startsWith("@@")).map((l) => l.slice(2));
 

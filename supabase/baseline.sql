@@ -29588,7 +29588,8 @@ end $validar$;
 -- 7. FKs compostas (organization_id, coluna) ------------------------------------
 -- O alvo precisa de `unique (organization_id, id)`: phone_prompts e phone_menus
 -- nascem com ela (acima). As referências a attendance_teams são as de
--- phone_menus e phone_menu_options, e usam a unique da 0263 (ver phone_menus).
+-- phone_menus e phone_menu_options e o time do número, e usam a unique da 0263
+-- (ver phone_menus).
 
 -- Uma FK por referência anulável, sempre `on delete set null (coluna)`. Para cada
 -- uma: se a FK certa (nome, alvo, as duas colunas, set null só da coluna) já está
@@ -29596,6 +29597,14 @@ end $validar$;
 -- primeiro. Senão: sai toda outra FK que envolva a coluna (a simples de um
 -- rascunho, ou uma torta), o ponteiro para outra organização (ou para linha que
 -- não existe) vira nulo, e a composta entra.
+--
+-- `channel_sessions.sip_team_id` não é referência nova: a 0286 a criou com FK
+-- SIMPLES (`channel_sessions_sip_team_id_fkey`, `on delete set null`), que aceita
+-- o time de outra organização — e `channel_sessions` é gravável pela REST (admin).
+-- O destino do número passa a ser um time OU um menu, e as duas metades ganham a
+-- mesma catraca: o bloco troca a simples pela composta, com o mesmo `set null`,
+-- agora só da coluna. O `add column if not exists` da 0286 não a recria: com a
+-- coluna existente, a cláusula inteira (inclusive o `references`) é pulada.
 do $fk$
 declare
   r      record;
@@ -29608,6 +29617,7 @@ begin
   for r in
     select * from (values
       ('channel_sessions', 'sip_menu_id',               'phone_menus',   'channel_sessions_sip_menu_id_org_fkey'),
+      ('channel_sessions', 'sip_team_id',               'attendance_teams', 'channel_sessions_sip_team_id_org_fkey'),
       ('voice_calls',      'menu_id',                   'phone_menus',   'voice_calls_menu_id_org_fkey'),
       ('phone_menus',      'prompt_id',                 'phone_prompts', 'phone_menus_prompt_id_org_fkey'),
       ('phone_menus',      'invalid_prompt_id',         'phone_prompts', 'phone_menus_invalid_prompt_id_org_fkey'),
@@ -29707,6 +29717,8 @@ comment on column public.phone_prompts.storage_path is
   '<organization_id>/<content_hash>.ulaw no bucket phone-prompts — amarrado por CHECK, porque o worker escreve este caminho no disco. NULL só numa linha failed.';
 comment on table public.phone_menus is
   'Menu de voz (URA) da organização: serve a vários números (channel_sessions.sip_menu_id). Tecla → time em phone_menu_options; quem não escolhe vai ao default_team_id. accepts_extension é da versão 3 (ramais).';
+comment on column public.channel_sessions.sip_team_id is
+  'Time que recebe as ligações deste número. Excludente com sip_menu_id (channel_sessions_sip_destino_check); NULL nos dois = ninguém atende (a tela mostra). Apagar o time não apaga o número. FK composta (organization_id, sip_team_id) desde a 0288: o banco recusa time de outra organização, também pela REST.';
 comment on column public.channel_sessions.sip_menu_id is
   'Menu de voz que atende as ligações deste número. Excludente com sip_team_id (channel_sessions_sip_destino_check). FK composta (organization_id, sip_menu_id): o banco recusa menu de outra organização, também pela REST. A API só aceita menu com a fala pronta.';
 comment on column public.attendance_teams.phone_emergency_expires_at is

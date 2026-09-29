@@ -571,7 +571,7 @@ describe("arquivar × apontar um número ao menu, ao mesmo tempo (Postgres real)
     const arquivando = arquivarMenu(portao.pool, ORG_A, id);
     let apontando: Promise<string> = Promise.resolve("—");
     try {
-      await portao.travou;
+      await chegouAoPortao(portao.travou);
       apontando = apontarNumero(pool, NUMERO_A, id);
       const apontou = acompanhar(apontando);
       await esperar(300);
@@ -579,6 +579,10 @@ describe("arquivar × apontar um número ao menu, ao mesmo tempo (Postgres real)
     } finally {
       // Abre sempre: uma asserção vermelha acima não pode deixar a transação presa no portão.
       portao.abrir();
+      // E espera as duas terminarem ANTES de o caso acabar: o `beforeEach` seguinte usa
+      // `sql()` síncrono, que prende o event loop — com uma transação ainda aberta
+      // segurando a trava do menu, o arquivo inteiro pendura em vez de ficar vermelho.
+      await Promise.allSettled([arquivando, apontando]);
     }
     expect(await arquivando).toMatchObject({ ok: true });
     expect(await apontando).toBe("menu_inativo");
@@ -592,13 +596,14 @@ describe("arquivar × apontar um número ao menu, ao mesmo tempo (Postgres real)
     const apontando = apontarNumero(portao.pool, NUMERO_A, id);
     let arquivando: ReturnType<typeof arquivarMenu> = Promise.resolve({ ok: false, motivo: "nao_encontrado" });
     try {
-      await portao.travou;
+      await chegouAoPortao(portao.travou);
       arquivando = arquivarMenu(pool, ORG_A, id);
       const arquivou = acompanhar(arquivando);
       await esperar(300);
       expect(arquivou()).toBe(false); // parado na trava do menu
     } finally {
       portao.abrir();
+      await Promise.allSettled([apontando, arquivando]);
     }
     expect(await apontando).toBe("ok");
     expect(await arquivando).toEqual({
@@ -683,12 +688,13 @@ describe("a trava do menu não faz a LIGAÇÃO esperar", () => {
     const portao = poolComPortao();
     const salvando = salvarMenuDaOrg(pedido({ nome: "Editado" }, id, portao.pool));
     try {
-      await portao.travou;
+      await chegouAoPortao(portao.travou);
       const inicio = Date.now();
       expect(await inserirLigacao(id)).toBe("entrou");
       expect(Date.now() - inicio).toBeLessThan(900);
     } finally {
       portao.abrir();
+      await Promise.allSettled([salvando]);
     }
     expect(await salvando).toMatchObject({ ok: true });
   });
