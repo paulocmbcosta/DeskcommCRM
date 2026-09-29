@@ -9953,7 +9953,7 @@ export const DICIONARIO: Traducoes = {
   "e foi para o time {time}": { es: "y pasó al equipo {time}" },
   "e foi para o time padrão, {time}": { es: "y pasó al equipo predeterminado, {time}" },
   "Desligou no menu {menu}, antes de escolher": { es: "Colgó en el menú {menu}, antes de elegir" },
-  "A ligação terminou no menu {menu}, antes da escolha": { es: "La llamada terminó en el menú {menu}, antes de la elección" },
+  "A ligação terminou no menu {menu}, antes de escolher": { es: "La llamada terminó en el menú {menu}, antes de elegir" },
   "Ouviu o aviso de instabilidade": { es: "Escuchó el aviso de inestabilidad" },
 };
 

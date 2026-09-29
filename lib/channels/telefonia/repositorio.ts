@@ -16,6 +16,7 @@ import { isWithinSchedule } from "@/lib/routing/eligibility";
 import { lerAgenda } from "@/lib/times/agenda";
 import { FUSO_PADRAO, fusoValido } from "@/lib/tempo/fusos";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
 import { normalizarIdioma, type Idioma } from "@/lib/i18n/idiomas";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
@@ -887,6 +888,45 @@ export function textoDoRegistro(p: {
 }
 
 /**
+ * O que a URA fez (fase 2), no schema central que o cartão lê (`MenuDaLigacao`):
+ * o menu, a tecla, o time para onde a ligação foi — ou que o cliente desligou no
+ * menu. Nulo quando a ligação não passou por menu.
+ *
+ * Os nomes são os desta hora, sem filtro de arquivamento (é história), e os dois
+ * lidos DESTA organização. Sem decisão, não há time a nomear: o `team_id` ainda é
+ * o de entrada, e ninguém chegou a tocar.
+ *
+ * NUNCA lança: os nomes são cosméticos, e quem chama é `finalizar` (controle.ts),
+ * que depois disto ainda abre o "Ligar de volta" e grava o `registrarFim`. Se a
+ * leitura falha, o registro sai com os nomes nulos (o cartão diz "menu do
+ * telefone") e o log conta por quê.
+ */
+async function menuDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<MenuDaLigacao | null> {
+  if (!l.menu_id && !l.menu_outcome) return null;
+  let nomes: { menu: string | null; time: string | null } | undefined;
+  try {
+    const { rows } = await db.query<{ menu: string | null; time: string | null }>(
+      `select (select m.name from phone_menus m where m.id = $2::uuid and m.organization_id = $1) as menu,
+              (select t.name from attendance_teams t where t.id = $3::uuid and t.organization_id = $1) as time`,
+      [l.organization_id, l.menu_id ?? null, l.menu_outcome ? l.team_id : null],
+    );
+    nomes = rows[0];
+  } catch (e) {
+    logger.warn("telefonia: nomes do menu e do time não lidos — o registro na conversa sai sem eles", {
+      voice_call: l.id,
+      erro: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+    });
+  }
+  return {
+    nome: nomes?.menu ?? null,
+    desfecho: l.menu_outcome ?? null,
+    tecla: l.menu_digit ?? null,
+    time_nome: nomes?.time ?? null,
+    desligou: desligouNoMenu(l),
+  };
+}
+
+/**
  * O registro da ligação DENTRO da conversa — a linha que o atendente vê no chat.
  *
  * `type=system`, `sent_via=system`, `direction=outbound`, de propósito: uma
@@ -911,26 +951,6 @@ export async function registrarNaConversa(
     quem = rows[0]?.nome ?? null;
   }
   const texto = textoDoRegistro({ direcao: l.direction, desfecho, duracaoMs, quem, motivo: l.end_reason ?? null });
-  // O que a URA fez (fase 2), no schema central que o cartão lê (`MenuDaLigacao`):
-  // o menu, a tecla, o time para onde a ligação foi — ou que o cliente desligou
-  // no menu. Os nomes são os desta hora, sem filtro de arquivamento (é história),
-  // e os dois lidos DESTA organização. Sem decisão, não há time a nomear: o
-  // `team_id` ainda é o de entrada, e ninguém chegou a tocar.
-  let menu: MenuDaLigacao | null = null;
-  if (l.menu_id || l.menu_outcome) {
-    const { rows: nomes } = await db.query<{ menu: string | null; time: string | null }>(
-      `select (select m.name from phone_menus m where m.id = $2::uuid and m.organization_id = $1) as menu,
-              (select t.name from attendance_teams t where t.id = $3::uuid and t.organization_id = $1) as time`,
-      [l.organization_id, l.menu_id ?? null, l.menu_outcome ? l.team_id : null],
-    );
-    menu = {
-      nome: nomes[0]?.menu ?? null,
-      desfecho: l.menu_outcome ?? null,
-      tecla: l.menu_digit ?? null,
-      time_nome: nomes[0]?.time ?? null,
-      desligou: desligouNoMenu(l),
-    };
-  }
   // Sem `on conflict`: a trava única de `(organization_id, external_id)` é
   // DEFERRABLE, e o Postgres recusa trava deferível como árbitro ("ON CONFLICT
   // does not support deferrable unique constraints") — medido na prova pela
@@ -942,6 +962,7 @@ export async function registrarNaConversa(
     [l.organization_id, externalId],
   );
   if (ja.length > 0) return;
+  const menu = await menuDoRegistro(db, l);
   try {
     await db.query(
     `insert into messages

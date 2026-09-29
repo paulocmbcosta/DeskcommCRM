@@ -71,7 +71,7 @@ function oQueAUraFez(menu: MenuDaLigacao, t: (texto: string) => string): { situa
   if (menu.desfecho === null) {
     return menu.desligou
       ? { situacao: "desligou", texto: preencher(t("Desligou no menu {menu}, antes de escolher"), valores) }
-      : { situacao: "interrompida", texto: preencher(t("A ligação terminou no menu {menu}, antes da escolha"), valores) };
+      : { situacao: "interrompida", texto: preencher(t("A ligação terminou no menu {menu}, antes de escolher"), valores) };
   }
   let acao: string;
   let destino: string;
@@ -129,7 +129,9 @@ export function CartaoDaLigacao({ ligacao, em }: { ligacao: MetadadoDaLigacao; e
         }`}
       >
         <Icone size={14} weight="bold" aria-hidden />
-        <span className="font-medium">{titulo}</span>
+        <span className="font-medium" data-ligacao-titulo>
+          {titulo}
+        </span>
         {ligacao.atendente_nome && atendida ? (
           <span className="text-muted-foreground">
             · {recebida ? t("atendida por") : t("por")} {ligacao.atendente_nome}
@@ -141,7 +143,7 @@ export function CartaoDaLigacao({ ligacao, em }: { ligacao: MetadadoDaLigacao; e
       {ura || ligacao.ouviu_aviso ? (
         // Fora da pílula, e não dentro dela: a frase é longa, e uma pílula que
         // quebra em duas linhas vira um borrão no chat estreito.
-        <p className="max-w-full px-4 text-center text-[11px] leading-snug text-muted-foreground" data-ligacao-ura>
+        <p className="max-w-full px-4 text-center text-xs leading-snug text-muted-foreground" data-ligacao-ura>
           {ura ? <span data-ligacao-menu={ura.situacao}>{ura.texto}</span> : null}
           {ura && ligacao.ouviu_aviso ? " · " : null}
           {ligacao.ouviu_aviso ? <span data-ligacao-ouviu-aviso>{t("Ouviu o aviso de instabilidade")}</span> : null}

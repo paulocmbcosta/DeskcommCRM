@@ -101,7 +101,7 @@ describe("o cartão conta o que a URA fez", () => {
         menu: menu({ desfecho: null, tecla: null, time_nome: null, desligou: false }),
       }),
     );
-    expect(c.menu?.textContent).toBe("A ligação terminou no menu Principal, antes da escolha");
+    expect(c.menu?.textContent).toBe("A ligação terminou no menu Principal, antes de escolher");
     expect(c.menu?.getAttribute("data-ligacao-menu")).toBe("interrompida");
   });
 
@@ -127,18 +127,18 @@ describe("o cartão conta o que a URA fez", () => {
 
   it("fora do horário tem título próprio — e conta o menu que levou ao time fechado", () => {
     const c = cartao(registro({ motivo: "after_hours", menu: menu({}) }));
-    expect(c.raiz.querySelector(".font-medium")?.textContent).toBe("Ligação fora do horário");
+    expect(c.raiz.querySelector("[data-ligacao-titulo]")?.textContent).toBe("Ligação fora do horário");
     expect(c.menu?.textContent).toBe("No menu Principal, digitou 2 e foi para o time Financeiro");
     cleanup();
     // O `after_hours` só muda o título da recebida NÃO atendida.
     const feita = cartao({ voice_call: { id: "vc-2", direcao: "outbound", desfecho: "sem_resposta", duracao_ms: null, motivo: "after_hours" } });
-    expect(feita.raiz.querySelector(".font-medium")?.textContent).toBe("Ligação sem resposta");
+    expect(feita.raiz.querySelector("[data-ligacao-titulo]")?.textContent).toBe("Ligação sem resposta");
   });
 
   it("em espanhol, a frase inteira — e os nomes vêm como foram cadastrados", () => {
     const es = (el: ReactElement) => <IdiomaProvider locale="es">{el}</IdiomaProvider>;
     const c = cartao(registro({ motivo: "after_hours", ouviu_aviso: true, menu: menu({}) }), es);
-    expect(c.raiz.querySelector(".font-medium")?.textContent).toBe("Llamada fuera de horario");
+    expect(c.raiz.querySelector("[data-ligacao-titulo]")?.textContent).toBe("Llamada fuera de horario");
     expect(c.ura?.textContent).toBe(
       "En el menú Principal, marcó 2 y pasó al equipo Financeiro · Escuchó el aviso de inestabilidad",
     );
@@ -156,7 +156,7 @@ describe("o cartão conta o que a URA fez", () => {
       "Colgó en el menú Principal, antes de elegir",
     );
     expect(frase({ desfecho: null, tecla: null, time_nome: null })).toBe(
-      "La llamada terminó en el menú Principal, antes de la elección",
+      "La llamada terminó en el menú Principal, antes de elegir",
     );
     expect(frase({ nome: null })).toBe("En el menú del teléfono, marcó 2 y pasó al equipo Financeiro");
     expect(frase({ tecla: null })).toBe("En el menú Principal, eligió una opción y pasó al equipo Financeiro");
@@ -199,6 +199,21 @@ describe("o metadado estranho não derruba o cartão nem conta história errada"
     // nem no cartão, nem no que o leitor entrega a quem mais o usar.
     expect(cartao(registro({ menu: menu({ desligou: true }) })).menu?.getAttribute("data-ligacao-menu")).toBe("chosen");
     expect(ligacaoDaMensagem(registro({ menu: menu({ desligou: true }) }))?.menu?.desligou).toBe(false);
+  });
+
+  // Só a forma nova grava `desfecho: null`, e sempre com `desligou`. Um objeto sem a
+  // chave `desfecho`, ou com o nulo sem o `desligou`, não sustenta "terminou no menu":
+  // o leitor devolve nulo, e o cartão cala.
+  it.each([
+    ["objeto vazio", {}],
+    ["desfecho nulo sem 'desligou'", { desfecho: null }],
+    ["só o nome", { nome: "X" }],
+    ["'desligou' que não é booleano", { desfecho: null, desligou: "sim" }],
+  ])("registro que não diz o que a URA fez (%s): o cartão cala sobre o menu", (_, bruto) => {
+    expect(ligacaoDaMensagem(registro({ menu: bruto }))?.menu).toBeNull();
+    const c = cartao(registro({ menu: bruto }));
+    expect(c.raiz.textContent).toBe(`Ligação perdida· ${HORA}`);
+    expect(c.ura).toBeNull();
   });
 
   it("sem o nome do menu ou do time (registro da 1ª versão da fase 2): a frase segue legível", () => {

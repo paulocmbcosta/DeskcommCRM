@@ -53,17 +53,26 @@ export interface MenuDaLigacao {
 const textoOuNulo = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
 
 /**
- * Lê `metadata.voice_call.menu` e NUNCA lança: o metadado é jsonb aberto. Um
- * desfecho fora do vocabulário (um worker mais novo, um registro malformado) faz
- * a leitura devolver `null` — o cartão cala sobre o menu em vez de contar uma
- * história errada. O registro da primeira versão da fase 2, sem `nome` nem
- * `desligou`, é lido com os dois vazios.
+ * Lê `metadata.voice_call.menu` e NUNCA lança: o metadado é jsonb aberto. Devolve
+ * `null` — e o cartão cala sobre o menu em vez de contar uma história errada —
+ * quando o registro não sustenta o que a URA fez:
+ *  - sem a chave `desfecho` (`{}`, `{ nome }`): nada diz o que houve no menu;
+ *  - `desfecho` fora do vocabulário (um worker mais novo, um registro malformado);
+ *  - `desfecho: null` sem `desligou` booleano: só a forma nova grava o nulo, e
+ *    sempre junto do `desligou` — sem ele, "terminou no menu" seria invenção.
+ * O registro da primeira versão da fase 2 (`{ desfecho, tecla, time_nome }`, sempre
+ * com desfecho) é lido com `nome` vazio.
  */
 export function menuDaLigacao(bruto: unknown): MenuDaLigacao | null {
   if (!bruto || typeof bruto !== "object" || Array.isArray(bruto)) return null;
   const m = bruto as Record<string, unknown>;
-  const desfecho = m.desfecho ?? null;
-  if (desfecho !== null && !DESFECHOS_DO_MENU.includes(desfecho as DesfechoDoMenu)) return null;
+  if (!("desfecho" in m)) return null;
+  const desfecho = m.desfecho;
+  if (desfecho === null) {
+    if (typeof m.desligou !== "boolean") return null;
+  } else if (!DESFECHOS_DO_MENU.includes(desfecho as DesfechoDoMenu)) {
+    return null;
+  }
   return {
     nome: textoOuNulo(m.nome),
     desfecho: desfecho as DesfechoDoMenu | null,

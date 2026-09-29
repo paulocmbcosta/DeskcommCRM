@@ -36,9 +36,10 @@
  *     "Ligar de volta" diz o time que ficou com a ligação.
  */
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { logger } from "@/lib/logger";
 import * as repo from "@/lib/channels/telefonia/repositorio";
 
 if (!process.env.TEST_DB_CONTAINER) {
@@ -772,7 +773,7 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
     ).rows[0]?.vc;
 
   it("desligou no menu, antes de escolher: o cartão diz isso, com o nome do menu e sem time (ninguém chegou a tocar)", async () => {
-    const id = await ligacao(ORG, NUMERO, "ura-repo-8", ABERTO, MENU);
+    const id = await ligacao(ORG, NUMERO, "ura-repo-20", ABERTO, MENU);
     const l = await repo.encerrarLigacao(pool, ORG, id, "cliente_desligou");
     await repo.registrarNaConversa(pool, l!, "perdida", null);
     expect(await registroDaLigacao(ORG, id)).toMatchObject({
@@ -781,10 +782,48 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
     });
   });
 
+  it("a leitura dos NOMES falha: o registro na conversa sai mesmo assim, sem nome, e o log diz por quê — e o repetido nem pergunta", async () => {
+    // Os nomes são cosméticos; o registro, não. Se a leitura deles derrubasse
+    // `registrarNaConversa`, cairiam junto, em `finalizar`, o "Ligar de volta" e o
+    // `registrarFim`. Aqui só a consulta dos nomes falha; o resto é Postgres real.
+    const perguntasPelosNomes: string[] = [];
+    const comNomesQuebrados: Queryable = {
+      query: ((t: string, v?: unknown[]) => {
+        if (/\bphone_menus\b/.test(t)) {
+          perguntasPelosNomes.push(t);
+          return Promise.reject(new Error("canceling statement due to statement timeout"));
+        }
+        return pool.query(t, v);
+      }) as Queryable["query"],
+    };
+    const aviso = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    try {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-22", ABERTO, MENU);
+      await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "2", desfecho: "chosen", teamId: FECHADO });
+      const l = await repo.encerrarLigacao(pool, ORG, id, "ninguem_atendeu");
+      await expect(repo.registrarNaConversa(comNomesQuebrados, l!, "perdida", null)).resolves.toBeUndefined();
+      expect(await registroDaLigacao(ORG, id)).toMatchObject({
+        menu: { nome: null, desfecho: "chosen", tecla: "2", time_nome: null, desligou: false },
+        motivo: "ninguem_atendeu",
+      });
+      expect(perguntasPelosNomes).toHaveLength(1);
+      expect(aviso).toHaveBeenCalledWith(
+        expect.stringContaining("nomes"),
+        expect.objectContaining({ voice_call: id, erro: expect.stringContaining("statement timeout") }),
+      );
+
+      // O registro já existe: a conferência vem ANTES da leitura dos nomes.
+      await repo.registrarNaConversa(comNomesQuebrados, l!, "perdida", null);
+      expect(perguntasPelosNomes).toHaveLength(1);
+    } finally {
+      aviso.mockRestore();
+    }
+  });
+
   it("o menu parou sem ser o cliente (reinício do worker): não é 'desligou'; e o nome é o daquela hora, também de menu arquivado", async () => {
     // O menu 'Velho' está arquivado: o registro conta o que o cliente ouviu, e o
     // nome sai sem filtro de arquivamento — é história, não escolha.
-    const id = await ligacao(ORG, NUMERO, "ura-repo-9", ABERTO, MENU_ARQUIVADO);
+    const id = await ligacao(ORG, NUMERO, "ura-repo-21", ABERTO, MENU_ARQUIVADO);
     const l = await repo.encerrarLigacao(pool, ORG, id, "interrompida_no_reinicio");
     await repo.registrarNaConversa(pool, l!, "perdida", null);
     expect(await registroDaLigacao(ORG, id)).toMatchObject({
