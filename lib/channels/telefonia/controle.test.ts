@@ -171,17 +171,18 @@ class BancoFalso implements PortaBanco {
     this.eventos.push(["menu_time_arquivado", org, menu.nome]);
   };
   /**
-   * Como o SQL (`registrarEscolhaDoMenu`): a ligação fica com o time escolhido,
-   * e a conversa dela acompanha — só a SEM DONO (a regra do roteamento).
+   * A escolha do menu. O que ela faz no banco (a ligação e a conversa sem dono
+   * vão ao time escolhido) é provado no Postgres real
+   * (tests/invariants/telefonia-repositorio-da-ura.test.ts); aqui só se registra
+   * o que o controlador pediu. `falharEscolha` simula o banco que lança ou que
+   * não acha a ligação.
    */
+  falharEscolha: "lanca" | "nao_acha" | null = null;
   registrarEscolhaDoMenu = async (org: string, id: string, e: EscolhaDoMenu) => {
     this.eventos.push(["escolha", org, id, e.digito, e.desfecho, e.teamId]);
     if (!this.daOrg(org, id, "registrarEscolhaDoMenu")) return false;
-    const l = this.ligacoes.get(id)!;
-    l.team_id = e.teamId;
-    const conversa = l.conversation_id ? this.conversas.get(l.conversation_id) : undefined;
-    if (conversa && !conversa.dono) conversa.teamId = e.teamId;
-    return true;
+    if (this.falharEscolha === "lanca") throw new Error("banco fora do ar");
+    return this.falharEscolha !== "nao_acha";
   };
   registrarAvisoOuvido = async (org: string, id: string) => {
     this.eventos.push(["ouviu_aviso", org, id]);
@@ -191,10 +192,8 @@ class BancoFalso implements PortaBanco {
     this.eventos.push(["fala_intocavel", org, rotulo]);
   };
   acharOuCriarContato = async () => "contato-1";
-  /** A conversa de telefone do contato: nasce no time da ligação, sem dono; a que já existe fica como está. */
-  conversas = new Map<string, { teamId: string | null; dono: string | null }>();
-  acharOuCriarConversa = async (_o: string, _c: string, _t: string, teamId: string | null) => {
-    if (!this.conversas.has("conversa-1")) this.conversas.set("conversa-1", { teamId, dono: null });
+  acharOuCriarConversa = async (org: string, _c: string, _t: string, teamId: string | null) => {
+    this.eventos.push(["conversa_criada", org, teamId]);
     return "conversa-1";
   };
   criarLigacao = async (l: NovaLigacao) => {
@@ -246,18 +245,20 @@ class BancoFalso implements PortaBanco {
     l.owner_user_id = l.owner_user_id ?? u;
     this.eventos.push(["atendida", id, u]);
   };
+  /** O que `encerrarLigacao` devolveu — a linha do banco, que o controlador repassa ao "Ligar de volta". */
+  devolvidasAoEncerrar: LigacaoDoBanco[] = [];
   encerrarLigacao = async (org: string, id: string, motivo: string) => {
     const l = this.ligacoes.get(id);
     if (!l || !this.daOrg(org, id, "encerrarLigacao") || l.status === "ended") return null;
     l.status = "ended";
     l.end_reason = motivo;
     this.eventos.push(["encerrada", id, motivo]);
-    return { ...l };
+    const linha = { ...l };
+    this.devolvidasAoEncerrar.push(linha);
+    return linha;
   };
   atribuirConversa = async (_o: string, c: string, u: string) => {
     this.eventos.push(["atribuida", c, u]);
-    const conversa = this.conversas.get(c);
-    if (conversa) conversa.dono = u;
   };
   registrarNaConversa = async (l: LigacaoDoBanco, d: string) => {
     this.eventos.push(["registro", l.id, d]);
@@ -1710,31 +1711,50 @@ describe("URA (§5.1)", () => {
   });
 
   describe("a conversa acompanha o time escolhido (visibilidade por time)", () => {
-    it("escolheu 2 e ninguém atendeu: a conversa foi para o time 2, e o 'Ligar de volta' sai com o time 2", async () => {
+    // O EFEITO no banco — a ligação e a conversa sem dono no time escolhido, a de
+    // humano parada, o time arquivado recusado, o texto do aviso — é provado no
+    // Postgres real (tests/invariants/telefonia-repositorio-da-ura.test.ts). Aqui,
+    // o que é do controlador: o que ele pede, em que ordem, e o que faz quando o
+    // banco falha.
+    const posicao = (nome: string) => banco.eventos.findIndex((e) => e[0] === nome);
+
+    it("escolheu 2: a conversa nasce no time padrão, e a escolha (que a leva ao time 2) é gravada UMA vez, ANTES de a ligação entrar na fila do time 2", async () => {
       await entrar();
-      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME, dono: null });
+      expect(banco.tem("conversa_criada")).toEqual([["conversa_criada", ORG, TIME]]);
       await tecla("2");
-      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME2, dono: null });
+      expect(escolhas()).toEqual([["escolha", ORG, "vc-1", "2", "chosen", TIME2]]);
+      expect(banco.tem("entrou_na_fila")).toEqual([["entrou_na_fila", ORG, TIME2]]);
+      expect(posicao("escolha")).toBeLessThan(posicao("entrou_na_fila"));
+      // Ninguém atendeu: o "Ligar de volta" leva a linha que o BANCO encerrou (com o time dele), não uma montada aqui.
       await vi.advanceTimersByTimeAsync(125_000);
       expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
-      expect(banco.perdidas.map((l) => l.team_id)).toEqual([TIME2]);
+      expect(banco.perdidas).toHaveLength(1);
+      expect(banco.perdidas[0]).toBe(banco.devolvidasAoEncerrar[0]);
     });
 
-    it("desligou no menu: a conversa fica no time padrão, e o 'Ligar de volta' sai com ele", async () => {
+    it("desligou no menu: nenhuma escolha é gravada (a conversa fica no time em que nasceu), e o 'Ligar de volta' leva a linha que o banco encerrou", async () => {
       await entrar();
       await terminou("fala-1");
       await destruir("cli-1");
-      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME, dono: null });
-      expect(banco.perdidas.map((l) => l.team_id)).toEqual([TIME]);
+      expect(escolhas()).toEqual([]);
+      expect(banco.tem("entrou_na_fila")).toEqual([]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.perdidas).toHaveLength(1);
+      expect(banco.perdidas[0]).toBe(banco.devolvidasAoEncerrar[0]);
     });
 
-    it("a conversa que já tem dono fica onde está; a ligação vai ao time escolhido", async () => {
-      banco.conversas.set("conversa-1", { teamId: TIME, dono: BIA });
-      await entrar();
-      await tecla("2");
-      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME, dono: BIA });
-      expect(banco.ligacoes.get("vc-1")?.team_id).toBe(TIME2);
-    });
+    it.each(["lanca", "nao_acha"] as const)(
+      "a escolha que o banco não grava (%s) não segura a ligação: ela entra na fila do time escolhido e o ramal toca",
+      async (falha) => {
+        banco.falharEscolha = falha;
+        anaDisponivel();
+        await entrar();
+        await tecla("2");
+        expect(escolhas()).toHaveLength(1);
+        expect(banco.tem("entrou_na_fila")).toEqual([["entrou_na_fila", ORG, TIME2]]);
+        expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      },
+    );
   });
 
   it("fluxo completo: menu → tecla 2 → fila do time 2 → aviso INTEIRO (a tecla já não vale) → ramal → o atendente atende", async () => {
