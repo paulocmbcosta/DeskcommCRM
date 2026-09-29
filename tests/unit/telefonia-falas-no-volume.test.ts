@@ -8,7 +8,8 @@
  *  2. o worker monta com escrita e o asterisk SÓ leitura (`:ro`);
  *  3. os dois no caminho que `falas-no-disco.ts` escreve e manda o Asterisk tocar
  *     — um caminho trocado de um lado só daria silêncio em toda URA;
- *  4. nenhum outro serviço monta o volume: quem escreve é só o worker.
+ *  4. nenhum outro serviço monta o volume — em nenhuma das sintaxes do compose,
+ *     nem pelo override do Traefik: quem escreve é só o worker.
  *
  * Não é um parser de YAML (o molde é tests/unit/portas-do-compose.test.ts): é o
  * suficiente para responder "este serviço monta X?" sem dependência nova.
@@ -21,15 +22,19 @@ import { describe, expect, it } from "vitest";
 import { DIRETORIO_DAS_FALAS, DIRETORIO_NO_ASTERISK } from "@/lib/channels/telefonia/falas-no-disco";
 
 const VOLUME = "telefonia-falas";
-const compose = readFileSync(join(process.cwd(), "docker-compose.prod.yml"), "utf8");
-const linhas = compose.split("\n");
+const ler = (arquivo: string) => readFileSync(join(process.cwd(), arquivo), "utf8");
+const linhas = ler("docker-compose.prod.yml").split("\n");
 
 const escapar = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Os serviços: da linha `  nome:` (dentro de `services:`) até o próximo cabeçalho do mesmo nível ou do topo. */
-function servicos(): Map<string, string> {
+/**
+ * Os serviços de um compose: da linha `  nome:` (dentro de `services:`) até o
+ * próximo cabeçalho do mesmo nível ou do topo. Linhas de comentário saem.
+ */
+function servicos(texto: string): Map<string, string> {
   const mapa = new Map<string, string>();
-  const inicio = linhas.findIndex((l) => /^services:\s*$/.test(l));
+  const todas = texto.split("\n");
+  const inicio = todas.findIndex((l) => /^services:\s*$/.test(l));
   if (inicio === -1) throw new Error("bloco services: não encontrado no compose");
   let atual: string | null = null;
   let buffer: string[] = [];
@@ -38,7 +43,7 @@ function servicos(): Map<string, string> {
     atual = null;
     buffer = [];
   };
-  for (const l of linhas.slice(inicio + 1)) {
+  for (const l of todas.slice(inicio + 1)) {
     if (/^\S/.test(l)) break;
     const cabecalho = /^ {2}([a-z][a-z0-9-]*):\s*$/.exec(l);
     if (cabecalho) {
@@ -64,12 +69,23 @@ function volumesDoTopo(): string[] {
   return nomes;
 }
 
-/** As linhas de montagem do volume das falas num serviço (sem comentários). */
+/** As linhas de montagem do volume das falas num serviço, na sintaxe curta (sem comentários). */
 function montagens(bloco: string): string[] {
   return [...bloco.matchAll(new RegExp(`^\\s+-\\s*"?(${VOLUME}:[^"\\s]+)"?\\s*$`, "gm"))].map((m) => m[1]!);
 }
 
-const SERVICOS = servicos();
+/**
+ * O serviço cita o volume em QUALQUER sintaxe de montagem — a curta
+ * (`- telefonia-falas:/x`), a longa (`source: telefonia-falas`) e a em linha
+ * (`- { source: telefonia-falas, ... }`): o nome como palavra inteira. Um
+ * `telefonia-falas-antigo` não conta.
+ */
+function montaOVolume(bloco: string): boolean {
+  return new RegExp(`(^|[^a-z0-9_-])${escapar(VOLUME)}($|[^a-z0-9_-])`, "m").test(bloco);
+}
+
+const SERVICOS = servicos(ler("docker-compose.prod.yml"));
+const DO_TRAEFIK = servicos(ler("docker-compose.traefik.yml"));
 
 describe("o volume das falas do telefone no compose de produção", () => {
   it("o parser enxerga os serviços (guarda do instrumento)", () => {
@@ -100,11 +116,26 @@ describe("o volume das falas do telefone no compose de produção", () => {
     expect(DIRETORIO_DAS_FALAS).toMatch(/^\//);
   });
 
-  it("nenhum outro serviço monta o volume", () => {
-    const outros = [...SERVICOS]
-      .filter(([nome]) => nome !== "worker" && nome !== "asterisk")
-      .filter(([, bloco]) => new RegExp(`\\b${escapar(VOLUME)}:`).test(bloco))
-      .map(([nome]) => nome);
+  it("o detector enxerga as três sintaxes de montagem (guarda do instrumento)", () => {
+    expect(montaOVolume(`    volumes:\n      - ${VOLUME}:/x:ro`)).toBe(true);
+    expect(montaOVolume(`    volumes:\n      - type: volume\n        source: ${VOLUME}\n        target: /x`)).toBe(true);
+    expect(montaOVolume(`    volumes:\n      - { type: volume, source: "${VOLUME}", target: /x }`)).toBe(true);
+    expect(montaOVolume(`    volumes:\n      - ${VOLUME}-antigo:/x`)).toBe(false);
+    expect(montaOVolume("    volumes:\n      - waha-data:/app/.sessions")).toBe(false);
+    // E enxerga os dois que montam de verdade.
+    expect(montaOVolume(SERVICOS.get("worker")!)).toBe(true);
+    expect(montaOVolume(SERVICOS.get("asterisk")!)).toBe(true);
+  });
+
+  it("nenhum outro serviço monta o volume — nem pelo override do Traefik", () => {
+    expect([...DO_TRAEFIK.keys()], "o parser não enxergou o override do Traefik").toContain("app");
+    const outros = [
+      ...[...SERVICOS].map(([nome, bloco]) => ["docker-compose.prod.yml", nome, bloco] as const),
+      ...[...DO_TRAEFIK].map(([nome, bloco]) => ["docker-compose.traefik.yml", nome, bloco] as const),
+    ]
+      .filter(([, nome]) => nome !== "worker" && nome !== "asterisk")
+      .filter(([, , bloco]) => montaOVolume(bloco))
+      .map(([arquivo, nome]) => `${arquivo} → ${nome}`);
     expect(outros).toEqual([]);
   });
 });

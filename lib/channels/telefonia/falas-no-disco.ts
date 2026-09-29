@@ -632,3 +632,41 @@ export class FalasNoDisco {
 export function falasNoDiscoDaInstalacao(db: Queryable, log: Registro): FalasNoDisco {
   return new FalasNoDisco(DIRETORIO_DAS_FALAS, db, armazemDaInstalacao(), log);
 }
+
+/**
+ * O armazém de reserva: a instalação sem cliente do Storage (credencial de
+ * serviço ausente ou inválida). Ler FALHA — e não devolve `null`, que no armazém
+ * quer dizer "o objeto não existe" (lib/telefonia/armazem.ts): aqui ninguém
+ * perguntou ao Storage. Assim a passada registra UMA queda do Storage, na
+ * transição, em vez de uma "fala pronta sem áudio" por fala. `apagar` não remove
+ * nada (`[]`) — e nem é alcançado, porque sem pastas listadas a limpeza para antes.
+ */
+export const ARMAZEM_SEM_STORAGE: ArmazemDasFalas = Object.freeze({
+  baixar: async () => {
+    throw new Error("sem cliente do Storage nesta instalação");
+  },
+  listarPastas: async () => {
+    throw new Error("sem cliente do Storage nesta instalação");
+  },
+  listarObjetos: async () => {
+    throw new Error("sem cliente do Storage nesta instalação");
+  },
+  apagar: async () => [],
+});
+
+/**
+ * O disco das falas do laço do worker (lib/channels/telefonia/laco.ts): o da
+ * instalação (`falasNoDiscoDaInstalacao`). Sem cliente do Storage, o mesmo volume
+ * com o armazém de reserva: o laço sobe assim mesmo — as ligações seguem, pulando
+ * as falas — e o log diz por quê uma vez.
+ */
+export function falasDoWorker(db: Queryable, log: Registro): FalasNoDisco {
+  try {
+    return falasNoDiscoDaInstalacao(db, log);
+  } catch (e) {
+    log.error("telefonia: sem cliente do Storage — as falas do telefone não chegam ao disco", {
+      erro: String(e).slice(0, 200),
+    });
+    return new FalasNoDisco(DIRETORIO_DAS_FALAS, db, ARMAZEM_SEM_STORAGE, log);
+  }
+}

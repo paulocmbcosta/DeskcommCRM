@@ -34,6 +34,7 @@ import type { Queryable } from "@/lib/agent-engine/queue/queue";
 import { armazemDaInstalacao, type ObjetoDoArmazem, type PortaDoArmazem } from "@/lib/telefonia/armazem";
 
 import {
+  ARMAZEM_SEM_STORAGE,
   CARENCIA_DO_ORFAO_MS,
   CARENCIA_DO_TEMPORARIO_MS,
   DIRETORIO_DAS_FALAS,
@@ -43,6 +44,7 @@ import {
   INTERVALO_DA_LIMPEZA_MS,
   JANELA_DO_STORAGE_MS,
   caminhoValido,
+  falasDoWorker,
   falasNoDiscoDaInstalacao,
   midiaDaFala,
   type OpcoesDasFalasNoDisco,
@@ -1019,5 +1021,52 @@ describe("falasNoDiscoDaInstalacao — a fiação do worker", () => {
     expect(armazemDaInstalacao).toHaveBeenCalledTimes(1);
     expect(baixar).not.toHaveBeenCalled();
     expect(listarPastas).not.toHaveBeenCalled();
+  });
+});
+
+describe("falasDoWorker e o armazém de reserva — o disco do laço do worker", () => {
+  it("usa o disco da instalação quando o cliente do Storage existe", () => {
+    vi.mocked(armazemDaInstalacao).mockReturnValueOnce({ ...armazem(), enviar: vi.fn() } as PortaDoArmazem);
+    expect(falasDoWorker(db, log)).toBeInstanceOf(FalasNoDisco);
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("sem cliente do Storage, o mesmo volume com a reserva — e o log diz por quê UMA vez", async () => {
+    vi.mocked(armazemDaInstalacao).mockImplementationOnce(() => {
+      throw new Error("supabaseUrl is required.");
+    });
+    const falas = falasDoWorker(db, log);
+
+    expect(falas).toBeInstanceOf(FalasNoDisco);
+    expect(mensagens("error")).toEqual(["telefonia: sem cliente do Storage — as falas do telefone não chegam ao disco"]);
+    // A ligação pula a fala (null), a limpeza não apaga nada — e nada lança. Só
+    // `stat` no volume da instalação: nada é escrito fora do diretório de teste.
+    expect(await falas.garantir({ id: "f1", storagePath: caminho("a") })).toBeNull();
+    expect(await falas.limparStorage()).toEqual({ apagados: 0, falhas: 1, pulada: false });
+  });
+
+  it("a reserva FALHA na leitura (não é 'objeto ausente') e o apagar não remove nada", async () => {
+    // `null` no baixar quer dizer "o objeto não existe" (lib/telefonia/armazem.ts);
+    // aqui ninguém perguntou ao Storage — é falha, registrada uma vez na transição,
+    // e não uma "fala pronta sem áudio" por fala.
+    await expect(ARMAZEM_SEM_STORAGE.baixar(caminho("a"))).rejects.toThrow(/sem cliente do Storage/);
+    await expect(ARMAZEM_SEM_STORAGE.listarPastas()).rejects.toThrow(/sem cliente do Storage/);
+    await expect(ARMAZEM_SEM_STORAGE.listarObjetos(ORG)).rejects.toThrow(/sem cliente do Storage/);
+    await expect(ARMAZEM_SEM_STORAGE.apagar([caminho("a")])).resolves.toEqual([]);
+  });
+
+  it("com a reserva, a passada registra UMA queda do Storage, não uma 'fala sem áudio' por fala", async () => {
+    referenciar(caminho("a"));
+    referenciar(caminho("b"));
+    const d = new FalasNoDisco(dir, db, ARMAZEM_SEM_STORAGE, log, { agora: () => relogio });
+    await d.sincronizar();
+    await d.limparStorage();
+    avancar(INTERVALO_DA_LIMPEZA_MS);
+    await d.sincronizar();
+    await d.limparStorage();
+
+    expect(mensagens("warn")).toEqual(["telefonia: o Storage das falas não responde"]);
+    expect(mensagens("info")).toEqual([]);
+    expect(await existe(caminho("a"))).toBe(false);
   });
 });
