@@ -333,7 +333,8 @@ describe("o ciclo da gravação na ligação", () => {
     await gravacoes.marcarGravando(pool, ORG, vcId, new Date());
     await encerrarERegistrar(ORG, vcId);
     const msg = await gravacoes.mensagemDaLigacao(pool, ORG, vcId);
-    await pool.query("update contacts set is_anonymized = true where id = $1", [contactId]);
+    // Como a cascata deixa o contato (a trava `contacts_anonymized_locked` exige a data).
+    await pool.query("update contacts set is_anonymized = true, anonymized_at = now() where id = $1", [contactId]);
     expect(
       await gravacoes.anexarGravacao(pool, {
         organizationId: ORG,
@@ -367,7 +368,13 @@ describe("LGPD — anonimizar o contato apaga a gravação", () => {
     const destino = `${ORG}/${msg!.conversationId}/${msg!.id}.mp3`;
     await gravacoes.anexarGravacao(pool, { organizationId: ORG, vcId, mensagemId: msg!.id, caminho: destino, bytes: 1, duracaoMs: 1 });
 
-    await pool.query("select public.fn_lgpd_cascade_redact_contact($1, $2, gen_random_uuid())", [ORG, contactId]);
+    // Um pedido LGPD de verdade: a fila de remoção aponta para ele (FK de `request_id`).
+    const { rows: pedido } = await pool.query<{ id: string }>(
+      `insert into lgpd_requests (organization_id, request_type, source, scope, contact_id, due_at)
+       values ($1, 'redact', 'manual', 'contact', $2, now() + interval '15 days') returning id`,
+      [ORG, contactId],
+    );
+    await pool.query("select public.fn_lgpd_cascade_redact_contact($1, $2, $3)", [ORG, contactId, pedido[0]!.id]);
 
     const { rows } = await pool.query(
       "select bucket from storage_redaction_queue where organization_id = $1 and object_path = $2",
