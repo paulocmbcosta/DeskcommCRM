@@ -151,6 +151,8 @@ class BancoFalso implements PortaBanco {
   };
   timeParaAFila = async (org: string, teamId: string) => {
     this.consultas.push(["timeParaAFila", org, teamId]);
+    // Também na linha do tempo dos efeitos: é a ENTRADA na fila, e há teste que mede o que vem antes dela.
+    this.eventos.push(["entrou_na_fila", org, teamId]);
     if (this.falharFila) throw new Error("banco fora do ar");
     return { situacao: this.situacao, aviso: this.aviso };
   };
@@ -1639,11 +1641,12 @@ describe("URA (§5.1)", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_no_input", TIME]]);
       expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento"]]);
-      // "Antes" da fila: o aviso nasce antes de a ligação pedir a situação do time.
-      const iAviso = banco.eventos.findIndex((e) => e[0] === "menu_time_arquivado");
-      const iEscolha = banco.eventos.findIndex((e) => e[0] === "escolha");
-      expect(iEscolha).toBeLessThan(iAviso);
-      expect(banco.consultas.at(-2)).toEqual(["timeParaAFila", ORG, TIME]);
+      // "Antes" da fila: a escolha, o aviso e SÓ ENTÃO a entrada na fila do time — por posição.
+      const posicao = (nome: string) => banco.eventos.findIndex((e) => e[0] === nome);
+      expect(posicao("escolha")).toBeGreaterThanOrEqual(0);
+      expect(posicao("escolha")).toBeLessThan(posicao("menu_time_arquivado"));
+      expect(posicao("menu_time_arquivado")).toBeLessThan(posicao("entrou_na_fila"));
+      expect(banco.tem("entrou_na_fila")).toEqual([["entrou_na_fila", ORG, TIME]]);
 
       await vi.advanceTimersByTimeAsync(125_000);
       expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
