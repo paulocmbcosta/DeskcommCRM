@@ -158,8 +158,11 @@ Cada uma pode mudar o desenho, por isso vêm primeiro.
    - `end_reason=after_hours`, sem aviso na Central.
    - É preciso separar "time fora do horário" de "ninguém disponível", que hoje devolvem a mesma lista vazia.
 2. **Emergência ligada e não vencida** (`active_since` preenchido e `expires_at` nulo ou no futuro): toca o aviso **inteiro**, sem que a tecla interrompa, e segue.
-3. **Toque nos atendentes:** a regra atual fica intacta (rodízio, 20 s, 2 voltas, 120 s de fila).
-4. **Se o cliente precisa esperar:** toca `waiting`, depois a música, e repete `waiting` a cada ~40 s (para a música, toca a fala, volta a música).
+3. **Toque nos atendentes:** a regra atual fica intacta (rodízio, 20 s, 2 voltas, 120 s de fila). **Enquanto um ramal toca, o cliente ouve o som de chamando, nunca `waiting`** (DYD-52, 1.50.2; decisão do dono depois da medição em produção, em que o cliente ouviu "Todos os nossos atendentes estão ocupados…" com o ramal do atendente tocando):
+   - ligação ainda não atendida (número que toca direto no time): o chamar da operadora, como na fase 1;
+   - ligação já atendida (depois da URA ou do aviso), ou atendida agora porque tocou 45 s ou começou a 2ª volta (a rede derruba ligação que só chama): o tom `tone:ring;tonezone=br` em banda, no canal do cliente — um só do primeiro ramal ao último, sem recomeçar ao trocar de atendente;
+   - o tom para antes da ponte, de `waiting`, de `nobody` e do fim da ligação; se o Asterisk não o tocar, entra a música no lugar, nunca `waiting`.
+4. **Se o cliente precisa esperar — ninguém está livre, e só então:** toca `waiting`, depois a música, e repete `waiting` a cada ~40 s (para a música, toca a fala, volta a música). Vindo do chamar (a lista esvaziou), o tom para e aí toca `waiting`. Quem já está com música segue com ela quando alguém fica livre e o ramal toca, e a repetição de `waiting` não fala enquanto esse ramal toca (fica para o ciclo seguinte).
 5. **Se um atendente atende no meio de uma fala:** a fala para e a ponte se forma.
 6. **Esgotou:** toca `nobody` e desliga. Vira perdida com aviso, como hoje — e o aviso passou a nomear o time que ficou com a ligação ("Ninguém do time X atendeu. Ligue de volta pela conversa."), no idioma da organização. Isso vale para toda ligação perdida, inclusive a do número que aponta direto para um time.
 

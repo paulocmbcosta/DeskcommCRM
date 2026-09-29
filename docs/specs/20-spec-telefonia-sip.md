@@ -155,6 +155,21 @@ Navegador do atendente (JsSIP) ────────────────�
   (`end_reason = after_hours`, sem aviso na Central; sem a fala, segue como acima); aviso de
   instabilidade vigente → tocado inteiro. No passo 5, "aguarde" a cada ~40 s entre a música;
   esgotou → "ninguém atendeu" e desliga.
+- **Enquanto um ramal toca (passo 4), quem ligou ouve o SOM DE CHAMANDO, nunca o "aguarde"**
+  (DYD-52, desde a 1.50.2). Ligação ainda não atendida: o chamar da operadora (o 180 de
+  `indicarChamando`). Ligação já atendida — pela URA, pelo aviso, ou pela régua dos 45 s e pela
+  2ª volta, que atendem para a rede não derrubar a ligação que só chama —: o tom
+  `tone:ring;tonezone=br` em banda no canal do cliente (`tocarTom`, o mesmo da ligação feita,
+  item 5 abaixo), UM só do primeiro ramal ao último, sem recomeçar ao trocar de atendente. Ele
+  para antes da ponte, do "aguarde" (a lista esvaziou), do "ninguém atendeu" e do fim da
+  ligação, e o fim do playback dele nunca é lido como fim de fala. O "aguarde" e a música são só
+  de quem não tem ninguém livre; quem já está com música segue com ela quando alguém fica livre,
+  e o "aguarde" dos ~40 s não fala enquanto esse ramal toca — rearma e fala no ciclo seguinte,
+  se a lista tiver esvaziado. Se o Asterisk não tocar o tom (`failed`, ou o tom que acaba
+  sozinho em menos de 2 s três vezes seguidas), entra a música no lugar — nunca o "aguarde". Até a 1.50.1, a
+  ligação atendida pela URA ouvia "Todos os nossos atendentes estão ocupados…" com o ramal do
+  atendente tocando (medido em produção: o atendente atendeu em 16 s). Prova do som na VPS
+  pendente (J36.7 do mapa de jornadas).
 - As falas são arquivos μ-law no volume `telefonia-falas` (`/var/lib/telefonia/falas`), que o
   worker copia do Storage e o Asterisk lê só leitura. **A ligação nunca chama a ElevenLabs**:
   só a prévia da tela sintetiza (D15, vigiado por
@@ -382,7 +397,11 @@ Navegador do atendente (JsSIP) ────────────────�
   falas tocadas pelo Asterisk de produção a partir do volume; o fim da fala quando o cliente
   desliga chegar como `PlaybackFinished` com `state: "failed"` (lido no código do Asterisk,
   não medido); se a música de espera recomeça do início a cada "aguarde"; a qualidade da voz
-  no celular do cliente. Medido antes de escrever a URA: a fala toca por caminho absoluto num
+  no celular do cliente. **Do som de chamando em banda (1.50.2):** o tom no canal do cliente da
+  operadora (a URI foi medida só no ramal da ligação feita, item 5 do §4.2); que ele segue sem
+  soluço de um ramal ao próximo; que parar o tom antes da ponte é o que deixa a ponte se formar
+  (lido no código do Asterisk: os comandos de um canal na ARI rodam em fila); e o intervalo
+  entre o 180 da operadora e o tom quando a régua dos 45 s atende. Medido antes de escrever a URA: a fala toca por caminho absoluto num
   volume só leitura, e as teclas da operadora da Totus chegam por RFC 4733 (§2 do desenho).
 
 ## 10. Living System Checklist — F1 + distribuição
@@ -480,7 +499,7 @@ existe ainda**, é dívida declarada — não ausência de defeito.
   registros: o último estado gravado (inclusive "Conectado") fica na tela. Não medido.
 - **Constantes sem tela** (decisões do §2, não estado configurável, mas nenhuma tela as mostra):
   20 s de toque, 2 voltas, 2 min de fila, reavaliação a cada 5 s
-  (`lib/telefonia/distribuicao.ts`); atender e segurar após 45 s, prazo de 60 s da saída
+  (`lib/telefonia/distribuicao.ts`); atender e passar ao chamar em banda após 45 s, prazo de 60 s da saída
   (`controle.ts`); 5 saídas simultâneas (`saida.ts`); a lista de números bloqueados
   (`lib/telefonia/numero.ts`).
 
