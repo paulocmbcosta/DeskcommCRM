@@ -477,6 +477,55 @@
       "col": 15,
       "type": "database",
       "label": "`attendance_teams.phone_emergency_*` — o aviso de instabilidade do time: fala, desde, até (nulo = até desligar), quem ligou. Vigente = `active_since` preenchido e `expires_at` nulo ou no futuro"
+    },
+    {
+      "id": "gravacoes",
+      "lane": "worker",
+      "col": 9,
+      "type": "backend",
+      "label": "`gravacoes.ts` (`GravacoesDaTelefonia`) — a GRAVAÇÃO (F3, DYD-53): a porta do controlador (política da org, gravar a ponte `p-<id>` como `g-<id>` em WAV, tocar o aviso na ponte da feita, parar antes de a ponte cair) e o processamento fora da fila serial: baixa o WAV pela ARI em stream → ffmpeg (MP3 mono 16 kHz 24 kbps, ~180 KB/min; ffmpeg na imagem do worker) → Storage → anexa → apaga o WAV. Logo após o fim e na passada de 60 s; 404 do arquivo depois de 2 min ou 30 min sem guardar = perdida. Órfãs `g-*` de ligação terminal são apagadas do Asterisk"
+    },
+    {
+      "id": "rota_gravacao",
+      "lane": "api",
+      "col": 18,
+      "type": "backend",
+      "label": "`GET/PUT /api/v1/telefonia/gravacao` (admin) + `lib/telefonia/gravacao-da-org.ts` — liga/desliga a gravação da organização e escolhe a retenção (30…1825 dias, padrão 90). LIGAR exige o aviso de gravação (`recording_notice`) PRONTO, conferido no mesmo UPDATE (409 `aviso_de_gravacao_ausente`); desligar nunca depende dele. Audita só quando muda"
+    },
+    {
+      "id": "rota_escuta",
+      "lane": "api",
+      "col": 19,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/chamadas/[id]/gravacao` (agent+) — a ESCUTA AUDITADA: lê a mensagem `ligacao:<id>` pelo cliente de SESSÃO (a RLS decide quem enxerga a conversa, inclusive por time), confere `<org>/<conversa>/` e devolve URL assinada de 10 min; cada pedido = `phone.recording_listened`. A rota genérica `/messages/[id]/media` RECUSA a mensagem de ligação"
+    },
+    {
+      "id": "poda_gravacoes",
+      "lane": "api",
+      "col": 20,
+      "type": "backend",
+      "label": "cron `data-retention` (diário) + `lib/telefonia/poda-das-gravacoes.ts` — gravação `stored` há mais dias que a retenção da org: remove do Storage PRIMEIRO, depois marca (mídia fora da mensagem, projeção \"expirada\", `expired`). Storage fora não marca nada. `phone.recordings_expired` por organização com efeito"
+    },
+    {
+      "id": "aba_gravacao",
+      "lane": "tela",
+      "col": 14,
+      "type": "frontend",
+      "label": "Conexões › Telefone › Gravação (`?aba=telefone&sub=gravacao`, `GravacaoDasLigacoes.tsx`) — estado do aviso de gravação (com \"Ouvir\" e o link para Voz e falas), interruptor que só liga com o aviso pronto, retenção, e o que é gravado, quem ouve e quanto ocupa"
+    },
+    {
+      "id": "cartao_gravacao",
+      "lane": "tela",
+      "col": 15,
+      "type": "frontend",
+      "label": "Cartão da ligação na conversa (`CartaoDaLigacao`) — linha da gravação lida por `gravacaoDaLigacao`: \"Preparando a gravação…\" → \"Ouvir a gravação (m:ss)\" (só `voice.recording.listen`, agent+; a URL é pedida no CLIQUE) → player; \"não foi salva\" / \"apagada pelo prazo de guarda\""
+    },
+    {
+      "id": "bucket_midia",
+      "lane": "banco",
+      "col": 16,
+      "type": "database",
+      "label": "Storage `whatsapp-media` (PRIVADO) — a gravação é a MÍDIA da mensagem da ligação: `<org>/<conversa>/<mensagem>.mp3`. Por estar ali, a anonimização do contato (0235) a põe na `storage_redaction_queue` sem mudar a cascata"
     }
   ],
   "edges": [
@@ -624,7 +673,29 @@
     { "from": "sete_dias", "to": "aba_menus", "label": "o bloco \"últimos 7 dias\" e o alerta \"menu que confunde\"" },
     { "from": "central", "to": "aba_voz", "label": "`phone_prompt_unplayable` → \"Revisar as falas do telefone\"" },
     { "from": "central", "to": "aba_menus", "label": "`phone_menu_team_archived` → \"Revisar os menus do telefone\"" },
-    { "from": "central", "to": "cartao_aviso", "label": "`phone_emergency_expired` → \"Abrir os times\"" }
+    { "from": "central", "to": "cartao_aviso", "label": "`phone_emergency_expired` → \"Abrir os times\"" },
+    { "from": "controle", "to": "gravacoes", "label": "`PortaGravacao`: política na entrada, gravar a ponte quando o atendente atende (recebida, só com o aviso ouvido) ou no ANSWER (feita), parar no fim, `aoEncerrar`" },
+    { "from": "controle", "to": "fala_no_ar", "label": "o aviso de gravação é uma fala (papel `gravacao`) ANTES do menu e da fila" },
+    { "from": "gravacoes", "to": "ari", "label": "`POST /bridges/p-<id>/record` (WAV, sem bipe, teto 2 h), `POST /recordings/live/g-<id>/stop`, `GET /recordings/stored/g-<id>/file`, `DELETE`; `POST /bridges/…/play` do aviso na feita" },
+    { "from": "laco", "to": "gravacoes", "label": "passada de 60 s (guarda própria): pendentes e órfãs" },
+    { "from": "gravacoes", "to": "bucket_midia", "label": "sobe o MP3 (upsert); anonimizada no meio → apaga o recém-subido" },
+    { "from": "gravacoes", "to": "t_messages", "label": "anexa: `media_storage_path` + projeção `voice_call.gravacao` por `jsonb_set` (nunca sobrescreve o metadado)" },
+    { "from": "gravacoes", "to": "t_voice_calls", "label": "`recording_status`: recording (a ARI grava PRIMEIRO, depois marca) → stored | failed; `recording_notice_at`" },
+    { "from": "gravacoes", "to": "t_inbox", "label": "`phone_recording_failed` (30 min sem guardar), dedup por título" },
+    { "from": "repositorio", "to": "t_messages", "label": "ligação gravada nasce com a projeção \"processando\"" },
+    { "from": "aba_gravacao", "to": "rota_gravacao", "label": "GET/PUT a política" },
+    { "from": "aba_gravacao", "to": "aba_voz", "label": "\"Criar o aviso em Voz e falas\" — o aviso é a fala geral `recording_notice`" },
+    { "from": "rota_gravacao", "to": "t_prompts", "label": "liga só com o `recording_notice` PRONTO (no mesmo UPDATE)" },
+    { "from": "rota_gravacao", "to": "t_audit", "label": "`phone.recording_settings_changed` (antes e depois)" },
+    { "from": "cartao_gravacao", "to": "rota_escuta", "label": "\"Ouvir a gravação\": pede a URL no clique" },
+    { "from": "rota_escuta", "to": "t_messages", "label": "lê `ligacao:<id>` pela SESSÃO (RLS, visibilidade por time)" },
+    { "from": "rota_escuta", "to": "bucket_midia", "label": "URL assinada de 10 min" },
+    { "from": "rota_escuta", "to": "t_audit", "label": "`phone.recording_listened` por escuta" },
+    { "from": "t_messages", "to": "cartao_gravacao", "label": "Realtime de `messages` (UPDATE): processando → pronta" },
+    { "from": "poda_gravacoes", "to": "t_voice_calls", "label": "`stored` → `expired` pela retenção da org" },
+    { "from": "poda_gravacoes", "to": "bucket_midia", "label": "remove ANTES de marcar" },
+    { "from": "poda_gravacoes", "to": "t_audit", "label": "`phone.recordings_expired` por organização" },
+    { "from": "central", "to": "aba_gravacao", "label": "`phone_recording_failed` → \"Abrir a gravação do telefone\"" }
   ],
   "cards": [
     {
@@ -659,6 +730,17 @@
         "A ligação nunca chama a ElevenLabs (D15): só a prévia sintetiza, 30 por hora por organização, e o mesmo texto com a mesma voz não é pago de novo. `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` reprova módulo de `lib/channels/telefonia/` ou `workers/` que alcance o cliente; neste mapa, nenhuma peça do worker tem aresta para `elevenlabs` (`tests/unit/mapas-de-arquitetura.test.ts`)",
         "Prévia que ninguém salvou não fica para sempre no Storage, que é a mesma cota do cliente: sai 24 h depois de CRIADA, junto com o áudio que nenhuma fala usa. Limitação aceita na v1: a idade conta da criação, não do último uso — a prévia que reaproveita um objeto antigo sem referência (voltar ao texto anterior) pode sumir antes do \"Salvar e usar\", que recusa com `previa_ausente`; gerar de novo paga uma síntese",
         "Fora do horário SEM a fala pronta segue a fase 1 (fila de 2 min → perdida com \"Ligar de volta\"): desligar calado seria beco sem saída para quem ainda não cadastrou a chave"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "O laço de retorno da GRAVAÇÃO (invariante 7): o que muda quando ela erra",
+      "items": [
+        "Gravação que não chega ao Storage em 30 min vira `failed`: o cartão da ligação diz \"não foi salva\" e a Central abre `phone_recording_failed` (um por vez, dedup por título), apontando a aba Gravação",
+        "Aviso de gravação que não toca (arquivo sumiu, Asterisk recusou): a ligação NÃO é gravada e a Central recebe o `phone_prompt_unplayable` de sempre — gravar quem não foi avisado não é opção",
+        "A ARI grava antes de o banco marcar: se o banco falha, a gravação é parada e apagada — nunca uma ligação `recording` sem arquivo, que viraria alarme falso",
+        "Retenção: a poda diária apaga o arquivo e o cartão passa a dizer \"apagada pelo prazo de guarda\"; Storage fora não marca nada e tenta no dia seguinte",
+        "O que NÃO fecha sozinho: número oculto (sem conversa) não é gravado — decisão D8 do desenho; a transcrição (F4) não existe ainda"
       ]
     }
   ]

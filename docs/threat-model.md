@@ -203,6 +203,15 @@ Não avaliado por falta de execução/instância:
 - Se `next.config.ts` define CSP / security headers.
 - Storage: se o bucket `whatsapp-media` está privado de fato e se a expiração das signed
   URLs é adequada.
+- Gravação das ligações do telefone (F3, migration 0289), DECLARADA: o áudio mora no mesmo
+  `whatsapp-media` privado, como mídia da mensagem da ligação, e só sai pela rota da escuta
+  auditada (`GET /api/v1/telefonia/chamadas/[id]/gravacao`): papel atendente ou acima, a
+  mensagem lida pelo cliente de SESSÃO (a RLS decide quem enxerga a conversa), caminho preso a
+  `<org>/<conversa>/`, URL assinada de 10 min e uma linha `phone.recording_listened` por
+  pedido. A rota genérica `/api/v1/messages/[id]/media` recusa a mensagem de ligação (sem isso,
+  ela serviria a gravação sem piso de papel nem trilha). Não avaliado: quem baixa o arquivo
+  pela URL assinada dentro dos 10 min pode repassá-lo — a trilha diz quem pediu, não para onde
+  o arquivo foi.
 - Storage, e este é MEDIDO e DECLARADO em vez de "não avaliado": `brand-logos` (migration
   0158) é o **único bucket público** do repositório — os outros quatro nascem
   `public = false`. A exceção existe porque o logo é renderizado num `<img>` da tela de
