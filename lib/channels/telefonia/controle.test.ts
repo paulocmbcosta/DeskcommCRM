@@ -1037,6 +1037,22 @@ describe("fila do time — as falas da fase 2 (§5.2)", () => {
       expect(falas.pedidas).toEqual([AGUARDE.id, AGUARDE.id]);
     });
 
+    it("o canal do cliente saiu do Stasis (409) ao pedir o 'aguarde': encerra na hora — sem ramal, sem 'tocando', sem relógio", async () => {
+      banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
+      ari.tocarFala = async (c: string, m: string) => {
+        ari.chamadas.push(["tocarFala", c, m]);
+        throw new ErroAri(409, "Conflict", `/channels/${c}/play`);
+      };
+      await entrar();
+      expect(ari.nomes()).toEqual(["indicarChamando", "atender", "tocarFala", "desligar"]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(banco.tem("tocando")).toEqual([]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(ctl.ativas).toBe(0);
+    });
+
     it("o Asterisk recusa a repetição: a música, que tinha parado, volta, e a Central fica sabendo", async () => {
       banco.gerais = { ...banco.gerais, aguarde: AGUARDE };
       await entrar();
@@ -1553,17 +1569,41 @@ describe("URA (§5.1)", () => {
       expect(escolhas()).toEqual([["escolha", ORG, "vc-1", null, "default_invalid", TIME]]);
     });
 
-    it("canal do cliente que sumiu (404) no pedido da fala: é ele desligando — sem aviso e sem desfecho de menu", async () => {
+    it("canal do cliente que sumiu (404) no pedido da fala: encerra NA HORA pelo fim normal, mesmo se o fim do canal se perder", async () => {
       ari.tocarFala = async (c: string, m: string) => {
         ari.chamadas.push(["tocarFala", c, m]);
         throw new ErroAri(404, "Not Found", `/channels/${c}/play`);
       };
       await entrar();
+      // Sem ChannelDestroyed nem StasisEnd: a ligação não fica viva esperando por eles.
+      expect(ctl.ativas).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      // É o cliente desligando: nem "fala não tocou", nem desfecho de menu.
       expect(banco.tem("fala_intocavel")).toEqual([]);
       expect(escolhas()).toEqual([]);
+      // O fim do canal que chega atrasado não encerra de novo.
       await destruir("cli-1");
-      expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
+      expect(banco.tem("encerrada")).toHaveLength(1);
     });
+  });
+
+  it("o 'aguarde' depois da escolha acha o canal do cliente fechado (404): a ligação acaba, e ramal nenhum toca", async () => {
+    banco.gerais = { ...banco.gerais, aguarde: falaDe("aguarde") };
+    anaDisponivel();
+    const tocar = ari.tocarFala;
+    ari.tocarFala = async (c: string, m: string) => {
+      if (m !== "sound:/falas/aguarde") return tocar(c, m);
+      ari.chamadas.push(["tocarFala", c, m]);
+      throw new ErroAri(404, "Not Found", `/channels/${c}/play`);
+    };
+    await entrar();
+    await tecla("2"); // já atendida pela URA: a fila segura com o "aguarde" antes de tocar o ramal
+    expect(ari.originados()).toEqual([]);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "cliente_desligou"]]);
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("fala de tecla inválida sem arquivo: pulada e avisada, e o menu repete no lugar dela", async () => {

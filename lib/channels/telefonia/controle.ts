@@ -633,6 +633,7 @@ export class ControladorDeChamadas {
         l.naFila = true;
         l.inicioFila = this.agora();
         await this.segurarNaLinha(l);
+        if (l.fim) return;
         await this.marcarTocando(l, null);
       }
       if (this.agora() - (l.inicioFila ?? this.agora()) >= ESPERA_NA_FILA_MS) {
@@ -648,6 +649,8 @@ export class ControladorDeChamadas {
     // foi atendida (pelo aviso, pela URA) não espera o ramal em silêncio.
     if (l.atendidaPelaRede || p.estado.volta > 1 || this.agora() - l.inicio >= ATENDER_E_SEGURAR_APOS_MS) {
       await this.segurarNaLinha(l);
+      // O "aguarde" pode ter encontrado o canal do cliente já fechado: não toca ramal para ninguém.
+      if (l.fim) return;
     }
 
     let canalDoRamal: { id: string };
@@ -755,15 +758,22 @@ export class ControladorDeChamadas {
     try {
       playbackId = await this.ari.tocarFala(l.cliente, midia);
     } catch (e) {
-      // Canal que sumiu (404) ou saiu do Stasis (409) é o cliente desligando: o
-      // fim vem logo atrás, e a fala não tem culpa.
+      // Canal que sumiu (404) ou saiu do Stasis (409) é o cliente desligando, e
+      // a fala não tem culpa (sem aviso na Central). A ligação acaba AGORA, pelo
+      // fim normal: sem o canal não há ligação, e se o StasisEnd/ChannelDestroyed
+      // se perdeu, nada mais a encerraria — ela ficava viva para sempre, sem
+      // relógio (medido na revisão: `ativas = 1` dez minutos depois). O fim do
+      // canal que chegar depois a acha encerrada e não faz nada.
       const canalSumiu = e instanceof ErroAri && (e.status === 404 || e.status === 409);
       this.log.warn("telefonia: o Asterisk não tocou a fala — pulada", {
         voice_call: l.vcId,
         papel,
         erro: mensagemDe(e, 160),
       });
-      if (canalSumiu) return "sem_canal";
+      if (canalSumiu) {
+        await this.encerrarRecebida(l, l.encerrando ?? "cliente_desligou");
+        return "sem_canal";
+      }
       await this.avisarIntocavel(l, rotulo);
       return "pulada";
     }
@@ -937,8 +947,8 @@ export class ControladorDeChamadas {
       return this.executarUra(l, ura, { tipo: "fala_falhou" });
     }
     const pedida = await this.porFalaNoAr(l, fala, qual, { rotulo, valeTocar: () => l.ura === ura });
-    // `sem_canal` é o cliente desligando: o fim do canal vem atrás e a URA não
-    // decide nada por ele — a ligação vira perdida, sem desfecho de menu.
+    // `sem_canal` é o cliente desligando: a ligação já acabou (perdida, sem
+    // desfecho de menu), e a URA não decide nada por ele.
     if (pedida !== "pulada") return;
     return this.executarUra(l, ura, { tipo: "fala_falhou" });
   }
