@@ -9822,6 +9822,7 @@ export const DICIONARIO: Traducoes = {
   "Sem escolha": { es: "Sin elección" },
   "Tecla errada": { es: "Tecla incorrecta" },
   "Desligou no menu": { es: "Colgó en el menú" },
+  "Outras teclas": { es: "Otras teclas" },
   "Muita gente não escolhe uma opção: cai no time padrão ou desliga no meio do menu. Talvez a fala esteja confusa ou longa demais — reescreva e gere a prévia de novo.": {
     es: "Mucha gente no elige una opción: cae en el equipo predeterminado o cuelga en medio del menú. Tal vez la locución sea confusa o demasiado larga: reescríbela y genera la vista previa de nuevo.",
   },
@@ -9829,8 +9830,8 @@ export const DICIONARIO: Traducoes = {
   "Nome do menu": { es: "Nombre del menú" },
   "Ex.: Atendimento principal": { es: "Ej.: Atención principal" },
   Opções: { es: "Opciones" },
-  "Tecla da opção": { es: "Tecla de la opción" },
-  "Time da opção": { es: "Equipo de la opción" },
+  "Tecla da opção {n}": { es: "Tecla de la opción {n}" },
+  "Time da opção {n}": { es: "Equipo de la opción {n}" },
   "Remover opção": { es: "Quitar opción" },
   "Adicionar opção": { es: "Agregar opción" },
   "As teclas * e # ficam reservadas.": { es: "Las teclas * y # quedan reservadas." },
@@ -9839,7 +9840,13 @@ export const DICIONARIO: Traducoes = {
   "Montada a partir das opções. Você pode editar antes de gerar.": {
     es: "Armada a partir de las opciones. Puedes editarla antes de generar.",
   },
-  "Refazer a partir das opções": { es: "Rehacer a partir de las opciones" },
+  "Fala escrita à mão: ela não acompanha as mudanças nas opções.": {
+    es: "Locución escrita a mano: no sigue los cambios en las opciones.",
+  },
+  "As opções mudaram depois que a fala foi escrita. Confira se ela ainda diz a tecla e o time certos — ou use o texto montado das opções.": {
+    es: "Las opciones cambiaron después de escribir la locución. Revisa si todavía dice la tecla y el equipo correctos, o usa el texto armado a partir de las opciones.",
+  },
+  "Usar o texto montado": { es: "Usar el texto armado" },
   "Fala de tecla inválida": { es: "Locución de tecla inválida" },
   "Fala de tecla inválida (opcional)": { es: "Locución de tecla inválida (opcional)" },
   "Toca quando o cliente aperta uma tecla que não é opção, antes de repetir o menu.": {
@@ -9851,6 +9858,9 @@ export const DICIONARIO: Traducoes = {
   "Escolha o time padrão.": { es: "Elige el equipo predeterminado." },
   "Um time escolhido foi arquivado. Escolha outro time.": { es: "Un equipo elegido fue archivado. Elige otro equipo." },
   "Escreva a fala do menu.": { es: "Escribe la locución del menú." },
+  "O áudio salvo de uma fala não foi encontrado. Gere a prévia dela de novo antes de salvar.": {
+    es: "No se encontró el audio guardado de una locución. Genera su vista previa de nuevo antes de guardar.",
+  },
   "Gere a prévia de cada fala que mudou antes de salvar o menu.": {
     es: "Genera la vista previa de cada locución que cambió antes de guardar el menú.",
   },

@@ -327,6 +327,45 @@ describe("aba Menus — o cartão de cada menu", () => {
     expect(within(await cartaoDo("Principal")).getByTestId("menu-ultimos-7-dias")).toHaveTextContent(/^Últimos 7 dias1 ligação/);
   });
 
+  it("tecla que saiu do menu ainda conta na semana: 'Outras teclas' fecha a conta do total", async () => {
+    servidor.menus = [
+      menuPrincipal({
+        ultimos_7_dias: { total: 12, por_tecla: { "1": 4, "0": 1, "5": 2 }, sem_escolha: 4, tecla_errada: 1, desligou_no_menu: 0 },
+      }),
+    ];
+    pintar();
+    const semana = within(await cartaoDo("Principal")).getByTestId("menu-ultimos-7-dias");
+    expect(semana).toHaveTextContent("12 ligações");
+    expect(semana).toHaveTextContent("Outras teclas: 2");
+    // 4 + 1 + 2 + 4 + 1 + 0 = 12: as parcelas fecham o total.
+    const parcelas = [...semana.querySelectorAll("li")]
+      .slice(1)
+      .map((li) => Number(/(\d+)$/.exec(li.textContent ?? "")?.[1] ?? NaN));
+    expect(parcelas.reduce((a, b) => a + b, 0)).toBe(12);
+  });
+
+  it("sem tecla de fora: nada de 'Outras teclas'", async () => {
+    pintar();
+    expect(within(await cartaoDo("Principal")).getByTestId("menu-ultimos-7-dias")).not.toHaveTextContent("Outras teclas");
+  });
+
+  it("um time arquivado com '$&' no nome sai escrito como é (a troca do marcador é literal)", async () => {
+    servidor.times.push(time("44444444-4444-4444-8444-444444444444", "A$&B", true));
+    servidor.menus = [
+      menuPrincipal({ time_padrao_id: "44444444-4444-4444-8444-444444444444", time_padrao_nome: "A$&B" }),
+    ];
+    pintar();
+    const cartao = await cartaoDo("Principal");
+    await waitFor(() => expect(cartao.querySelector("[data-time-arquivado]")).toHaveTextContent("(A$&B)"));
+  });
+
+  it("a leitura dos times falhou: a tela diz, e não abre menu novo sem time", async () => {
+    trocadas.set("GET /api/v1/conversations/teams", () => recusa(500, "internal_error", "Erro interno."));
+    pintar();
+    expect(await screen.findByText("Não foi possível carregar os times. Recarregue a página.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Novo menu" })).toBeDisabled();
+  });
+
   it("um time do menu foi arquivado: o cartão avisa, nomeando o time", async () => {
     servidor.menus = [
       menuPrincipal({ time_padrao_id: T_ANTIGO, time_padrao_nome: "Cobrança antiga" }),
@@ -521,8 +560,7 @@ describe("aba Menus — o editor", () => {
     const user = usuario();
     pintar();
     const editor = await abrirEditor();
-    const teclas = within(editor).getAllByRole("combobox", { name: "Tecla da opção" });
-    await escolher(user, teclas[1]!, "1");
+    await escolher(user, within(editor).getByRole("combobox", { name: "Tecla da opção 2" }), "1");
     expect(within(editor).getByText("Cada tecla só pode levar a um time.")).toBeInTheDocument();
     expect(salvarDe(editor)).toBeDisabled();
     await user.click(salvarDe(editor));
@@ -541,12 +579,12 @@ describe("aba Menus — o editor", () => {
     ];
     pintar();
     const editor = await abrirEditor();
-    const times = within(editor).getAllByRole("combobox", { name: "Time da opção" });
-    await waitFor(() => expect(times[1]).toHaveTextContent("Cobrança antiga (arquivado)"));
+    const segunda = within(editor).getByRole("combobox", { name: "Time da opção 2" });
+    await waitFor(() => expect(segunda).toHaveTextContent("Cobrança antiga (arquivado)"));
     expect(within(editor).getByText("Um time escolhido foi arquivado. Escolha outro time.")).toBeInTheDocument();
     expect(salvarDe(editor)).toBeDisabled();
 
-    await user.click(times[1]!);
+    await user.click(segunda);
     // O arquivado aparece para dizer o que ESTAVA escolhido, mas não se escolhe de novo.
     expect(await screen.findByRole("option", { name: "Cobrança antiga (arquivado)" })).toHaveAttribute("aria-disabled", "true");
     await user.click(screen.getByRole("option", { name: "Financeiro" }));
@@ -563,9 +601,9 @@ describe("aba Menus — o editor", () => {
       await user.click(await screen.findByRole("button", { name: "Novo menu" }));
       const editor = document.querySelector("[data-editor-de-menu]") as HTMLElement;
       await user.type(within(editor).getByRole("textbox", { name: "Nome do menu" }), "Atendimento");
-      await escolher(user, within(editor).getByRole("combobox", { name: "Time da opção" }), "Suporte");
+      await escolher(user, within(editor).getByRole("combobox", { name: "Time da opção 1" }), "Suporte");
       await user.click(within(editor).getByRole("button", { name: "Adicionar opção" }));
-      await escolher(user, within(editor).getAllByRole("combobox", { name: "Time da opção" })[1]!, "Financeiro");
+      await escolher(user, within(editor).getByRole("combobox", { name: "Time da opção 2" }), "Financeiro");
       expect(within(editor).getByText("Escolha o time padrão.")).toBeInTheDocument();
       await escolher(user, within(editor).getByRole("combobox", { name: "Time padrão (quem não escolhe nada)" }), "Suporte");
 
@@ -616,7 +654,7 @@ describe("aba Menus — o editor", () => {
       const editor = document.querySelector("[data-editor-de-menu]") as HTMLElement;
       const nome = within(editor).getByRole("textbox", { name: "Nome do menu" });
       await user.type(nome, "Atendimento");
-      await escolher(user, within(editor).getByRole("combobox", { name: "Time da opção" }), "Suporte");
+      await escolher(user, within(editor).getByRole("combobox", { name: "Time da opção 1" }), "Suporte");
       await escolher(user, within(editor).getByRole("combobox", { name: "Time padrão (quem não escolhe nada)" }), "Suporte");
       await user.click(gerarDe(editor, "menu"));
       await waitFor(() => expect(salvarDe(editor)).toBeEnabled());
@@ -630,6 +668,106 @@ describe("aba Menus — o editor", () => {
   );
 });
 
+describe("aba Menus — a fala acompanha as opções", () => {
+  it(
+    "menu com a fala montada: trocar o time de uma tecla muda a fala, e o salvar pede a prévia nova",
+    { timeout: TETO_MS },
+    async () => {
+      const user = usuario();
+      pintar();
+      const editor = await abrirEditor();
+      expect(within(editor).getByText("Montada a partir das opções. Você pode editar antes de gerar.")).toBeInTheDocument();
+      expect(salvarDe(editor)).toBeEnabled();
+
+      await escolher(user, within(editor).getByRole("combobox", { name: "Time da opção 1" }), "Financeiro");
+      // A URA não pode dizer "Para Suporte, digite 1" e mandar para o Financeiro.
+      expect(campoDoMenu(editor)).toHaveValue("Para Financeiro, digite 1. Para Financeiro, digite 0.");
+      expect(salvarDe(editor)).toBeDisabled();
+      expect(within(editor).getByText("Gere a prévia de cada fala que mudou antes de salvar o menu.")).toBeInTheDocument();
+      await user.click(salvarDe(editor));
+      expect(enviados("PATCH", "/api/v1/telefonia/menus/m1")).toHaveLength(0);
+    },
+  );
+
+  it(
+    "fala escrita à mão: trocar as opções avisa que ela pode não bater mais, e 'Usar o texto montado' resolve",
+    { timeout: TETO_MS },
+    async () => {
+      const user = usuario();
+      servidor.menus = [menuPrincipal({ fala: fala({ texto: "Bem-vindo! Suporte no 1, financeiro no 0." }) })];
+      pintar();
+      const editor = await abrirEditor();
+      expect(campoDoMenu(editor)).toHaveValue("Bem-vindo! Suporte no 1, financeiro no 0.");
+      expect(within(editor).getByText("Fala escrita à mão: ela não acompanha as mudanças nas opções.")).toBeInTheDocument();
+      expect(within(editor).queryByText("Montada a partir das opções. Você pode editar antes de gerar.")).toBeNull();
+      expect(editor.querySelector("[data-fala-desatualizada]")).toBeNull();
+
+      await escolher(user, within(editor).getByRole("combobox", { name: "Time da opção 1" }), "Financeiro");
+      expect(campoDoMenu(editor)).toHaveValue("Bem-vindo! Suporte no 1, financeiro no 0.");
+      expect(editor.querySelector("[data-fala-desatualizada]")).toHaveTextContent(/As opções mudaram depois que a fala foi escrita/);
+
+      await user.click(within(editor).getByRole("button", { name: "Usar o texto montado" }));
+      expect(campoDoMenu(editor)).toHaveValue("Para Financeiro, digite 1. Para Financeiro, digite 0.");
+      expect(editor.querySelector("[data-fala-desatualizada]")).toBeNull();
+      expect(within(editor).getByText("Montada a partir das opções. Você pode editar antes de gerar.")).toBeInTheDocument();
+    },
+  );
+
+  it("escrever a fala à mão e DEPOIS mexer nas opções também avisa", async () => {
+    pintar();
+    const editor = await abrirEditor();
+    await userEvent.type(campoDoMenu(editor), " Obrigado.");
+    expect(editor.querySelector("[data-fala-desatualizada]")).toBeNull();
+    await userEvent.click(within(editor).getByRole("button", { name: "Adicionar opção" }));
+    expect(editor.querySelector("[data-fala-desatualizada]")).not.toBeNull();
+  });
+
+  it("mudar uma opção DEPOIS de gerar a prévia trava o salvar (a prévia era do texto antigo)", async () => {
+    pintar();
+    const editor = await abrirEditor();
+    await userEvent.click(gerarDe(editor, "menu"));
+    await waitFor(() => expect(editor.querySelector("[data-ouvir-previa]")).not.toBeNull());
+    expect(salvarDe(editor)).toBeEnabled();
+    const remover = within(editor).getAllByRole("button", { name: "Remover opção" });
+    await userEvent.click(remover[1]!);
+    expect(campoDoMenu(editor)).toHaveValue("Para Suporte, digite 1.");
+    expect(salvarDe(editor)).toBeDisabled();
+    expect(editor.querySelector("[data-ouvir-previa]")).toBeNull();
+  });
+});
+
+describe("aba Menus — acessibilidade do editor", () => {
+  it("abrir leva o foco ao nome; cancelar devolve ao 'Editar' que abriu", async () => {
+    pintar();
+    const cartao = await cartaoDo("Principal");
+    await userEvent.click(within(cartao).getByRole("button", { name: "Editar" }));
+    const editor = document.querySelector("[data-editor-de-menu]") as HTMLElement;
+    expect(document.activeElement).toBe(editor.querySelector("#menu-nome"));
+    await userEvent.click(within(editor).getByRole("button", { name: "Cancelar" }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(document.querySelector('[data-menu="m1"]') as HTMLElement).getByRole("button", { name: "Editar" })),
+    );
+  });
+
+  it("menu novo: cancelar devolve o foco ao 'Novo menu'", async () => {
+    pintar();
+    await userEvent.click(await screen.findByRole("button", { name: "Novo menu" }));
+    const editor = document.querySelector("[data-editor-de-menu]") as HTMLElement;
+    expect(document.activeElement).toBe(editor.querySelector("#menu-nome"));
+    await userEvent.click(within(editor).getByRole("button", { name: "Cancelar" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Novo menu" })));
+  });
+
+  it("cada linha de opção tem nome próprio, e o motivo do salvar travado é a descrição do botão", async () => {
+    pintar();
+    const editor = await abrirEditor();
+    expect(within(editor).getByRole("combobox", { name: "Tecla da opção 1" })).toBeInTheDocument();
+    expect(within(editor).getByRole("combobox", { name: "Time da opção 2" })).toBeInTheDocument();
+    await userEvent.clear(within(editor).getByRole("textbox", { name: "Nome do menu" }));
+    expect(salvarDe(editor)).toHaveAccessibleDescription("Dê um nome ao menu.");
+  });
+});
+
 describe("aba Menus — o editor quando a rota recusa", () => {
   it("o áudio da fala do menu sumiu (`previa_ausente`): a frase diz qual fala, e o salvar volta só depois da prévia", async () => {
     const frase = "O áudio da fala do menu não foi encontrado. Gere a prévia de novo e salve.";
@@ -640,6 +778,12 @@ describe("aba Menus — o editor quando a rota recusa", () => {
     await waitFor(() => expect(alertaDe(editor, "menu")).toHaveTextContent(frase));
     // A fala em uso não serve mais: salvar de novo daria a mesma recusa.
     expect(salvarDe(editor)).toBeDisabled();
+    // E a tela para de dizer que ela está "Em uso" e de oferecer o áudio que sumiu.
+    expect(editor.querySelector("[data-estado-da-fala]")?.getAttribute("data-estado-da-fala")).not.toBe("em-uso");
+    expect(editor.querySelector("[data-ouvir-fala]")).toBeNull();
+    expect(
+      within(editor).getByText("O áudio salvo de uma fala não foi encontrado. Gere a prévia dela de novo antes de salvar."),
+    ).toBeInTheDocument();
 
     trocadas.delete("PATCH /api/v1/telefonia/menus/m1");
     await userEvent.click(gerarDe(editor, "menu"));
@@ -747,7 +891,7 @@ describe("aba Menus — em espanhol", () => {
     pintar((f) => <IdiomaProvider locale="es">{f}</IdiomaProvider>);
     await user.click(await screen.findByRole("button", { name: "Nuevo menú" }));
     const editor = document.querySelector("[data-editor-de-menu]") as HTMLElement;
-    await escolher(user, within(editor).getByRole("combobox", { name: "Equipo de la opción" }), "Suporte");
+    await escolher(user, within(editor).getByRole("combobox", { name: "Equipo de la opción 1" }), "Suporte");
     expect(within(editor).getByRole("textbox", { name: "Locución del menú" })).toHaveValue("Para Suporte, marque 1.");
   });
 });
