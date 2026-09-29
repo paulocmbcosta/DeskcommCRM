@@ -106,15 +106,21 @@ function useLeituraDosAvisos(chave: readonly string[], url: string, ligado: bool
     queryKey: chave,
     enabled: ligado && activeOrg !== null,
     staleTime: 30_000,
-    refetchOnWindowFocus: (q) => !leituraRecusada(q.state.error),
+    // A volta do foco relê SEMPRE, até depois de um 401/403: `loadAuthUser` devolve
+    // 401 quando a Auth pisca por um instante, e a faixa mora no layout (não
+    // remonta ao navegar) — sem este caminho, uma falha passageira a apagaria em
+    // toda aba até recarregar.
+    refetchOnWindowFocus: true,
     // O relógio depende de `ligado` (a faixa recebe do layout se a instalação tem
     // telefonia), e NÃO de uma leitura boa: se a primeira falhar, não há dado, e o
     // app não repete 500/504 (lib/query/client.ts) — a faixa nunca apareceria para
     // quem fica o dia inteiro com a aba em foco. O dado só DESLIGA o relógio quando
     // diz, com todas as letras, que a instalação não tem telefonia (o cartão do
     // time não recebe `ligado` do servidor e fica sabendo por ele).
-    // E um 401/403 (a sessão caiu, o acesso mudou) PARA a releitura: repetir não
-    // muda a resposta, e cada aba aberta bateria na rota uma vez por minuto à toa.
+    // E um 401/403 (a sessão caiu, o acesso mudou) PARA o relógio do minuto:
+    // repetir às cegas não muda a resposta, e cada aba bateria na rota à toa. É o
+    // erro da ÚLTIMA leitura que decide: a primeira leitura boa (pela volta do
+    // foco) limpa o erro e religa o relógio.
     refetchInterval: (q) =>
       ligado && !leituraRecusada(q.state.error) && q.state.data?.oferecida !== false ? INTERVALO_DA_RELEITURA_MS : false,
     queryFn: async () => (await apiClient.get<{ data: AvisosNaResposta }>(url)).data,

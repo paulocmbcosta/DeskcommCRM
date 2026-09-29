@@ -237,21 +237,45 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
   it.each([
     [401, "unauthenticated", "Auth required."],
     [403, "forbidden_role", "Permissão insuficiente."],
-  ])("a leitura recusada com %i (sessão caiu, acesso mudou): para de reler — nem no minuto, nem no foco", async (status, code, message) => {
+  ])("a leitura recusada com %i: o relógio do minuto para, mas a volta do foco ainda relê", async (status, code, message) => {
     trocadas.set(`GET ${URL_DA_FAIXA}`, () => recusa(status, code, message));
     pintar();
     await waitFor(() => expect(leituras()).toBe(1));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(121_000);
     });
+    expect(leituras()).toBe(1);
     await act(async () => {
       window.dispatchEvent(new Event("visibilitychange"));
     });
+    await waitFor(() => expect(leituras()).toBe(2));
+    expect(faixa()).toBeNull();
+  });
+
+  it("um 401 passageiro (a Auth piscou): a volta do foco relê, a leitura boa traz a faixa e religa o relógio do minuto", async () => {
+    trocadas.set(`GET ${URL_DA_FAIXA}`, () => recusa(401, "unauthenticated", "Auth required."));
+    pintar();
+    await waitFor(() => expect(leituras()).toBe(1));
     await act(async () => {
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(61_000);
     });
     expect(leituras()).toBe(1);
-    expect(faixa()).toBeNull();
+
+    // A Auth voltou. A pessoa volta à aba: a leitura boa traz a faixa.
+    trocadas.clear();
+    await act(async () => {
+      window.dispatchEvent(new Event("visibilitychange"));
+    });
+    await acharFaixa();
+    expect(leituras()).toBe(2);
+
+    // E o relógio do minuto voltou: o aviso desligado em outra aba sai daqui sozinho.
+    servidor.ligados = [];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await waitFor(() => expect(leituras()).toBe(3));
+    await waitFor(() => expect(faixa()).toBeNull());
   });
 
   it("um prazo distante (30 dias) não dispara a releitura na hora: o relógio respeita o teto do setTimeout", async () => {
