@@ -134,13 +134,15 @@ export const ROTULO_DA_CHAVE_DE_VOZ = "ElevenLabs";
  * coluna é de vocabulário aberto (um clone pode ter outra linha com
  * `provider = "elevenlabs"` e outro rótulo, e ela não seria a chave de voz).
  *
- * `is_active` é OPCIONAL: quem já filtrou por ele na própria consulta SQL
- * (`estadoDaChaveDeVoz`/`chaveDeVoz`, que já fazem `is_active = true` no
- * `where`) não precisa repetir aqui; quem filtra um array já carregado na
- * memória (o cartão da ElevenLabs em Credenciais de IA) sempre o passa.
+ * `is_active` é OBRIGATÓRIO: só a linha ativa é a chave vigente. Opcional e lido
+ * como `true`, ele deixava quem filtra uma lista em memória (o cartão da
+ * ElevenLabs em Credenciais de IA) esquecer o campo e aceitar uma linha
+ * desativada. As consultas SQL (`estadoDaChaveDeVoz`/`chaveDeVoz`) não chamam
+ * este predicado: filtram `is_active = true` no próprio `where`, com as mesmas
+ * duas constantes.
  */
-export function ehLinhaDaChaveDeVoz(c: { provider: string; label: string; is_active?: boolean }): boolean {
-  return c.provider === PROVEDOR_DE_VOZ && c.label === ROTULO_DA_CHAVE_DE_VOZ && (c.is_active ?? true);
+export function ehLinhaDaChaveDeVoz(c: { provider: string; label: string; is_active: boolean }): boolean {
+  return c.provider === PROVEDOR_DE_VOZ && c.label === ROTULO_DA_CHAVE_DE_VOZ && c.is_active === true;
 }
 
 /**

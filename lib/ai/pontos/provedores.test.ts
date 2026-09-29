@@ -4,7 +4,7 @@ import { ehLinhaDaChaveDeVoz, PROVEDOR_DE_VOZ, ROTULO_DA_CHAVE_DE_VOZ } from "./
 
 /**
  * O CRITÉRIO ÚNICO de "esta linha de `ai_provider_credentials` é a chave de
- * voz" — usado por `ehChaveDeVoz` (o cartão em Credenciais de IA) e pela MESMA
+ * voz" — usado pelo cartão em Credenciais de IA e pela MESMA
  * dupla de constantes que `estadoDaChaveDeVoz`/`chaveDeVoz`
  * (`lib/telefonia/chave-elevenlabs.ts`) passam para a consulta SQL. Antes de
  * existir aqui, o rótulo "ElevenLabs" estava duplicado: uma cópia em
@@ -33,7 +33,10 @@ describe("ehLinhaDaChaveDeVoz", () => {
     );
   });
 
-  it("sem `is_active` informado: só provider e rótulo decidem (quem já filtrou is_active na query não repete)", () => {
-    expect(ehLinhaDaChaveDeVoz({ provider: PROVEDOR_DE_VOZ, label: ROTULO_DA_CHAVE_DE_VOZ })).toBe(true);
+  it("`is_active` é OBRIGATÓRIO: sem ele não compila, e em runtime a linha sem o campo NÃO é a chave vigente", () => {
+    // Opcional e lido como `true`, ele deixava quem filtra uma lista em memória
+    // esquecer o campo e aceitar uma linha desativada como a chave de voz.
+    // @ts-expect-error — `is_active` é obrigatório no tipo de entrada.
+    expect(ehLinhaDaChaveDeVoz({ provider: PROVEDOR_DE_VOZ, label: ROTULO_DA_CHAVE_DE_VOZ })).toBe(false);
   });
 });

@@ -40,15 +40,6 @@ import { ApiError } from "@/lib/api/types";
 import { ehFalhaDaFala, MENSAGEM_DA_FALHA_DA_FALA, type MotivoDoErroDaElevenLabs } from "@/lib/telefonia/vocabulario";
 import { ArrowsClockwise, Key } from "@/lib/ui/icons";
 
-/**
- * A chave de voz é a linha deste provider COM este rótulo — o MESMO critério
- * (`ehLinhaDaChaveDeVoz`, em `lib/ai/pontos/provedores.ts`, client-safe) que
- * `estadoDaChaveDeVoz`/`chaveDeVoz` (`lib/telefonia/chave-elevenlabs.ts`)
- * passam para a consulta SQL. Um único predicado: antes, o rótulo "ElevenLabs"
- * vivia duplicado (uma cópia ali, outra solta aqui).
- */
-const ehChaveDeVoz = ehLinhaDaChaveDeVoz;
-
 type EstadoDaChave =
   | "nao_cadastrada"
   | "validada"
@@ -163,7 +154,10 @@ export function CartaoElevenLabs({ credenciaisIniciais, podeEditar }: Props) {
   const [chave, setChave] = useState("");
   const [erro, setErro] = useState<string | null>(null);
 
-  const credencial = (data ?? []).find(ehChaveDeVoz) ?? null;
+  // A chave de voz é a linha ATIVA deste provider COM este rótulo — o MESMO
+  // critério (`ehLinhaDaChaveDeVoz`, client-safe) que `estadoDaChaveDeVoz`/
+  // `chaveDeVoz` (`lib/telefonia/chave-elevenlabs.ts`) passam para a consulta SQL.
+  const credencial = (data ?? []).find(ehLinhaDaChaveDeVoz) ?? null;
   const estado = estadoDaChave(credencial);
   const motivo = credencial?.validation_error ?? null;
 
