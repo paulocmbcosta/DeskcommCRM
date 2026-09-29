@@ -50,7 +50,7 @@ import {
   type OpcoesDasFalasNoDisco,
 } from "./falas-no-disco";
 
-const { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } = fs;
+const { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } = fs;
 
 const ORG = "00000000-0000-4000-8000-00000000000a";
 const OUTRA = "00000000-0000-4000-8000-00000000000b";
@@ -685,6 +685,104 @@ describe("sincronizar — o órfão do disco sai 15 min depois de VISTO órfão,
     await d.limparStorage();
     expect(apagadosDoStorage).toEqual([caminho("a")]);
     expect(await existe(caminho("b"))).toBe(true);
+  });
+});
+
+describe("links no volume — nunca ler, gravar, mudar permissão ou apagar ATRAVÉS de um link", () => {
+  /** Uma pasta FORA do volume, com permissão fechada, para provar que nada a atravessa. */
+  let fora: string;
+  beforeEach(async () => {
+    fora = await mkdtemp(join(tmpdir(), "fora-do-volume-"));
+    await chmod(fora, 0o700);
+  });
+  afterEach(async () => {
+    await rm(fora, { recursive: true, force: true });
+  });
+  const avisosDeLink = () => mensagens("warn").filter((m) => m.includes("não é pasta de verdade"));
+  /** A pasta da organização dentro do volume vira um link para `fora`. */
+  async function pastaDaOrgEhLink(org = ORG) {
+    await symlink(fora, join(dir, org));
+  }
+
+  it("pasta da organização que é link para fora do volume: a limpeza não apaga nada lá fora, e registra o pulo UMA vez", async () => {
+    await writeFile(join(fora, `${hash("d")}.ulaw`), new Uint8Array([4])); // "órfão" fora do volume
+    await writeFile(join(fora, `.${hash("7")}.abc.tmp`), new Uint8Array([0])); // "temporário largado"
+    const velho = new Date(relogio - CARENCIA_DO_TEMPORARIO_MS);
+    await utimes(join(fora, `.${hash("7")}.abc.tmp`), velho, velho);
+    await pastaDaOrgEhLink();
+    const d = disco();
+
+    expect((await d.sincronizar()).apagadas).toBe(0);
+    avancar(CARENCIA_DO_ORFAO_MS);
+    expect((await d.sincronizar()).apagadas).toBe(0);
+
+    expect((await readdir(fora)).sort()).toEqual([`.${hash("7")}.abc.tmp`, `${hash("d")}.ulaw`].sort());
+    expect(eventos.some((e) => e.tipo === "consulta_referencias" && e.org === ORG)).toBe(false);
+    expect(avisosDeLink()).toHaveLength(1);
+    expect(log.warn.mock.calls.find((c) => String(c[0]).includes("não é pasta de verdade"))?.[1]).toEqual({ pasta: ORG });
+  });
+
+  it("garantir com a pasta da organização como link: não lê o arquivo de lá, não grava nem muda a permissão de lá — a ligação pula a fala", async () => {
+    await writeFile(join(fora, `${hash("a")}.ulaw`), new Uint8Array([7]));
+    await pastaDaOrgEhLink();
+    objetos.set(caminho("a"), new Uint8Array([1]));
+
+    expect(await disco().garantir({ id: "f1", storagePath: caminho("a") })).toBeNull();
+
+    expect(baixar).not.toHaveBeenCalled();
+    expect(await readdir(fora)).toEqual([`${hash("a")}.ulaw`]);
+    expect([...(await readFile(join(fora, `${hash("a")}.ulaw`)))]).toEqual([7]);
+    expect((await stat(fora)).mode & 0o777).toBe(0o700);
+    expect(avisosDeLink()).toHaveLength(1);
+  });
+
+  it("a passada não grava através do link, e a organização do link não trava o download das outras", async () => {
+    await pastaDaOrgEhLink();
+    linhas = [
+      ...["a", "b", "c"].map((c) => ({ organization_id: ORG, storage_path: caminho(c), status: "ready" as const })),
+      { organization_id: OUTRA, storage_path: caminho("d", OUTRA), status: "ready" },
+    ];
+    for (const l of linhas) objetos.set(l.storage_path!, new Uint8Array([1]));
+    const d = disco();
+
+    expect(await d.sincronizar()).toEqual({ baixadas: 1, apagadas: 0, falhas: 3 });
+    expect(await d.sincronizar()).toEqual({ baixadas: 0, apagadas: 0, falhas: 3 });
+
+    expect(baixar.mock.calls.map((c) => c[0])).toEqual([caminho("d", OUTRA)]);
+    expect(await existe(caminho("d", OUTRA))).toBe(true);
+    expect(await readdir(fora)).toEqual([]);
+    expect((await stat(fora)).mode & 0o777).toBe(0o700);
+    expect(avisosDeLink()).toHaveLength(1);
+    // A escrita não "caiu": o link não é disco cheio.
+    expect(mensagens("warn").some((m) => m.includes("não gravada"))).toBe(false);
+  });
+
+  it("a pasta que vira link NO MEIO do download: a gravação recusa antes do chmod e não escreve lá fora", async () => {
+    await mkdir(join(dir, ORG), { recursive: true });
+    baixar.mockImplementationOnce(async () => {
+      await rm(join(dir, ORG), { recursive: true, force: true });
+      await pastaDaOrgEhLink();
+      return new Uint8Array([1]);
+    });
+
+    expect(await disco().garantir({ id: "f1", storagePath: caminho("a") })).toBeNull();
+
+    expect(await readdir(fora)).toEqual([]);
+    expect((await stat(fora)).mode & 0o777).toBe(0o700);
+  });
+
+  it("arquivo de fala que é link: não conta como presente — baixa de novo e troca o LINK pelo arquivo, sem tocar no alvo", async () => {
+    await writeFile(join(fora, "alvo"), new Uint8Array([7]));
+    await mkdir(join(dir, ORG), { recursive: true });
+    await symlink(join(fora, "alvo"), noDisco(caminho("a")));
+    objetos.set(caminho("a"), new Uint8Array([1]));
+
+    expect(await disco().garantir({ id: "f1", storagePath: caminho("a") })).toBe(midiaDaFala(caminho("a")));
+
+    expect(baixar).toHaveBeenCalledTimes(1);
+    expect((await lstat(noDisco(caminho("a")))).isFile()).toBe(true);
+    expect([...(await readFile(noDisco(caminho("a"))))]).toEqual([1]);
+    expect([...(await readFile(join(fora, "alvo")))]).toEqual([7]);
   });
 });
 

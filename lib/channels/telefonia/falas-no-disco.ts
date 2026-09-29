@@ -77,6 +77,18 @@
  * `organization_id/content_hash.ulaw`, então o filtro não esconde referência
  * nenhuma. O caminho no disco passa pela mesma régua do CHECK antes de virar
  * caminho de arquivo: nada de `..`.
+ *
+ * LINK NÃO É PASTA: a régua do caminho barra `..`, mas não barra um link. Se a
+ * pasta de uma organização dentro do volume for um link (ou o arquivo da fala
+ * for um), `readdir`/`stat`/`chmod`/`unlink` o atravessariam — e a limpeza já
+ * apagou, numa sonda da revisão de segurança, um `<hash>.ulaw` FORA do volume. Por
+ * isso a pasta da organização e o arquivo são olhados com `lstat` (que não segue
+ * link) antes de qualquer leitura, escrita, `chmod` ou `unlink`: pasta que não é
+ * pasta de verdade é pulada — registrada UMA vez por pasta —, e arquivo que é link
+ * não conta como presente (a fala é baixada de novo e o `rename` troca o LINK, sem
+ * tocar no alvo). A raiz é o próprio volume, montado pelo compose, e não é
+ * olhada assim. É defesa em profundidade: só o worker escreve no volume, e entre o
+ * `lstat` e o uso sobra uma janela que só quem já escreve no volume alcança.
  */
 import { randomBytes } from "node:crypto";
 import { chmod, lstat, mkdir, open, readdir, rename, stat, unlink, type FileHandle } from "node:fs/promises";
@@ -192,6 +204,11 @@ export interface ResultadoDaLimpeza {
 export type ArmazemDasFalas = Pick<PortaDoArmazem, "baixar" | "listarPastas" | "listarObjetos" | "apagar">;
 
 type Baixa = "gravada" | "ausente" | "falhou";
+/**
+ * A fala no volume. `"pasta_falsa"`: a pasta da organização não é pasta de verdade
+ * (link) — nada é lido, baixado ou gravado através dela, e não é queda do disco.
+ */
+type NoDisco = "presente" | "falta" | "pasta_falsa";
 /** O que pode cair — e é registrado só na transição. */
 /**
  * O que pode cair — e é registrado só na transição. O disco são DUAS frentes: o
@@ -212,6 +229,9 @@ const VOLTOU: Record<Frente, string> = {
 
 /** Erro de consulta ao banco, para a limpeza saber qual frente caiu. */
 class FalhaDoBanco extends Error {}
+
+/** A pasta da organização no volume existe e não é pasta de verdade (é link, ou arquivo). */
+class PastaQueNaoEhPasta extends Error {}
 
 const motivo = (e: unknown) => (e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200));
 
@@ -249,6 +269,8 @@ export class FalasNoDisco {
   private readonly ausentes = new Map<string, { vezes: number; proxima: number }>();
   /** Caminhos fora da régua já registrados (um aviso por caminho). */
   private readonly foraDaReguaAvisados = new Set<string>();
+  /** Pastas de organização que não são pasta de verdade, já registradas (um aviso por pasta). */
+  private readonly pastasFalsasAvisadas = new Set<string>();
   private readonly fora = new Set<Frente>();
   /** Quando a última limpeza RODOU — com ou sem falha. */
   private ultimaLimpeza: number | null = null;
@@ -280,7 +302,9 @@ export class FalasNoDisco {
         this.avisarForaDaRegua(fala.storagePath, { fala: fala.id });
         return null;
       }
-      if (await this.presente(fala.storagePath)) return midiaDaFala(fala.storagePath);
+      const situacao = await this.noDisco(fala.storagePath);
+      if (situacao === "presente") return midiaDaFala(fala.storagePath);
+      if (situacao === "pasta_falsa") return null;
       const baixa = await dentroDoPrazo(this.baixarUmaVez(fala.storagePath, this.prazoDoGarantirMs), this.prazoDoGarantirMs);
       if (baixa === "gravada") return midiaDaFala(fala.storagePath);
       if (baixa === "prazo") {
@@ -328,8 +352,15 @@ export class FalasNoDisco {
             this.avisarForaDaRegua(caminho, {});
             continue;
           }
-          if (await this.presente(caminho)) {
+          const situacao = await this.noDisco(caminho);
+          if (situacao === "presente") {
             this.ausentes.delete(caminho);
+            continue;
+          }
+          if (situacao === "pasta_falsa") {
+            // Não conta como falha SEGUIDA: não é o disco nem o Storage caindo, e
+            // uma organização assim não pode parar o download das outras.
+            r.falhas++;
             continue;
           }
           const ausencia = this.ausentes.get(caminho);
@@ -380,6 +411,10 @@ export class FalasNoDisco {
     try {
       for (const org of orgs) {
         const pasta = join(this.dir, org);
+        // `readdir` e o `unlink` abaixo seguiriam uma pasta que é link: nada disso fora do volume.
+        const deVerdade = await this.ehPastaDeVerdade(pasta).catch(() => null);
+        if (deVerdade === false) this.avisarPastaFalsa(org);
+        if (deVerdade !== true) continue;
         const falas: string[] = [];
         for (const nome of await readdir(pasta).catch(() => [] as string[])) {
           const ehTemporario = TEMPORARIO.test(nome);
@@ -497,14 +532,46 @@ export class FalasNoDisco {
     return join(this.dir, storagePath);
   }
 
-  /** O arquivo está lá e não está vazio. */
-  private async presente(storagePath: string): Promise<boolean> {
+  /**
+   * `"presente"`: o arquivo está lá, não está vazio, e nem ele nem a pasta da
+   * organização são link (`lstat`) — o Asterisk nunca recebe um endereço que aponta
+   * para fora do volume. Arquivo que é link é `"falta"`: baixar de novo troca o
+   * LINK pelo arquivo (o `rename` não segue o destino). Pasta que é link é
+   * `"pasta_falsa"`, registrada uma vez.
+   */
+  private async noDisco(storagePath: string): Promise<NoDisco> {
+    const org = storagePath.slice(0, storagePath.indexOf("/"));
     try {
-      const info = await stat(this.arquivo(storagePath));
-      return info.isFile() && info.size > 0;
+      const deVerdade = await this.ehPastaDeVerdade(join(this.dir, org));
+      if (deVerdade === false) {
+        this.avisarPastaFalsa(org);
+        return "pasta_falsa";
+      }
+      if (deVerdade === null) return "falta";
+      const info = await lstat(this.arquivo(storagePath));
+      return info.isFile() && info.size > 0 ? "presente" : "falta";
     } catch {
-      return false;
+      return "falta";
     }
+  }
+
+  /** A pasta é pasta DE VERDADE — `lstat`, que não segue link? `null`: não existe. */
+  private async ehPastaDeVerdade(pasta: string): Promise<boolean | null> {
+    try {
+      return (await lstat(pasta)).isDirectory();
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw e;
+    }
+  }
+
+  private avisarPastaFalsa(org: string): void {
+    if (this.pastasFalsasAvisadas.has(org)) return;
+    this.pastasFalsasAvisadas.add(org);
+    this.log.warn(
+      "telefonia: a pasta da organização no volume das falas não é pasta de verdade (link?) — pulada: nada é lido, gravado ou apagado através dela",
+      { pasta: org },
+    );
   }
 
   private async consultar<R extends { storage_path: string }>(sql: string, params: unknown[]): Promise<{ rows: R[] }> {
@@ -596,7 +663,7 @@ export class FalasNoDisco {
     const [org, nome] = storagePath.split("/") as [string, string];
     const pasta = join(this.dir, org);
     await this.pastaLegivel(this.dir);
-    await this.pastaLegivel(pasta);
+    await this.pastaLegivel(pasta, { semLink: true });
     const temporario = join(pasta, `.${nome.slice(0, 64)}.${randomBytes(6).toString("hex")}.tmp`);
     let alca: FileHandle | undefined;
     try {
@@ -614,10 +681,16 @@ export class FalasNoDisco {
     }
   }
 
-  /** A pasta existe e é 0755 — o Asterisk (outro usuário) precisa atravessá-la. */
-  private async pastaLegivel(pasta: string): Promise<void> {
+  /**
+   * A pasta existe e é 0755 — o Asterisk (outro usuário) precisa atravessá-la.
+   * `semLink` (a pasta da organização): olhada com `lstat`, e a que não é pasta de
+   * verdade é recusada ANTES do `chmod`, que seguiria o link. A raiz é o volume.
+   */
+  private async pastaLegivel(pasta: string, { semLink = false } = {}): Promise<void> {
     await mkdir(pasta, { recursive: true, mode: 0o755 });
-    if (((await stat(pasta)).mode & 0o777) !== 0o755) await chmod(pasta, 0o755);
+    const info = semLink ? await lstat(pasta) : await stat(pasta);
+    if (semLink && !info.isDirectory()) throw new PastaQueNaoEhPasta("a pasta da organização no volume não é pasta de verdade");
+    if ((info.mode & 0o777) !== 0o755) await chmod(pasta, 0o755);
   }
 
   private async apagarDoDisco(caminho: string): Promise<boolean> {
