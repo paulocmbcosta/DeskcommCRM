@@ -9962,6 +9962,7 @@ export const DICIONARIO: Traducoes = {
   "Aviso de gravação": { es: "Aviso de grabación" },
   "Toca no começo de toda ligação gravada: antes do menu, para quem liga; ao atender, para quem recebe a ligação do atendente. Sem este aviso pronto, a gravação não liga.": { es: "Suena al comienzo de toda llamada grabada: antes del menú, para quien llama; al contestar, para quien recibe la llamada del agente. Sin este aviso listo, la grabación no se activa." },
   "Esta ligação poderá ser gravada para garantir a qualidade do atendimento.": { es: "Esta llamada podrá ser grabada para garantizar la calidad de la atención." },
+  "Para gravar as ligações, gere e salve antes o aviso de gravação na aba Voz e falas.": { es: "Para grabar las llamadas, genera y guarda antes el aviso de grabación en la pestaña Voz y locuciones." },
 };
 
 /**
