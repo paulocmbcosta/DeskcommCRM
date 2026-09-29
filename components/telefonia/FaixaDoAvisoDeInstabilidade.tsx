@@ -10,6 +10,9 @@
  * sem perguntar a ninguém: sem ela, a faixa não faz uma leitura sequer — a
  * consulta de 60 s só existe onde há ligação para ouvir aviso.
  *
+ * Não é `sticky` por conta própria: quem gruda no topo é o contêiner do layout
+ * que a empilha com a faixa de conexão caída (`data-faixas-do-topo`).
+ *
  * A leitura que falha some com a faixa, em silêncio: uma falha não pode derrubar
  * o layout (a faixa roda em toda tela), nem deixar à vista um aviso que já não dá
  * para confirmar — o prazo pode ter passado enquanto a API não respondia.
@@ -37,7 +40,7 @@ export function FaixaDoAvisoDeInstabilidade({ oferecida }: { oferecida: boolean 
       role="status"
       aria-live="polite"
       data-faixa-aviso-de-instabilidade=""
-      className="sticky top-0 z-40 flex flex-col gap-1 border-b border-amber-300 bg-amber-100/95 px-4 py-2 text-sm text-amber-950 backdrop-blur dark:border-amber-700/60 dark:bg-amber-950/70 dark:text-amber-50"
+      className="flex flex-col gap-1 border-b border-amber-300 bg-amber-100/95 px-4 py-2 text-sm text-amber-950 backdrop-blur dark:border-amber-700/60 dark:bg-amber-950/70 dark:text-amber-50"
     >
       {dados.ligados.map((a) => {
         const desligando = desligar.isPending && desligar.variables === a.team_id;

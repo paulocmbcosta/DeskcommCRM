@@ -270,6 +270,31 @@ describe("faixa do aviso de instabilidade — quanto ela custa e como falha", ()
     expect(document.body.textContent).not.toContain("nginx");
   });
 
+  it.each([
+    ["500 da rota", () => recusa(500, "internal_error", "Erro interno.")],
+    ["504 de um proxy, com HTML", () => new Response(HTML_DO_PROXY, { status: 504, headers: { "Content-Type": "text/html" } })],
+  ])(
+    "a PRIMEIRA leitura falhou (%s): a releitura de um minuto recupera a faixa, sem troca de foco",
+    async (_caso, falha) => {
+      trocadas.set(`GET ${URL_DOS_AVISOS}`, falha);
+      pintar();
+      await waitFor(() => expect(leituras()).toBe(1));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(faixa()).toBeNull();
+      expect(document.body.textContent).not.toContain("nginx");
+
+      // A API voltou. Nenhum evento de foco: só o relógio.
+      trocadas.clear();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(61_000);
+      });
+      await waitFor(() => expect(leituras()).toBe(2));
+      expect(await screen.findByRole("status")).toHaveTextContent("Aviso de instabilidade ligado no telefone do Suporte");
+    },
+  );
+
   it("a releitura falhou com o aviso na tela: a faixa sai, em vez de afirmar o que não dá mais para confirmar", async () => {
     const qc = pintar();
     await screen.findByRole("status");

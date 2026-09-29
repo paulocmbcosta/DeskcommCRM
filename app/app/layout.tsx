@@ -247,13 +247,23 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <div data-marca-org="" className="contents">
         <EstiloDaMarcaDaOrganizacao css={cssDaOrganizacao} />
         <ImpersonateBanner impersonating={impersonating} />
-        <ConexaoCaidaBanner caidas={conexoesCaidas} />
         {/*
-          O aviso de instabilidade do telefone ligado: todo membro vê (desenho da
-          fase 2, §6.4). `oferecida` é lida AQUI, do ambiente, sem consulta: a
-          instalação sem telefonia não paga nem a primeira leitura da faixa.
+          As faixas de estado do topo EMPILHADAS num contêiner `sticky` só. Cada
+          uma `sticky top-0` por conta própria, as duas grudavam no MESMO ponto ao
+          rolar e a de cima cobria a outra. Dentro do contêiner, o `sticky` da
+          faixa de conexão não tem para onde andar (o pai tem a altura dela) e ela
+          se comporta como antes; quem gruda é o conjunto. Sem nenhuma faixa, o
+          contêiner tem altura zero.
         */}
-        <FaixaDoAvisoDeInstabilidade oferecida={configAriDoAmbiente() !== null} />
+        <div data-faixas-do-topo="" className="sticky top-0 z-50">
+          <ConexaoCaidaBanner caidas={conexoesCaidas} />
+          {/*
+            O aviso de instabilidade do telefone ligado: todo membro vê (desenho da
+            fase 2, §6.4). `oferecida` é lida AQUI, do ambiente, sem consulta: a
+            instalação sem telefonia não paga nem a primeira leitura da faixa.
+          */}
+          <FaixaDoAvisoDeInstabilidade oferecida={configAriDoAmbiente() !== null} />
+        </div>
         {needsMfaGate ? (
           // Gate always mounted for MFA-required roles; it latches the blocking
           // decision client-side so the enroll Server Action's revalidation

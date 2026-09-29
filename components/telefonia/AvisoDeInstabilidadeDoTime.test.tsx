@@ -468,6 +468,24 @@ describe("cartão do aviso no time", () => {
     expect(document.querySelector("[data-aviso-de-instabilidade]")).toBeNull();
   });
 
+  it("instalação sem telefonia: depois da primeira resposta, o cartão não relê mais", async () => {
+    servidor = { oferecida: false, pode_mudar: true, ligados: [], times: [] };
+    pintar();
+    await waitFor(() => expect(enviados("GET", URL_DOS_AVISOS)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(enviados("GET", URL_DOS_AVISOS)).toHaveLength(1);
+  });
+
+  it("a primeira leitura falhou: o cartão diz que falhou e se recupera sozinho no minuto seguinte", async () => {
+    trocadas.set(`GET ${URL_DOS_AVISOS}`, proxy);
+    pintar();
+    expect(await cartao()).toHaveAttribute("data-falha-da-leitura");
+    trocadas.clear();
+    await vi.advanceTimersByTimeAsync(61_000);
+    await waitFor(() => expect(document.querySelector('[data-aviso-de-instabilidade="t1"]')).toHaveAttribute("data-ativo", "nao"));
+    expect(enviados("GET", URL_DOS_AVISOS)).toHaveLength(2);
+  });
+
   it("a leitura falhou: diz que falhou, sem o HTML do proxy", async () => {
     trocadas.set(`GET ${URL_DOS_AVISOS}`, proxy);
     pintar();

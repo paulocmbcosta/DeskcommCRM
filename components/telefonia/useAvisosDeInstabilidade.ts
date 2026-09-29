@@ -22,7 +22,9 @@
  * a tela não confia no relógio do navegador para esconder um aviso, que pode
  * estar horas adiantado. Mas, em vez de esperar o minuto, a consulta relê quando
  * o prazo mais próximo passa (`proximoPrazo`): o aviso vencido sai da tela na
- * hora em que para de tocar.
+ * hora em que para de tocar. Esse relógio precisa de um dado lido (é dele que sai
+ * o prazo); sem leitura boa não há aviso na tela para vencer, e quem recupera é a
+ * releitura de 60 s, que NÃO depende de leitura boa nenhuma.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, isSameDay, type Locale } from "date-fns";
@@ -78,7 +80,13 @@ export function useAvisosDeInstabilidade({ ligado = true }: { ligado?: boolean }
     enabled: ligado && activeOrg !== null,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
-    refetchInterval: (q) => (q.state.data?.oferecida ? INTERVALO_DA_RELEITURA_MS : false),
+    // O relógio depende de `ligado` (a faixa recebe do layout se a instalação tem
+    // telefonia), e NÃO de uma leitura boa: se a primeira falhar, não há dado, e o
+    // app não repete 500/504 (lib/query/client.ts) — a faixa nunca apareceria para
+    // quem fica o dia inteiro com a aba em foco. O dado só DESLIGA o relógio quando
+    // diz, com todas as letras, que a instalação não tem telefonia (o cartão do
+    // time não recebe `ligado` do servidor e fica sabendo por ele).
+    refetchInterval: (q) => (ligado && q.state.data?.oferecida !== false ? INTERVALO_DA_RELEITURA_MS : false),
     queryFn: async () => (await apiClient.get<{ data: AvisosNaResposta }>("/api/v1/telefonia/emergencias")).data,
   });
 

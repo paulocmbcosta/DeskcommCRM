@@ -11,6 +11,9 @@
  *    cada aba aberta. Um `true` fixo passaria no teste do componente e custaria
  *    caro em toda instalação que nunca ligou o telefone.
  *
+ * E as duas faixas do topo ficam EMPILHADAS num contêiner `sticky` só: cada uma
+ * `sticky top-0` sozinha, grudavam no mesmo ponto e a de cima cobria a outra.
+ *
  * Mede o elemento que o layout devolve, e não o texto-fonte: a cerca irmã conta
  * por que uma regex no arquivo cimenta a implementação sem vigiar o efeito.
  */
@@ -72,12 +75,27 @@ function achar(no: ReactNode, alvo: unknown, irmaos: ReactNode[] = []): { elemen
   return achar(elemento.props?.children, alvo);
 }
 
+/** O primeiro elemento da árvore que declara a prop `prop`. */
+function acharPorProp(no: ReactNode, prop: string): ReactElement<{ children?: ReactNode; className?: string }> | null {
+  if (!no || typeof no !== "object") return null;
+  if (Array.isArray(no)) {
+    for (const filho of no) {
+      const achado = acharPorProp(filho as ReactNode, prop);
+      if (achado) return achado;
+    }
+    return null;
+  }
+  const elemento = no as ReactElement<{ children?: ReactNode; className?: string } & Record<string, unknown>>;
+  if (elemento.props && prop in elemento.props) return elemento;
+  return acharPorProp(elemento.props?.children, prop);
+}
+
 async function montar() {
   const { FaixaDoAvisoDeInstabilidade } = await import("@/components/telefonia/FaixaDoAvisoDeInstabilidade");
   const { ConexaoCaidaBanner } = await import("@/components/app/ConexaoCaidaBanner");
   const { default: AppLayout } = await import("@/app/app/layout");
   const arvore = (await AppLayout({ children: null })) as ReactElement;
-  return { faixa: achar(arvore, FaixaDoAvisoDeInstabilidade), conexao: achar(arvore, ConexaoCaidaBanner) };
+  return { arvore, faixa: achar(arvore, FaixaDoAvisoDeInstabilidade), conexao: achar(arvore, ConexaoCaidaBanner) };
 }
 
 beforeEach(() => {
@@ -91,7 +109,7 @@ describe("a faixa do aviso de instabilidade no layout de /app", () => {
   it("com a telefonia no ambiente: montada para o atendente, com `oferecida`, logo abaixo da faixa de conexão", async () => {
     vi.stubEnv("TELEFONIA_ARI_URL", "http://asterisk.teste:8088");
     vi.stubEnv("TELEFONIA_ARI_PASSWORD", "senha-de-teste");
-    const { faixa, conexao } = await montar();
+    const { arvore, faixa, conexao } = await montar();
 
     expect(faixa, "o layout não montou a faixa do aviso").not.toBeNull();
     expect((faixa!.elemento.props as { oferecida: boolean }).oferecida).toBe(true);
@@ -99,6 +117,12 @@ describe("a faixa do aviso de instabilidade no layout de /app", () => {
     const irmaos = faixa!.irmaos;
     expect(irmaos).toBe(conexao!.irmaos);
     expect(irmaos.indexOf(faixa!.elemento)).toBe(irmaos.indexOf(conexao!.elemento) + 1);
+    // E EMPILHADAS: as duas dentro do mesmo contêiner que gruda no topo — cada uma
+    // `sticky top-0` sozinha, a de cima cobria a outra ao rolar.
+    const topo = acharPorProp(arvore, "data-faixas-do-topo");
+    expect(topo, "falta o contêiner das faixas do topo").not.toBeNull();
+    expect(topo!.props.children).toBe(irmaos);
+    expect(String(topo!.props.className).split(/\s+/)).toEqual(expect.arrayContaining(["sticky", "top-0"]));
   });
 
   it("sem a telefonia no ambiente: `oferecida` falso — a faixa não fará leitura nenhuma", async () => {
