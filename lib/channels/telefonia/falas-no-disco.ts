@@ -203,7 +203,11 @@ export interface ResultadoDaLimpeza {
 
 export type ArmazemDasFalas = Pick<PortaDoArmazem, "baixar" | "listarPastas" | "listarObjetos" | "apagar">;
 
-type Baixa = "gravada" | "ausente" | "falhou";
+/**
+ * `"pasta_falsa"`: a pasta da organização virou link DURANTE o download — a
+ * gravação a recusou antes do `chmod`. Não é queda da gravação nem falha seguida.
+ */
+type Baixa = "gravada" | "ausente" | "falhou" | "pasta_falsa";
 /**
  * A fala no volume. `"pasta_falsa"`: a pasta da organização não é pasta de verdade
  * (link) — nada é lido, baixado ou gravado através dela, e não é queda do disco.
@@ -373,7 +377,9 @@ export class FalasNoDisco {
           else r.falhas++;
           if (baixa === "ausente") ausentesProntas.add(caminho);
           // Ausência é resposta do Storage (ele está de pé); falha é Storage fora ou disco cheio.
-          falhasSeguidas = baixa === "falhou" ? falhasSeguidas + 1 : 0;
+          // A pasta que virou link não diz nada de nenhum dos dois: nem soma, nem zera.
+          if (baixa === "falhou") falhasSeguidas++;
+          else if (baixa !== "pasta_falsa") falhasSeguidas = 0;
           if (falhasSeguidas >= FALHAS_SEGUIDAS_ATE_DESISTIR) return;
         }
         if (rows.length < this.lote) {
@@ -598,7 +604,7 @@ export class FalasNoDisco {
     return baixa;
   }
 
-  /** Storage → disco. Nunca lança: a falha vira `"falhou"`, a ausência `"ausente"`. */
+  /** Storage → disco. Nunca lança: a falha vira `"falhou"`, a ausência `"ausente"`, a pasta que virou link `"pasta_falsa"`. */
   private async baixarParaODisco(storagePath: string, prazoMs: number): Promise<Baixa> {
     let bytes: Uint8Array | null;
     try {
@@ -621,6 +627,10 @@ export class FalasNoDisco {
     try {
       await this.gravarAtomico(storagePath, bytes);
     } catch (e) {
+      if (e instanceof PastaQueNaoEhPasta) {
+        this.avisarPastaFalsa(storagePath.slice(0, storagePath.indexOf("/")));
+        return "pasta_falsa";
+      }
       this.caiu("gravacao", "telefonia: fala não gravada no volume", { caminho: storagePath, erro: motivo(e) });
       return "falhou";
     }

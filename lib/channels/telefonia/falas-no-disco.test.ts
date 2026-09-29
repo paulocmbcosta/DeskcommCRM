@@ -771,6 +771,32 @@ describe("links no volume — nunca ler, gravar, mudar permissão ou apagar ATRA
     expect((await stat(fora)).mode & 0o777).toBe(0o700);
   });
 
+  it("pasta que vira link no meio do download, na passada: pulada e registrada — não é queda da gravação nem falha seguida", async () => {
+    const ORG_C = "00000000-0000-4000-8000-00000000000c";
+    const ORG_D = "00000000-0000-4000-8000-00000000000d";
+    const viramLink = [ORG, OUTRA, ORG_C];
+    linhas = [...viramLink, ORG_D].map((org) => ({ organization_id: org, storage_path: caminho("a", org), status: "ready" as const }));
+    for (const l of linhas) objetos.set(l.storage_path!, new Uint8Array([1]));
+    for (const org of viramLink) await mkdir(join(dir, org), { recursive: true });
+    baixar.mockImplementation(async (c) => {
+      const org = c.slice(0, c.indexOf("/"));
+      if (viramLink.includes(org)) {
+        await rm(join(dir, org), { recursive: true, force: true });
+        await pastaDaOrgEhLink(org);
+      }
+      return new Uint8Array([1]);
+    });
+
+    // Três seguidas: se contassem como falha seguida, a passada pararia antes de ORG_D.
+    expect(await disco().sincronizar()).toEqual({ baixadas: 1, apagadas: 0, falhas: 3 });
+
+    expect(await existe(caminho("a", ORG_D))).toBe(true);
+    expect(await readdir(fora)).toEqual([]);
+    expect((await stat(fora)).mode & 0o777).toBe(0o700);
+    expect(mensagens("warn").some((m) => m.includes("não gravada"))).toBe(false);
+    expect(avisosDeLink()).toHaveLength(3);
+  });
+
   it("arquivo de fala que é link: não conta como presente — baixa de novo e troca o LINK pelo arquivo, sem tocar no alvo", async () => {
     await writeFile(join(fora, "alvo"), new Uint8Array([7]));
     await mkdir(join(dir, ORG), { recursive: true });
