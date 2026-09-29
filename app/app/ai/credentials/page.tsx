@@ -6,6 +6,8 @@ import { createClient } from "@/lib/supabase/server";
 import type { CredentialRow } from "@/hooks/ai/useCredentials";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { contarUsoPublicado, type VersaoVinculada } from "@/lib/ai/credenciais/uso";
+import { configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
+import { CartaoElevenLabs } from "./_components/CartaoElevenLabs";
 import { CredentialsList } from "./_components/CredentialsList";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +63,10 @@ export default async function CredentialsPage() {
         canWrite={canWrite}
         usageMap={usageMap}
       />
+      {/* A voz do telefone: só onde a instalação oferece telefonia. */}
+      {configAriDoAmbiente() !== null ? (
+        <CartaoElevenLabs credenciaisIniciais={credentials} podeEditar={canWrite} />
+      ) : null}
     </div>
   );
 }

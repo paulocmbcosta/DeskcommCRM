@@ -9656,6 +9656,51 @@ export const DICIONARIO: Traducoes = {
   },
   "O telefone não está ligado nesta instalação.": { es: "El teléfono no está activado en esta instalación." },
   "alguém da equipe": { es: "alguien del equipo" },
+  // Telefonia, fase 2 — o cartão da ElevenLabs em Credenciais de IA
+  "ElevenLabs (voz da URA)": { es: "ElevenLabs (voz del IVR)" },
+  "Chave da ElevenLabs": { es: "Clave de ElevenLabs" },
+  "Trocar a chave": { es: "Cambiar la clave" },
+  "A chave que dá voz ao telefone: o menu, o aguarde, o fora do horário e o aviso de instabilidade. Uma por organização. Ela é validada listando as vozes da sua conta, e nunca mais aparece na tela.": {
+    es: "La clave que da voz al teléfono: el menú, el mensaje de espera, el de fuera de horario y el aviso de inestabilidad. Una por organización. Se valida listando las voces de tu cuenta y no vuelve a aparecer en pantalla.",
+  },
+  "Só um administrador cadastra, troca ou testa esta chave.": {
+    es: "Solo un administrador registra, cambia o prueba esta clave.",
+  },
+  Testar: { es: "Probar" },
+  "Não cadastrada": { es: "No registrada" },
+  "Chave recusada": { es: "Clave rechazada" },
+  "ElevenLabs fora do ar": { es: "ElevenLabs fuera de servicio" },
+  "Sem crédito": { es: "Sin crédito" },
+  "Falha no teste": { es: "Falló la prueba" },
+  "Nenhuma chave cadastrada. Sem ela, o telefone não gera as falas do menu, do aguarde e do fora do horário.": {
+    es: "Ninguna clave registrada. Sin ella, el teléfono no genera las locuciones del menú, de espera y de fuera de horario.",
+  },
+  "A ElevenLabs aceitou esta chave.": { es: "ElevenLabs aceptó esta clave." },
+  "Esta chave ainda não foi testada.": { es: "Esta clave aún no se ha probado." },
+  "A ElevenLabs recusou esta chave no último teste. Sem uma chave aceita não dá para gerar falas novas; as já geradas continuam tocando.": {
+    es: "ElevenLabs rechazó esta clave en la última prueba. Sin una clave aceptada no se pueden generar locuciones nuevas; las ya generadas siguen sonando.",
+  },
+  "A ElevenLabs não respondeu ao último teste. A chave continua guardada e as falas já geradas continuam tocando; teste de novo mais tarde.": {
+    es: "ElevenLabs no respondió a la última prueba. La clave sigue guardada y las locuciones ya generadas siguen sonando; vuelve a probar más tarde.",
+  },
+  "A conta da ElevenLabs está sem crédito. As falas já geradas continuam tocando; para gerar falas novas, recarregue a conta.": {
+    es: "La cuenta de ElevenLabs no tiene crédito. Las locuciones ya generadas siguen sonando; para generar locuciones nuevas, recarga la cuenta.",
+  },
+  "A ElevenLabs recusou esta chave, e ela não foi salva. Confira se copiou a chave inteira, ou gere uma nova na sua conta da ElevenLabs.": {
+    es: "ElevenLabs rechazó esta clave y no se guardó. Revisa si copiaste la clave completa o genera una nueva en tu cuenta de ElevenLabs.",
+  },
+  "A conta desta chave está sem crédito na ElevenLabs, e ela não foi salva. Recarregue a conta e salve de novo.": {
+    es: "La cuenta de esta clave no tiene crédito en ElevenLabs y no se guardó. Recarga la cuenta y guarda de nuevo.",
+  },
+  "A ElevenLabs não respondeu, e a chave não foi salva. Tente de novo em instantes.": {
+    es: "ElevenLabs no respondió y la clave no se guardó. Inténtalo de nuevo en unos instantes.",
+  },
+  "A ElevenLabs devolveu um erro, e a chave não foi salva. Tente de novo em instantes.": {
+    es: "ElevenLabs devolvió un error y la clave no se guardó. Inténtalo de nuevo en unos instantes.",
+  },
+  "Chave da ElevenLabs salva e validada.": { es: "Clave de ElevenLabs guardada y validada." },
+  "A ElevenLabs aceitou a chave.": { es: "ElevenLabs aceptó la clave." },
+  "Não foi possível salvar a chave. Tente de novo.": { es: "No se pudo guardar la clave. Inténtalo de nuevo." },
 };
 
 /**
