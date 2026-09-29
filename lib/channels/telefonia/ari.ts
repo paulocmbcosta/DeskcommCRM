@@ -233,17 +233,12 @@ export class ClienteAri {
   }
 
   /**
-   * Para uma fala em andamento. Um playback que já terminou responde 404
-   * (`GET /playbacks/{id}` medido na VPS) e NÃO é erro — o estado desejado
-   * (fala parada) já vale.
+   * Para uma fala em andamento. Nome próprio para a URA ler melhor no chamador
+   * (`pararReproducao` é do tom) — mesmo endpoint, mesmo corpo: um playback que
+   * já terminou responde 404 (`GET /playbacks/{id}` medido na VPS) e NÃO é erro.
    */
-  async pararFala(playbackId: string) {
-    try {
-      await this.pedir("DELETE", `/playbacks/${playbackId}`);
-    } catch (e) {
-      if (e instanceof ErroAri && e.status === 404) return;
-      throw e;
-    }
+  pararFala(playbackId: string) {
+    return this.pararReproducao(playbackId);
   }
 
   listarCanais() {
