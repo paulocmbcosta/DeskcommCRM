@@ -11,7 +11,7 @@
  */
 
 /** `phone_prompts.kind` — uma fala por linha. */
-export const TIPOS_DE_FALA = ["menu", "invalid", "waiting", "nobody", "after_hours", "emergency"] as const;
+export const TIPOS_DE_FALA = ["menu", "invalid", "waiting", "nobody", "after_hours", "emergency", "recording_notice"] as const;
 export type TipoDeFala = (typeof TIPOS_DE_FALA)[number];
 
 /**

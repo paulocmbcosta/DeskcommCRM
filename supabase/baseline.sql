@@ -10138,6 +10138,10 @@ alter table public.agent_inbox_items
     'phone_prompt_unplayable',
     'phone_emergency_expired',
     'phone_menu_team_archived',
+    -- (migration 0289) A gravação de uma ligação não pôde ser guardada em 30 min
+    -- (serviço de telefonia, Storage ou conversor fora): sem isto a falha ficaria
+    -- só no log do worker. Entra NESTA lista, no fim, pela mesma razão das de cima.
+    'phone_recording_failed',
     'other'
   ));
 
@@ -29366,10 +29370,17 @@ create table if not exists public.phone_prompts (
 -- validados no bloco 6b (o porquê no cabeçalho). kind, text e hash não têm cura.
 do $chk_falas$
 begin
+  -- A lista cresce (0289: `recording_notice`, o aviso de gravação). Este é o
+  -- bloco ÚNICO da constraint (tests/unit/baseline-constraint-reconstruida.test.ts):
+  -- ela é refeita só quando a definição em vigor ainda não tem o valor mais novo —
+  -- o que já está em dia não é tocado. A lista só cresce, então nenhuma linha
+  -- existente a viola; `NOT VALID` e validada no bloco 6b, como as demais.
   if not exists (select 1 from pg_constraint
-                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_kind_check') then
+                  where conrelid = 'public.phone_prompts'::regclass and conname = 'phone_prompts_kind_check'
+                    and pg_get_constraintdef(oid) like '%recording_notice%') then
+    alter table public.phone_prompts drop constraint if exists phone_prompts_kind_check;
     alter table public.phone_prompts add constraint phone_prompts_kind_check
-      check (kind in ('menu', 'invalid', 'waiting', 'nobody', 'after_hours', 'emergency')) not valid;
+      check (kind in ('menu', 'invalid', 'waiting', 'nobody', 'after_hours', 'emergency', 'recording_notice')) not valid;
   end if;
 
   if not exists (select 1 from pg_constraint
@@ -30020,3 +30031,97 @@ drop trigger if exists trg_platform_meta_app_updated_at on public.platform_meta_
 create trigger trg_platform_meta_app_updated_at
   before update on public.platform_meta_app
   for each row execute function public.fn_set_updated_at();
+
+-- ---- telefonia: gravação das ligações (migration 0289) ----
+-- Racional completo no cabeçalho de supabase/migrations/20260929230000_0289_telefonia_gravacao_das_ligacoes.sql
+-- e no desenho docs/superpowers/specs/2026-09-29-telefonia-gravacao-das-ligacoes-design.md.
+-- phone_prompts_kind_check (+ recording_notice) e agent_inbox_items_kind_check
+-- (+ phone_recording_failed): blocos únicos delas, acima — não aqui.
+--
+-- CHECKs e FK só quando faltam, curados antes, e a validação só do que ainda está
+-- NOT VALID: `voice_calls` cresce com o histórico, e a reaplicação do update.sh
+-- não varre a tabela de novo.
+alter table public.phone_settings
+  add column if not exists recording_enabled boolean not null default false,
+  add column if not exists recording_retention_days integer not null default 90,
+  add column if not exists recording_notice_prompt_id uuid;
+
+do $gravacao_0289$
+declare
+  r record;
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_settings'::regclass
+                    and conname = 'phone_settings_recording_retention_check') then
+    update public.phone_settings set recording_retention_days = 90
+     where recording_retention_days not between 7 and 3650;
+    alter table public.phone_settings add constraint phone_settings_recording_retention_check
+      check (recording_retention_days between 7 and 3650);
+  end if;
+
+  -- FK COMPOSTA, a mesma catraca das outras falas gerais (0288): o banco recusa
+  -- apontar o aviso de gravação para a fala de outra organização, também pela REST.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_settings'::regclass
+                    and conname = 'phone_settings_recording_notice_prompt_id_org_fkey') then
+    update public.phone_settings s set recording_notice_prompt_id = null
+     where s.recording_notice_prompt_id is not null
+       and not exists (select 1 from public.phone_prompts p
+                        where p.id = s.recording_notice_prompt_id and p.organization_id = s.organization_id);
+    alter table public.phone_settings add constraint phone_settings_recording_notice_prompt_id_org_fkey
+      foreign key (organization_id, recording_notice_prompt_id)
+      references public.phone_prompts (organization_id, id) on delete set null (recording_notice_prompt_id);
+  end if;
+
+  alter table public.voice_calls
+    add column if not exists recording_status text,
+    add column if not exists recording_notice_at timestamptz;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_recording_status_check') then
+    update public.voice_calls set recording_status = null
+     where recording_status is not null and recording_status not in ('recording', 'stored', 'failed', 'expired');
+    alter table public.voice_calls add constraint voice_calls_recording_status_check
+      check (recording_status is null or recording_status in ('recording', 'stored', 'failed', 'expired')) not valid;
+  end if;
+
+  -- A gravação é da ligação do TELEFONE: a linha do WaCalls a REST escreve com o
+  -- JWT do agent, e ninguém forja por ela uma gravação (a mesma regra da URA, 0288).
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_recording_so_no_telefone_check') then
+    update public.voice_calls set recording_status = null, recording_notice_at = null
+     where provider <> 'sip_trunk' and (recording_status is not null or recording_notice_at is not null);
+    alter table public.voice_calls add constraint voice_calls_recording_so_no_telefone_check
+      check (provider = 'sip_trunk' or (recording_status is null and recording_notice_at is null)) not valid;
+  end if;
+
+  for r in
+    select k.conname from pg_constraint k
+     where k.conrelid = 'public.voice_calls'::regclass and k.contype = 'c' and not k.convalidated
+       and k.conname in ('voice_calls_recording_status_check', 'voice_calls_recording_so_no_telefone_check')
+  loop
+    begin
+      execute format('alter table public.voice_calls validate constraint %I', r.conname);
+    exception when check_violation then
+      raise warning '0289: voice_calls tem linha que viola % — o CHECK vale para toda linha nova (NOT VALID); corrija a linha e o próximo update.sh o valida', r.conname;
+    end;
+  end loop;
+end $gravacao_0289$;
+
+create index if not exists voice_calls_gravacao_pendente
+  on public.voice_calls (ended_at) where recording_status = 'recording';
+create index if not exists voice_calls_gravacao_guardada
+  on public.voice_calls (organization_id, ended_at) where recording_status = 'stored';
+
+comment on column public.phone_settings.recording_enabled is
+  'Grava as ligações do telefone desta organização (as duas direções, só a conversa: a ponte atendente↔cliente). Só liga com o aviso de gravação pronto (a rota recusa). Lido pelo worker a cada ligação.';
+comment on column public.phone_settings.recording_retention_days is
+  'Por quantos dias a gravação fica guardada. A poda diária (cron data-retention) apaga o arquivo e marca voice_calls.recording_status = expired.';
+comment on column public.phone_settings.recording_notice_prompt_id is
+  'A fala do AVISO DE GRAVAÇÃO (phone_prompts.kind = recording_notice). Recebida: toca antes do menu/fila; se não tocar, a ligação não é gravada. Feita: toca na ponte quando o cliente atende.';
+comment on column public.voice_calls.recording_status is
+  'Ciclo da gravação (fonte da verdade): recording (gravando ou esperando ser guardada), stored (arquivo na mensagem da ligação), failed (perdida), expired (apagada pela retenção). NULL = não gravada. Só sip_trunk. A projeção para a tela fica em messages.metadata.voice_call.gravacao.';
+comment on column public.voice_calls.recording_notice_at is
+  'Quando o aviso de gravação tocou para quem estava na linha (recebida: ao fim da fala, antes do menu/fila; feita: ao atender). NULL = não houve aviso, e então a ligação não foi gravada.';
+
+notify pgrst, 'reload schema';
