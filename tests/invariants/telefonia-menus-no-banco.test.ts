@@ -35,12 +35,16 @@
  *     pronto, recusa o de outra organização, o arquivado e o de fala pendente,
  *     escolher um time tira o menu, a aba antiga mantém; nas duas ordens contra o
  *     arquivamento, nunca sobra número tocando menu arquivado; e a trava da linha
- *     do número (`for no key update`) não faz a ligação esperar.
+ *     do número (`for no key update`) não faz a ligação esperar;
+ * 11. o `criarNumero` DE VERDADE com número repetido devolve a recusa traduzida
+ *     (`numero_ja_existe`), não um 500 — pelo índice único que existe hoje
+ *     (recusa no INSERT) e por uma unicidade DEFERRABLE (recusa só no COMMIT, que
+ *     `emTransacao` faz dentro do mesmo `try`).
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { atualizarNumero, numeroSchema, type EntradaDoNumero } from "@/lib/channels/telefonia/numeros";
+import { atualizarNumero, criarNumero, numeroSchema, type EntradaDoNumero } from "@/lib/channels/telefonia/numeros";
 import { caminhoDaFala, hashDaFala } from "@/lib/telefonia/falas";
 import {
   CONSULTA_DA_SEMANA,
@@ -893,5 +897,66 @@ describe("o atualizarNumero de verdade e o destino do número (Postgres real)", 
     expect(venceuArquivar !== venceuApontar, JSON.stringify({ a, n, fim })).toBe(true);
     expect(e.chegadas).toBe(2);
     expect(e.simultaneas).toBe(1);
+  });
+});
+
+describe("o criarNumero de verdade e o número repetido (Postgres real)", () => {
+  const contarNumeros = async (telefone: string) =>
+    Number(
+      (
+        await pool.query<{ n: string }>(
+          "select count(*) as n from channel_sessions where organization_id = $1 and phone_number = $2",
+          [ORG_A, telefone],
+        )
+      ).rows[0]!.n,
+    );
+  /** Um número NOVO para A: outra conta SIP, com senha (a cifra precisa da chave da instalação). */
+  const novoNumeroA = (e: Partial<EntradaDoNumero> = {}) =>
+    doNumeroA({ usuario: "u-menus-a-novo", servidor: "voip.menus-a-novo.com.br", senha: "segredo-de-teste", ...e });
+
+  beforeAll(() => {
+    sql(`insert into private.app_secrets (name, value)
+         values ('nuvemshop_oauth_key', 'chave-sintetica-do-invariante-com-32-mais-chars')
+         on conflict (name) do nothing;`);
+  });
+
+  it("a unicidade de hoje é o índice PARCIAL da 0107 (não deferrable): o repetido é recusado no INSERT — numero_ja_existe, e nada gravado", async () => {
+    // Mede a régua, em vez de supor: a constraint DEFERRABLE do snapshot virou índice na 0107.
+    const { rows: regua } = await pool.query<{ constraint: boolean; indice: string | null }>(
+      `select exists (select 1 from pg_constraint where conname = 'channel_sessions_phone_per_org_unique') as constraint,
+              (select pg_get_indexdef(i.indexrelid) from pg_index i
+                 join pg_class c on c.oid = i.indexrelid
+                where c.relname = 'channel_sessions_phone_per_org_unique') as indice`,
+    );
+    expect(regua[0]!.constraint).toBe(false);
+    expect(regua[0]!.indice).toMatch(/UNIQUE INDEX .*\(organization_id, phone_number\) WHERE \(archived_at IS NULL\)/);
+
+    expect(await criarNumero(pool, ORG_A, novoNumeroA())).toEqual({ ok: false, motivo: "numero_ja_existe" });
+    expect(await contarNumeros("+556130008801")).toBe(1);
+  });
+
+  it("recusa que só aparece no COMMIT (unicidade DEFERRABLE) também volta traduzida — não um 500", async () => {
+    // Sonda: uma unicidade deferível que o número novo viola. O INSERT passa; o
+    // COMMIT de `emTransacao` é que estoura — e ele está dentro do mesmo `try`.
+    sql(`alter table public.channel_sessions add constraint sonda_unico_deferivel_nome
+           unique (organization_id, display_name) deferrable initially deferred;`);
+    try {
+      const r = await criarNumero(pool, ORG_A, novoNumeroA({ numero: "(61) 3000-8899" }));
+      expect(r).toEqual({ ok: false, motivo: "numero_ja_existe" });
+      expect(await contarNumeros("+556130008899")).toBe(0);
+    } finally {
+      sql("alter table public.channel_sessions drop constraint if exists sonda_unico_deferivel_nome;");
+    }
+  });
+
+  it("controle: número novo, conta nova — cria, com a senha cifrada no banco", async () => {
+    const r = await criarNumero(pool, ORG_A, novoNumeroA({ nome: "Novo", numero: "(61) 3000-8898" }));
+    expect(r).toMatchObject({ ok: true });
+    const { rows } = await pool.query<{ cifrada: boolean }>(
+      "select sip_password_encrypted is not null and sip_password_encrypted <> '\\x00'::bytea as cifrada from channel_sessions where phone_number = $1",
+      ["+556130008898"],
+    );
+    expect(rows).toEqual([{ cifrada: true }]);
+    await pool.query("delete from channel_sessions where phone_number = $1 and organization_id = $2", ["+556130008898", ORG_A]);
   });
 });

@@ -37,11 +37,22 @@
  *  7. APAGAR UMA ORGANIZAÇÃO com tudo ligado (número → menu, opções, falas,
  *     configuração, aviso ligado, ligação com menu) passa e não toca na outra —
  *     também com os gatilhos de cascata disparando na ordem ADVERSA.
+ *  8. A TROCA DA FK DO TIME DO NÚMERO (simples da 0286 → composta) mora num bloco
+ *     `do` PRÓPRIO, com prazo de trava: o primeiro `update.sh` roda com o app de
+ *     pé, e sem prazo o ALTER esperaria para sempre atrás de uma leitura de
+ *     `channel_sessions`. Estourado o prazo, só aquele bloco falha — inteiro, sem
+ *     meio-termo —, o `psql` sem ON_ERROR_STOP (como o update.sh o roda) segue
+ *     para os comandos seguintes, e o próximo update.sh faz a troca. Nos update.sh
+ *     seguintes o bloco não pede trava nenhuma. Os números cujo time foi anulado
+ *     (time de outra organização) saem num WARNING com a contagem.
  */
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { beforeAll, describe, expect, it } from "vitest";
+import pg from "pg";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { countAs, sql } from "./gov-helpers";
 
@@ -81,6 +92,38 @@ function blocoDa0288(): string {
 }
 
 /** `null` quando o comando passa; a mensagem do psql quando falha. */
+/**
+ * Aplica o script como o `update.sh` aplica o baseline: `psql -f` SEM
+ * ON_ERROR_STOP — um comando que falha não interrompe os seguintes. Devolve a
+ * saída e quanto levou.
+ *
+ * O `lock_timeout` de 15 s da sessão é a rede do TESTE, não do produto: quando o
+ * caso segura a tabela numa transação e roda isto (síncrono, com o event loop
+ * preso), um bloco que perdesse o próprio prazo esperaria para sempre — o
+ * arquivo penduraria em vez de ficar vermelho. O bloco da 0288 o rebaixa a 3 s.
+ */
+function comoUpdateSh(script: string): { stdout: string; stderr: string; ms: number } {
+  const inicio = Date.now();
+  const r = spawnSync(
+    "docker",
+    [
+      "exec", "-i", "-e", "PGOPTIONS=-c lock_timeout=15s", process.env.TEST_DB_CONTAINER!,
+      "psql", "-U", "postgres", "-d", "postgres", "-tA", "-f", "-",
+    ],
+    { input: script, encoding: "utf8" },
+  );
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", ms: Date.now() - inicio };
+}
+
+/** O bloco `do` da troca da FK do time do número, lido do apêndice (não copiado à mão). */
+function blocoDoTimeDoNumero(): string {
+  const bloco = blocoDa0288();
+  const inicio = bloco.indexOf("do $fk_time_do_numero$");
+  const fim = bloco.indexOf("end $fk_time_do_numero$;");
+  if (inicio === -1 || fim === -1) throw new Error("bloco $fk_time_do_numero$ não encontrado no apêndice da 0288");
+  return bloco.slice(inicio, fim + "end $fk_time_do_numero$;".length);
+}
+
 function tenta(comando: string): string | null {
   try {
     sql(comando);
@@ -595,7 +638,10 @@ describe("o bucket e o apêndice", () => {
       values ('${ORG_A}', '${NUMERO_A}', 'sip_trunk', 'ref-0288-torta', 'inbound', '+5561999990288', 'ended', 'talvez');
     `);
 
-    expect(tenta(blocoDa0288())).toBeNull();
+    const reaplicado = comoUpdateSh(blocoDa0288());
+    expect(reaplicado.stderr).not.toMatch(/ERROR/);
+    // O operador vê, no log do update, quantos números ficaram sem time (o de outra organização).
+    expect(reaplicado.stderr).toMatch(/WARNING: {2}0288: 1 número\(s\) de telefone apontavam para um time de OUTRA organização/);
 
     expect(
       sql(`select coalesce(sip_team_id::text, '-') || '|' || coalesce(sip_menu_id::text, '-')
@@ -790,5 +836,72 @@ describe("apagar uma organização com tudo ligado", () => {
   it("apagar C de verdade: C some inteira, D fica inteira", () => {
     expect(tenta(`delete from public.organizations where id = '${ORG_C}';`)).toBeNull();
     expect(linhas(sql(`${contagem(ORG_C)} ${contagem(ORG_D)}`))).toEqual([VAZIA, CHEIA]);
+  });
+});
+
+describe("a troca da FK do time do número: bloco próprio, com prazo de trava", () => {
+  const pool = new pg.Pool({
+    connectionString: `postgresql://postgres:postgres@127.0.0.1:${process.env.TEST_DB_PORT ?? 54329}/postgres`,
+    max: 2,
+  });
+  const fkDoTime = () =>
+    sql(`select string_agg(conname, ',' order by conname) from pg_constraint
+          where conrelid = 'public.channel_sessions'::regclass and contype = 'f'
+            and conkey @> array[(select attnum from pg_attribute
+                                  where attrelid = 'public.channel_sessions'::regclass and attname = 'sip_team_id')];`);
+  const comoA0286 = () =>
+    sql(`
+      alter table public.channel_sessions drop constraint if exists channel_sessions_sip_team_id_org_fkey;
+      alter table public.channel_sessions drop constraint if exists channel_sessions_sip_team_id_fkey;
+      alter table public.channel_sessions add constraint channel_sessions_sip_team_id_fkey
+        foreign key (sip_team_id) references public.attendance_teams(id) on delete set null;
+    `);
+  /** O app de pé: uma transação que leu `channel_sessions` e ainda não terminou. */
+  const segurarATabela = async () => {
+    const c = await pool.connect();
+    await c.query("begin");
+    await c.query("select 1 from public.channel_sessions limit 1");
+    return async () => {
+      await c.query("rollback").catch(() => undefined);
+      c.release();
+    };
+  };
+
+  afterAll(() => pool.end());
+
+  it("update.sh depois do primeiro: com a composta no lugar, o bloco não pede trava — passa na hora com a tabela ocupada", async () => {
+    expect(fkDoTime()).toBe("channel_sessions_sip_team_id_org_fkey");
+    const soltar = await segurarATabela();
+    try {
+      const r = comoUpdateSh(blocoDoTimeDoNumero());
+      expect(r.stderr).not.toMatch(/ERROR/);
+      expect(r.ms).toBeLessThan(2_500);
+    } finally {
+      await soltar();
+    }
+    expect(fkDoTime()).toBe("channel_sessions_sip_team_id_org_fkey");
+  });
+
+  it("primeiro update.sh com o app segurando a tabela: desiste em ~3 s, sem meio-termo, e os comandos seguintes rodam", async () => {
+    comoA0286();
+    const soltar = await segurarATabela();
+    let r: ReturnType<typeof comoUpdateSh>;
+    try {
+      r = comoUpdateSh(`${blocoDoTimeDoNumero()}\nselect 'depois do bloco';`);
+    } finally {
+      await soltar();
+    }
+    expect(r.stderr).toMatch(/ERROR: {2}0288: a troca da FK do time do número .* esperou mais de 3 s/);
+    expect(r.ms).toBeGreaterThanOrEqual(2_500);
+    expect(r.ms).toBeLessThan(15_000);
+    // psql sem ON_ERROR_STOP, como o update.sh: o comando seguinte rodou.
+    expect(r.stdout).toMatch(/depois do bloco/);
+    // Nada pela metade: a simples ficou, a composta não entrou.
+    expect(fkDoTime()).toBe("channel_sessions_sip_team_id_fkey");
+
+    // O próximo update.sh, com a tabela livre, faz a troca.
+    const depois = comoUpdateSh(blocoDoTimeDoNumero());
+    expect(depois.stderr).not.toMatch(/ERROR/);
+    expect(fkDoTime()).toBe("channel_sessions_sip_team_id_org_fkey");
   });
 });

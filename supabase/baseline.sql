@@ -29588,8 +29588,8 @@ end $validar$;
 -- 7. FKs compostas (organization_id, coluna) ------------------------------------
 -- O alvo precisa de `unique (organization_id, id)`: phone_prompts e phone_menus
 -- nascem com ela (acima). As referências a attendance_teams são as de
--- phone_menus e phone_menu_options e o time do número, e usam a unique da 0263
--- (ver phone_menus).
+-- phone_menus e phone_menu_options e o time do número (7b), e usam a unique da
+-- 0263 (ver phone_menus).
 
 -- Uma FK por referência anulável, sempre `on delete set null (coluna)`. Para cada
 -- uma: se a FK certa (nome, alvo, as duas colunas, set null só da coluna) já está
@@ -29597,14 +29597,6 @@ end $validar$;
 -- primeiro. Senão: sai toda outra FK que envolva a coluna (a simples de um
 -- rascunho, ou uma torta), o ponteiro para outra organização (ou para linha que
 -- não existe) vira nulo, e a composta entra.
---
--- `channel_sessions.sip_team_id` não é referência nova: a 0286 a criou com FK
--- SIMPLES (`channel_sessions_sip_team_id_fkey`, `on delete set null`), que aceita
--- o time de outra organização — e `channel_sessions` é gravável pela REST (admin).
--- O destino do número passa a ser um time OU um menu, e as duas metades ganham a
--- mesma catraca: o bloco troca a simples pela composta, com o mesmo `set null`,
--- agora só da coluna. O `add column if not exists` da 0286 não a recria: com a
--- coluna existente, a cláusula inteira (inclusive o `references`) é pulada.
 do $fk$
 declare
   r      record;
@@ -29617,7 +29609,6 @@ begin
   for r in
     select * from (values
       ('channel_sessions', 'sip_menu_id',               'phone_menus',   'channel_sessions_sip_menu_id_org_fkey'),
-      ('channel_sessions', 'sip_team_id',               'attendance_teams', 'channel_sessions_sip_team_id_org_fkey'),
       ('voice_calls',      'menu_id',                   'phone_menus',   'voice_calls_menu_id_org_fkey'),
       ('phone_menus',      'prompt_id',                 'phone_prompts', 'phone_menus_prompt_id_org_fkey'),
       ('phone_menus',      'invalid_prompt_id',         'phone_prompts', 'phone_menus_invalid_prompt_id_org_fkey'),
@@ -29663,6 +29654,99 @@ begin
     end if;
   end loop;
 end $fk$;
+
+-- 7b. O time do número: FK simples (0286) → composta, num bloco PRÓPRIO, com prazo de trava.
+-- `channel_sessions.sip_team_id` não é referência nova: a 0286 a criou com FK
+-- SIMPLES (`channel_sessions_sip_team_id_fkey`, `on delete set null`), que aceita
+-- o time de outra organização — e `channel_sessions` é gravável pela REST (admin).
+-- O destino do número é um time OU um menu, e as duas metades ganham a mesma
+-- catraca: a composta, com o mesmo `set null`, agora só da coluna. O `add column
+-- if not exists` da 0286 não a recria ao reaplicar: com a coluna existente, a
+-- cláusula inteira (inclusive o `references`) é pulada — medido em pg15.
+--
+-- Fora do laço acima, e com `lock_timeout`, porque esta é a única troca que
+-- acontece em TODO clone: a 0286 já está nas instalações, então o primeiro
+-- update.sh depois desta versão troca a FK com o app de pé. Trocar pede
+-- AccessExclusive em `channel_sessions` e em `attendance_teams`, e sem prazo o
+-- ALTER esperaria atrás de qualquer leitura em curso — e todo o resto esperaria
+-- atrás dele. Com 3 s: estourou, o bloco inteiro desfaz (nada pela metade) e
+-- falha com uma mensagem que diz isso; o update.sh roda o baseline SEM
+-- ON_ERROR_STOP, então os blocos seguintes rodam, e o próximo update.sh tenta de
+-- novo. Com a composta no lugar (todo update.sh depois do primeiro), o bloco
+-- volta antes de pedir trava. O `set_config(..., true)` vale até o fim da
+-- transação — o bloco devolve o prazo anterior ao terminar, para não o deixar
+-- valendo para o resto de uma migration aplicada numa transação só.
+--
+-- Número que apontava para time de OUTRA organização (ou que não existe) fica sem
+-- time: é o que a composta exige, e o operador precisa saber — WARNING com a
+-- contagem no log do update.
+do $fk_time_do_numero$
+declare
+  v_rel      constant regclass := 'public.channel_sessions'::regclass;
+  v_nome     constant text := 'channel_sessions_sip_team_id_org_fkey';
+  v_org      int2;
+  v_col      int2;
+  v_ok       boolean;
+  v_outras   int;
+  v_anulados int;
+  v_prazo    constant text := current_setting('lock_timeout');
+  c          record;
+begin
+  select attnum into v_org from pg_attribute where attrelid = v_rel and attname = 'organization_id';
+  select attnum into v_col from pg_attribute where attrelid = v_rel and attname = 'sip_team_id';
+
+  select exists (
+    select 1 from pg_constraint k
+     where k.conrelid = v_rel
+       and k.conname = v_nome
+       and k.contype = 'f'
+       and k.confrelid = 'public.attendance_teams'::regclass
+       and k.conkey = array[v_org, v_col]
+       and k.confdeltype = 'n'
+       and k.confdelsetcols = array[v_col]
+  ) into v_ok;
+  select count(*) into v_outras
+    from pg_constraint k
+   where k.conrelid = v_rel and k.contype = 'f' and v_col = any (k.conkey)
+     and not (v_ok and k.conname = v_nome);
+
+  -- Todo update.sh depois do primeiro: nada a trocar, e nenhuma trava pedida.
+  if v_ok and v_outras = 0 then
+    return;
+  end if;
+
+  perform set_config('lock_timeout', '3s', true);
+
+  for c in
+    select k.conname from pg_constraint k
+     where k.conrelid = v_rel and k.contype = 'f' and v_col = any (k.conkey)
+       and not (v_ok and k.conname = v_nome)
+  loop
+    execute format('alter table public.channel_sessions drop constraint %I', c.conname);
+  end loop;
+
+  if not v_ok then
+    update public.channel_sessions t
+       set sip_team_id = null
+     where t.sip_team_id is not null
+       and not exists (select 1 from public.attendance_teams x
+                        where x.id = t.sip_team_id and x.organization_id = t.organization_id);
+    get diagnostics v_anulados = row_count;
+    alter table public.channel_sessions add constraint channel_sessions_sip_team_id_org_fkey
+      foreign key (organization_id, sip_team_id) references public.attendance_teams (organization_id, id)
+      on delete set null (sip_team_id);
+    -- Só depois de a composta entrar: um prazo estourado acima desfaz o `update`, e o aviso mentiria.
+    if v_anulados > 0 then
+      raise warning '0288: % número(s) de telefone apontavam para um time de OUTRA organização (ou que não existe) — esses números ficaram sem time (sip_team_id = null); escolha o time de novo em Conexões › Telefone', v_anulados;
+    end if;
+  end if;
+
+  perform set_config('lock_timeout', v_prazo, true);
+exception
+  when lock_not_available then
+    raise exception '0288: a troca da FK do time do número (%) esperou mais de 3 s pela trava de channel_sessions/attendance_teams e ficou para depois — nada mudou; o próximo update.sh tenta de novo', v_nome
+      using errcode = 'lock_not_available';
+end $fk_time_do_numero$;
 
 -- 8. RLS, GRANT e policies ------------------------------------------------------
 alter table public.phone_prompts      enable row level security;
