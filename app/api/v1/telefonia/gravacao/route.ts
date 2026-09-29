@@ -80,7 +80,7 @@ export async function PUT(req: NextRequest): Promise<Response> {
       actorUserId: authz.user.id,
       organizationId: org,
       resourceType: "phone_settings",
-      resourceId: org,
+      resourceId: authz.org.orgId,
       metadata: {
         antes: { ativa: r.antes.ativa, retencao_dias: r.antes.retencaoDias },
         depois: { ativa: r.depois.ativa, retencao_dias: r.depois.retencaoDias },

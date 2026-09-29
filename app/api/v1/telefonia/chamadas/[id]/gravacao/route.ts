@@ -46,6 +46,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
   const id = z.string().uuid().safeParse((await ctx.params).id);
   if (!id.success) return naoHa();
+  const vcId = id.data;
   const org = authz.org.orgId;
 
   const supabase = await createClient();
@@ -53,7 +54,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     .from("messages")
     .select("id, conversation_id, media_storage_path")
     .eq("organization_id", org)
-    .eq("external_id", `ligacao:${id.data}`)
+    .eq("external_id", `ligacao:${vcId}`)
     .maybeSingle();
   if (error) return fail("internal_error", t("Erro ao buscar a gravação."), 500, { requestId });
   const caminho = msg?.media_storage_path;
@@ -63,7 +64,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     .storage.from(BUCKET_DAS_GRAVACOES)
     .createSignedUrl(caminho, VALIDADE_DA_URL_S);
   if (erroDaAssinatura || !assinada?.signedUrl) {
-    logger.warn("telefonia: URL da gravação não assinada", { voice_call: id.data, erro: erroDaAssinatura?.message });
+    logger.warn("telefonia: URL da gravação não assinada", { voice_call: vcId, erro: erroDaAssinatura?.message });
     return fail("bad_gateway", t("A gravação está indisponível no momento. Tente de novo em instantes."), 502, { requestId });
   }
 
@@ -72,7 +73,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     actorUserId: authz.user.id,
     organizationId: org,
     resourceType: "voice_call",
-    resourceId: id.data,
+    resourceId: vcId,
     metadata: { conversation_id: msg.conversation_id },
     requestId,
   });
