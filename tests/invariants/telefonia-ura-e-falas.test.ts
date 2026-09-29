@@ -158,7 +158,7 @@ function privilegiosDaRest(): string[] {
     .sort();
 }
 
-/** Os 12 CHECKs da 0288 (o de `agent_inbox_items.kind` é do bloco único do baseline). */
+/** Os 13 CHECKs da 0288 (o de `agent_inbox_items.kind` é do bloco único do baseline). */
 const CHECKS_DA_0288 = [
   "attendance_teams_phone_emergency_check",
   "channel_sessions_sip_destino_check",
@@ -172,6 +172,7 @@ const CHECKS_DA_0288 = [
   "phone_prompts_text_check",
   "voice_calls_menu_digit_check",
   "voice_calls_menu_outcome_check",
+  "voice_calls_menu_so_no_telefone_check",
 ] as const;
 const CHECKS_SQL = CHECKS_DA_0288.map((c) => `'${c}'`).join(", ");
 
@@ -441,8 +442,11 @@ describe("as catracas do schema", () => {
     expect(
       comoMembro(ADMIN_A, `update public.channel_sessions set sip_menu_id = null, sip_team_id = '${TIME_B}' where id = '${NUMERO_A}'`),
     ).toMatch(/violates foreign key constraint "channel_sessions_sip_team_id_org_fkey"/);
-    // voice_calls é gravável por agent. O GRANT já vem do default ACL do baseline;
-    // o grant explícito só deixa a pré-condição à vista (e desfaz no rollback).
+    // voice_calls: pela REST, o agent só grava a linha do WaCalls (policy da 0235
+    // restrita pela 0288), e nela o menu é barrado pelo CHECK — o `menu_id` não é
+    // alcançável pela REST, nem o de A. A FK composta continua sendo provada pela
+    // conexão direta (caso anterior); o resto em telefonia-voice-calls-pela-rest.test.ts.
+    // O GRANT já vem do default ACL do baseline; o explícito deixa a pré-condição à vista.
     const ligacao = (menu: string) =>
       comoMembro(
         USER_A,
@@ -452,8 +456,8 @@ describe("as catracas do schema", () => {
                  '+5561999990288', 'ended', '${menu}')`,
         "grant insert on public.voice_calls to authenticated;",
       );
-    expect(ligacao(MENU_A)).toBeNull();
-    expect(ligacao(MENU_B)).toMatch(/violates foreign key constraint "voice_calls_menu_id_org_fkey"/);
+    expect(ligacao(MENU_A)).toMatch(/new row violates row-level security policy for table "voice_calls"/);
+    expect(ligacao(MENU_B)).toMatch(/new row violates row-level security policy for table "voice_calls"/);
   });
 
   it("apagar o alvo solta só a coluna: o organization_id fica (on delete set null (coluna))", () => {

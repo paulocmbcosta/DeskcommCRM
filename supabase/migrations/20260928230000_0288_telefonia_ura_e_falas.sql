@@ -27,7 +27,11 @@
 --    ANTES de o CHECK entrar.
 -- 6. `voice_calls` — o que o menu fez (`menu_id`, `menu_digit`, `menu_outcome`) e
 --    quando o cliente ouviu o aviso inteiro (`emergency_heard_at`). `end_reason`
---    ganha `after_hours` sem migration: é coluna de vocabulário aberto.
+--    ganha `after_hours` sem migration: é coluna de vocabulário aberto. Essas
+--    quatro colunas são da ligação do TELEFONE: um CHECK as mantém nulas fora de
+--    `provider = 'sip_trunk'`, e a policy de escrita pela REST da 0235
+--    (`voice_calls_write`) passa a valer só para `provider = 'wacalls'` — ver
+--    "Segurança", abaixo.
 -- 7. `agent_inbox_items.kind` ganha `phone_prompt_unplayable` (a fala não tocou
 --    e a ligação seguiu sem ela), `phone_emergency_expired` (o aviso venceu e
 --    desligou sozinho) e `phone_menu_team_archived` (quem ligou caiu no time
@@ -75,6 +79,18 @@
 -- `attendance_teams`, `atendimentos` e `attendant_pause_log`. O `revoke`
 -- explícito é o que protege no Supabase real: o default ACL de `public` concede
 -- tudo a tabela nova, e só acrescentar GRANT não retira nada.
+-- `voice_calls` é o caso oposto: o WaCalls AINDA grava por ela pela REST, com o
+-- JWT do agent (a rota que disca, a reconciliação com a ponte, a de atender), e
+-- nenhum e2e cobre isso — então NÃO há revoke nem grant por coluna. Até aqui a
+-- policy de escrita da 0235 alcançava também a ligação do telefone, e um agent
+-- forjava o desfecho do menu (revisão de segurança da fase 2). Agora ela vale só
+-- para `provider = 'wacalls'`, no `using` E no `with check`, com o mesmo papel e a
+-- mesma organização; e o CHECK `voice_calls_menu_so_no_telefone_check` barra
+-- coluna do menu numa linha do WaCalls, para todo mundo. As FKs simples da
+-- 0235/0286 em `voice_calls` (`team_id`, `conversation_id`, `ringing_user_id`)
+-- ainda aceitam id de outra organização numa linha do WaCalls pela REST: fora
+-- desta migration, nas pendências. Gate:
+-- `tests/invariants/telefonia-voice-calls-pela-rest.test.ts`.
 -- Nenhuma função nova.
 --
 -- Idempotente e auto-curativa: `if not exists` em tabela, coluna e índice.
@@ -315,6 +331,22 @@ begin
     alter table public.voice_calls add constraint voice_calls_menu_outcome_check
       check (menu_outcome is null or menu_outcome in ('chosen', 'default_no_input', 'default_invalid')) not valid;
   end if;
+
+  -- O menu e o aviso de instabilidade são da ligação do TELEFONE. Fora de
+  -- `sip_trunk` (a linha do WaCalls, que a REST grava com o JWT do agent) essas
+  -- colunas ficam nulas — senão um agent forjava pela REST o desfecho de um menu
+  -- e poluía os "últimos 7 dias" e o cartão da ligação. Cura segura: numa linha
+  -- que não é do telefone elas não querem dizer nada.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_menu_so_no_telefone_check') then
+    update public.voice_calls
+       set menu_id = null, menu_digit = null, menu_outcome = null, emergency_heard_at = null
+     where provider <> 'sip_trunk'
+       and (menu_id is not null or menu_digit is not null or menu_outcome is not null or emergency_heard_at is not null);
+    alter table public.voice_calls add constraint voice_calls_menu_so_no_telefone_check
+      check (provider = 'sip_trunk'
+             or (menu_id is null and menu_digit is null and menu_outcome is null and emergency_heard_at is null)) not valid;
+  end if;
 end $chk_ligacoes$;
 create index if not exists idx_voice_calls_menu_recentes
   on public.voice_calls (menu_id, started_at) where menu_id is not null;
@@ -337,7 +369,8 @@ begin
          'phone_prompts_kind_check', 'phone_prompts_status_check', 'phone_prompts_text_check',
          'phone_prompts_hash_check', 'phone_prompts_storage_path_check', 'phone_prompts_ready_check',
          'phone_menus_name_check', 'phone_menu_options_digit_check', 'channel_sessions_sip_destino_check',
-         'attendance_teams_phone_emergency_check', 'voice_calls_menu_digit_check', 'voice_calls_menu_outcome_check')
+         'attendance_teams_phone_emergency_check', 'voice_calls_menu_digit_check', 'voice_calls_menu_outcome_check',
+         'voice_calls_menu_so_no_telefone_check')
   loop
     begin
       execute format('alter table %s validate constraint %I', r.tabela, r.conname);
@@ -540,6 +573,27 @@ drop policy if exists tenant_isolation_phone_menu_options_all on public.phone_me
 drop policy if exists tenant_isolation_phone_menu_options_select on public.phone_menu_options;
 create policy tenant_isolation_phone_menu_options_select on public.phone_menu_options for select to authenticated
   using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+
+-- voice_calls: a escrita pela REST (a policy da 0235) passa a valer SÓ para a
+-- linha do WaCalls, que ainda escreve por ela com a sessão do usuário —
+-- app/api/v1/voice/calls/route.ts (o INSERT e a reconciliação) e
+-- app/api/v1/voice/calls/[id]/accept/route.ts (o dono). A linha do telefone
+-- (`sip_trunk`) é do worker e da API, pela conexão direta: pela REST ela fica
+-- só-leitura, e o `with check` impede uma linha do WaCalls de virar do telefone.
+-- O papel e a organização são os da 0235. Coluna do menu numa linha do WaCalls é
+-- barrada pelo CHECK `voice_calls_menu_so_no_telefone_check` (bloco 6).
+drop policy if exists voice_calls_write on public.voice_calls;
+create policy voice_calls_write on public.voice_calls for all
+  using (
+    provider = 'wacalls'
+    and organization_id in (select public.fn_user_org_ids())
+    and public.fn_role_at_least(organization_id, 'agent')
+  )
+  with check (
+    provider = 'wacalls'
+    and organization_id in (select public.fn_user_org_ids())
+    and public.fn_role_at_least(organization_id, 'agent')
+  );
 
 -- 9. updated_at ------------------------------------------------------------------
 create or replace trigger trg_phone_prompts_updated_at
