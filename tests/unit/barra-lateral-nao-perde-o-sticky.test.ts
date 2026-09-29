@@ -1,7 +1,8 @@
 /**
  * A barra lateral gruda — e quem a quebra não é ela.
  *
- * `components/shell/Sidebar.tsx` é `sticky top-0 h-screen`, com um comentário
+ * `components/shell/Sidebar.tsx` é `sticky` e da altura da janela (o `top` e a
+ * altura descontam as faixas do topo — lib/ui/faixas-do-topo.ts), com um comentário
  * longo explicando por que NÃO é `fixed` (duas medidas para a mesma coisa, e a
  * barra passando por cima da lista no dia em que discordaram). Mesmo assim ela
  * rolava com a página: sumia do alto e deixava faixa vazia embaixo.
@@ -64,7 +65,13 @@ describe("a rede contra scroll horizontal não pode matar o sticky", () => {
       join(__dirname, "..", "..", "components", "shell", "Sidebar.tsx"),
       "utf8",
     );
-    expect(sidebar).toContain("sticky top-0");
+    // A lista de classes da barra começa por `sticky` — é isso que ela protege.
+    expect(sidebar).toMatch(/"sticky /);
+    // O `top` vem da classe (`top-0`) ou da altura das faixas do topo, no `style`
+    // (lib/ui/faixas-do-topo.ts). Sem nenhum dos dois, `sticky` não gruda em lugar
+    // nenhum — e a cerca reprovaria um `sticky` decorativo.
+    expect(sidebar).toMatch(/"sticky top-0|top: TOPO_ABAIXO_DAS_FAIXAS/);
     expect(sidebar).not.toMatch(/className=\{?[^}]*"fixed /);
+    expect(sidebar).not.toMatch(/"fixed /);
   });
 });

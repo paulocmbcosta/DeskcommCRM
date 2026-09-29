@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { CaretDoubleLeft, CaretDoubleRight, CaretDown, Gear } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
+import { JANELA_ABAIXO_DAS_FAIXAS, TOPO_ABAIXO_DAS_FAIXAS } from "@/lib/ui/faixas-do-topo";
 import { toggleSidebar } from "@/app/actions/shell/toggleSidebar";
 import { useAuth } from "@/hooks/auth/AuthProvider";
 import { ConnectionHealthDot } from "@/components/connections/ConnectionHealthDot";
@@ -388,15 +389,21 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         // que é a assinatura de servidor e navegador terem pintado estados
         // diferentes — e `AppShell` e `Sidebar` são ambos `"use client"`.
         //
-        // `sticky top-0 h-screen` dá o mesmo efeito visual (a barra não rola com
-        // a página) e ela VOLTA a ocupar lugar: sobra para o conteúdo exatamente
-        // o que ela não usou, e não há segunda medida para discordar.
+        // `sticky` com a altura da janela dá o mesmo efeito visual (a barra não
+        // rola com a página) e ela VOLTA a ocupar lugar: sobra para o conteúdo
+        // exatamente o que ela não usou, e não há segunda medida para discordar.
+        //
+        // O `top` e a altura descontam as faixas do topo (aviso de instabilidade,
+        // conexão caída, acompanhamento), no `style`: com `top-0 h-screen` a barra
+        // nascia com o rodapé cortado e, ao rolar, com o topo coberto por elas. Sem
+        // faixa a conta dá o mesmo `top: 0; height: 100vh` (lib/ui/faixas-do-topo.ts).
         //
         // `shrink-0` porque item de flex encolhe por padrão, e uma barra de 60
         // espremida para caber é o mesmo defeito por outro caminho.
-        "sticky top-0 z-30 flex h-screen shrink-0 flex-col border-r bg-card transition-[width] duration-200",
+        "sticky z-30 flex shrink-0 flex-col border-r bg-card transition-[width] duration-200",
         collapsed ? "w-16" : "w-60",
       )}
+      style={{ top: TOPO_ABAIXO_DAS_FAIXAS, height: JANELA_ABAIXO_DAS_FAIXAS }}
     >
       <SidebarContent collapsed={collapsed} />
     </aside>

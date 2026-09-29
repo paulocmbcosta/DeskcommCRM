@@ -8,6 +8,12 @@
  * hidratar (daí o `0px` de reserva).
  *
  * Quem gruda ou mede a janela abaixo delas desconta essa altura:
+ *  - a casca de /app (`AppShell`) mede, no mínimo, a janela menos as faixas —
+ *    com `min-h-screen`, a página somava faixa + 100vh e rolava pela altura dela
+ *    em toda tela;
+ *  - a barra lateral gruda logo abaixo das faixas e mede a janela menos elas —
+ *    `top-0 h-screen` nascia com o rodapé (o `VersionFooter`) cortado e, ao
+ *    rolar, com o topo coberto;
  *  - a TopBar gruda LOGO ABAIXO das faixas ao rolar (antes, as duas em `top: 0`,
  *    o contêiner `z-50` cobria a TopBar `z-20`);
  *  - a Inbox, que ocupa a janela abaixo da TopBar (`h-14` = 3.5rem) e não rola,
@@ -22,8 +28,14 @@ export const VARIAVEL_DA_ALTURA_DAS_FAIXAS = "--altura-das-faixas";
 
 const ALTURA_DAS_FAIXAS = `var(${VARIAVEL_DA_ALTURA_DAS_FAIXAS}, 0px)`;
 
-/** O `top` de quem gruda logo abaixo das faixas (a TopBar). */
+/** O `top` de quem gruda logo abaixo das faixas (a TopBar, a barra lateral). */
 export const TOPO_ABAIXO_DAS_FAIXAS = ALTURA_DAS_FAIXAS;
+
+/**
+ * A janela menos as faixas — o `min-height` da casca e a altura da barra lateral.
+ * `100vh`, como o `min-h-screen`/`h-screen` que substitui: sem faixa, nada muda.
+ */
+export const JANELA_ABAIXO_DAS_FAIXAS = `calc(100vh - ${ALTURA_DAS_FAIXAS})`;
 
 /** A altura de uma tela que ocupa a janela abaixo da TopBar (3.5rem) e das faixas (a Inbox). */
 export const ALTURA_ABAIXO_DA_TOPBAR = `calc(100dvh - 3.5rem - ${ALTURA_DAS_FAIXAS})`;
