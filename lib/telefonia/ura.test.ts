@@ -152,6 +152,43 @@ describe("URA — a regra pura (D5)", () => {
     expect(certo.acao).toEqual({ tipo: "tocar", fala: "menu", pararAtual: false });
   });
 
+  describe("a fala que não tocou (fala_falhou): a decisão é da regra, não do controlador", () => {
+    it("o menu não tocou na primeira vez: time padrão com default_no_input, sem fala para parar", () => {
+      const { acoes, estado } = rodar(menu, [{ tipo: "fala_falhou" }]);
+      expect(acoes).toEqual([
+        { tipo: "encaminhar", teamId: SUPORTE, desfecho: "default_no_input", digito: null, pararAtual: false },
+      ]);
+      expect(estado).toEqual({ fase: "decidida" });
+    });
+
+    it("o menu não tocou na repetição depois de uma tecla errada: time padrão com default_invalid", () => {
+      const { acoes } = rodar(menu, [{ tipo: "tecla", digito: "9" }, { tipo: "fala_falhou" }]);
+      expect(acoes.at(-1)).toEqual({
+        tipo: "encaminhar",
+        teamId: SUPORTE,
+        desfecho: "default_invalid",
+        digito: null,
+        pararAtual: false,
+      });
+    });
+
+    it("a fala de tecla inválida não tocou: pula para o menu, como se ela tivesse acabado", () => {
+      const { acoes, estado } = rodar({ ...menu, temFalaInvalida: true }, [{ tipo: "tecla", digito: "7" }, { tipo: "fala_falhou" }]);
+      expect(acoes).toEqual([
+        { tipo: "tocar", fala: "invalida", pararAtual: true },
+        { tipo: "tocar", fala: "menu", pararAtual: false },
+      ]);
+      expect(estado).toEqual({ fase: "tocando", vez: 2, fala: "menu", houveInvalida: true });
+    });
+
+    it("na espera (nada no ar) e depois de decidida: ignorado", () => {
+      const esperando: EstadoDaUra = { fase: "esperando", vez: 1, houveInvalida: false };
+      expect(passoDaUra(menu, esperando, { tipo: "fala_falhou" })).toEqual({ estado: esperando, acao: { tipo: "ignorar" } });
+      const decidida: EstadoDaUra = { fase: "decidida" };
+      expect(passoDaUra(menu, decidida, { tipo: "fala_falhou" })).toEqual({ estado: decidida, acao: { tipo: "ignorar" } });
+    });
+  });
+
   it("prazo duplicado (o mesmo timer disparou 2x): a segunda vez ignora", () => {
     let estado: EstadoDaUra = ESTADO_INICIAL_DA_URA;
     estado = passoDaUra(menu, estado, { tipo: "fim_da_fala" }).estado; // esperando, vez 1

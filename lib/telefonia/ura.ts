@@ -15,7 +15,12 @@
  *  - sem tecla em 5 s → o menu de novo;
  *  - o menu toca no máximo 3 vezes (a primeira + 2 repetições); falhou a terceira
  *    → o time padrão, com `default_invalid` se ALGUMA tecla errada foi apertada,
- *    ou `default_no_input` se nenhuma.
+ *    ou `default_no_input` se nenhuma;
+ *  - a fala que NÃO TOCOU (`fala_falhou`: sem arquivo no disco, recusada pelo
+ *    Asterisk, ou o playback terminou `failed`) é pulada, como se não existisse
+ *    (desenho §4): a de tecla inválida cede ao menu; o menu que não toca não se
+ *    repete no silêncio — vai ao time padrão, com o desfecho da mesma régua.
+ *    Decidir isso aqui, e não no controlador, mantém o desfecho numa regra só.
  *
  * O estado é uma união discriminada por `fase`, o que elimina combinações
  * impossíveis (não dá para estar "tocando" E "esperando" ao mesmo tempo):
@@ -73,7 +78,12 @@ export const ESTADO_INICIAL_DA_URA: Readonly<EstadoDaUra> = Object.freeze({
   houveInvalida: false,
 });
 
-export type EventoDaUra = { tipo: "tecla"; digito: string } | { tipo: "fim_da_fala" } | { tipo: "prazo"; vez: number };
+export type EventoDaUra =
+  | { tipo: "tecla"; digito: string }
+  | { tipo: "fim_da_fala" }
+  | { tipo: "prazo"; vez: number }
+  /** A fala no ar (ou a que ia tocar) não tocou. */
+  | { tipo: "fala_falhou" };
 
 export type AcaoDaUra =
   | { tipo: "tocar"; fala: FalaDaUra; pararAtual: boolean }
@@ -141,6 +151,32 @@ export function passoDaUra(
         estado: { fase: "tocando", vez, fala: "menu", houveInvalida: estado.houveInvalida },
         acao: { tipo: "tocar", fala: "menu", pararAtual: false },
       };
+    }
+    case "fala_falhou": {
+      if (estado.fase !== "tocando") return { estado, acao: { tipo: "ignorar" } };
+      // A de tecla inválida é só um aviso: sem ela, o menu segue na mesma vez.
+      if (estado.fala === "invalida") {
+        return {
+          estado: { fase: "tocando", vez: estado.vez, fala: "menu", houveInvalida: estado.houveInvalida },
+          acao: { tipo: "tocar", fala: "menu", pararAtual: false },
+        };
+      }
+      // O menu é o mesmo áudio a cada vez: o que não tocou agora não toca na
+      // repetição. Esperar o cliente escolher o que ele não ouviu seria silêncio.
+      return {
+        estado: { fase: "decidida" },
+        acao: {
+          tipo: "encaminhar",
+          teamId: menu.defaultTeamId,
+          desfecho: estado.houveInvalida ? "default_invalid" : "default_no_input",
+          digito: null,
+          pararAtual: false,
+        },
+      };
+    }
+    default: {
+      const _nunca: never = evento;
+      return _nunca;
     }
   }
 }
