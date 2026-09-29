@@ -3089,7 +3089,7 @@ worker contra Postgres real (`tests/invariants/telefonia-repositorio-da-ura.test
 
 **Estado da spec:** **PASSOU** na execução 36576512233 do `e2e.yml` (`workflow_dispatch` na
 branch da fase 2, commit `0fba1433`), job `e2e-parte (3)`, com `E2E_TELEFONIA=1`. Para conferir
-na fonte: `gh run view 36576512233`. A spec é um teste só, com oito passos; os casos J36.1 a
+na fonte a linha da spec no log desse job: `gh api repos/paulocmbcosta/DeskcommCRM/actions/jobs/109450910362/logs | grep -a '✓.*telefonia-ura-e-falas'`. A spec é um teste só, com oito passos; os casos J36.1 a
 J36.6 são os passos dela, e PASS aqui vale só para eles. O job terminou vermelho por UMA outra
 spec, `inbox-rotulo-de-origem.spec.ts:224`, que também falha no último e2e da `main`
 (execução 36439395747, o merge do PR #93) — herdada, não desta versão. Nenhum caso a partir do

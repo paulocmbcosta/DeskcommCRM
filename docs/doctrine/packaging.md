@@ -100,9 +100,10 @@ OCI — no mínimo `source`, `revision`, `version`, `licenses` — e é constru�
   imagem que não roda na VPS amd64 do cliente, e a falha aparece só no `up -d` dele. **(b)
   Rastreabilidade:** sem `org.opencontainers.image.revision` não existe resposta para "que
   código está rodando neste cliente?", e o suporte vira adivinhação.
-- **Verificação:** o job **`imagens-ok`** de `publish-image.yml` reprova quando qualquer uma
-  das três imagens não constrói. Ele existe porque a matriz gera um nome de check por imagem,
-  e exigir os três pelo nome faria uma quarta imagem, um dia, escapar do gate em silêncio.
+- **Verificação:** o job **`imagens-ok`** de `publish-image.yml` reprova quando qualquer
+  imagem da matriz não constrói (quais: `grep -n 'name: deskcomm' .github/workflows/publish-image.yml`).
+  Ele existe porque a matriz gera um nome de check por imagem, e exigir cada um pelo nome
+  faria uma imagem nova, um dia, escapar do gate em silêncio.
 
   > **Ativado.** `imagens-ok` **é** required check da `main`. Medido em 2026-08-14:
   >
@@ -141,7 +142,7 @@ seria recusar instalar por não conseguir resolver um número:
 2. **Quem preenche o `.env` à mão** a partir do template recebe `stable` — o piso seguro
    para quem não vai rodar a entrevista. `--yes` com o template preserva esse valor.
 
-O que **nenhum** caminho faz é pinar numa versão sem antes conferir que as três imagens
+O que **nenhum** caminho faz é pinar numa versão sem antes conferir que as imagens dela
 existem lá: a tag do git nasce minutos antes das imagens, e `deskcomm-worker:1.2.1` nunca
 vai existir porque a v1.2.1 é anterior à criação desse pacote.
 
@@ -164,8 +165,9 @@ vai existir porque a v1.2.1 é anterior à criação desse pacote.
   meses sem nenhum. `hostgator-setup-kit/test-validators.sh` roda o `install.sh` de verdade
   contra um remoto local com tags conhecidas e cobra o `.env` pinado na maior delas (a ordem
   alfabética escolheria `v1.9.0` sobre `v1.10.0` — erro que só apareceria na décima release).
-  `tests/shell/update-guard.test.sh` prova que o `update.sh` grava as **três** imagens na
-  mesma versão, no `.env`, sem duplicar chave.
+  `tests/shell/update-guard.test.sh` prova que o `update.sh` grava **todas** as imagens na
+  mesma versão, no `.env`, sem duplicar chave — quais são:
+  `grep -nE 'set_env_var "\$envfile" [A-Z]+_IMAGE ' hostgator-setup-kit/_common.sh`.
 
 ### 4. Tag de versão é imutável; canal é móvel
 
@@ -405,16 +407,16 @@ do banco. É o passo que mais trava na estreia de uma imagem nova.
 [ ] 5. `git tag vX.Y.Z && git push origin vX.Y.Z` — a partir de um commit da `main`
 [ ] 6. O run de publicação ficou verde:
        gh run list --workflow=publish-image.yml --limit 3
-[ ] 7. As TRÊS imagens existem E são públicas nesta versão:
-       for i in deskcommcrm deskcomm-worker deskcomm-scheduler; do
-         echo "$i: $(ghcr_status $i X.Y.Z)"; done      → 200 nas três
+[ ] 7. TODAS as imagens da matriz existem E são públicas nesta versão:
+       for i in $(grep -oE 'name: deskcomm[a-z-]*' .github/workflows/publish-image.yml | cut -d' ' -f2); do
+         echo "$i: $(ghcr_status $i X.Y.Z)"; done      → 200 em todas
        403 em alguma? Torne o pacote público ANTES de seguir
 [ ] 8. A imagem reporta a versão certa:
        docker run --rm ghcr.io/melgarafael/deskcommcrm:X.Y.Z \
          node -e 'console.log(process.env.APP_VERSION)'   → X.Y.Z
 [ ] 9. `gh release create vX.Y.Z` com as notas do CHANGELOG
-[ ] 10. SÓ AGORA: `stable` e X.Y.Z são o MESMO digest, nas três imagens:
-        for i in deskcommcrm deskcomm-worker deskcomm-scheduler; do
+[ ] 10. SÓ AGORA: `stable` e X.Y.Z são o MESMO digest, em todas as imagens:
+        for i in $(grep -oE 'name: deskcomm[a-z-]*' .github/workflows/publish-image.yml | cut -d' ' -f2); do
           for t in X.Y.Z stable; do
             echo -n "$i:$t "; docker buildx imagetools inspect \
               ghcr.io/melgarafael/$i:$t --format '{{.Manifest.Digest}}'; done; done
@@ -464,7 +466,7 @@ parque instalado** percorre, e é o único que a suíte de CI não exercita.
 |---|---|---|
 | CI (mecânico) | `imagens-ok` em `publish-image.yml` | imagem quebrada **reprova o merge** — é required check da `main`. Meça antes de confiar: `gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts'` |
 | CI (mecânico) | `tests/unit/packaging-artefato-do-cliente.test.ts` | serviço `build:`-only, pin upstream solto, `pull_policy` trocado e versão que mente reprovam |
-| CI (mecânico) | `tests/shell/update-guard.test.sh` | atualização que não pina as três imagens reprova |
+| CI (mecânico) | `tests/shell/update-guard.test.sh` | atualização que não pina todas as imagens na versão reprova |
 | CI (mecânico) | `hostgator-setup-kit/test-validators.sh` | instalação que nasce em tag móvel reprova |
 | Gate de sessão | item 15 do Definition of Done (`CLAUDE.md`) | nenhuma task de imagem/compose/kit fecha sem responder |
 | Revisão | bloco de packaging em `CONTRIBUTING.md` | contribuidor externo sabe a régua antes do PR |

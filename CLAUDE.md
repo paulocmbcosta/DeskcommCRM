@@ -242,6 +242,11 @@ Depois de qualquer deploy, confirme que o domínio responde **307** (redireciona
 pro login) e não 404. Verificações e o caso de build local em
 `docs/runbooks/deploy.md`.
 
+Quando a versão mexe no `worker` ou no Asterisk (a URA do telefone montou o volume
+`telefonia-falas` nos dois), `up -d app` sozinho não basta: siga o §1 de
+`docs/runbooks/deploy.md` — `update.sh`, ou `up -d app worker` (+ `asterisk`, só com a
+telefonia ligada) com os mesmos dois `-f`.
+
 O caminho normal **não constrói nada na VPS**: commit → push → PR → merge na
 `main` → o CI publica no GHCR → a VPS puxa. Imagem construída na VPS é exceção
 de emergência e é dívida: existe só naquele disco e qualquer `up -d` sem
@@ -249,9 +254,9 @@ de emergência e é dívida: existe só naquele disco e qualquer `up -d` sem
 
 Essa frase já foi meia-verdade: valia para o `app` e era falsa para o produto,
 porque o serviço `worker` não tinha `image:` — era construído na VPS de todo
-cliente e nunca reconstruído por nenhum `update.sh`. Hoje os três serviços
-nossos (`app`, `worker`, `scheduler`) são imagens publicadas, e um teste
-reprova o retorno do padrão. Ver a doutrina abaixo.
+cliente e nunca reconstruído por nenhum `update.sh`. Hoje todo serviço nosso é
+imagem publicada — quais são: `grep -n 'ghcr.io/paulocmbcosta/' docker-compose.prod.yml` —,
+e um teste reprova o retorno do padrão. Ver a doutrina abaixo.
 
 ---
 
@@ -269,7 +274,8 @@ O não-negociável, em quatro linhas:
    instalar, ele **nunca é atualizado**.
 2. **Publicação é ato do CI.** Nunca da sua máquina: build ARM local não roda
    na VPS amd64 do cliente, e a falha só aparece no `up -d` dele. O job
-   `imagens-ok` reprova quando qualquer uma das três imagens não constrói, e
+   `imagens-ok` reprova quando qualquer imagem da matriz não constrói (quais:
+   `grep -n 'name: deskcomm' .github/workflows/publish-image.yml`), e
    **é status check obrigatório desde 2026-08-13** — a branch protection tem
    `verify, build-and-size, invariants, e2e, imagens-ok`. (Este parágrafo dizia
    "ainda não é obrigatório" até 2026-08-14; a ativação era o passo final do
@@ -413,7 +419,7 @@ Checks **obrigatórios** na branch protection da `main` (verificado na configura
   ```
 
   **Por que não há mais número aqui.** O conserto que este parágrafo pedia era pôr a prosa sob gate — `tests/unit/e2e-cobertura-completa.test.ts` cobrando também o texto daqui. Tirar o número é melhor e mais barato: não há o que policiar, e a diferença entre disco e CI segue vigiada onde importa, no próprio teste, que reprova toda spec nova que não esteja em `SPECS_PARTE_*` ou em `FORA_DO_CI` **com motivo escrito**. Prosa que nenhum gate lê é prosa que diverge; prosa que não afirma número não tem como divergir.
-- **`imagens-ok`** (`publish-image.yml`) — reprova quando qualquer uma das três imagens Docker não constrói. **É obrigatório desde 2026-08-13**; este arquivo dizia o contrário em outro parágrafo (ver a doutrina de packaging acima, já corrigida).
+- **`imagens-ok`** (`publish-image.yml`) — reprova quando qualquer imagem Docker da matriz não constrói (quais: `grep -n 'name: deskcomm' .github/workflows/publish-image.yml`). **É obrigatório desde 2026-08-13**; este arquivo dizia o contrário em outro parágrafo (ver a doutrina de packaging acima, já corrigida).
 
 Neste repositório são **quatro** os obrigatórios — medido em 2026-09-18 na branch protection, recriada nesse dia (o fork não a herdou da origem):
 

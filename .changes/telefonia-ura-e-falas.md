@@ -50,5 +50,9 @@ de ficar presa; e as telas do telefone nunca mostram cru um erro do proxy (504, 
 Sem a chave da ElevenLabs e sem menu, as ligações seguem como antes, fora o texto do aviso de
 perdida. O `update.sh` cria as tabelas novas e o volume das falas (`telefonia-falas`, em
 `/var/lib/telefonia/falas`) sozinho, sem nada a editar no `.env` nem no compose. Quem atualiza à
-mão, sem ele, recria também o `worker` e o `asterisk`, e não só o `app`: sem isso o Asterisk fica
-sem o volume e pula as falas. Ainda não há transferência nem ramais.
+mão, sem ele, recria também o `worker` e, com a telefonia ligada, o `asterisk` — nunca com ela
+desligada, que subiria um Asterisk que ninguém configurou; o passo a passo está no §1 de
+`docs/runbooks/deploy.md`. Depois de atualizar, com a telefonia ligada: **Conexões › Telefone**
+ganha as abas **Menus** e **Voz e falas**, **Credenciais de IA** ganha o cartão da ElevenLabs, e
+o Asterisk enxerga o volume das falas só para leitura (a conferência está no §2 do mesmo
+runbook). Ainda não há transferência nem ramais.

@@ -67,8 +67,8 @@ está no ar, saudável, e inalcançável.
 ## 2. Verificação pós-deploy (não pule)
 
 `healthy` no `docker ps` **não prova que o site está acessível** — o healthcheck
-é um probe TCP interno e passa mesmo com o roteamento quebrado. Verifique as
-duas coisas:
+é um probe TCP interno e passa mesmo com o roteamento quebrado. Verifique o
+roteamento sempre e, com a telefonia ligada, também o volume das falas:
 
 ```bash
 # 1) as labels do Traefik existem?
@@ -110,14 +110,15 @@ commit → push → PR → merge na main → CI publica imagem → VPS puxa
    VPS não existe: o CI não o vê, some se a VPS for reconstruída, e é invisível
    pra qualquer outra pessoa.
 2. **PR e merge na `main`.** `publish-image.yml` dispara em push na `main` (ou
-   tag `v*`) e publica **quatro** imagens — `deskcommcrm`, `deskcomm-worker`,
-   `deskcomm-scheduler` e `deskcomm-asterisk` — sempre na mesma versão. O build pesado roda nos
-   runners do GitHub, nunca na VPS do usuário.
+   tag `v*`) e publica as imagens da matriz — todas na mesma versão; quais são:
+   `grep -n 'name: deskcomm' .github/workflows/publish-image.yml`. O build pesado
+   roda nos runners do GitHub, nunca na VPS do usuário.
 3. **Deploy na VPS.** Numa instalação real isto é `bash hostgator-setup-kit/update.sh`,
    não um `up -d` na mão: ele puxa a tag publicada, re-aplica o `baseline.sql`,
-   faz backup antes, grava as quatro imagens no `.env` (a do Asterisk mesmo com a
-   telefonia desligada: `gravar_imagens`, em `hostgator-setup-kit/_common.sh`) e
-   recria todos os serviços que mudaram (§1).
+   faz backup antes, grava no `.env` a imagem de cada serviço nosso — a do Asterisk
+   mesmo com a telefonia desligada; quais são:
+   `grep -nE 'set_env_var "\$envfile" [A-Z]+_IMAGE ' hostgator-setup-kit/_common.sh` —
+   e recria todos os serviços que mudaram (§1).
 
 > **`latest` não é a última release.** Ele é publicado a partir da branch default, então
 > segue o **topo da `main`** — código ainda não lançado. Quem quer a última release usa
