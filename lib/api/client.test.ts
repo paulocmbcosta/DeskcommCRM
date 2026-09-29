@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { apiClient } from "@/lib/api/client";
-import { ApiError } from "@/lib/api/types";
+import { ApiError, ApiErrorSemCorpo, mensagemDoServidor } from "@/lib/api/types";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -351,6 +351,66 @@ describe("apiClient", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(desfecho).toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
+ * DE QUEM É A MENSAGEM DO ERRO. Quando a resposta de erro não traz o corpo
+ * estruturado (`{ error: { code, message } }`) — o 504 de um proxy com HTML, um
+ * 502 com "Bad Gateway" —, o cliente INVENTA o código e a mensagem: o texto cru
+ * da resposta, ou `HTTP <status>`. Uma tela que mostra `err.message` como se
+ * fosse a frase do servidor põe "Falhou: HTTP 504" (ou uma página HTML) diante
+ * do usuário. O erro sai como `ApiErrorSemCorpo` (subclasse: `instanceof
+ * ApiError` e todos os campos continuam iguais para quem já os lia), e
+ * `mensagemDoServidor` só devolve a frase que veio do corpo.
+ */
+describe("apiClient — a mensagem do erro é do servidor ou foi inventada aqui", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("504 com o HTML do proxy: ApiErrorSemCorpo, com os MESMOS campos de antes, e nenhuma mensagem do servidor", async () => {
+    const html = "<html><body><h1>504 Gateway Time-out</h1></body></html>";
+    fetchMock.mockResolvedValueOnce(new Response(html, { status: 504, headers: { "Content-Type": "text/html" } }));
+    const erro = await apiClient.post("/x", { a: 1 }).catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ApiError);
+    expect(erro).toBeInstanceOf(ApiErrorSemCorpo);
+    expect(erro).toMatchObject({ name: "ApiError", status: 504, code: "internal_error", message: html, details: undefined });
+    expect(mensagemDoServidor(erro)).toBeNull();
+  });
+
+  it("resposta de erro vazia: `HTTP <status>` segue sendo a mensagem, e não é do servidor", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 502 }));
+    const erro = await apiClient.get("/x").catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ApiErrorSemCorpo);
+    expect(erro).toMatchObject({ status: 502, message: "HTTP 502" });
+    expect(mensagemDoServidor(erro)).toBeNull();
+  });
+
+  it("CONTROLE — corpo estruturado: ApiError comum, e a frase chega intacta", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(422, { error: { code: "previa_ausente", message: "Gere a prévia de novo." } }),
+    );
+    const erro = await apiClient.put("/x", { a: 1 }).catch((e: unknown) => e);
+    expect(erro).toBeInstanceOf(ApiError);
+    expect(erro).not.toBeInstanceOf(ApiErrorSemCorpo);
+    expect(mensagemDoServidor(erro)).toBe("Gere a prévia de novo.");
+  });
+
+  it("corpo estruturado SEM mensagem: o código não passa por frase", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(422, { error: { code: "sem_credito" } }));
+    const erro = await apiClient.post("/x", {}).catch((e: unknown) => e);
+    expect(erro).toMatchObject({ code: "sem_credito", message: "sem_credito" });
+    expect(mensagemDoServidor(erro)).toBeNull();
+  });
+
+  it("o que não é erro da API não tem mensagem do servidor", () => {
+    expect(mensagemDoServidor(new Error("rede"))).toBeNull();
+    expect(mensagemDoServidor(null)).toBeNull();
   });
 });
 

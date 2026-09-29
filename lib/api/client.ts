@@ -1,6 +1,6 @@
 import type { ZodSchema } from "zod";
 
-import { ApiError, type ApiErrorBody } from "@/lib/api/types";
+import { ApiError, ApiErrorSemCorpo, type ApiErrorBody } from "@/lib/api/types";
 import { randomId } from "@/lib/random-id";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -346,7 +346,11 @@ async function request<T>(
           e.message,
         );
       }
-      throw new ApiError(
+      // Sem corpo estruturado, o código e a mensagem são inventados AQUI (o
+      // texto cru da resposta — o HTML de um proxy — ou `HTTP <status>`). A
+      // subclasse diz isso a quem pergunta (`mensagemDoServidor`) sem mudar
+      // nada para quem só lê `ApiError`.
+      throw new ApiErrorSemCorpo(
         res.status,
         synthesizeCode(res.status),
         undefined,
@@ -395,7 +399,7 @@ async function request<T>(
 
   // Exhausted retries on retryable status: throw a synthetic ApiError
   throw lastError ??
-    new ApiError(
+    new ApiErrorSemCorpo(
       503,
       "service_unavailable",
       undefined,
