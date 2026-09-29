@@ -39,12 +39,22 @@
  * 11. o `criarNumero` DE VERDADE com número repetido devolve a recusa traduzida
  *     (`numero_ja_existe`), não um 500 — pelo índice único que existe hoje
  *     (recusa no INSERT) e por uma unicidade DEFERRABLE (recusa só no COMMIT, que
- *     `emTransacao` faz dentro do mesmo `try`).
+ *     `emTransacao` faz dentro do mesmo `try`);
+ * 12. a leitura dos números (`numerosDaOrg`, a da tela) diz quando o destino foi
+ *     ARQUIVADO — o time (arquivar um time não olha os números) e o menu (o
+ *     produto recusa arquivar menu em uso, mas a coluna é gravável fora dele) —,
+ *     com o nome, para a tela mostrar por que ninguém recebe as ligações.
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { atualizarNumero, criarNumero, numeroSchema, type EntradaDoNumero } from "@/lib/channels/telefonia/numeros";
+import {
+  atualizarNumero,
+  criarNumero,
+  numeroSchema,
+  numerosDaOrg,
+  type EntradaDoNumero,
+} from "@/lib/channels/telefonia/numeros";
 import { caminhoDaFala, hashDaFala } from "@/lib/telefonia/falas";
 import {
   CONSULTA_DA_SEMANA,
@@ -958,5 +968,47 @@ describe("o criarNumero de verdade e o número repetido (Postgres real)", () => 
     );
     expect(rows).toEqual([{ cifrada: true }]);
     await pool.query("delete from channel_sessions where phone_number = $1 and organization_id = $2", ["+556130008898", ORG_A]);
+  });
+});
+
+describe("a leitura dos números diz quando o destino foi arquivado (Postgres real)", () => {
+  const TIME_A3 = "c0de0288-8888-4000-8000-0000000000a3";
+  const doA = async () => (await numerosDaOrg(pool, ORG_A)).find((n) => n.id === NUMERO_A)!;
+
+  beforeAll(() => {
+    sql(`insert into public.attendance_teams (id, organization_id, name, slug, archived_at)
+         values ('${TIME_A3}', '${ORG_A}', 'Cobrança antiga', 'cobranca-antiga-menus', now())
+         on conflict (id) do nothing;`);
+  });
+
+  it("menu ativo e time ativo: nada arquivado", async () => {
+    const { id } = await criar();
+    sql(`update public.channel_sessions set sip_menu_id = '${id}' where id = '${NUMERO_A}';`);
+    expect(await doA()).toMatchObject({ menu_id: id, menu_nome: "Principal", menu_arquivado: false, time_arquivado: false });
+
+    sql(`update public.channel_sessions set sip_menu_id = null, sip_team_id = '${TIME_A1}' where id = '${NUMERO_A}';`);
+    expect(await doA()).toMatchObject({ time_id: TIME_A1, time_nome: "Suporte", time_arquivado: false, menu_arquivado: false });
+  });
+
+  it("o menu arquivado por fora do produto: menu_arquivado, com o nome", async () => {
+    const { id } = await criar();
+    sql(`update public.channel_sessions set sip_menu_id = '${id}' where id = '${NUMERO_A}';
+         update public.phone_menus set archived_at = now() where id = '${id}';`);
+    expect(await doA()).toMatchObject({ menu_id: id, menu_nome: "Principal", menu_arquivado: true, time_arquivado: false });
+  });
+
+  it("o time arquivado com o número apontando para ele: time_arquivado, com o nome", async () => {
+    sql(`update public.channel_sessions set sip_team_id = '${TIME_A3}' where id = '${NUMERO_A}';`);
+    expect(await doA()).toMatchObject({
+      time_id: TIME_A3,
+      time_nome: "Cobrança antiga",
+      time_arquivado: true,
+      menu_id: null,
+      menu_arquivado: false,
+    });
+  });
+
+  it("sem destino: nenhum dos dois arquivado (não nulo)", async () => {
+    expect(await doA()).toMatchObject({ time_id: null, menu_id: null, time_arquivado: false, menu_arquivado: false });
   });
 });

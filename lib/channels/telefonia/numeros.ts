@@ -92,9 +92,20 @@ export interface NumeroPublico {
   prefixo: string | null;
   time_id: string | null;
   time_nome: string | null;
+  /**
+   * O time do número foi arquivado: não recebe ligações. Arquivar um time não
+   * olha os números, então isto acontece — e a tela precisa dizer por quê.
+   */
+  time_arquivado: boolean;
   /** O menu de voz que atende este número (excludente com `time_id`). */
   menu_id: string | null;
   menu_nome: string | null;
+  /**
+   * O menu do número foi arquivado. O produto recusa arquivar menu em uso
+   * (`menu_em_uso`, sob a trava), mas a coluna é gravável fora dele; a ligação
+   * segue sem menu, e a tela diz isso em vez de mostrar o nome como se valesse.
+   */
+  menu_arquivado: boolean;
   status: string;
   status_reason: string | null;
   created_at: string;
@@ -105,7 +116,8 @@ export async function numerosDaOrg(db: Queryable, organizationId: string): Promi
     `select c.id, c.display_name as nome, c.phone_number as numero, c.sip_server as servidor,
             coalesce(c.sip_port, 5060) as porta, coalesce(c.sip_transport, 'udp') as transporte,
             c.sip_username as usuario, c.sip_dial_prefix as prefixo, c.sip_team_id as time_id, t.name as time_nome,
-            c.sip_menu_id as menu_id, pm.name as menu_nome,
+            (t.archived_at is not null) as time_arquivado,
+            c.sip_menu_id as menu_id, pm.name as menu_nome, (pm.archived_at is not null) as menu_arquivado,
             c.status, c.status_reason, c.created_at
        from channel_sessions c
        left join attendance_teams t on t.id = c.sip_team_id and t.organization_id = c.organization_id
