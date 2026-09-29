@@ -23,6 +23,8 @@ import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
 import { TelefoniaProvider } from "@/components/telefonia/TelefoniaContext";
 import { PainelDoTelefone } from "@/components/telefonia/PainelDoTelefone";
+import { FaixaDoAvisoDeInstabilidade } from "@/components/telefonia/FaixaDoAvisoDeInstabilidade";
+import { configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
 import { acessoFoiRevogado } from "@/lib/auth/vinculo-revogado";
 import { barraLateralRecolhida, COOKIE_BARRA_RECOLHIDA } from "@/lib/navigation/barra-lateral";
 
@@ -246,6 +248,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <EstiloDaMarcaDaOrganizacao css={cssDaOrganizacao} />
         <ImpersonateBanner impersonating={impersonating} />
         <ConexaoCaidaBanner caidas={conexoesCaidas} />
+        {/*
+          O aviso de instabilidade do telefone ligado: todo membro vê (desenho da
+          fase 2, §6.4). `oferecida` é lida AQUI, do ambiente, sem consulta: a
+          instalação sem telefonia não paga nem a primeira leitura da faixa.
+        */}
+        <FaixaDoAvisoDeInstabilidade oferecida={configAriDoAmbiente() !== null} />
         {needsMfaGate ? (
           // Gate always mounted for MFA-required roles; it latches the blocking
           // decision client-side so the enroll Server Action's revalidation

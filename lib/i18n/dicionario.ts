@@ -9899,6 +9899,47 @@ export const DICIONARIO: Traducoes = {
     es: "No se pudo guardar el número. Inténtalo de nuevo en unos instantes.",
   },
   "Não foi possível carregar os números. Recarregue a página.": { es: "No se pudieron cargar los números. Recarga la página." },
+  // Telefonia, fase 2 — o aviso de instabilidade em Configurações › Times e a faixa em todo o CRM
+  "Aviso de instabilidade (telefone)": { es: "Aviso de inestabilidad (teléfono)" },
+  "Ligado às": { es: "Activado a las" },
+  "desliga às": { es: "se desactiva a las" },
+  "até alguém desligar": { es: "hasta que alguien lo desactive" },
+  "Desligar agora": { es: "Desactivar ahora" },
+  "Nenhum aviso gravado ainda. Toda ligação de fora que entrar na fila deste time ouve o aviso inteiro antes de tocar nos atendentes.": {
+    es: "Ningún aviso grabado todavía. Toda llamada externa que entre en la fila de este equipo escucha el aviso completo antes de sonar para los agentes.",
+  },
+  "Ligar aviso": { es: "Activar aviso" },
+  "Ligar o aviso de instabilidade": { es: "Activar el aviso de inestabilidad" },
+  "Toda ligação de fora que entrar na fila do time ouve este aviso inteiro antes de tocar nos atendentes. A ligação transferida por um atendente não ouve.": {
+    es: "Toda llamada externa que entre en la fila del equipo escucha este aviso completo antes de sonar para los agentes. La llamada transferida por un agente no lo escucha.",
+  },
+  "Texto do aviso": { es: "Texto del aviso" },
+  "Gere a prévia e ouça o aviso antes de ligar.": { es: "Genera la vista previa y escucha el aviso antes de activarlo." },
+  "Ouça a prévia antes de ligar.": { es: "Escucha la vista previa antes de activarlo." },
+  "Prévia ouvida. Pode ligar.": { es: "Vista previa escuchada. Ya puedes activarlo." },
+  "Este é o texto já gravado do aviso: dá para ligar direto.": {
+    es: "Este es el texto ya grabado del aviso: puedes activarlo directamente.",
+  },
+  "Desligar sozinho depois de": { es: "Desactivar solo después de" },
+  "1 hora": { es: "1 hora" },
+  "2 horas (padrão)": { es: "2 horas (predeterminado)" },
+  "4 horas": { es: "4 horas" },
+  "Até eu desligar": { es: "Hasta que yo lo desactive" },
+  "Aviso de instabilidade do time {time}": { es: "Aviso de inestabilidad del equipo {time}" },
+  "Aviso de instabilidade ligado no telefone do": { es: "Aviso de inestabilidad activado en el teléfono de" },
+  "Desligar o aviso do time {time}": { es: "Desactivar el aviso del equipo {time}" },
+  "Aviso de instabilidade desligado.": { es: "Aviso de inestabilidad desactivado." },
+  "O aviso de instabilidade já estava desligado.": { es: "El aviso de inestabilidad ya estaba desactivado." },
+  "Aviso de instabilidade ligado.": { es: "Aviso de inestabilidad activado." },
+  "Não foi possível desligar o aviso. Tente de novo em instantes.": {
+    es: "No se pudo desactivar el aviso. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível ligar o aviso. Tente de novo em instantes.": {
+    es: "No se pudo activar el aviso. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível carregar o aviso de instabilidade do telefone. Recarregue a página.": {
+    es: "No se pudo cargar el aviso de inestabilidad del teléfono. Recarga la página.",
+  },
 };
 
 /**

@@ -8,6 +8,7 @@
  */
 import { useState } from "react";
 
+import { AvisoDeInstabilidadeDoTime } from "@/components/telefonia/AvisoDeInstabilidadeDoTime";
 import { EditorDeTime } from "@/components/times/EditorDeTime";
 import { useTimes } from "@/components/times/useTimes";
 import { Button } from "@/components/ui/button";
@@ -58,7 +59,11 @@ export function PainelDeTimes() {
       ) : null}
 
       {ativos.map((x) => (
-        <EditorDeTime key={x.id} time={x} membros={membros} />
+        <div key={x.id} className="space-y-2">
+          <EditorDeTime time={x} membros={membros} />
+          {/* O aviso de instabilidade do telefone é do TIME (desenho da fase 2, D7). */}
+          <AvisoDeInstabilidadeDoTime teamId={x.id} />
+        </div>
       ))}
 
       {rascunhos.map((n) => (
