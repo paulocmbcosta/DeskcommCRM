@@ -9869,6 +9869,35 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível salvar o menu. Tente de novo em instantes.": {
     es: "No se pudo guardar el menú. Inténtalo de nuevo en unos instantes.",
   },
+  "Quando ligarem: menu": { es: "Cuando llamen: menú" },
+  "Quando ligarem": { es: "Cuando llamen" },
+  "Tocar no time": { es: "Sonar en el equipo" },
+  "Tocar o menu": { es: "Reproducir el menú" },
+  "Menu que atende as ligações": { es: "Menú que atiende las llamadas" },
+  "Escolha o menu": { es: "Elige el menú" },
+  "fala pendente": { es: "locución pendiente" },
+  "Nenhum menu criado ainda. Crie um na aba Menus.": {
+    es: "Ningún menú creado todavía. Crea uno en la pestaña Menús.",
+  },
+  "Criar um menu": { es: "Crear un menú" },
+  "O menu deste número foi arquivado e não atende mais as ligações. Edite o número e escolha outro destino.": {
+    es: "El menú de este número fue archivado y ya no atiende las llamadas. Edita el número y elige otro destino.",
+  },
+  "O time deste número foi arquivado e não recebe ligações. Edite o número e escolha outro time.": {
+    es: "El equipo de este número fue archivado y no recibe llamadas. Edita el número y elige otro equipo.",
+  },
+  "O time escolhido foi arquivado e não recebe ligações. Escolha outro time.": {
+    es: "El equipo elegido fue archivado y no recibe llamadas. Elige otro equipo.",
+  },
+  "O menu escolhido foi arquivado. Escolha outro menu ou toque no time.": {
+    es: "El menú elegido fue archivado. Elige otro menú o haz que suene en el equipo.",
+  },
+  "A fala deste menu ainda não está pronta. Gere a prévia e salve o menu na aba Menus.": {
+    es: "La locución de este menú todavía no está lista. Genera la vista previa y guarda el menú en la pestaña Menús.",
+  },
+  "Não foi possível salvar o número. Tente de novo em instantes.": {
+    es: "No se pudo guardar el número. Inténtalo de nuevo en unos instantes.",
+  },
 };
 
 /**

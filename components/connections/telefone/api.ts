@@ -73,9 +73,15 @@ export function useVozesDaConta(ligado: boolean) {
   });
 }
 
-export function useMenusDoTelefone() {
+/**
+ * `ligado = false` não busca: a aba Números só precisa da lista quando o
+ * formulário de um número está aberto — a leitura dos menus soma o "últimos 7
+ * dias" de cada um, e o cartão do número não depende dela.
+ */
+export function useMenusDoTelefone(ligado = true) {
   return useQuery({
     queryKey: CHAVE_DOS_MENUS,
+    enabled: ligado,
     queryFn: async () => (await apiClient.get<{ data: RespostaDosMenus }>("/api/v1/telefonia/menus")).data,
   });
 }
