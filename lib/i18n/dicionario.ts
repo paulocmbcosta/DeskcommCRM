@@ -9707,6 +9707,71 @@ export const DICIONARIO: Traducoes = {
   "Chave da ElevenLabs salva e validada.": { es: "Clave de ElevenLabs guardada y validada." },
   "A ElevenLabs aceitou a chave.": { es: "ElevenLabs aceptó la clave." },
   "Não foi possível salvar a chave. Tente de novo.": { es: "No se pudo guardar la clave. Inténtalo de nuevo." },
+  // Telefonia, fase 2 — Conexões › Telefone (sub-abas, voz e falas, prévia)
+  Números: { es: "Números" },
+  Menus: { es: "Menús" },
+  "Voz e falas": { es: "Voz y locuciones" },
+  "Não foi possível carregar a voz do telefone. Recarregue a página.": {
+    es: "No se pudo cargar la voz del teléfono. Recarga la página.",
+  },
+  "Falta a chave da ElevenLabs": { es: "Falta la clave de ElevenLabs" },
+  "As falas do telefone (menu, aguarde, fora do horário e aviso de instabilidade) são geradas pela ElevenLabs, com a chave da sua conta. Sem a chave, nenhuma fala é gerada e nenhum menu pode ser ligado a um número.": {
+    es: "Las locuciones del teléfono (menú, espera, fuera de horario y aviso de inestabilidad) las genera ElevenLabs con la clave de tu cuenta. Sin la clave no se genera ninguna locución y ningún menú puede conectarse a un número.",
+  },
+  "Cadastrar a chave em Credenciais de IA": { es: "Registrar la clave en Credenciales de IA" },
+  "Voz das falas": { es: "Voz de las locuciones" },
+  "A mesma voz vale para todas as falas desta organização. Trocar a voz não muda as falas em uso: gere a prévia e salve cada uma de novo.": {
+    es: "La misma voz vale para todas las locuciones de esta organización. Cambiar la voz no cambia las locuciones en uso: genera la vista previa y guarda cada una de nuevo.",
+  },
+  Voz: { es: "Voz" },
+  "Escolha uma voz": { es: "Elige una voz" },
+  "Ouvir amostra": { es: "Escuchar muestra" },
+  "Não foi possível listar as vozes da sua conta da ElevenLabs. Confira a chave em Credenciais de IA.": {
+    es: "No se pudieron listar las voces de tu cuenta de ElevenLabs. Revisa la clave en Credenciales de IA.",
+  },
+  "Voz salva. Gere a prévia e salve cada fala de novo para usar a voz nova.": {
+    es: "Voz guardada. Genera la vista previa y guarda cada locución de nuevo para usar la voz nueva.",
+  },
+  Aguarde: { es: "Espere" },
+  "Ninguém atendeu": { es: "Nadie atendió" },
+  "Fora do horário": { es: "Fuera de horario" },
+  "Toca quando o cliente precisa esperar na fila, e de novo a cada 40 segundos, entre a música.": {
+    es: "Suena cuando el cliente necesita esperar en la fila, y de nuevo cada 40 segundos, entre la música.",
+  },
+  "Toca antes de desligar, quando ninguém do time atendeu a tempo.": {
+    es: "Suena antes de colgar, cuando nadie del equipo atendió a tiempo.",
+  },
+  "Toca quando o time está fora do horário, e a ligação é encerrada em seguida.": {
+    es: "Suena cuando el equipo está fuera de horario, y la llamada se cierra a continuación.",
+  },
+  "Texto da fala": { es: "Texto de la locución" },
+  "Gerar prévia": { es: "Generar vista previa" },
+  "Gerando a prévia…": { es: "Generando la vista previa…" },
+  "Salvar e usar": { es: "Guardar y usar" },
+  "Escolha a voz acima antes de gerar.": { es: "Elige la voz arriba antes de generar." },
+  "Gere a prévia deste texto e ouça antes de salvar.": {
+    es: "Genera la vista previa de este texto y escúchala antes de guardar.",
+  },
+  "Fala salva. As ligações já tocam o áudio novo.": { es: "Locución guardada. Las llamadas ya reproducen el audio nuevo." },
+  "Não foi possível salvar a fala. Tente de novo em instantes.": {
+    es: "No se pudo guardar la locución. Inténtalo de nuevo en unos instantes.",
+  },
+  "Não foi possível gerar a prévia. Tente de novo em instantes.": {
+    es: "No se pudo generar la vista previa. Inténtalo de nuevo en unos instantes.",
+  },
+  Ouvir: { es: "Escuchar" },
+  "Ainda não gerada": { es: "Aún no generada" },
+  "Falhou:": { es: "Falló:" },
+  "Prévia não salva": { es: "Vista previa sin guardar" },
+  "Em uso, com a voz anterior": { es: "En uso, con la voz anterior" },
+  "Em uso": { es: "En uso" },
+  "Não foi possível carregar o áudio desta fala.": { es: "No se pudo cargar el audio de esta locución." },
+  "Carregando o áudio…": { es: "Cargando el audio…" },
+  // O "fora do horário" sugerido com o WhatsApp da organização (texto-do-menu.ts,
+  // `textoSugeridoForaDoHorario`): passa por t() antes de o número entrar.
+  "Nosso atendimento está fechado agora. Se preferir, mande uma mensagem no nosso WhatsApp, {numero}. Obrigado pela ligação.": {
+    es: "Nuestra atención está cerrada ahora. Si lo prefiere, envíe un mensaje a nuestro WhatsApp, {numero}. Gracias por su llamada.",
+  },
 };
 
 /**

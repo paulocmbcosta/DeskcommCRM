@@ -11,6 +11,8 @@ import { CanalTelefoneClient } from "./CanalTelefoneClient";
 import { ConnectionsClient } from "./ConnectionsClient";
 import { TemplatesClient } from "./TemplatesClient";
 import { TemplatesParceiroClient } from "./TemplatesParceiroClient";
+import { MenusDoTelefone } from "./telefone/MenusDoTelefone";
+import { VozEFalas } from "./telefone/VozEFalas";
 import { useT } from "@/hooks/i18n/useT";
 
 /**
@@ -60,11 +62,18 @@ export function ConexoesShell({
               ? "telefone"
               : "numeros";
   const sub = params.get("sub") === "templates" ? "templates" : "conexao";
+  // As sub-abas do Telefone (fase 2): `?aba=telefone&sub=menus|falas`. `?aba=` já
+  // escolhe o canal, então a aba de dentro mora em `?sub=` — o mesmo padrão de
+  // `?aba=oficial&sub=templates`. É para cá que a Central aponta: "uma fala não
+  // tocou" → `sub=falas`, menu com time arquivado → `sub=menus`
+  // (lib/ai/inbox-destino.ts). Sem `sub` (ou com o de outro canal), Números.
+  const subParam = params.get("sub");
+  const subDoTelefone = subParam === "menus" ? "menus" : subParam === "falas" ? "falas" : "numeros";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
     const q = new URLSearchParams();
     if (proximaAba !== "numeros") q.set("aba", proximaAba);
-    if (proximaSub && proximaSub !== "conexao") q.set("sub", proximaSub);
+    if (proximaSub && proximaSub !== "conexao" && proximaSub !== "numeros") q.set("sub", proximaSub);
     const qs = q.toString();
     // `scroll: false`: trocar de aba não é navegar para outra página; jogar o
     // usuário para o topo a cada clique faz a tela parecer que recarregou.
@@ -103,7 +112,25 @@ export function ConexoesShell({
       </TabsList>
 
       <TabsContent value="telefone" className="mt-0">
-        <CanalTelefoneClient />
+        {/* Números (a conta na operadora e o destino de cada um), Menus (a URA) e
+            Voz e falas (a voz da ElevenLabs e as falas gerais) — a ordem em que
+            quem instala monta: primeiro o número, depois o que ele fala. */}
+        <Tabs value={subDoTelefone} onValueChange={(v) => irPara("telefone", v)} className="flex flex-col gap-4">
+          <TabsList>
+            <TabsTrigger value="numeros">{t("Números")}</TabsTrigger>
+            <TabsTrigger value="menus">{t("Menus")}</TabsTrigger>
+            <TabsTrigger value="falas">{t("Voz e falas")}</TabsTrigger>
+          </TabsList>
+          <TabsContent value="numeros" className="mt-0">
+            <CanalTelefoneClient />
+          </TabsContent>
+          <TabsContent value="menus" className="mt-0">
+            <MenusDoTelefone />
+          </TabsContent>
+          <TabsContent value="falas" className="mt-0">
+            <VozEFalas />
+          </TabsContent>
+        </Tabs>
       </TabsContent>
 
       <TabsContent value="site" className="mt-0">

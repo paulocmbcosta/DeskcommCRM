@@ -15,6 +15,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CHAVE_DA_VOZ } from "@/components/connections/telefone/api";
 import type { CredentialRow } from "@/hooks/ai/useCredentials";
 import { PROVEDOR_DE_VOZ } from "@/lib/ai/pontos/provedores";
 import { ApiError } from "@/lib/api/types";
@@ -290,5 +291,25 @@ describe("a chave colada", () => {
     await userEvent.type(await screen.findByLabelText("Chave da ElevenLabs"), "sk_qualquer_000000");
     await userEvent.click(screen.getByRole("button", { name: "Salvar chave" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível guardar a chave agora.");
+  });
+});
+
+describe("salvar a chave relê a aba Voz e falas", () => {
+  it("a consulta da aba (CHAVE_DA_VOZ) é invalidada — a MESMA constante, não uma cópia da chave de cache", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // A aba Voz e falas já leu "sem chave" nesta sessão do navegador.
+    qc.setQueryData(CHAVE_DA_VOZ, { oferecida: true, chave: { cadastrada: false, last4: null } });
+    api.put.mockImplementationOnce(async () => {
+      api.linhas = [linhaDeVoz({ api_key_last4: "5678" })];
+      return { data: { cadastrada: true, last4: "5678", validada_em: "2026-09-29T10:00:00.000Z" } };
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <CartaoElevenLabs credenciaisIniciais={[]} podeEditar />
+      </QueryClientProvider>,
+    );
+    await userEvent.type(await screen.findByLabelText("Chave da ElevenLabs"), CHAVE_NOVA);
+    await userEvent.click(screen.getByRole("button", { name: "Salvar chave" }));
+    await waitFor(() => expect(qc.getQueryState(CHAVE_DA_VOZ)?.isInvalidated).toBe(true));
   });
 });

@@ -25,6 +25,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { CHAVE_DA_VOZ } from "@/components/connections/telefone/api";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -188,8 +189,9 @@ export function CartaoElevenLabs({ credenciaisIniciais, podeEditar }: Props) {
       await Promise.all([
         qc.invalidateQueries({ queryKey: credentialsListQueryKey }),
         // A aba Voz e falas (Conexões › Telefone) lê a chave para dizer se dá
-        // para gerar as falas.
-        qc.invalidateQueries({ queryKey: ["telefonia", "voz"] }),
+        // para gerar as falas. A constante é a da própria aba: uma cópia da
+        // chave de cache escrita aqui deixaria de reler no dia em que ela mudar.
+        qc.invalidateQueries({ queryKey: CHAVE_DA_VOZ }),
       ]);
     },
     onError: (e) => {
