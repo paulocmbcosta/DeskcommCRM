@@ -7,13 +7,22 @@
  * enquanto ainda acha que o anterior está tocando. Uma fila serial basta: o
  * volume de eventos de telefonia é de dezenas por ligação, não de milhares.
  *
+ * Ao lado da fila, a PASSADA de 60 s que não depende da ARI (`passadaDoTelefone`):
+ * os avisos de instabilidade vencidos, as falas do Storage para o volume
+ * `telefonia-falas` e a limpeza do Storage (desenho da fase 2, §4 e §5.5).
+ *
  * Sem `TELEFONIA_ARI_URL`/`TELEFONIA_ARI_PASSWORD` o laço não sobe — a
- * telefonia é um profile opcional do compose (spec 20 §4.3).
+ * telefonia é um profile opcional do compose (spec 20 §4.3). Nem a passada: o
+ * volume segue montado no worker (docker-compose.prod.yml), vazio, e nada é
+ * escrito nele.
  */
 import type pg from "pg";
 
+import type { Queryable } from "@/lib/agent-engine/queue/queue";
+
 import { ClienteAri, ErroAri, configAriDoAmbiente, type CanalAri } from "./ari";
 import { ControladorDeChamadas, type EventoAri, type PortaAri, type PortaBanco, type Registro } from "./controle";
+import { DIRETORIO_DAS_FALAS, FalasNoDisco, falasNoDiscoDaInstalacao, type ArmazemDasFalas } from "./falas-no-disco";
 import { idDoRamal } from "./pjsip";
 import * as repo from "./repositorio";
 import { SincronizadorDeTroncos } from "./sincronizacao";
@@ -79,6 +88,114 @@ function portaBanco(pool: pg.Pool): PortaBanco {
   };
 }
 
+/**
+ * O armazém de reserva: a instalação sem cliente do Storage (credencial de
+ * serviço ausente ou inválida). Ler FALHA — e não devolve `null`, que no armazém
+ * quer dizer "o objeto não existe" (lib/telefonia/armazem.ts): aqui ninguém
+ * perguntou ao Storage. Assim `FalasNoDisco` registra UMA queda do Storage, na
+ * transição, em vez de uma "fala pronta sem áudio" por fala. `apagar` não remove
+ * nada (`[]`) — e nem é alcançado, porque sem pastas listadas a limpeza para antes.
+ */
+export const ARMAZEM_SEM_STORAGE: ArmazemDasFalas = Object.freeze({
+  baixar: async () => {
+    throw new Error("sem cliente do Storage nesta instalação");
+  },
+  listarPastas: async () => {
+    throw new Error("sem cliente do Storage nesta instalação");
+  },
+  listarObjetos: async () => {
+    throw new Error("sem cliente do Storage nesta instalação");
+  },
+  apagar: async () => [],
+});
+
+/**
+ * O disco das falas do worker: o volume da instalação, com o Storage pelo cliente
+ * de serviço (`falasNoDiscoDaInstalacao`). Sem esse cliente, o mesmo volume com o
+ * armazém de reserva: o laço sobe assim mesmo — as ligações seguem, pulando as
+ * falas — e o log diz por quê uma vez. Nunca a ElevenLabs: o worker não a
+ * alcança (tests/unit/ligacao-nunca-chama-elevenlabs.test.ts).
+ */
+export function falasDoWorker(db: Queryable, log: Registro): FalasNoDisco {
+  try {
+    return falasNoDiscoDaInstalacao(db, log);
+  } catch (e) {
+    log.error("telefonia: sem cliente do Storage — as falas do telefone não chegam ao disco", {
+      erro: String(e).slice(0, 200),
+    });
+    return new FalasNoDisco(DIRETORIO_DAS_FALAS, db, ARMAZEM_SEM_STORAGE, log);
+  }
+}
+
+export interface DependenciasDaPassada {
+  falas: Pick<FalasNoDisco, "sincronizar" | "limparStorage">;
+  /** `repo.desligarAvisosVencidos` com o pool do worker: desliga, audita e avisa na Central. */
+  desligarAvisosVencidos: (agora: Date) => Promise<repo.AvisoDesligado[]>;
+  log: Registro;
+  /** Relógio. Padrão: `new Date()`. */
+  agora?: () => Date;
+}
+
+/**
+ * A passada de 60 s do telefone que NÃO depende da ARI — roda com o Asterisk fora:
+ *  1. os avisos de instabilidade VENCIDOS (§5.5): desligados, auditados
+ *     (`phone.emergency_expired`) e avisados na Central por
+ *     `desligarAvisosVencidos` num comando só; aqui só entram no log. Primeiro,
+ *     porque é um comando só e não deve esperar a sincronização, que pode passar
+ *     minutos baixando arquivo;
+ *  2. as falas do Storage para o volume (`sincronizar`);
+ *  3. a limpeza do Storage (`limparStorage`, com freio próprio de 10 min —
+ *     `INTERVALO_DA_LIMPEZA_MS` —, então pode ser chamada a cada passada).
+ *
+ * Cada etapa é isolada: a que falha não impede as outras nem a próxima passada.
+ * Sem inundar o log (30 MB, divididos com o motor da IA): `FalasNoDisco` registra
+ * as próprias quedas na transição, e a etapa que LANÇA — `desligarAvisosVencidos`
+ * com o banco fora; `sincronizar`/`limparStorage` só se quebrarem o contrato de
+ * nunca lançar — é registrada uma vez ao cair e uma ao voltar. Passada sem efeito
+ * não escreve nada. Sem reentrância: a passada lenta não empilha outra.
+ */
+export function passadaDoTelefone(d: DependenciasDaPassada): () => Promise<void> {
+  const agora = d.agora ?? (() => new Date());
+  const fora = new Set<string>();
+  let emCurso = false;
+
+  const etapa = async (nome: string, rodar: () => Promise<void>) => {
+    try {
+      await rodar();
+    } catch (e) {
+      if (!fora.has(nome)) {
+        fora.add(nome);
+        d.log.warn(`telefonia: a passada de ${nome} falhou — tenta de novo a cada minuto`, { erro: String(e).slice(0, 200) });
+      }
+      return;
+    }
+    if (fora.delete(nome)) d.log.info(`telefonia: a passada de ${nome} voltou a funcionar`);
+  };
+
+  return async () => {
+    if (emCurso) return;
+    emCurso = true;
+    try {
+      await etapa("avisos de instabilidade vencidos", async () => {
+        for (const v of await d.desligarAvisosVencidos(agora())) {
+          d.log.info("telefonia: aviso de instabilidade venceu e foi desligado", {
+            team_id: v.id,
+            organization_id: v.organizationId,
+          });
+        }
+      });
+      await etapa("falas no disco", async () => {
+        await d.falas.sincronizar();
+      });
+      await etapa("limpeza do Storage das falas", async () => {
+        await d.falas.limparStorage();
+      });
+    } finally {
+      emCurso = false;
+    }
+  };
+}
+
 export interface EstadoDaTelefonia {
   conectada: boolean;
   ligacoesAtivas: number;
@@ -100,7 +217,8 @@ export async function runTelefoniaLoop(opts: {
     return;
   }
   const ari = new ClienteAri(cfg);
-  const ctl = new ControladorDeChamadas(portaAri(ari), portaBanco(opts.pool), opts.log);
+  const falas = falasDoWorker(opts.pool, opts.log);
+  const ctl = new ControladorDeChamadas(portaAri(ari), portaBanco(opts.pool), opts.log, Date.now, falas);
   const sync = new SincronizadorDeTroncos(ari, opts.pool, opts.log, {
     host: new URL(cfg.baseUrl).hostname,
     senha: cfg.senha,
@@ -114,8 +232,17 @@ export async function runTelefoniaLoop(opts: {
   };
   ctl.usarFila(enfileirar);
 
+  // Fora da fila serial: baixar arquivo não pode atrasar o evento de uma ligação.
+  const passada = passadaDoTelefone({
+    falas,
+    desligarAvisosVencidos: (agora) => repo.desligarAvisosVencidos(opts.pool, agora),
+    log: opts.log,
+  });
+  void passada();
+
   const reconciliar = setInterval(() => {
     if (estado.conectada) void enfileirar(() => sync.sincronizar(false));
+    void passada();
   }, RECONCILIAR_MS);
   const lerEstados = setInterval(() => {
     if (estado.conectada) void sync.atualizarEstados().catch(() => undefined);
