@@ -66,6 +66,15 @@ describe("o 'Ligar de volta' (textoDoAvisoDePerdida)", () => {
     );
   });
 
+  it("nome de time e número entram LITERAIS — `$$`, `$&` e `{time}` não viram padrão de substituição", () => {
+    const t = textoDoAvisoDePerdida({ ...base, numero: "+55$&61", nomeDoTime: "Cobrança $$ & $& {time}" });
+    expect(t.titulo).toBe("Ligação perdida de +55$&61");
+    expect(t.corpo).toBe("Ninguém do time Cobrança $$ & $& {time} atendeu. Ligue de volta pela conversa.");
+    expect(textoDoAvisoDePerdida({ ...base, nomeDoTime: "A $' B", idioma: "es" }).corpo).toBe(
+      "Nadie del equipo A $' B atendió. Devuelve la llamada desde la conversación.",
+    );
+  });
+
   it("desligou no menu: não diz que o time não atendeu — ninguém chegou a tocar", () => {
     expect(textoDoAvisoDePerdida({ ...base, nomeDoTime: "Suporte", desligouNoMenu: true }).corpo).toBe(
       "O cliente desligou no menu do telefone. Ligue de volta pela conversa.",

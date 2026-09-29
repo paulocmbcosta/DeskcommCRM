@@ -995,14 +995,20 @@ export function textoDoAvisoDePerdida(p: {
   desligouNoMenu: boolean;
   idioma: Idioma;
 }): { titulo: string; corpo: string } {
-  const titulo = traduzir("Ligação perdida de {numero}", p.idioma).replace("{numero}", p.numero);
+  // Substituição por FUNÇÃO: com uma string no 2º argumento, `$&`, `$$` e `$'`
+  // no nome do time (ou no número) viram padrões do `replace` e saem deturpados.
+  const titulo = traduzir("Ligação perdida de {numero}", p.idioma).replace("{numero}", () => p.numero);
   if (p.desligouNoMenu) {
     return { titulo, corpo: traduzir("O cliente desligou no menu do telefone. Ligue de volta pela conversa.", p.idioma) };
   }
-  if (p.nomeDoTime) {
+  const nomeDoTime = p.nomeDoTime;
+  if (nomeDoTime) {
     return {
       titulo,
-      corpo: traduzir("Ninguém do time {time} atendeu. Ligue de volta pela conversa.", p.idioma).replace("{time}", p.nomeDoTime),
+      corpo: traduzir("Ninguém do time {time} atendeu. Ligue de volta pela conversa.", p.idioma).replace(
+        "{time}",
+        () => nomeDoTime,
+      ),
     };
   }
   return { titulo, corpo: traduzir("Ninguém atendeu. Ligue de volta pela conversa.", p.idioma) };
