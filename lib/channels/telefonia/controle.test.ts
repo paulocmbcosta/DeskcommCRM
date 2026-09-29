@@ -168,8 +168,17 @@ class BancoFalso implements PortaBanco {
   avisarMenuComTimeArquivado = async (org: string, menu: Pick<MenuDoBanco, "id" | "nome">) => {
     this.eventos.push(["menu_time_arquivado", org, menu.nome]);
   };
+  /**
+   * Como o SQL (`registrarEscolhaDoMenu`): a ligação fica com o time escolhido,
+   * e a conversa dela acompanha — só a SEM DONO (a regra do roteamento).
+   */
   registrarEscolhaDoMenu = async (org: string, id: string, e: EscolhaDoMenu) => {
     this.eventos.push(["escolha", org, id, e.digito, e.desfecho, e.teamId]);
+    if (!this.daOrg(org, id, "registrarEscolhaDoMenu")) return false;
+    const l = this.ligacoes.get(id)!;
+    l.team_id = e.teamId;
+    const conversa = l.conversation_id ? this.conversas.get(l.conversation_id) : undefined;
+    if (conversa && !conversa.dono) conversa.teamId = e.teamId;
     return true;
   };
   registrarAvisoOuvido = async (org: string, id: string) => {
@@ -180,7 +189,12 @@ class BancoFalso implements PortaBanco {
     this.eventos.push(["fala_intocavel", org, rotulo]);
   };
   acharOuCriarContato = async () => "contato-1";
-  acharOuCriarConversa = async () => "conversa-1";
+  /** A conversa de telefone do contato: nasce no time da ligação, sem dono; a que já existe fica como está. */
+  conversas = new Map<string, { teamId: string | null; dono: string | null }>();
+  acharOuCriarConversa = async (_o: string, _c: string, _t: string, teamId: string | null) => {
+    if (!this.conversas.has("conversa-1")) this.conversas.set("conversa-1", { teamId, dono: null });
+    return "conversa-1";
+  };
   criarLigacao = async (l: NovaLigacao) => {
     const id = `vc-${++this.seq}`;
     this.ligacoes.set(id, {
@@ -240,12 +254,17 @@ class BancoFalso implements PortaBanco {
   };
   atribuirConversa = async (_o: string, c: string, u: string) => {
     this.eventos.push(["atribuida", c, u]);
+    const conversa = this.conversas.get(c);
+    if (conversa) conversa.dono = u;
   };
   registrarNaConversa = async (l: LigacaoDoBanco, d: string) => {
     this.eventos.push(["registro", l.id, d]);
   };
+  /** As ligações que viraram "Ligar de volta", inteiras (o time delas é o do aviso). */
+  perdidas: LigacaoDoBanco[] = [];
   avisarPerdida = async (l: LigacaoDoBanco) => {
     this.eventos.push(["perdida", l.id]);
+    this.perdidas.push(l);
   };
   registrarFim = async (l: LigacaoDoBanco, d: string, m: string) => {
     this.eventos.push(["fim", l.id, d, m]);
@@ -1644,6 +1663,34 @@ describe("URA (§5.1)", () => {
       await entrar();
       expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "menu Atendimento"]]);
       expect(banco.tem("menu_time_arquivado")).toEqual([["menu_time_arquivado", ORG, "Atendimento"]]);
+    });
+  });
+
+  describe("a conversa acompanha o time escolhido (visibilidade por time)", () => {
+    it("escolheu 2 e ninguém atendeu: a conversa foi para o time 2, e o 'Ligar de volta' sai com o time 2", async () => {
+      await entrar();
+      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME, dono: null });
+      await tecla("2");
+      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME2, dono: null });
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+      expect(banco.perdidas.map((l) => l.team_id)).toEqual([TIME2]);
+    });
+
+    it("desligou no menu: a conversa fica no time padrão, e o 'Ligar de volta' sai com ele", async () => {
+      await entrar();
+      await terminou("fala-1");
+      await destruir("cli-1");
+      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME, dono: null });
+      expect(banco.perdidas.map((l) => l.team_id)).toEqual([TIME]);
+    });
+
+    it("a conversa que já tem dono fica onde está; a ligação vai ao time escolhido", async () => {
+      banco.conversas.set("conversa-1", { teamId: TIME, dono: BIA });
+      await entrar();
+      await tecla("2");
+      expect(banco.conversas.get("conversa-1")).toEqual({ teamId: TIME, dono: BIA });
+      expect(banco.ligacoes.get("vc-1")?.team_id).toBe(TIME2);
     });
   });
 

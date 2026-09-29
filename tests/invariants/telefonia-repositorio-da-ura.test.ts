@@ -25,8 +25,13 @@
  *     fase 1 (tocando, atendida, encerrada) —, e o cartão da conversa o mostra;
  *     o pedido de saída só volta para o atendente dono dele;
  *  5. o aviso de fala intocável não se repete enquanto o anterior está aberto;
- *  6. o aviso do menu cujo time padrão foi arquivado também não se repete, e
- *     aponta para o número (o destino "Revisar conexão" na Central).
+ *  6. o aviso do menu cujo time padrão foi arquivado também não se repete, com
+ *     kind próprio (`phone_menu_team_archived`);
+ *  7. a escolha do menu leva a CONVERSA sem dono para o time escolhido — e quem
+ *     é só desse time, no modo de visibilidade restrito ao time (0281), passa a
+ *     enxergá-la, medido com o JWT dele (papel `authenticated`), não como
+ *     superusuário; a conversa de um atendente humano fica onde está; e o
+ *     "Ligar de volta" diz o time que ficou com a ligação.
  */
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -830,5 +835,120 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
       [ORG, `ligacao:${id}`],
     );
     expect(rows[0].body).toBe("Ligação recebida fora do horário");
+  });
+
+  describe("a escolha do menu leva a conversa para o time escolhido (visibilidade por time, 0281)", () => {
+    /** Atendente de A que é SÓ do Financeiro (não do Suporte, o time padrão do menu). */
+    const CARLA = "c0de0289-1111-4000-8000-000000000003";
+    const conversaDaLigacao = async (id: string) =>
+      (await pool.query<{ conversation_id: string }>("select conversation_id from voice_calls where id = $1", [id])).rows[0]!
+        .conversation_id;
+    const conversa = async (id: string) =>
+      (
+        await pool.query<{ team_id: string | null; assigned_to_user_id: string | null }>(
+          "select team_id, assigned_to_user_id from conversations where id = $1",
+          [id],
+        )
+      ).rows[0]!;
+    /** A conversa aparece para `user`? Com o JWT dele, no papel `authenticated` — a régua do PostgREST e do Realtime. */
+    const enxerga = async (user: string, conv: string) => {
+      const c = await pool.connect();
+      try {
+        await c.query("begin");
+        await c.query("set local role authenticated");
+        await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: user, role: "authenticated" })]);
+        const { rows } = await c.query<{ n: number }>("select count(*)::int as n from public.conversations where id = $1", [conv]);
+        return rows[0]!.n === 1;
+      } finally {
+        await c.query("rollback");
+        c.release();
+      }
+    };
+    let modoAntes: string | null = null;
+
+    beforeAll(async () => {
+      await pool.query("insert into auth.users (id, email) values ($1, 'carla-ura@invariant.test') on conflict (id) do nothing", [
+        CARLA,
+      ]);
+      await pool.query(
+        `insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+         values ($1, $2, 'agent', now()) on conflict do nothing`,
+        [CARLA, ORG],
+      );
+      await pool.query(
+        "insert into public.attendance_team_members (organization_id, team_id, user_id) values ($1, $2, $3) on conflict do nothing",
+        [ORG, FECHADO, CARLA],
+      );
+      modoAntes = (
+        await pool.query<{ m: string | null }>("select settings->>'visibility_mode' as m from organizations where id = $1", [ORG])
+      ).rows[0]!.m;
+      // O modo mais restrito que ainda mostra a fila: as suas + as SEM DONO dos seus times.
+      await pool.query(
+        `update organizations set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{visibility_mode}', '"own_and_team_queue"')
+          where id = $1`,
+        [ORG],
+      );
+    });
+    afterAll(async () => {
+      await pool.query(
+        `update organizations set settings = case when $2::text is null then settings - 'visibility_mode'
+                                                  else jsonb_set(settings, '{visibility_mode}', to_jsonb($2::text)) end
+          where id = $1`,
+        [ORG, modoAntes],
+      );
+    });
+
+    it("sem dono: a conversa vai para o time escolhido, e quem é só desse time passa a enxergá-la (com o JWT dele)", async () => {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-8", ABERTO, MENU);
+      const conv = await conversaDaLigacao(id);
+      expect(await conversa(conv)).toEqual({ team_id: ABERTO, assigned_to_user_id: null });
+      // Controle: enquanto é do Suporte, a Carla (só do Financeiro) não a vê — e a Ana (dos dois) vê.
+      expect(await enxerga(CARLA, conv)).toBe(false);
+      expect(await enxerga(ANA, conv)).toBe(true);
+
+      expect(await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "2", desfecho: "chosen", teamId: FECHADO })).toBe(true);
+      expect(await conversa(conv)).toEqual({ team_id: FECHADO, assigned_to_user_id: null });
+      expect(await naLinha(id)).toMatchObject({ team_id: FECHADO, menu_outcome: "chosen" });
+      expect(await enxerga(CARLA, conv)).toBe(true);
+      // O Bruno é da outra organização: não vê nem assim.
+      expect(await enxerga(BRUNO, conv)).toBe(false);
+    });
+
+    it("a escolha de outra organização (ou com o time de outra) não move a conversa", async () => {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-9", ABERTO, MENU);
+      const conv = await conversaDaLigacao(id);
+      expect(await repo.registrarEscolhaDoMenu(pool, OUTRA, id, { digito: "1", desfecho: "chosen", teamId: TIME_OUTRA })).toBe(false);
+      expect(await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "1", desfecho: "chosen", teamId: TIME_OUTRA })).toBe(false);
+      expect(await conversa(conv)).toEqual({ team_id: ABERTO, assigned_to_user_id: null });
+    });
+
+    it("a conversa que já é de um atendente humano não muda de time: a ligação vai ao escolhido, a conversa fica com quem a tem", async () => {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-10", ABERTO, MENU);
+      const conv = await conversaDaLigacao(id);
+      await repo.atribuirConversa(pool, ORG, conv, ANA);
+      expect(await conversa(conv)).toEqual({ team_id: ABERTO, assigned_to_user_id: ANA });
+
+      expect(await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "2", desfecho: "chosen", teamId: FECHADO })).toBe(true);
+      expect(await naLinha(id)).toMatchObject({ team_id: FECHADO, menu_outcome: "chosen" });
+      expect(await conversa(conv)).toEqual({ team_id: ABERTO, assigned_to_user_id: ANA });
+    });
+
+    it("o 'Ligar de volta' diz o time que ficou com a ligação; sem time, o texto de antes", async () => {
+      const id = await ligacao(ORG, NUMERO, "ura-repo-11", ABERTO, MENU);
+      await repo.registrarEscolhaDoMenu(pool, ORG, id, { digito: "2", desfecho: "chosen", teamId: FECHADO });
+      const l = await repo.encerrarLigacao(pool, ORG, id, "fila_esgotada");
+      await repo.avisarPerdida(pool, l!);
+      await repo.avisarPerdida(pool, { ...l!, team_id: null });
+      const { rows } = await pool.query<{ title: string; body: string; ref_kind: string | null }>(
+        `select title, body, ref_kind from public.agent_inbox_items
+          where organization_id = $1 and kind = 'voice_call_missed' and ref_id = $2 order by created_at, body`,
+        [ORG, l!.contact_id],
+      );
+      expect(rows.map((r) => r.body).sort()).toEqual([
+        "Ninguém atendeu. Ligue de volta pela conversa.",
+        "Ninguém do time Financeiro atendeu. Ligue de volta pela conversa.",
+      ]);
+      expect(rows.every((r) => r.title === `Ligação perdida de ${l!.peer_phone}` && r.ref_kind === "contact")).toBe(true);
+    });
   });
 });

@@ -514,9 +514,22 @@ export interface EscolhaDoMenu {
 /**
  * Grava o que o cliente fez no menu (`menu_digit`, `menu_outcome`) e o time que
  * a URA escolheu (`team_id` — o que o "Ligar de volta", a distribuição e o
- * cartão leem) num UPDATE só: o desfecho e o time nunca ficam um sem o outro.
+ * cartão leem) num comando só: o desfecho e o time nunca ficam um sem o outro.
  * A ligação E o time têm de ser desta organização (a FK de `voice_calls.team_id`
  * é simples e não confere isso); senão, `false` e nada muda.
+ *
+ * No MESMO comando, a CONVERSA da ligação vai para o time escolhido
+ * (`conversations.team_id`). É a coluna que a visibilidade por time lê
+ * (`fn_can_view_conversation`, migration 0281): no modo restrito ao time, quem
+ * é só do Financeiro não enxerga a conversa que nasceu no time padrão do menu —
+ * e o "Ligar de volta" dela ficaria sem ter quem abrisse a conversa.
+ *
+ * A regra é a do roteamento de conversas (`lib/routing/worker.ts`): conversa
+ * COM DONO (`assigned_to_user_id`) não é mexida — não se tira uma conversa de
+ * quem a tem, nem se muda o time debaixo dela. Só a sem dono acompanha a URA.
+ * Direto na coluna, e não por `fn_conversation_set_team`: aquela é o gesto de
+ * uma PESSOA (exige `auth.uid()`, solta o dono e pede o rodízio de texto, que a
+ * conversa de telefone não tem — `skipped_voice_channel`).
  */
 export async function registrarEscolhaDoMenu(
   db: Queryable,
@@ -524,14 +537,26 @@ export async function registrarEscolhaDoMenu(
   id: string,
   e: EscolhaDoMenu,
 ): Promise<boolean> {
-  const { rowCount } = await db.query(
-    `update voice_calls
-        set menu_digit = $3, menu_outcome = $4, team_id = $5, updated_at = now()
-      where id = $1 and organization_id = $2
-        and exists (select 1 from attendance_teams t where t.id = $5 and t.organization_id = $2)`,
+  const { rows } = await db.query<{ ligacao: number }>(
+    `with ligacao as (
+       update voice_calls
+          set menu_digit = $3, menu_outcome = $4, team_id = $5, updated_at = now()
+        where id = $1 and organization_id = $2
+          and exists (select 1 from attendance_teams t where t.id = $5 and t.organization_id = $2)
+        returning conversation_id
+     ), conversa as (
+       update conversations c
+          set team_id = $5, updated_at = now()
+         from ligacao
+        where c.id = ligacao.conversation_id and c.organization_id = $2
+          and c.assigned_to_user_id is null
+          and c.team_id is distinct from $5
+        returning c.id
+     )
+     select (select count(*) from ligacao)::int as ligacao`,
     [id, organizationId, e.digito, e.desfecho, e.teamId],
   );
-  return (rowCount ?? 0) > 0;
+  return (rows[0]?.ligacao ?? 0) > 0;
 }
 
 /**
@@ -943,18 +968,25 @@ export async function registrarNaConversa(
   );
 }
 
-/** Chamada recebida que ninguém atendeu: aviso na Central para alguém retornar. */
+/**
+ * Chamada recebida que ninguém atendeu: aviso na Central para alguém retornar.
+ *
+ * O aviso diz o TIME que ficou com a ligação (`voice_calls.team_id`): com a URA,
+ * o escolhido no menu, ou o padrão dele se o cliente desligou antes de escolher.
+ * A Central é da organização inteira (o aviso não tem coluna de time), então é
+ * o texto que diz de quem é o retorno; a conversa já está no mesmo time
+ * (`registrarEscolhaDoMenu`), e quem é dele a abre. Time lido desta organização.
+ */
 export async function avisarPerdida(db: Queryable, l: LigacaoDoBanco): Promise<void> {
   await db.query(
     `insert into agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
-     values ($1, 'voice_call_missed', 'warn', $2, $3, $4, $5)`,
-    [
-      l.organization_id,
-      `Ligação perdida de ${l.peer_phone}`,
-      "Ninguém atendeu. Ligue de volta pela conversa.",
-      l.contact_id ? "contact" : null,
-      l.contact_id,
-    ],
+     select $1, 'voice_call_missed', 'warn', $2,
+            case when t.name is null then 'Ninguém atendeu. Ligue de volta pela conversa.'
+                 else 'Ninguém do time ' || t.name || ' atendeu. Ligue de volta pela conversa.' end,
+            $3, $4
+       from (select 1) as um
+       left join attendance_teams t on t.id = $5::uuid and t.organization_id = $1`,
+    [l.organization_id, `Ligação perdida de ${l.peer_phone}`, l.contact_id ? "contact" : null, l.contact_id, l.team_id],
   );
 }
 

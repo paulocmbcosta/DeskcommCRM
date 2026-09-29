@@ -113,6 +113,7 @@ export interface PortaBanco {
   falasGerais(org: string): Promise<FalasGerais>;
   /** A URA (§5.1): o menu do número e o que o cliente escolheu nele. */
   menuPorId(org: string, menuId: string): Promise<MenuDoBanco | null>;
+  /** A escolha na ligação — e a conversa SEM DONO acompanha o time escolhido (visibilidade por time, 0281). */
   registrarEscolhaDoMenu(org: string, id: string, e: EscolhaDoMenu): Promise<boolean>;
   /** O cliente caiu no time padrão do menu, e ele está ARQUIVADO: `phone_menu_team_archived` na Central. */
   avisarMenuComTimeArquivado(org: string, menu: Pick<MenuDoBanco, "id" | "nome">): Promise<void>;
@@ -994,7 +995,9 @@ export class ControladorDeChamadas {
 
   /**
    * A URA decidiu o time: grava a escolha (tecla, desfecho e time numa escrita
-   * só) e a ligação entra na fila dele (§5.2), com tudo o que a fila faz — fora
+   * só, que também leva a conversa sem dono para o time, para quem é dele
+   * enxergá-la e o "Ligar de volta" ter quem a abra) e a ligação entra na fila
+   * dele (§5.2), com tudo o que a fila faz — fora
    * do horário, aviso de instabilidade, "aguarde", os ramais e "ninguém
    * atendeu". Os 2 min da fila contam daqui, da entrada nela (§5.1.3).
    *
