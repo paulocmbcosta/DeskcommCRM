@@ -106,11 +106,13 @@ export interface PortaBanco {
   acharOuCriarContato(org: string, e164: string, nome: string | null): Promise<string>;
   acharOuCriarConversa(org: string, contactId: string, troncoId: string, teamId: string | null): Promise<string>;
   criarLigacao(l: NovaLigacao): Promise<string>;
-  ligacaoPorId(id: string): Promise<LigacaoDoBanco | null>;
+  /** O pedido de saída que o ramal disca — só se for DESTE atendente (a organização sai da linha). */
+  ligacaoDoAtendente(userId: string, id: string): Promise<LigacaoDoBanco | null>;
   ligacoesVivas(): Promise<LigacaoDoBanco[]>;
-  marcarTocando(id: string, userId: string | null): Promise<void>;
-  marcarAtendida(id: string, userId: string): Promise<void>;
-  encerrarLigacao(id: string, motivo: string): Promise<LigacaoDoBanco | null>;
+  // As escritas da ligação ficam presas à organização dela (`l.org`).
+  marcarTocando(org: string, id: string, userId: string | null): Promise<void>;
+  marcarAtendida(org: string, id: string, userId: string): Promise<void>;
+  encerrarLigacao(org: string, id: string, motivo: string): Promise<LigacaoDoBanco | null>;
   atribuirConversa(org: string, conversationId: string, userId: string): Promise<void>;
   registrarNaConversa(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, duracaoMs: number | null): Promise<void>;
   avisarPerdida(l: LigacaoDoBanco): Promise<void>;
@@ -260,6 +262,7 @@ interface Feita {
 interface Recuperada {
   tipo: "recuperada";
   vcId: string;
+  org: string;
   ponte: string;
   canais: string[];
   fim: boolean;
@@ -597,7 +600,7 @@ export class ControladorDeChamadas {
   /** O estado na tela ("tocando para Fulano"). Não gravar não pode parar a fila: o relógio vem depois. */
   private async marcarTocando(l: Recebida, userId: string | null) {
     await this.banco
-      .marcarTocando(l.vcId, userId)
+      .marcarTocando(l.org, l.vcId, userId)
       .catch((e) => this.log.warn("telefonia: 'tocando' não gravado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
   }
 
@@ -859,7 +862,7 @@ export class ControladorDeChamadas {
     await this.ari.criarPonte(l.ponte);
     await this.ari.porNaPonte(l.ponte, l.cliente);
     await this.ari.porNaPonte(l.ponte, canal.id);
-    await this.banco.marcarAtendida(vcId, l.atendidaPor);
+    await this.banco.marcarAtendida(l.org, vcId, l.atendidaPor);
     if (l.conversationId) {
       await this.banco.atribuirConversa(l.org, l.conversationId, l.atendidaPor).catch((e) =>
         this.log.warn("telefonia: conversa não atribuída a quem atendeu", { erro: String(e) }),
@@ -881,7 +884,7 @@ export class ControladorDeChamadas {
     }
     if (l.ponte) await this.ari.destruirPonte(l.ponte).catch(() => undefined);
     this.porId.delete(l.vcId);
-    await this.finalizar(l.vcId, l.atendidaPor ? "atendida" : "perdida", motivo);
+    await this.finalizar(l.org, l.vcId, l.atendidaPor ? "atendida" : "perdida", motivo);
   }
 
   // ─── feita ───────────────────────────────────────────────────────────────
@@ -897,32 +900,34 @@ export class ControladorDeChamadas {
     if (dono?.tipo !== "ramal") return recusar("não veio de ramal");
     if (!m) return recusar("destino não é um pedido de ligação");
 
-    const vc = await this.banco.ligacaoPorId(m[1]!);
+    // Só o pedido DESTE atendente: o de outro nem volta do banco.
+    const vc = await this.banco.ligacaoDoAtendente(dono.id, m[1]!);
     if (!vc) return recusar("pedido inexistente");
     // A autorização inteira da ligação de saída: o pedido existe, é de saída,
     // ainda não começou, é DESTE atendente e é recente. A senha do ramal, sozinha,
     // não disca para lugar nenhum.
     if (vc.direction !== "outbound" || vc.status !== "starting") return recusar("pedido já usado", { voice_call: vc.id });
+    // Defesa em profundidade: a leitura já filtra o dono; a regra continua escrita aqui.
     if (vc.owner_user_id !== dono.id) return recusar("pedido de outro atendente", { voice_call: vc.id });
     if (this.agora() - new Date(vc.started_at).getTime() > VALIDADE_DO_PEDIDO_DE_SAIDA_MS) {
-      await this.banco.encerrarLigacao(vc.id, "pedido_expirado");
+      await this.banco.encerrarLigacao(vc.organization_id, vc.id, "pedido_expirado");
       return recusar("pedido expirado", { voice_call: vc.id });
     }
     const numero = numeroParaLigar(vc.peer_phone);
     if (!numero.ok) {
-      await this.banco.encerrarLigacao(vc.id, `numero_${numero.motivo}`);
+      await this.banco.encerrarLigacao(vc.organization_id, vc.id, `numero_${numero.motivo}`);
       return recusar("número fora da política", { voice_call: vc.id, motivo: numero.motivo });
     }
     const tronco = await this.banco.troncoPorId(vc.channel_session_id);
     if (!tronco || tronco.organizationId !== vc.organization_id) {
-      await this.banco.encerrarLigacao(vc.id, RECUSA_DA_SAIDA.troncoIndisponivel);
+      await this.banco.encerrarLigacao(vc.organization_id, vc.id, RECUSA_DA_SAIDA.troncoIndisponivel);
       return recusar("tronco indisponível", { voice_call: vc.id });
     }
     // O prefixo de discagem é DO TRONCO (vem do banco, nunca do que o atendente
     // digitou) e entra na frente do número que a política acabou de julgar.
     const destino = enderecoDeSaida(tronco, numero.discar);
     if (!destino.ok) {
-      await this.banco.encerrarLigacao(vc.id, RECUSA_DA_SAIDA.troncoConfiguracaoInvalida);
+      await this.banco.encerrarLigacao(vc.organization_id, vc.id, RECUSA_DA_SAIDA.troncoConfiguracaoInvalida);
       return recusar("tronco com configuração inválida", { voice_call: vc.id, problema: destino.problema });
     }
 
@@ -955,7 +960,7 @@ export class ControladorDeChamadas {
     await this.ari.porNaPonte(l.ponte, perna.id);
     // O chamar local até a operadora mandar áudio próprio (183) ou atender.
     l.tom = (await this.ari.tocarTom(canal.id, "ring").catch(() => null))?.id ?? null;
-    await this.banco.marcarTocando(vc.id, null);
+    await this.banco.marcarTocando(vc.organization_id, vc.id, null);
     await this.ari.discar(perna.id, PRAZO_DA_SAIDA_S);
     this.log.info("telefonia: ligação feita", { voice_call: vc.id, tronco: tronco.id });
   }
@@ -980,7 +985,7 @@ export class ControladorDeChamadas {
     if (s === "ANSWER") {
       await this.pararTom(l);
       l.atendida = true;
-      await this.banco.marcarAtendida(l.vcId, l.userId);
+      await this.banco.marcarAtendida(l.org, l.vcId, l.userId);
       this.log.info("telefonia: ligação feita atendida", { voice_call: l.vcId });
     }
   }
@@ -1008,7 +1013,7 @@ export class ControladorDeChamadas {
     if (!l.atendida && l.causaDaRede !== null) {
       ({ desfecho, motivo: motivoFinal } = fimDaSaidaNaoAtendida({ causa: l.causaDaRede, tocou: l.tocou }));
     }
-    await this.finalizar(l.vcId, desfecho, motivoFinal);
+    await this.finalizar(l.org, l.vcId, desfecho, motivoFinal);
   }
 
   // ─── fim de canal ────────────────────────────────────────────────────────
@@ -1055,11 +1060,11 @@ export class ControladorDeChamadas {
     }
     await this.ari.destruirPonte(l.ponte).catch(() => undefined);
     this.porId.delete(l.vcId);
-    await this.finalizar(l.vcId, "atendida", "encerrada_apos_reinicio");
+    await this.finalizar(l.org, l.vcId, "atendida", "encerrada_apos_reinicio");
   }
 
-  private async finalizar(vcId: string, desfechoPedido: DesfechoDaLigacao, motivo: string) {
-    const l = await this.banco.encerrarLigacao(vcId, motivo);
+  private async finalizar(org: string, vcId: string, desfechoPedido: DesfechoDaLigacao, motivo: string) {
+    const l = await this.banco.encerrarLigacao(org, vcId, motivo);
     if (!l) return; // já encerrada por outro caminho
     const desfecho: DesfechoDaLigacao = l.answered_at ? "atendida" : desfechoPedido === "atendida" ? "perdida" : desfechoPedido;
     const duracao = l.answered_at ? this.agora() - new Date(l.answered_at).getTime() : null;
@@ -1093,7 +1098,14 @@ export class ControladorDeChamadas {
       const ponte = pontes.find((p) => p.id === ponteDe(vc.id));
       const canaisDaPonte = (ponte?.channels ?? []).filter((c) => canaisVivos.has(c));
       if (ponte && canaisDaPonte.length >= 2) {
-        const r: Recuperada = { tipo: "recuperada", vcId: vc.id, ponte: ponte.id, canais: canaisDaPonte, fim: false };
+        const r: Recuperada = {
+          tipo: "recuperada",
+          vcId: vc.id,
+          org: vc.organization_id,
+          ponte: ponte.id,
+          canais: canaisDaPonte,
+          fim: false,
+        };
         this.porId.set(vc.id, r);
         for (const c of canaisDaPonte) this.porCanal.set(c, r);
         this.log.info("telefonia: ligação em curso retomada após reinício", { voice_call: vc.id });
@@ -1102,7 +1114,7 @@ export class ControladorDeChamadas {
       for (const c of canaisDaPonte) await this.ari.desligar(c).catch(() => undefined);
       if (vc.sip_call_ref && canaisVivos.has(vc.sip_call_ref)) await this.ari.desligar(vc.sip_call_ref).catch(() => undefined);
       if (ponte) await this.ari.destruirPonte(ponte.id).catch(() => undefined);
-      await this.finalizar(vc.id, vc.answered_at ? "atendida" : "perdida", "interrompida_no_reinicio");
+      await this.finalizar(vc.organization_id, vc.id, vc.answered_at ? "atendida" : "perdida", "interrompida_no_reinicio");
     }
   }
 }

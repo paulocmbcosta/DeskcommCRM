@@ -108,7 +108,15 @@ export async function troncoPorId(db: Queryable, id: string): Promise<TroncoDoBa
   return rows[0] ? paraTronco(rows[0]) : null;
 }
 
-/** Espelha o estado do registro na linha do canal — o que a tela de Conexões mostra. */
+/**
+ * Espelha o estado do registro na linha do canal — o que a tela de Conexões mostra.
+ *
+ * Sem filtro de `organization_id`, de propósito: quem chama é o laço dos troncos
+ * (`sincronizacao.ts`), que varre a instalação inteira como `troncosAtivos`, e o
+ * `id` sai SEMPRE dessa varredura (ou do mapa do que ela empurrou ao Asterisk) —
+ * nunca de dado que chega de fora. Carregar a organização por esse caminho não
+ * fecharia porta nenhuma; a linha continua presa ao `provider` do tronco.
+ */
 export async function gravarEstadoDoTronco(
   db: Queryable,
   id: string,
@@ -704,8 +712,18 @@ const COLUNAS_DA_LIGACAO = `id, organization_id, channel_session_id, contact_id,
   peer_phone, status, owner_user_id, created_by, team_id, started_at, answered_at,
   provider, sip_call_ref, menu_id, menu_digit, menu_outcome, emergency_heard_at, end_reason`;
 
-export async function ligacaoPorId(db: Queryable, id: string): Promise<LigacaoDoBanco | null> {
-  const { rows } = await db.query<LigacaoDoBanco>(`select ${COLUNAS_DA_LIGACAO} from voice_calls where id = $1`, [id]);
+/**
+ * A ligação `id`, se ela for DESTE atendente (`owner_user_id`) — o pedido de
+ * ligação de saída que o ramal disca (`c-<id>`). A catraca aqui é o atendente, e
+ * não a organização: quando o ramal disca, a organização ainda não é conhecida
+ * (o ramal é da pessoa, que pode estar em mais de uma), e ela sai da PRÓPRIA
+ * linha, que o controlador confere contra o tronco antes de discar.
+ */
+export async function ligacaoDoAtendente(db: Queryable, userId: string, id: string): Promise<LigacaoDoBanco | null> {
+  const { rows } = await db.query<LigacaoDoBanco>(
+    `select ${COLUNAS_DA_LIGACAO} from voice_calls where id = $1 and owner_user_id = $2`,
+    [id, userId],
+  );
   return rows[0] ?? null;
 }
 
@@ -718,40 +736,50 @@ export async function ligacoesVivas(db: Queryable): Promise<LigacaoDoBanco[]> {
   return rows;
 }
 
-/** Tocando para alguém (ou para ninguém, com `null`). */
-export async function marcarTocando(db: Queryable, id: string, userId: string | null): Promise<void> {
+/** Tocando para alguém (ou para ninguém, com `null`). Presa à organização da ligação. */
+export async function marcarTocando(
+  db: Queryable,
+  organizationId: string,
+  id: string,
+  userId: string | null,
+): Promise<void> {
   await db.query(
-    `update voice_calls set status = 'ringing', ringing_user_id = $2, updated_at = now()
-      where id = $1 and status <> 'ended'`,
-    [id, userId],
+    `update voice_calls set status = 'ringing', ringing_user_id = $3, updated_at = now()
+      where id = $1 and organization_id = $2 and status <> 'ended'`,
+    [id, organizationId, userId],
   );
 }
 
-export async function marcarAtendida(db: Queryable, id: string, userId: string): Promise<void> {
+/** Atendida por `userId`. Presa à organização da ligação. */
+export async function marcarAtendida(db: Queryable, organizationId: string, id: string, userId: string): Promise<void> {
   await db.query(
     `update voice_calls
         set status = 'connected', answered_at = coalesce(answered_at, now()),
-            owner_user_id = coalesce(owner_user_id, $2), ringing_user_id = null, updated_at = now()
-      where id = $1 and status <> 'ended'`,
-    [id, userId],
+            owner_user_id = coalesce(owner_user_id, $3), ringing_user_id = null, updated_at = now()
+      where id = $1 and organization_id = $2 and status <> 'ended'`,
+    [id, organizationId, userId],
   );
 }
 
-/** Fecha a ligação. Idempotente: a segunda chamada não muda nada e devolve `null`. */
+/**
+ * Fecha a ligação. Idempotente: a segunda chamada não muda nada e devolve `null`
+ * — como a de outra organização, que nunca a alcança.
+ */
 export async function encerrarLigacao(
   db: Queryable,
+  organizationId: string,
   id: string,
   motivo: string,
 ): Promise<LigacaoDoBanco | null> {
   const { rows } = await db.query<LigacaoDoBanco>(
     `update voice_calls
-        set status = 'ended', ended_at = now(), end_reason = $2, ringing_user_id = null,
+        set status = 'ended', ended_at = now(), end_reason = $3, ringing_user_id = null,
             duration_ms = case when answered_at is null then null
                                else (extract(epoch from (now() - answered_at)) * 1000)::int end,
             updated_at = now()
-      where id = $1 and status <> 'ended'
+      where id = $1 and organization_id = $2 and status <> 'ended'
       returning ${COLUNAS_DA_LIGACAO}`,
-    [id, motivo],
+    [id, organizationId, motivo],
   );
   return rows[0] ?? null;
 }

@@ -193,21 +193,36 @@ class BancoFalso implements PortaBanco {
     });
     return id;
   };
-  ligacaoPorId = async (id: string) => this.ligacoes.get(id) ?? null;
+  /** Como o SQL: só o pedido do próprio atendente volta. */
+  ligacaoDoAtendente = async (userId: string, id: string) => {
+    const l = this.ligacoes.get(id);
+    return l && l.owner_user_id === userId ? l : null;
+  };
   ligacoesVivas = async () => [...this.ligacoes.values()].filter((l) => l.status !== "ended");
-  marcarTocando = async (id: string, u: string | null) => {
+  /** Toda escrita da ligação chega com a organização dela; a errada fica registrada (e o `afterEach` reprova). */
+  private daOrg(org: string, id: string, onde: string) {
+    const certa = this.ligacoes.get(id)?.organization_id === org;
+    if (!certa) this.eventos.push(["org_errada", onde, id, org]);
+    return certa;
+  }
+  marcarTocando = async (org: string, id: string, u: string | null) => {
+    if (!this.daOrg(org, id, "marcarTocando")) return;
+    if (this.falharTocando) throw new Error("banco fora do ar");
     this.eventos.push(["tocando", id, u]);
   };
-  marcarAtendida = async (id: string, u: string) => {
+  /** `marcarTocando` lança (o banco caiu no meio da ligação). */
+  falharTocando = false;
+  marcarAtendida = async (org: string, id: string, u: string) => {
+    if (!this.daOrg(org, id, "marcarAtendida")) return;
     const l = this.ligacoes.get(id)!;
     l.status = "connected";
     l.answered_at = new Date().toISOString();
     l.owner_user_id = l.owner_user_id ?? u;
     this.eventos.push(["atendida", id, u]);
   };
-  encerrarLigacao = async (id: string, motivo: string) => {
+  encerrarLigacao = async (org: string, id: string, motivo: string) => {
     const l = this.ligacoes.get(id);
-    if (!l || l.status === "ended") return null;
+    if (!l || !this.daOrg(org, id, "encerrarLigacao") || l.status === "ended") return null;
     l.status = "ended";
     l.end_reason = motivo;
     this.eventos.push(["encerrada", id, motivo]);
@@ -259,6 +274,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   expect(log.error).not.toHaveBeenCalled();
+  expect(banco.tem("org_errada")).toEqual([]);
 });
 
 const cliente = canal("cli-1", `PJSIP/tronco-${TRONCO}-00000001`);

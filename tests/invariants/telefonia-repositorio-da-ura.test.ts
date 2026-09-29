@@ -21,8 +21,9 @@
  *     CONTROLE com `for update` mostra a ligação caindo no lock_timeout). Nenhuma
  *     prova aqui mede relógio: "não esperou" é "não levou 55P03 com lock_timeout";
  *  4. a ligação guarda o que a URA fez (menu, tecla, desfecho e time numa escrita
- *     só, aviso ouvido), com toda escrita presa à organização, e o cartão da
- *     conversa o mostra;
+ *     só, aviso ouvido), com toda escrita presa à organização — também as da
+ *     fase 1 (tocando, atendida, encerrada) —, e o cartão da conversa o mostra;
+ *     o pedido de saída só volta para o atendente dono dele;
  *  5. o aviso de fala intocável não se repete enquanto o anterior está aberto.
  */
 import pg from "pg";
@@ -707,7 +708,7 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
     await repo.registrarAvisoOuvido(pool, ORG, id);
     expect((await naLinha(id)).emergency_heard_at?.getTime()).toBe(primeiraVez?.getTime());
 
-    const l = await repo.encerrarLigacao(pool, id, "cliente_desligou");
+    const l = await repo.encerrarLigacao(pool, ORG, id, "cliente_desligou");
     expect(l).toMatchObject({ menu_id: MENU, menu_digit: "2", menu_outcome: "chosen", team_id: FECHADO, end_reason: "cliente_desligou" });
     await repo.registrarNaConversa(pool, l!, "perdida", null);
 
@@ -720,8 +721,6 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
       ouviu_aviso: true,
       motivo: "cliente_desligou",
     });
-    // As colunas novas também voltam em ligacaoPorId.
-    expect(await repo.ligacaoPorId(pool, id)).toMatchObject({ menu_id: MENU, menu_outcome: "chosen", end_reason: "cliente_desligou" });
   });
 
   it("as escritas da URA ficam presas à organização: a de fora não mexe, o time de fora não entra", async () => {
@@ -740,6 +739,37 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
     expect(await naLinha(id)).toMatchObject({ menu_digit: null, menu_outcome: "default_no_input", team_id: FECHADO });
   });
 
+  it("as escritas da fase 1 (tocando, atendida, encerrada) também ficam presas à organização", async () => {
+    const id = await ligacao(ORG, NUMERO, "ura-repo-7", ABERTO, MENU);
+    const linha = async () =>
+      (
+        await pool.query<{ status: string; ringing_user_id: string | null; owner_user_id: string | null; answered_at: Date | null }>(
+          "select status, ringing_user_id, owner_user_id, answered_at from voice_calls where id = $1",
+          [id],
+        )
+      ).rows[0]!;
+
+    // Com a organização de B, nada muda na ligação de A.
+    await repo.marcarTocando(pool, OUTRA, id, ANA);
+    await repo.marcarAtendida(pool, OUTRA, id, ANA);
+    expect(await repo.encerrarLigacao(pool, OUTRA, id, "cliente_desligou")).toBeNull();
+    expect(await linha()).toEqual({ status: "ringing", ringing_user_id: null, owner_user_id: null, answered_at: null });
+
+    // Com a de A, cada uma faz o seu.
+    await repo.marcarTocando(pool, ORG, id, ANA);
+    expect(await linha()).toMatchObject({ status: "ringing", ringing_user_id: ANA });
+    await repo.marcarAtendida(pool, ORG, id, ANA);
+    expect(await linha()).toMatchObject({ status: "connected", ringing_user_id: null, owner_user_id: ANA });
+
+    // O pedido volta só para o atendente dono dele — com as colunas da fase 2.
+    expect(await repo.ligacaoDoAtendente(pool, BRUNO, id)).toBeNull();
+    expect(await repo.ligacaoDoAtendente(pool, ANA, id)).toMatchObject({ id, organization_id: ORG, menu_id: MENU, menu_outcome: null });
+
+    expect(await repo.encerrarLigacao(pool, ORG, id, "atendente_desligou")).toMatchObject({ id, end_reason: "atendente_desligou" });
+    // Idempotente: a segunda vez não acha nada para fechar.
+    expect(await repo.encerrarLigacao(pool, ORG, id, "atendente_desligou")).toBeNull();
+  });
+
   it("o banco recusa a ligação de A com o menu de B (FK composta), e a de B com o menu de B entra", async () => {
     await expect(ligacao(ORG, NUMERO, "ura-repo-4", ABERTO, MENU_OUTRA)).rejects.toMatchObject({ code: "23503" });
     const id = await ligacao(OUTRA, NUMERO_OUTRA, "ura-repo-5", TIME_OUTRA, MENU_OUTRA);
@@ -748,7 +778,7 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
 
   it("sem menu (número que aponta para time): a ligação nasce com menu_id nulo e o cartão sem 'menu'", async () => {
     const id = await ligacao(OUTRA, NUMERO_OUTRA, "ura-repo-6", TIME_OUTRA, null);
-    const l = await repo.encerrarLigacao(pool, id, "ninguem_atendeu");
+    const l = await repo.encerrarLigacao(pool, OUTRA, id, "ninguem_atendeu");
     await repo.registrarNaConversa(pool, l!, "perdida", null);
     const { rows } = await pool.query(
       "select body, metadata->'voice_call' as vc from public.messages where organization_id = $1 and external_id = $2",
@@ -760,7 +790,7 @@ describe("a ligação guarda o que a URA fez, e o cartão da conversa o mostra",
 
   it("fora do horário: o registro na conversa diz isso", async () => {
     const id = await ligacao(ORG, NUMERO, "ura-repo-2", FECHADO, null);
-    const l = await repo.encerrarLigacao(pool, id, "after_hours");
+    const l = await repo.encerrarLigacao(pool, ORG, id, "after_hours");
     expect(l?.end_reason).toBe("after_hours");
     await repo.registrarNaConversa(pool, l!, "perdida", null);
     const { rows } = await pool.query(
