@@ -8,6 +8,18 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.51.1] — 2026-09-30
+
+### Corrigido
+
+- **Responder só "cancelar" não bloqueia mais o cliente — a conversa vai para uma pessoa** Um cliente que respondia apenas "cancelar" era bloqueado na hora: ninguém conseguia mais mandar
+  mensagem para ele, nem a IA nem o atendente, até um gerente desbloquear pela tela. Numa operação
+  real de provedor de internet, todos os bloqueios por "cancelar" eram engano — a cliente queria
+  cancelar a visita técnica, ou estava sem internet e irritada no meio do atendimento. Agora
+  "cancelar" sozinho faz a IA parar de responder e passar a conversa para uma pessoa da equipe, que
+  lê e decide. "Sair", "parar" e "stop" continuam bloqueando na hora, e "cancelar a inscrição" ou
+  "cancelar a assinatura das mensagens" também.
+
 ## [1.51.0] — 2026-09-30
 
 ### Adicionado
@@ -5811,7 +5823,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.1...HEAD
+[1.51.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.0...v1.51.1
 [1.51.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.2...v1.51.0
 [1.50.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.1...v1.50.2
 [1.50.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.0...v1.50.1
