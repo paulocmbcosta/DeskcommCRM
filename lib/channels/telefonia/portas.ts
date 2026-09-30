@@ -114,6 +114,13 @@ export interface PortaBanco {
   timeDaLigacao(org: string, id: string): Promise<string | null>;
   /** A pessoa está numa ligação viva (falando, tocando, ou do outro lado de uma interna). */
   pessoaEmLigacao(org: string, userId: string): Promise<boolean>;
+  // ── ramais (v3, migration 0291) ──
+  /** Quem tem o ramal `numero` nesta organização (a URA com ramal). */
+  donoDoRamal(org: string, numero: string): Promise<string | null>;
+  /** O nome e o ramal de quem faz a ligação interna. */
+  quemLiga(org: string, userId: string): Promise<{ nome: string; ramal: string | null }>;
+  /** O colega pode receber a interna `vcId` agora (membro, sem pausa, sem outra ligação)? */
+  colegaLivreParaInterna(org: string, userId: string, vcId: string): Promise<boolean>;
 }
 
 export interface Registro {

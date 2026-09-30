@@ -98,6 +98,9 @@ function portaBanco(pool: pg.Pool): PortaBanco {
     moverParaOTime: (org, id, c, t) => repo.moverParaOTime(pool, org, id, c, t),
     timeDaLigacao: (org, id) => repo.timeDaLigacao(pool, org, id),
     pessoaEmLigacao: (org, u) => repo.pessoaEmLigacao(pool, org, u),
+    donoDoRamal: (org, n) => repo.donoDoRamal(pool, org, n),
+    quemLiga: (org, u) => repo.quemLiga(pool, org, u),
+    colegaLivreParaInterna: (org, u, vc) => repo.colegaLivreParaInterna(pool, org, u, vc),
   };
 }
 

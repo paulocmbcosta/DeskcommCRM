@@ -360,6 +360,15 @@ export class BancoFalso implements PortaBanco {
   /** Quem o banco diz estar em outra ligação. */
   ocupados = new Set<string>();
   pessoaEmLigacao = async (_org: string, u: string) => this.ocupados.has(u);
+  // ── ramais (v3) ──
+  /** Ramal → pessoa, desta organização. */
+  ramais = new Map<string, string>();
+  donoDoRamal = async (org: string, numero: string) => (org === ORG ? (this.ramais.get(numero) ?? null) : null);
+  quemLiga = async (_org: string, u: string) => ({
+    nome: u === ANA ? "Ana" : "Colega",
+    ramal: [...this.ramais.entries()].find(([, dono]) => dono === u)?.[0] ?? null,
+  });
+  colegaLivreParaInterna = async (_org: string, u: string) => !this.ocupados.has(u);
 
   tem(nome: string) {
     return this.eventos.filter((e) => e[0] === nome);

@@ -392,6 +392,8 @@ export interface MenuDoBanco {
    * (`lib/telefonia/ura.ts`): toca a fala de tecla inválida e repete o menu.
    */
   opcoes: Array<{ digito: string; teamId: string }>;
+  /** O cliente pode digitar o ramal de alguém (v3, `accepts_extension`). Opcional no tipo para os testes da v1. */
+  aceitaRamal?: boolean;
 }
 
 const falaOuNada = (id: string | null, caminho: string | null, duracaoMs: number | null): FalaDoBanco | null =>
@@ -414,8 +416,9 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     invalida_caminho: string | null;
     invalida_duracao: number | null;
     opcoes: Array<{ digito: string; teamId: string }>;
+    accepts_extension: boolean;
   }>(
-    `select m.id, m.name as nome, m.default_team_id,
+    `select m.id, m.name as nome, m.default_team_id, m.accepts_extension,
             (d.id is not null and d.archived_at is null) as time_padrao_ativo,
             p.id as fala_id, p.storage_path as fala_caminho, p.duration_ms as fala_duracao,
             i.id as invalida_id, i.storage_path as invalida_caminho, i.duration_ms as invalida_duracao,
@@ -446,6 +449,7 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     fala: falaOuNada(r.fala_id, r.fala_caminho, r.fala_duracao),
     falaInvalida: falaOuNada(r.invalida_id, r.invalida_caminho, r.invalida_duracao),
     opcoes: r.opcoes,
+    aceitaRamal: r.accepts_extension === true,
   };
 }
 
@@ -760,7 +764,7 @@ export interface LigacaoDoBanco {
   channel_session_id: string;
   contact_id: string | null;
   conversation_id: string | null;
-  direction: "inbound" | "outbound";
+  direction: "inbound" | "outbound" | "internal";
   peer_phone: string;
   status: string;
   owner_user_id: string | null;
@@ -778,12 +782,14 @@ export interface LigacaoDoBanco {
   end_reason?: string | null;
   /** O ciclo da gravação (0289). `recording` no fim = há arquivo a guardar. */
   recording_status?: EstadoDaGravacao | null;
+  /** Na ligação interna (0291): quem recebe. */
+  peer_user_id?: string | null;
 }
 
 /** As colunas de `LigacaoDoBanco` — uma lista só para leitura, recuperação e encerramento. */
 const COLUNAS_DA_LIGACAO = `id, organization_id, channel_session_id, contact_id, conversation_id, direction,
   peer_phone, status, owner_user_id, created_by, team_id, started_at, answered_at,
-  provider, sip_call_ref, menu_id, menu_digit, menu_outcome, emergency_heard_at, end_reason, recording_status`;
+  provider, sip_call_ref, menu_id, menu_digit, menu_outcome, emergency_heard_at, end_reason, recording_status, peer_user_id`;
 
 /**
  * A ligação `id`, se ela for DESTE atendente (`owner_user_id`) — o pedido de
@@ -1189,7 +1195,8 @@ export async function registrarNaConversa(
   desfecho: DesfechoDaLigacao,
   duracaoMs: number | null,
 ): Promise<void> {
-  if (!l.conversation_id || !l.contact_id) return;
+  // A interna (v3) não tem conversa nem contato: não há onde registrar.
+  if (!l.conversation_id || !l.contact_id || l.direction === "internal") return;
   let quem: string | null = null;
   if (l.owner_user_id) {
     const { rows } = await db.query<{ nome: string | null }>(
@@ -1353,4 +1360,57 @@ export async function registrarFim(
     usuarioId: l.owner_user_id,
     payload: { canal: "telefone", desfecho, motivo },
   });
+}
+
+// ─── ramais e ligação interna (fase 2, versão 3; migration 0291) ──────────
+
+/** Quem tem o ramal `numero` NESTA organização — `null` se ninguém. */
+export async function donoDoRamal(db: Queryable, organizationId: string, numero: string): Promise<string | null> {
+  const { rows } = await db.query<{ user_id: string }>(
+    `select e.user_id from phone_extensions e
+       join user_organizations uo on uo.user_id = e.user_id and uo.organization_id = e.organization_id
+        and uo.revoked_at is null and uo.role in ('agent', 'manager', 'admin')
+      where e.organization_id = $1 and e."number" = $2`,
+    [organizationId, numero],
+  );
+  return rows[0]?.user_id ?? null;
+}
+
+/** O nome e o ramal de quem liga — o que aparece no telefone do colega ("Ana (201)"). */
+export async function quemLiga(db: Queryable, organizationId: string, userId: string): Promise<{ nome: string; ramal: string | null }> {
+  const { rows } = await db.query<{ nome: string | null; ramal: string | null }>(
+    `select coalesce(nullif(u.raw_user_meta_data->>'full_name', ''), u.email) as nome,
+            (select e."number" from phone_extensions e where e.organization_id = $1 and e.user_id = u.id) as ramal
+       from auth.users u where u.id = $2`,
+    [organizationId, userId],
+  );
+  return { nome: rows[0]?.nome ?? "", ramal: rows[0]?.ramal ?? null };
+}
+
+/**
+ * O colega pode receber a ligação interna `vcId` agora? Membro com papel de
+ * atendimento desta organização, disponível (sem pausa), e sem OUTRA ligação
+ * viva — a própria interna já o marca como `peer_user_id`, então ela fica de
+ * fora da conta. O "online" é da ARI, e o horário próprio a API já conferiu.
+ */
+export async function colegaLivreParaInterna(
+  db: Queryable,
+  organizationId: string,
+  userId: string,
+  vcId: string,
+): Promise<boolean> {
+  const { rows } = await db.query(
+    `select 1 from user_organizations uo
+       join attendant_availability a on a.organization_id = uo.organization_id and a.user_id = uo.user_id and a.is_available
+      where uo.organization_id = $1 and uo.user_id = $2 and uo.revoked_at is null
+        and uo.role in ('agent', 'manager', 'admin')
+        and not exists (
+          select 1 from voice_calls v
+           where v.organization_id = $1 and v.status <> 'ended' and v.id <> $3
+             and (v.owner_user_id = $2 or v.ringing_user_id = $2 or v.peer_user_id = $2)
+             and v.started_at > now() - interval '4 hours'
+        )`,
+    [organizationId, userId, vcId],
+  );
+  return rows.length > 0;
 }
