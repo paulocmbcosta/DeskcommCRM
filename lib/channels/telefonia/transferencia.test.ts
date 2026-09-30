@@ -357,6 +357,39 @@ describe("consultada", () => {
   });
 });
 
+describe("quando a ARI falha", () => {
+  it("a ponte de consulta não se forma: A volta ao cliente e a transferência fecha recusada", async () => {
+    await recebidaComAna();
+    pedir({ kind: "attended" });
+    ari.criarPonte = async () => {
+      throw new Error("ari 500");
+    };
+    await ordem("transferir");
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "ramal-canal-1"]);
+    expect(ari.chamadas).toContainEqual(["pararMusicaNaPonte", "p-vc-1"]);
+    expect(ari.originados()).toEqual([]);
+    expect(transferencia()).toMatchObject({ desfecho: "refused", motivo: "falha_na_ponte_de_consulta" });
+    // A segue com o cliente.
+    await destruir("ramal-canal-1");
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "atendente_desligou"]]);
+  });
+
+  it("quem atendeu não entra na ponte: o ramal cai e segue como não atendida (volta a A)", async () => {
+    await recebidaComAna();
+    pedir();
+    await ordem("transferir");
+    const porNaPonte = ari.porNaPonte;
+    ari.porNaPonte = async (p: string, c: string) => {
+      if (c === "ramal-canal-2") throw new Error("ari 422");
+      return porNaPonte(p, c);
+    };
+    await atende("ramal-canal-2", "transf");
+    expect(ari.chamadas).toContainEqual(["desligar", "ramal-canal-2", undefined]);
+    expect(ari.chamadas).toContainEqual(["originar", `PJSIP/ramal-${ANA}`, "volta,vc-1"]);
+    expect(transferencia().status).toBe("open");
+  });
+});
+
 describe("o cliente desliga no meio", () => {
   it("direta tocando: o ramal de B cai e a transferência fecha cancelled", async () => {
     await recebidaComAna();

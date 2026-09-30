@@ -351,9 +351,19 @@ export class Transferencias<L> {
       // A sai da ponte do cliente SEM ser desligado e vai para a ponte de consulta.
       em.quemTransferiu = a.canal;
       this.porCanal.set(a.canal, em);
-      await this.d.ari.tirarDaPonte(agora.ponte!, a.canal).catch(() => undefined);
-      await this.d.ari.criarPonte(ponteDeConsulta(v.vcId));
-      await this.d.ari.porNaPonte(ponteDeConsulta(v.vcId), a.canal);
+      try {
+        await this.d.ari.tirarDaPonte(agora.ponte!, a.canal);
+        await this.d.ari.criarPonte(ponteDeConsulta(v.vcId));
+        await this.d.ari.porNaPonte(ponteDeConsulta(v.vcId), a.canal);
+      } catch (e) {
+        // A ponte de consulta não se formou: desfaz — A volta ao cliente, e a
+        // transferência fecha recusada. Sem isto o cliente ficava na música e A no vazio.
+        this.d.log.warn("telefonia: a ponte de consulta não se formou — A volta ao cliente", {
+          voice_call: v.vcId,
+          erro: mensagemDe(e),
+        });
+        return this.desfazerConsulta(em, "falha_na_ponte_de_consulta");
+      }
       em.tom = (await this.d.ari.tocarTom(a.canal, "ring").catch(() => null))?.id ?? null;
       return this.tocar(em, t.toUserId!, "consulta");
     }
@@ -616,14 +626,38 @@ export class Transferencias<L> {
     return this.entregar(em, canal.id, em.alvo, desfecho);
   }
 
+  /** A consulta que não chegou a começar: A volta à ponte do cliente, e a transferência fecha `refused`. */
+  private async desfazerConsulta(em: EmCurso<L>, motivo: string): Promise<void> {
+    const v = this.d.ganchos.vista(em.l);
+    const a = em.quemTransferiu;
+    em.quemTransferiu = null;
+    if (a) this.porCanal.delete(a);
+    this.esquecer(em);
+    await this.d.ari.destruirPonte(ponteDeConsulta(em.vcId)).catch(() => undefined);
+    if (a && v.ponte) await this.d.ari.porNaPonte(v.ponte, a).catch(() => undefined);
+    if (v.ponte) await this.d.ari.pararMusicaNaPonte(v.ponte).catch(() => undefined);
+    await this.fechar(em, { desfecho: "refused", motivo, atendidaPor: null });
+  }
+
   /** Quem atendeu fica com o cliente: entra na ponte, a música para, a ligação e a conversa passam a ele. */
   private async entregar(em: EmCurso<L>, canal: string, userId: string, desfecho: DesfechoDaTransferencia): Promise<void> {
     const v = this.d.ganchos.vista(em.l);
+    if (!v.ponte) return;
+    try {
+      await this.d.ari.porNaPonte(v.ponte, canal);
+    } catch (e) {
+      // Não entrou na ponte do cliente: larga esse ramal e segue como se não tivesse atendido.
+      this.d.log.warn("telefonia: quem atendeu a transferência não entrou na ponte — segue como não atendida", {
+        voice_call: em.vcId,
+        erro: mensagemDe(e),
+      });
+      this.porCanal.delete(canal);
+      await this.d.ari.desligar(canal).catch(() => undefined);
+      return this.naoAtendeu(em);
+    }
     this.porCanal.delete(canal);
     em.canal = null;
     this.esquecer(em);
-    if (!v.ponte) return;
-    await this.d.ari.porNaPonte(v.ponte, canal);
     await this.d.ari
       .pararMusicaNaPonte(v.ponte)
       .catch((e) => this.d.log.warn("telefonia: música da ponte não parada", { voice_call: em.vcId, erro: mensagemDe(e) }));
