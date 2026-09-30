@@ -675,7 +675,7 @@
     { "from": "central", "to": "aba_menus", "label": "`phone_menu_team_archived` → \"Revisar os menus do telefone\"" },
     { "from": "central", "to": "cartao_aviso", "label": "`phone_emergency_expired` → \"Abrir os times\"" },
     { "from": "controle", "to": "gravacoes", "label": "`PortaGravacao`: política na entrada, gravar a ponte quando o atendente atende (recebida, só com o aviso ouvido) ou no ANSWER (feita), parar no fim, `aoEncerrar`" },
-    { "from": "controle", "to": "fala_no_ar", "label": "o aviso de gravação é uma fala (papel `gravacao`) ANTES do menu e da fila" },
+    { "from": "controle", "to": "fala_no_ar", "label": "o aviso de gravação é uma fala (papel `gravacao`) na passagem para o atendente: depois do menu e da fila, antes dos toques" },
     { "from": "gravacoes", "to": "ari", "label": "`POST /bridges/p-<id>/record` (WAV, sem bipe, teto 2 h), `POST /recordings/live/g-<id>/stop`, `GET /recordings/stored/g-<id>/file`, `DELETE`; `POST /bridges/…/play` do aviso na feita" },
     { "from": "laco", "to": "gravacoes", "label": "passada de 60 s (guarda própria): pendentes e órfãs" },
     { "from": "gravacoes", "to": "bucket_midia", "label": "sobe o MP3 (upsert); anonimizada no meio → apaga o recém-subido" },

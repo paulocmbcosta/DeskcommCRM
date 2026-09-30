@@ -350,6 +350,14 @@ services:
   # chega pelo Caddy (`/telefonia/ws`), e a ARI nunca é roteada para fora.
   asterisk:
     profiles: ["telefonia"]
+    # Nome fixo, e começando por LETRA. O PJSIP põe o hostname no From/Contact
+    # das INVITEs que manda aos navegadores; sem esta linha ele é o id aleatório
+    # do contêiner, que começa por dígito em ~60% das recriações — e o JsSIP
+    # descarta a INVITE em silêncio (a gramática do RFC 3261 exige letra no
+    # último rótulo). Medido em 30/09/2026: o deploy da 1.51.0 sorteou
+    # `39779767aa76` e nenhuma ligação recebida tocou em navegador nenhum.
+    # Vigiado em tests/unit/telefonia-hostname-do-asterisk.test.ts.
+    hostname: telefonia
     mem_limit: 256m
     image: ${ASTERISK_IMAGE:-ghcr.io/paulocmbcosta/deskcomm-asterisk:stable}
     pull_policy: ${ASTERISK_PULL_POLICY:-always}

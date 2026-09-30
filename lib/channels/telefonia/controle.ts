@@ -29,9 +29,10 @@
  *
  * GRAVAÇÃO (F3; desenho 2026-09-29-telefonia-gravacao-das-ligacoes-design.md):
  *             com a organização gravando e a ligação com conversa, o AVISO DE
- *             GRAVAÇÃO toca antes de tudo (antes do menu e da fila); tocou → a
- *             ponte é gravada quando o atendente atende; não tocou → a ligação
- *             segue sem gravar. Na FEITA, o aviso toca na ponte quando o cliente
+ *             GRAVAÇÃO toca na passagem para o atendente — depois do menu, do
+ *             "fora do horário" e do aviso de instabilidade, logo antes dos
+ *             toques; tocou → a ponte é gravada quando o atendente atende; não
+ *             tocou → a ligação segue sem gravar. Na FEITA, o aviso toca na ponte quando o cliente
  *             atende, e a gravação começa junto. A gravação para no fim, e o
  *             arquivo é guardado fora daqui (`gravacoes.ts`), pela porta própria.
  *
@@ -346,9 +347,9 @@ interface Recebida {
   /**
    * A gravação (F3). `null` = esta ligação não é gravada. `avisoEm`: quando o
    * aviso de gravação terminou de tocar — sem ele, a ponte não é gravada;
-   * `menu`: o que vem depois do aviso; `gravando`: a ponte está sendo gravada.
+   * `gravando`: a ponte está sendo gravada.
    */
-  gravacao: { avisoEm: number | null; menu: MenuDoBanco | null; gravando: boolean } | null;
+  gravacao: { avisoEm: number | null; gravando: boolean } | null;
   /** O motivo do fim, já decidido enquanto a última fala toca ("fora do horário", "ninguém atendeu"). */
   encerrando: string | null;
   /**
@@ -628,26 +629,25 @@ export class ControladorDeChamadas {
     };
     this.registrar(l, canal.id);
     this.log.info("telefonia: ligação recebida", { voice_call: vcId, tronco: tronco.id, time: teamId, menu: menu?.id ?? null });
-    if (await this.avisarDaGravacao(l, menu)) return;
-    return this.depoisDaEntrada(l, menu);
-  }
-
-  /** Depois do aviso de gravação — ou sem ele: o menu do número, ou a fila do time. */
-  private async depoisDaEntrada(l: Recebida, menu: MenuDoBanco | null): Promise<void> {
-    if (l.fim) return;
     if (menu) return this.iniciarUra(l, menu);
     await this.entrarNaFila(l);
   }
 
   /**
    * O AVISO DE GRAVAÇÃO (F3, D3): com a organização gravando e a ligação com
-   * conversa (número oculto não é gravado — D8), o aviso toca ANTES de tudo.
+   * conversa (número oculto não é gravado — D8), o aviso toca na PASSAGEM para
+   * o atendente — depois do menu, do "fora do horário" e do aviso de
+   * instabilidade, logo antes dos toques (e do "aguarde", que é a frase da
+   * transferência). Pedido do dono em 30/09/2026: o aviso logo no "alô", antes
+   * do menu, era a primeira coisa que o cliente ouvia; e quem desliga no menu
+   * ou fora do horário nunca chega a ser gravado, então não precisa ouvi-lo.
    * `true` = a fala está no ar (o resto vem no fim dela, em `aposFala`) ou a
    * ligação acabou; `false` = seguir já, sem gravar. A leitura da política que
    * falha não para nada: a ligação segue, sem gravação.
    */
-  private async avisarDaGravacao(l: Recebida, menu: MenuDoBanco | null): Promise<boolean> {
-    if (!l.conversationId) return false;
+  private async avisarDaGravacao(l: Recebida): Promise<boolean> {
+    // Uma vez por ligação: quem já ouviu não ouve de novo.
+    if (l.gravacao || !l.conversationId) return false;
     let politica: PoliticaDeGravacao;
     try {
       politica = await this.gravacao.politica(l.org);
@@ -659,7 +659,7 @@ export class ControladorDeChamadas {
       return false;
     }
     if (!politica.gravar || !politica.aviso || l.fim) return false;
-    l.gravacao = { avisoEm: null, menu, gravando: false };
+    l.gravacao = { avisoEm: null, gravando: false };
     const pedida = await this.falaNoAr.porNoAr(l, politica.aviso, "gravacao");
     if (pedida !== "pulada") return true;
     // Não tocou (sem arquivo, ou recusada pelo Asterisk): a Central já sabe, e
@@ -754,6 +754,13 @@ export class ControladorDeChamadas {
     const aviso = l.fila.avisoPendente;
     l.fila.avisoPendente = null;
     if (aviso && (await this.falaNoAr.porNoAr(l, aviso, "aviso")) === "no_ar") return;
+    return this.avisarEChamar(l);
+  }
+
+  /** O aviso de gravação, se esta ligação for gravada; depois (ou sem ele), os ramais. */
+  private async avisarEChamar(l: Recebida): Promise<void> {
+    if (l.fim) return;
+    if (await this.avisarDaGravacao(l)) return;
     return this.comecarOsToques(l);
   }
 
@@ -1005,12 +1012,12 @@ export class ControladorDeChamadas {
     if (l.fim) return;
     switch (papel) {
       case "gravacao": {
-        // O aviso de gravação acabou (ou não tocou): o que viria na entrada.
+        // O aviso de gravação acabou (ou não tocou): os ramais.
         const g = l.gravacao;
-        if (!g) return this.depoisDaEntrada(l, null);
-        if (tocou) g.avisoEm = this.agora();
+        if (g && tocou) g.avisoEm = this.agora();
+        // Quem não foi avisado não é gravado.
         else l.gravacao = null;
-        return this.depoisDaEntrada(l, g.menu);
+        return this.comecarOsToques(l);
       }
       case "menu":
       case "invalida": {
@@ -1027,7 +1034,7 @@ export class ControladorDeChamadas {
         return this.tocarAviso(l);
       case "aviso":
         if (tocou) await this.registrarOuviuOAviso(l);
-        return this.comecarOsToques(l);
+        return this.avisarEChamar(l);
       case "espera":
         if (l.atendidaPor || l.encerrando) return;
         await this.ari.musicaDeEspera(l.cliente).catch(() => undefined);
