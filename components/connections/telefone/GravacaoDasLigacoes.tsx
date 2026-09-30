@@ -136,7 +136,7 @@ export function GravacaoDasLigacoes() {
             <Label htmlFor="tel-gravar">{t("Gravar as ligações")}</Label>
             <p className="text-xs text-muted-foreground">
               {t(
-                "Recebidas: o aviso toca no começo, antes do menu. Feitas pelo atendente: o aviso toca quando o cliente atende. Se o aviso não tocar, aquela ligação não é gravada.",
+                "Recebidas: o aviso toca depois do menu, logo antes de chamar o atendente. Feitas pelo atendente: o aviso toca quando o cliente atende. Se o aviso não tocar, aquela ligação não é gravada.",
               )}
             </p>
           </div>

@@ -3181,7 +3181,7 @@ cartão da ligação, dentro da conversa, para análise de atendimento — e tra
 `[P0]` porque gravar é dado sensível (LGPD) e porque o primeiro contato de quem liga passa a
 ser o aviso de gravação.
 
-**Como é provado.** A máquina (aviso antes do menu/fila, ponte gravada só com o aviso ouvido,
+**Como é provado.** A máquina (aviso depois do menu e antes dos toques, ponte gravada só com o aviso ouvido,
 feita gravando no ANSWER, parar no fim) em `lib/channels/telefonia/controle.test.ts` (bloco
 "gravação das ligações"); o processamento (ARI → ffmpeg → Storage → anexar → apagar, e cada
 falha) em `lib/channels/telefonia/gravacoes.test.ts`; o SQL no Postgres real em
@@ -3194,7 +3194,7 @@ VPS de produção em 2026-09-29, numa ponte de sonda sem ligação (gravar → p
 |---|---|---|
 | J37.1 Conexões › Telefone › Gravação sem o aviso pronto: diz o porquê, aponta Voz e falas, e o interruptor não liga; a rota recusa com 409 do mesmo jeito | `[P0]` | em unidade (`components/connections/telefone/GravacaoDasLigacoes.test.tsx`, `app/api/v1/telefonia/gravacao/route.test.ts`); pela tela, pendente (e2e) |
 | J37.2 O admin gera e salva o "Aviso de gravação" em Voz e falas; a aba Gravação passa a mostrá-lo com "Ouvir" e liga; a auditoria registra `phone.recording_settings_changed` | `[P0]` | em unidade; pela tela, pendente |
-| J37.3 Ligação real recebida com a gravação ligada: o cliente ouve o aviso ANTES do menu; o atendente atende; ao desligar, o cartão diz "Preparando a gravação…" e, em segundos, "Ouvir a gravação (m:ss)" | `[P0]` | pendente — prova na VPS pelo dono |
+| J37.3 Ligação real recebida com a gravação ligada: o cliente escolhe no menu e ouve o aviso logo antes de o atendente ser chamado (até 30/09/2026 era antes do menu); o atendente atende; ao desligar, o cartão diz "Preparando a gravação…" e, em segundos, "Ouvir a gravação (m:ss)" | `[P0]` | provada em 30/09/2026 com o aviso ainda ANTES do menu (ligação do dono, atendida às 19:40 UTC, MP3 de 129 KB guardado 2 s após o fim); a nova ordem falta provar na VPS |
 | J37.4 O atendente (papel agent, que enxerga a conversa) clica em Ouvir: o player toca; a auditoria ganha UMA linha `phone.recording_listened` | `[P0]` | em unidade (rota e cartão); pela tela, pendente |
 | J37.5 Ligação feita pelo atendente: os dois ouvem o aviso quando o cliente atende, e a gravação começa com ele | `[P0]` | pendente — prova na VPS |
 | J37.6 Aviso sem arquivo: a ligação segue sem gravar, e a Central recebe "Uma fala do telefone não tocou" | `[P1]` | em unidade (`controle.test.ts`) |

@@ -23,8 +23,9 @@ spec 18 (voz é dado sensível: consentimento e cascata de anonimização).
   linha da gravação — "Preparando a gravação…", depois o botão **Ouvir a
   gravação (m:ss)**, que abre um player ali mesmo. Cada vez que alguém pede
   para ouvir, fica uma linha na auditoria (`phone.recording_listened`).
-- **Quem liga** ouve o aviso de gravação logo no início, antes do menu ou da
-  fila. **Quem recebe** uma ligação feita pelo atendente ouve o aviso assim que
+- **Quem liga** ouve o aviso de gravação depois do menu, logo antes de ser
+  chamado o atendente (até 30/09/2026 era logo no início, antes do menu — ver a
+  emenda em D3). **Quem recebe** uma ligação feita pelo atendente ouve o aviso assim que
   atende, junto com o atendente.
 
 ## 2. Decisões (§4 do contexto)
@@ -34,6 +35,8 @@ spec 18 (voz é dado sensível: consentimento e cascata de anonimização).
 | D1 | Gravar sempre, por número ou por time? | **Por organização**, desligada por padrão, valendo para os números dela nos dois sentidos. | A Totus tem um número; por número/time é refinamento sem pedido (YAGNI). O padrão desligado respeita quem instala o produto: gravar é decisão consciente, com aviso. |
 | D2 | Só a ponte ou também URA/espera? | **Só a conversa**: começa quando cliente e atendente estão na ponte e termina no fim da ligação. | É o que serve à análise de atendimento; URA e música ocupariam espaço sem informação. |
 | D3 | Aviso obrigatório? | **Sim, fala geral nova `recording_notice`.** Ligar a gravação exige o aviso pronto (tela e API recusam). **Recebida:** o aviso toca primeiro, antes do menu/fila; se ele NÃO tocar (arquivo sumiu, Asterisk recusou), aquela ligação **não é gravada** — e a Central recebe o `phone_prompt_unplayable` que já existe. **Feita:** o aviso toca na ponte no instante em que o cliente atende, junto com o início da gravação — o próprio áudio prova o aviso; se não der para tocar, não grava. | Gravar quem não foi avisado é o risco LGPD que o pedido não pode criar. O momento do aviso fica em `voice_calls.recording_notice_at`. |
+
+**Emenda a D3 (30/09/2026, pedido do dono depois da primeira ligação real):** na recebida o aviso deixou de ser a primeira coisa que o cliente ouve. Ele toca na **passagem para o atendente**: depois do menu, do "fora do horário" (que encerra a ligação, então quem cai nele não ouve o aviso) e do aviso de instabilidade, logo antes dos toques e do "aguarde" (a frase da transferência). A regra LGPD não muda: só a PONTE é gravada, e ela só existe depois do aviso; se o aviso não tocar, a ligação não é gravada. Quem desliga no menu nunca chega a ser gravado, e por isso não precisa ouvi-lo.
 | D4 | Formato? | O Asterisk grava **WAV 8 kHz** (medido: o Asterisk 20.11.1 do Alpine não tem Opus/Ogg entre os formatos); o worker converte para **MP3 mono 16 kHz, 24 kbps (~180 KB/min)** com ffmpeg — novo na imagem do worker — e apaga o WAV do Asterisk. Teto de 2 h por ligação. | MP3 toca em qualquer navegador (Safari incluso) e em qualquer computador, para quando o cliente pedir a gravação; 16 kHz é o que a transcrição usa. Opus seria ~1/3 menor, mas não abre em todo lugar. |
 | D5 | Retenção? | **90 dias por padrão**, escolha na tela (30, 60, 90, 180, 365, 730, 1825). A poda é diária, no cron `data-retention`: apaga o arquivo e o cartão passa a dizer "Gravação apagada". | 90 dias é o mínimo que o Decreto 11.034/2022 pede para gravações de SAC. A cota: 1 GB (Supabase Free) ≈ 5.800 min; a Totus está no Pro (100 GB). |
 | D6 | Quem ouve? É auditado? | Quem **vê a conversa** (a visibilidade por time já é RLS) **e** tem papel **atendente ou acima** (`viewer` não ouve). Toda escuta audita. A URL assinada vale 10 min. | O atendente precisa da ligação anterior para dar continuidade; o gestor, para analisar. A auditoria é a "escuta auditada" da F3. |
@@ -162,7 +165,7 @@ mensagem numa conversa invisível, que nada expõe.
 ## 6. Prova
 
 - Unitários: regra pura (projeção, retenção, duração pelo WAV), controlador
-  (aviso antes do menu, sem aviso não grava, ponte grava, feita grava no
+  (aviso depois do menu e antes dos toques, sem aviso não grava, ponte grava, feita grava no
   ANSWER, fim para a gravação), processamento (404, 30 min, anonimizada, êxito),
   rotas (papel, RLS, auditoria, 409 sem aviso), cartão (quatro situações).
 - `test:db`: vocabulário dos CHECKs novos contra o TypeScript.

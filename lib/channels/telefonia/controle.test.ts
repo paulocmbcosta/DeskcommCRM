@@ -1903,16 +1903,15 @@ describe("gravação das ligações (F3)", () => {
   });
 
   describe("recebida", () => {
-    it("o aviso toca ANTES da fila; no fim dele a fila segue; o ramal atende → a ponte é gravada com a hora do aviso", async () => {
+    it("o aviso toca na PASSAGEM para o atendente: depois de entrar na fila, antes dos toques; o ramal atende → a ponte é gravada com a hora do aviso", async () => {
       await entrar();
       expect(gravacao.chamadas).toEqual([["politica", ORG]]);
+      expect(banco.tem("entrou_na_fila")).toHaveLength(1);
       expect(ari.falas()).toEqual([SOM_DO_AVISO]);
       expect(ari.originados()).toEqual([]);
-      expect(banco.tem("entrou_na_fila")).toEqual([]);
 
       vi.setSystemTime(new Date("2026-09-28T13:00:03Z"));
       await terminou("fala-1");
-      expect(banco.tem("entrou_na_fila")).toHaveLength(1);
       expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
 
       await ramalAtende(ari.ultimoOriginado());
@@ -1929,40 +1928,72 @@ describe("gravação das ligações (F3)", () => {
       expect(banco.tem("registro")).toEqual([["registro", "vc-1", "atendida"]]);
     });
 
-    it("com menu: o aviso de gravação toca antes do menu", async () => {
+    describe("com menu (pedido do dono em 30/09/2026: o aviso não é a primeira coisa que o cliente ouve)", () => {
       const MENU = "33333333-3333-3333-3333-333333333333";
-      banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
-      banco.menus.set(MENU, {
-        id: MENU,
-        nome: "Atendimento",
-        defaultTeamId: TIME,
-        timePadraoAtivo: true,
-        fala: falaDe("menu", 4_000),
-        falaInvalida: null,
-        opcoes: [{ digito: "1", teamId: TIME }],
+      beforeEach(() => {
+        banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
+        banco.menus.set(MENU, {
+          id: MENU,
+          nome: "Atendimento",
+          defaultTeamId: TIME,
+          timePadraoAtivo: true,
+          fala: falaDe("menu", 4_000),
+          falaInvalida: null,
+          opcoes: [{ digito: "1", teamId: TIME }],
+        });
       });
-      await entrar();
-      expect(ari.falas()).toEqual([SOM_DO_AVISO]);
-      await terminou("fala-1");
-      expect(ari.falas()).toEqual([SOM_DO_AVISO, "sound:/falas/menu"]);
+
+      it("o menu toca primeiro; o aviso só depois da escolha, antes dos toques; a ponte é gravada", async () => {
+        await entrar();
+        expect(ari.falas()).toEqual(["sound:/falas/menu"]);
+        expect(gravacao.chamadas).toEqual([]);
+
+        await ctl.tratar({ type: "ChannelDtmfReceived", channel: canal("cli-1", "x"), digit: "1" });
+        expect(banco.tem("escolha")).toEqual([["escolha", ORG, "vc-1", "1", "chosen", TIME]]);
+        expect(ari.falas()).toEqual(["sound:/falas/menu", SOM_DO_AVISO]);
+        expect(ari.originados()).toEqual([]);
+
+        await terminou(ari.ultimaFala());
+        expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+        await ramalAtende(ari.ultimoOriginado());
+        expect(gravacao.nomes()).toEqual(["politica", "comecar"]);
+      });
+
+      it("a tecla durante o aviso não muda nada: a URA já decidiu", async () => {
+        await entrar();
+        await ctl.tratar({ type: "ChannelDtmfReceived", channel: canal("cli-1", "x"), digit: "1" });
+        await ctl.tratar({ type: "ChannelDtmfReceived", channel: canal("cli-1", "x"), digit: "1" });
+        expect(banco.tem("escolha")).toHaveLength(1);
+        expect(ari.falas()).toEqual(["sound:/falas/menu", SOM_DO_AVISO]);
+      });
+
+      it("quem desliga no menu, antes de escolher, não ouve o aviso — nem a política é lida", async () => {
+        await entrar();
+        await clienteDesligaDuranteAFala("fala-1");
+        expect(ari.falas()).toEqual(["sound:/falas/menu"]);
+        expect(gravacao.chamadas).toEqual([]);
+      });
     });
 
-    it("tecla durante o aviso não escolhe nada (a URA ainda não começou)", async () => {
-      const MENU = "33333333-3333-3333-3333-333333333333";
-      banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
-      banco.menus.set(MENU, {
-        id: MENU,
-        nome: "Atendimento",
-        defaultTeamId: TIME,
-        timePadraoAtivo: true,
-        fala: falaDe("menu", 4_000),
-        falaInvalida: null,
-        opcoes: [{ digito: "1", teamId: TIME }],
-      });
+    it("fora do horário: toca o 'fora do horário' e desliga — sem aviso de gravação", async () => {
+      banco.situacao = "fora_do_horario";
+      banco.gerais = { ...banco.gerais, foraDoHorario: falaDe("fora") };
       await entrar();
-      await ctl.tratar({ type: "ChannelDtmfReceived", channel: canal("cli-1", "x"), digit: "1" });
-      expect(banco.tem("escolha")).toEqual([]);
-      expect(ari.chamadas.filter((c) => c[0] === "pararFala")).toEqual([]);
+      await terminou("fala-1");
+      expect(ari.falas()).toEqual(["sound:/falas/fora"]);
+      expect(gravacao.chamadas).toEqual([]);
+      expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "after_hours"]]);
+    });
+
+    it("com aviso de instabilidade: instabilidade → aviso de gravação → toques", async () => {
+      banco.aviso = falaDe("aviso", 10_000);
+      await entrar();
+      expect(ari.falas()).toEqual(["sound:/falas/aviso"]);
+      await terminou("fala-1");
+      expect(ari.falas()).toEqual(["sound:/falas/aviso", SOM_DO_AVISO]);
+      expect(ari.originados()).toEqual([]);
+      await terminou(ari.ultimaFala());
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
     });
 
     it("aviso sem arquivo no disco: pulado, a Central fica sabendo, a fila segue e a ponte NÃO é gravada", async () => {
