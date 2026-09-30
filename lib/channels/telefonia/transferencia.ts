@@ -461,10 +461,17 @@ export class Transferencias<L> {
     }
   }
 
-  /** D10: P não atendeu — o ramal de quem transferiu toca de volta. */
+  /**
+   * D10: P não atendeu — o ramal de quem transferiu toca de volta. "Livre" aqui
+   * DESCONTA esta ligação: quem transferiu ainda é o dono dela no banco, e a
+   * régua comum (`pessoaEmLigacao`) diria sempre que está ocupado.
+   */
   private async tocarVolta(em: EmCurso<L>): Promise<void> {
     em.fase = "tocando_volta";
-    if (!(await this.online(em.de)) || (await this.emLigacao(em.org, em.de))) return this.irParaAFila(em);
+    const livre =
+      (await this.online(em.de)) &&
+      (await this.d.banco.colegaLivreParaInterna(em.org, em.de, em.vcId).catch(() => true));
+    if (!livre) return this.irParaAFila(em);
     return this.tocar(em, em.de, "volta");
   }
 

@@ -182,6 +182,20 @@ describe("a ligação durante a transferência", () => {
     expect((await um<{ r: string }>(`select ringing_user_id as r from voice_calls where id = $1`, [LIGACAO])).r).toBe(BIA);
   });
 
+  it("a volta a quem transferiu desconta a própria ligação: dono dela, mas livre para recebê-la de volta", async () => {
+    // Ana é a dona de LIGACAO (connected): a régua comum a vê ocupada…
+    expect(await repo.pessoaEmLigacao(pool, ORG, ANA)).toBe(true);
+    // …mas a pergunta da volta desconta esta ligação. Sem disponibilidade marcada, não recebe;
+    // com ela, recebe — e outra ligação viva dela a torna ocupada de novo.
+    await pool.query(
+      `insert into attendant_availability (organization_id, user_id, is_available) values ($1, $2, true)
+       on conflict (organization_id, user_id) do update set is_available = true`,
+      [ORG, ANA],
+    );
+    expect(await repo.colegaLivreParaInterna(pool, ORG, ANA, LIGACAO)).toBe(true);
+    expect(await repo.colegaLivreParaInterna(pool, ORG, ANA, INTERNA)).toBe(false);
+  });
+
   it("passar a ligação troca o dono e mantém a hora em que o cliente foi atendido", async () => {
     const antes = await um<{ answered_at: Date }>(`select answered_at from voice_calls where id = $1`, [LIGACAO]);
     await repo.passarLigacao(pool, ORG, LIGACAO, BIA);

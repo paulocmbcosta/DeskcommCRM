@@ -147,6 +147,16 @@ describe("direta para pessoa", () => {
     expect(banco.tem("registro")).toEqual([["registro", "vc-1", "atendida"]]);
   });
 
+  it("B não atende e A já pegou outra ligação: não toca em A, vai direto à fila", async () => {
+    await recebidaComAna();
+    pedir();
+    await ordem("transferir");
+    banco.ocupados.add(ANA);
+    await destruir("ramal-canal-2", 19);
+    expect(ari.originados().filter((e) => e === `PJSIP/ramal-${ANA}`)).toEqual([]);
+    expect(banco.tem("movida_para_o_time")).toHaveLength(1);
+  });
+
   it("nem B nem A: a fila do time, com A fora do rodízio; C atende (queue_answered)", async () => {
     await recebidaComAna();
     pedir();

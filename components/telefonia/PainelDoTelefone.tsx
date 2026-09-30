@@ -173,8 +173,9 @@ export function PainelDoTelefone() {
   // A consulta (v2) de quem transfere: [Completar] e [Voltar] no lugar de [Transferir].
   const emConsulta = ligacao.transferencia?.tipo === "attended" && ligacao.papelDaEntrada !== "consulta";
   // Só a ligação atendida, com id, sem transferência aberta — e nunca a interna (D16).
+  // Quem pegou a consulta e ficou com o cliente pode transferir de novo.
   const podeTransferir =
-    ligacao.fase === "em_ligacao" && Boolean(ligacao.id) && !ligacao.transferencia && ligacao.papelDaEntrada !== "consulta" && !ligacao.interna;
+    ligacao.fase === "em_ligacao" && Boolean(ligacao.id) && !ligacao.transferencia && !ligacao.interna;
 
   const situacao =
     ligacao.fase === "em_ligacao"
