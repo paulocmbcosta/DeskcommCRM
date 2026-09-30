@@ -328,11 +328,17 @@ describe("menuSchema", () => {
     expect(menuSchema.parse({ ...valido, fala_invalida: undefined }).fala_invalida).toBeNull();
   });
 
+  it("aceita_ramal (v3): ausente é false; true passa", () => {
+    expect(menuSchema.parse(valido).aceita_ramal).toBe(false);
+    expect(menuSchema.parse({ ...valido, aceita_ramal: true }).aceita_ramal).toBe(true);
+  });
+
   it.each([
     ["tecla reservada", { ...valido, opcoes: [{ tecla: "*", time_id: TIME_A }] }],
     ["tecla de dois dígitos", { ...valido, opcoes: [{ tecla: "10", time_id: TIME_A }] }],
     ["sem opção", { ...valido, opcoes: [] }],
-    ["campo que não existe", { ...valido, aceita_ramal: true }],
+    ["campo que não existe", { ...valido, toca_musica: true }],
+    ["aceita_ramal que não é booleano", { ...valido, aceita_ramal: "sim" }],
     ["a organização no corpo", { ...valido, organization_id: OUTRA }],
     ["fala vazia", { ...valido, fala: { texto: "  ", hash: "a".repeat(64) } }],
     ["fala sem o hash da prévia", { ...valido, fala: { texto: "Oi." } }],
