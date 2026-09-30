@@ -40,6 +40,8 @@ interface Ramal {
   senha?: string;
   ws_url?: string;
   numeros?: NumeroDaEmpresa[];
+  /** O número do ramal desta pessoa (v3) — "Seu ramal: 201". */
+  numero?: string | null;
 }
 
 export interface EstadoDaLigacao {
@@ -113,9 +115,12 @@ interface ContextoDoTelefone {
   /** A organização tem telefone (mesmo que o ramal ainda esteja conectando). */
   disponivel: boolean;
   numeros: NumeroDaEmpresa[];
+  /** O número do ramal desta pessoa (v3); `null` = sem ramal. */
+  meuRamal: string | null;
   ligacao: EstadoDaLigacao | null;
   ultimoEncerramento: Encerramento | null;
-  ligar(p: { contatoId?: string; numero?: string; numeroDaEmpresaId?: string; nome?: string | null }): Promise<void>;
+  /** Com `ramal`, a ligação interna para um colega (v3). */
+  ligar(p: { contatoId?: string; numero?: string; ramal?: string; numeroDaEmpresaId?: string; nome?: string | null }): Promise<void>;
   atender(): void;
   desligar(): void;
   alternarMudo(): void;
@@ -135,6 +140,7 @@ export function useTelefonia(): ContextoDoTelefone {
       pronto: false,
       disponivel: false,
       numeros: [],
+      meuRamal: null,
       ligacao: null,
       ultimoEncerramento: null,
       ligar: async () => undefined,
@@ -324,6 +330,8 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
           }
           sessaoRef.current = s;
           const id = ev.request.getHeader("X-Ligacao-Id") ?? null;
+          // A ligação interna (v3) traz quem liga no header; o nome e o ramal vêm na bina.
+          const interna = Boolean(ev.request.getHeader("X-Interna-De"));
           setLigacao({
             id,
             direcao: "entrada",
@@ -338,7 +346,7 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
             transferencia: null,
             transferidaPor: null,
             ultimaTransferencia: null,
-            interna: false,
+            interna,
           });
         }
         s.on("ended", () => limparSessao("encerrada"));
@@ -394,7 +402,8 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
           const atendeu = l.direcao === "saida" && d.status === "connected" && l.fase !== "em_ligacao";
           return {
             ...l,
-            nome: d.contact_name ?? l.nome,
+            // Na interna que EU fiz (v3), quem está do outro lado é o colega.
+            nome: d.contact_name ?? (l.direcao === "saida" && d.direction === "internal" ? d.peer_user_name : undefined) ?? l.nome,
             numero: d.peer_phone || l.numero,
             contatoId: d.contact_id,
             conversaId: d.conversation_id,
@@ -429,10 +438,15 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
       let pedido: { id: string; destino: string };
       try {
         pedido = (
-          await apiClient.post<{ data: { id: string; destino: string } }>("/api/v1/telefonia/chamadas", {
-            ...(p.contatoId ? { contact_id: p.contatoId } : { numero: p.numero }),
-            ...(p.numeroDaEmpresaId ? { numero_da_empresa_id: p.numeroDaEmpresaId } : {}),
-          })
+          await apiClient.post<{ data: { id: string; destino: string } }>(
+            "/api/v1/telefonia/chamadas",
+            p.ramal
+              ? { ramal: p.ramal }
+              : {
+                  ...(p.contatoId ? { contact_id: p.contatoId } : { numero: p.numero }),
+                  ...(p.numeroDaEmpresaId ? { numero_da_empresa_id: p.numeroDaEmpresaId } : {}),
+                },
+          )
         ).data;
       } catch (e) {
         showApiError(e);
@@ -445,7 +459,7 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
         id: pedido.id,
         direcao: "saida",
         fase: "discando",
-        numero: p.numero ?? "",
+        numero: p.ramal ?? p.numero ?? "",
         nome: p.nome ?? null,
         contatoId: p.contatoId ?? null,
         conversaId: null,
@@ -455,7 +469,7 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
         transferencia: null,
         transferidaPor: null,
         ultimaTransferencia: null,
-        interna: false,
+        interna: Boolean(p.ramal),
       });
       const s = ua.call(`sip:${pedido.destino}@${window.location.hostname}`, {
         mediaConstraints: { audio: true, video: false },
@@ -531,6 +545,7 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
       pronto,
       disponivel: Boolean(ramal?.ativo),
       numeros: ramal?.numeros ?? [],
+      meuRamal: ramal?.numero ?? null,
       ligacao,
       ultimoEncerramento,
       ligar,

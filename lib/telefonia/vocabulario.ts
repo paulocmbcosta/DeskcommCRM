@@ -168,6 +168,14 @@ export const MENSAGEM_DO_MOTIVO_DA_TRANSFERENCIA: Record<string, string> = {
 };
 export const MENSAGEM_GENERICA_DA_TRANSFERENCIA = "A transferência não aconteceu.";
 
+// ─── ramais (fase 2, versão 3; migration 0291) ─────────────────────────────
+
+/**
+ * 2 a 4 dígitos, sem começar por 0 (D22 — o 0 é o prefixo de saída da
+ * operadora). A mesma régua do CHECK `phone_extensions_number_check`.
+ */
+export const REGUA_DO_RAMAL = /^[1-9][0-9]{1,3}$/;
+
 /**
  * As falas gerais da organização (`phone_settings.<tipo>_prompt_id`).
  * `recording_notice` (0289) é o AVISO DE GRAVAÇÃO: sem ele pronto, a gravação das

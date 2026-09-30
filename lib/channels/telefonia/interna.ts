@@ -12,12 +12,13 @@
 import { randomUUID } from "node:crypto";
 
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { REGUA_DO_RAMAL } from "@/lib/telefonia/vocabulario";
 
 import { lerDiretorio, type SituacaoDaPessoa } from "./diretorio";
 import { PROVIDER, donoDoRamal } from "./repositorio";
 
-/** 2 a 4 dígitos, sem começar por 0 — a régua do CHECK `phone_extensions_number_check` (D22). */
-export const REGUA_DO_RAMAL = /^[1-9][0-9]{1,3}$/;
+/** A régua do ramal mora no vocabulário (client-safe): o discador da tela pergunta lá. */
+export { REGUA_DO_RAMAL };
 
 export type RecusaDaInterna =
   | "ramal_inexistente"

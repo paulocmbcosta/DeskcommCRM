@@ -493,6 +493,7 @@ describe("aba Menus — o editor", () => {
     expect(enviados("POST", "/api/v1/telefonia/falas/previa")).toHaveLength(0);
     expect(enviados("PATCH", "/api/v1/telefonia/menus/m1")).toEqual([
       {
+        aceita_ramal: false,
         nome: "Principal",
         opcoes: [
           { tecla: "1", time_id: T_SUPORTE },
@@ -505,6 +506,14 @@ describe("aba Menus — o editor", () => {
     ]);
     await waitFor(() => expect(document.querySelector("[data-editor-de-menu]")).toBeNull());
     expect(toast.success).toHaveBeenCalledWith("Menu salvo.");
+  });
+
+  it("o interruptor 'O cliente pode digitar o ramal' (v3) vai no corpo do salvar", async () => {
+    pintar();
+    const editor = await abrirEditor();
+    await userEvent.click(within(editor).getByRole("switch", { name: "O cliente pode digitar o ramal" }));
+    await userEvent.click(salvarDe(editor));
+    expect(enviados("PATCH", "/api/v1/telefonia/menus/m1")).toEqual([expect.objectContaining({ aceita_ramal: true })]);
   });
 
   it("a fala de tecla inválida em uso vai com o hash dela; apagar o texto tira a fala do menu", async () => {
@@ -626,6 +635,7 @@ describe("aba Menus — o editor", () => {
       const criacoes = chamadas("POST", "/api/v1/telefonia/menus");
       expect(criacoes).toHaveLength(2);
       expect(criacoes[0]!.corpo).toEqual({
+        aceita_ramal: false,
         nome: "Atendimento",
         opcoes: [
           { tecla: "1", time_id: T_SUPORTE },

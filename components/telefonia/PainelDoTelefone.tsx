@@ -127,7 +127,12 @@ export function PainelDoTelefone() {
       </div>
     );
   }
-  const quem = ligacao.nome || phoneForDisplay(ligacao.numero) || t("Número não identificado");
+  // A interna (v3): o colega pelo nome e pelo ramal — "Ana (201)"; o ramal não é telefone para formatar.
+  const quem = ligacao.interna
+    ? ligacao.nome
+      ? `${ligacao.nome} (${ligacao.numero})`
+      : t("Ramal {n}").replace("{n}", ligacao.numero)
+    : ligacao.nome || phoneForDisplay(ligacao.numero) || t("Número não identificado");
   const inicial = (quem.trim().charAt(0) || "?").toUpperCase();
 
   if (tocando) {
@@ -142,9 +147,11 @@ export function PainelDoTelefone() {
           {inicial}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("Ligação recebida")}</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {ligacao.interna ? t("Ligação interna") : t("Ligação recebida")}
+          </p>
           <p className="truncate text-base font-semibold">{quem}</p>
-          {ligacao.nome ? <p className="truncate text-sm text-muted-foreground">{phoneForDisplay(ligacao.numero)}</p> : null}
+          {ligacao.nome && !ligacao.interna ? <p className="truncate text-sm text-muted-foreground">{phoneForDisplay(ligacao.numero)}</p> : null}
           {frase ? (
             <p data-telefonia-transferencia className="truncate text-xs font-medium text-primary">
               {frase.texto}
@@ -190,7 +197,7 @@ export function PainelDoTelefone() {
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">{quem}</p>
           <p className="text-xs tabular-nums text-muted-foreground" data-telefonia-situacao>
-            {ligacao.direcao === "entrada" ? t("Recebida") : t("Feita")} · {situacao}
+            {ligacao.interna ? t("Interna") : ligacao.direcao === "entrada" ? t("Recebida") : t("Feita")} · {situacao}
           </p>
         </div>
         <div className="flex shrink-0 gap-1">

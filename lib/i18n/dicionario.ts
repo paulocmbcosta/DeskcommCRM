@@ -37,6 +37,31 @@ import type { Idioma } from "./idiomas";
 type Traducoes = Record<string, Partial<Record<Exclude<Idioma, "pt-BR">, string>>>;
 
 export const DICIONARIO: Traducoes = {
+  // Telefonia — ramais (fase 2, v3)
+  "Seu ramal:": { es: "Tu extensión:" },
+  "Número, ramal ou nome": { es: "Número, extensión o nombre" },
+  "Esse é o seu ramal.": { es: "Esa es tu extensión." },
+  "Ramal {n}": { es: "Extensión {n}" },
+  "Ligação interna": { es: "Llamada interna" },
+  "Interna": { es: "Interna" },
+  "Ramais": { es: "Extensiones" },
+  "Ramal de {nome}": { es: "Extensión de {nome}" },
+  "O ramal tem de 2 a 4 dígitos e não começa por 0.": { es: "La extensión debe tener de 2 a 4 dígitos y no empezar por 0." },
+  "Cada pessoa que atende ganha um ramal sozinha, a partir de 201. Os colegas ligam uns para os outros discando o ramal no telefone do cabeçalho, e o cliente pode digitá-lo no menu que aceita ramal.": { es: "Cada persona que atiende recibe una extensión automáticamente, a partir de 201. Los compañeros se llaman entre sí marcando la extensión en el teléfono del encabezado, y el cliente puede marcarla en el menú que acepta extensión." },
+  "Só quem administra a organização vê os ramais.": { es: "Solo quien administra la organización ve las extensiones." },
+  "Ninguém atende o telefone ainda.": { es: "Nadie atiende el teléfono todavía." },
+  "Pessoa": { es: "Persona" },
+  "Ramal": { es: "Extensión" },
+  "O cliente pode digitar o ramal": { es: "El cliente puede marcar la extensión" },
+  "Quem sabe o ramal digita e fala direto com a pessoa. As opções de uma tecla continuam valendo, com 2 segundos de espera para ver se vem mais dígito. Diga isso na fala do menu.": { es: "Quien conoce la extensión la marca y habla directamente con la persona. Las opciones de una tecla siguen valiendo, con 2 segundos de espera para ver si vienen más dígitos. Dilo en el mensaje del menú." },
+  "Informe o contato, o número ou o ramal.": { es: "Indica el contacto, el número o la extensión." },
+  "Essa pessoa não tem ramal nesta organização.": { es: "Esa persona no tiene extensión en esta organización." },
+  "Esse ramal já é de outra pessoa.": { es: "Esa extensión ya es de otra persona." },
+  "Esse ramal não existe nesta organização.": { es: "Esa extensión no existe en esta organización." },
+  "O colega está sem o telefone conectado.": { es: "El compañero no tiene el teléfono conectado." },
+  "O colega está em outra ligação.": { es: "El compañero está en otra llamada." },
+  "O colega está em pausa.": { es: "El compañero está en pausa." },
+  "O colega está fora do horário dele.": { es: "El compañero está fuera de su horario." },
   // Telefonia — transferência de ligação (fase 2, v2)
   "{de} falou com {para} antes e transferiu": { es: "{de} habló con {para} antes y transfirió" },
   "{de} tentou falar com {para}, que não atendeu": { es: "{de} intentó hablar con {para}, que no contestó" },

@@ -38,6 +38,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useT } from "@/hooks/i18n/useT";
 import type { TimeDoInbox } from "@/hooks/inbox/useTimesDoInbox";
@@ -81,6 +82,8 @@ interface Rascunho {
   /** As opções (tecla → time) quando a fala foi escrita à mão: mudaram depois, a tela avisa. */
   opcoesDoTextoAMao: string;
   texto_invalida: string;
+  /** v3: o cliente pode digitar o ramal de alguém. */
+  aceita_ramal: boolean;
 }
 
 /** O corpo do POST/PATCH — `menuSchema` da rota. */
@@ -90,6 +93,7 @@ interface CorpoDoMenu {
   time_padrao_id: string;
   fala: FalaParaSalvar;
   fala_invalida: FalaParaSalvar | null;
+  aceita_ramal: boolean;
 }
 
 /** As opções como uma assinatura comparável (tecla → time, na ordem falada). */
@@ -105,7 +109,15 @@ const assinaturaDasOpcoes = (opcoes: readonly LinhaDeOpcao[]) =>
  */
 function rascunhoInicial(menu: MenuPublico | null, frase: string): Rascunho {
   if (!menu) {
-    return { nome: "", opcoes: [{ tecla: "1", time_id: "" }], time_padrao_id: "", textoAMao: null, opcoesDoTextoAMao: "", texto_invalida: "" };
+    return {
+      nome: "",
+      opcoes: [{ tecla: "1", time_id: "" }],
+      time_padrao_id: "",
+      textoAMao: null,
+      opcoesDoTextoAMao: "",
+      texto_invalida: "",
+      aceita_ramal: false,
+    };
   }
   const opcoes = naOrdemFalada(menu.opcoes).map((o) => ({ tecla: o.tecla, time_id: o.time_id }));
   const salvo = menu.fala?.texto ?? "";
@@ -120,6 +132,7 @@ function rascunhoInicial(menu: MenuPublico | null, frase: string): Rascunho {
     textoAMao: salvo.trim() && salvo.trim() !== montado.trim() ? salvo : null,
     opcoesDoTextoAMao: assinaturaDasOpcoes(opcoes),
     texto_invalida: menu.fala_invalida?.texto ?? "",
+    aceita_ramal: menu.aceita_ramal === true,
   };
 }
 
@@ -365,6 +378,23 @@ export function EditorDeMenu({
         </Select>
       </div>
 
+      <div className="flex items-start gap-3 rounded-md border border-border p-3">
+        <Switch
+          id="menu-aceita-ramal"
+          checked={r.aceita_ramal}
+          onCheckedChange={(v) => editar((x) => ({ ...x, aceita_ramal: v }))}
+          disabled={salvando}
+        />
+        <div className="space-y-0.5">
+          <Label htmlFor="menu-aceita-ramal">{t("O cliente pode digitar o ramal")}</Label>
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "Quem sabe o ramal digita e fala direto com a pessoa. As opções de uma tecla continuam valendo, com 2 segundos de espera para ver se vem mais dígito. Diga isso na fala do menu.",
+            )}
+          </p>
+        </div>
+      </div>
+
       <div className="space-y-1.5">
         <Label htmlFor="menu-texto">{nomeDaFalaDoMenu}</Label>
         <Textarea
@@ -463,6 +493,7 @@ export function EditorDeMenu({
                 time_padrao_id: r.time_padrao_id,
                 fala: falaDoMenu,
                 fala_invalida: falaDaInvalida,
+                aceita_ramal: r.aceita_ramal,
               });
             }
           }}

@@ -12,6 +12,7 @@ import { ConnectionsClient } from "./ConnectionsClient";
 import { TemplatesClient } from "./TemplatesClient";
 import { TemplatesParceiroClient } from "./TemplatesParceiroClient";
 import { MenusDoTelefone } from "./telefone/MenusDoTelefone";
+import { RamaisDoTelefone } from "@/components/connections/telefone/RamaisDoTelefone";
 import { GravacaoDasLigacoes } from "./telefone/GravacaoDasLigacoes";
 import { VozEFalas } from "./telefone/VozEFalas";
 import { useT } from "@/hooks/i18n/useT";
@@ -71,7 +72,15 @@ export function ConexoesShell({
   // Sem `sub` (ou com o de outro canal), Números.
   const subParam = params.get("sub");
   const subDoTelefone =
-    subParam === "menus" ? "menus" : subParam === "falas" ? "falas" : subParam === "gravacao" ? "gravacao" : "numeros";
+    subParam === "menus"
+      ? "menus"
+      : subParam === "falas"
+        ? "falas"
+        : subParam === "gravacao"
+          ? "gravacao"
+          : subParam === "ramais"
+            ? "ramais"
+            : "numeros";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
     const q = new URLSearchParams();
@@ -124,6 +133,8 @@ export function ConexoesShell({
             <TabsTrigger value="menus">{t("Menus")}</TabsTrigger>
             <TabsTrigger value="falas">{t("Voz e falas")}</TabsTrigger>
             <TabsTrigger value="gravacao">{t("Gravação")}</TabsTrigger>
+            {/* v3 (D18): o número de cada pessoa, para os colegas e para a URA. */}
+            <TabsTrigger value="ramais">{t("Ramais")}</TabsTrigger>
           </TabsList>
           <TabsContent value="numeros" className="mt-0">
             <CanalTelefoneClient />
@@ -136,6 +147,9 @@ export function ConexoesShell({
           </TabsContent>
           <TabsContent value="gravacao" className="mt-0">
             <GravacaoDasLigacoes />
+          </TabsContent>
+          <TabsContent value="ramais" className="mt-0">
+            <RamaisDoTelefone />
           </TabsContent>
         </Tabs>
       </TabsContent>
