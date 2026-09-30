@@ -259,6 +259,50 @@ export class ClienteAri {
     return this.pedir<CanalAri[]>("GET", "/channels");
   }
 
+  // ─── transferência (fase 2, versão 2) ────────────────────────────────────
+
+  /** Música para todos na ponte — o cliente, enquanto a transferência acontece (D19). */
+  musicaNaPonte(ponteId: string) {
+    return this.pedir("POST", `/bridges/${ponteId}/moh`, { query: { mohClass: "default" } });
+  }
+
+  /** Para a música da ponte. Ponte que já caiu (404) ou sem música (409) é o estado desejado. */
+  async pararMusicaNaPonte(ponteId: string) {
+    try {
+      await this.pedir("DELETE", `/bridges/${ponteId}/moh`);
+    } catch (e) {
+      if (e instanceof ErroAri && (e.status === 404 || e.status === 409)) return;
+      throw e;
+    }
+  }
+
+  /**
+   * Tira o canal da ponte SEM desligá-lo. O canal que já não está nela (422) ou
+   * a ponte que já caiu (404) é o estado desejado.
+   */
+  async tirarDaPonte(ponteId: string, canalId: string) {
+    try {
+      await this.pedir("POST", `/bridges/${ponteId}/removeChannel`, { query: { channel: canalId } });
+    } catch (e) {
+      if (e instanceof ErroAri && (e.status === 404 || e.status === 422)) return;
+      throw e;
+    }
+  }
+
+  /**
+   * Um EVENTO DE USUÁRIO para a aplicação Stasis (D13): é assim que a API manda a
+   * ordem da tela ao worker, que o recebe como `ChannelUserevent` na mesma
+   * WebSocket dos eventos das ligações. Sem `source`: a ordem não é de um canal,
+   * é da aplicação. As variáveis vão no CORPO, nunca na URL.
+   */
+  emitirEvento(nome: string, variaveis: Record<string, string>) {
+    if (!/^[a-z_]{1,60}$/.test(nome)) throw new Error(`nome de evento inválido: ${nome.slice(0, 40)}`);
+    return this.pedir("POST", `/events/user/${nome}`, {
+      query: { application: APP_STASIS },
+      corpo: { variables: variaveis },
+    });
+  }
+
   // ─── gravação da ponte (F3; medido na VPS em 2026-09-29) ─────────────────
   //
   // O Asterisk grava a PONTE (os dois lados misturados) em WAV, no diretório de

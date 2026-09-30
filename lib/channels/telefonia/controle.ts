@@ -74,83 +74,17 @@ import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 import { ErroAri, type CanalAri } from "./ari";
 import { FalasNoAr, semFalaNoAr, type FalaDaLigacao, type PortaFalas } from "./fala-no-ar";
 import { donoDoEndpoint, endpointDoCanal, enderecoDeSaida, idDoRamal } from "./pjsip";
+import type { EventoAri, PortaAri, PortaBanco, Registro } from "./portas";
 import type { PoliticaDeGravacao } from "./repositorio-das-gravacoes";
-import type {
-  DesfechoDaLigacao,
-  EscolhaDoMenu,
-  FalaDoBanco,
-  FalasGerais,
-  LigacaoDoBanco,
-  MenuDoBanco,
-  NovaLigacao,
-  TimeParaAFila,
-  TroncoDoBanco,
-} from "./repositorio";
+import type { DesfechoDaLigacao, FalaDoBanco, FalasGerais, MenuDoBanco, TimeParaAFila, TroncoDoBanco } from "./repositorio";
+import { Transferencias, papelDaTransferencia, type VistaDaLigacao } from "./transferencia";
 
 // ─── portas ────────────────────────────────────────────────────────────────
-
-export interface PortaAri {
-  atender(canal: string): Promise<unknown>;
-  indicarChamando(canal: string): Promise<unknown>;
-  desligar(canal: string, motivo?: "normal" | "busy" | "congestion" | "no_answer"): Promise<unknown>;
-  originar(p: {
-    endpoint: string;
-    appArgs: string;
-    callerId?: string;
-    prazoS: number;
-    variaveis?: Record<string, string>;
-  }): Promise<{ id: string }>;
-  criarCanal(p: { endpoint: string; appArgs: string; callerId?: string }): Promise<{ id: string }>;
-  discar(canal: string, prazoS: number): Promise<unknown>;
-  criarPonte(id: string): Promise<{ id: string }>;
-  porNaPonte(ponte: string, canal: string): Promise<unknown>;
-  destruirPonte(ponte: string): Promise<unknown>;
-  musicaDeEspera(canal: string): Promise<unknown>;
-  pararMusica(canal: string): Promise<unknown>;
-  tocarTom(canal: string, tom: "ring" | "busy" | "congestion"): Promise<{ id: string }>;
-  pararReproducao(id: string): Promise<unknown>;
-  /** Toca uma fala do telefone (URA, aguarde, aviso) e devolve o id do playback. */
-  tocarFala(canal: string, midia: string): Promise<string>;
-  /** Para uma fala em andamento. Um playback que já terminou não é erro. */
-  pararFala(playbackId: string): Promise<unknown>;
-  /** O ramal está registrado (há navegador para tocar)? */
-  ramalOnline(userId: string): Promise<boolean>;
-  /** Pontes vivas com os canais de cada uma — para `recuperar()`. */
-  pontes(): Promise<Array<{ id: string; channels: string[] }>>;
-  canais(): Promise<Array<{ id: string }>>;
-}
-
-export interface PortaBanco {
-  troncoPorId(id: string): Promise<TroncoDoBanco | null>;
-  disponiveisNoTime(org: string, teamId: string, agora: Date): Promise<CandidatoAoToque[]>;
-  /** A entrada na fila: fora do horário/aberto/indisponível e o aviso de instabilidade vigente. */
-  timeParaAFila(org: string, teamId: string, agora: Date): Promise<TimeParaAFila>;
-  falasGerais(org: string): Promise<FalasGerais>;
-  /** A URA (§5.1): o menu do número e o que o cliente escolheu nele. */
-  menuPorId(org: string, menuId: string): Promise<MenuDoBanco | null>;
-  /** A escolha na ligação — e a conversa SEM DONO acompanha o time escolhido (visibilidade por time, 0281). */
-  registrarEscolhaDoMenu(org: string, id: string, e: EscolhaDoMenu): Promise<boolean>;
-  /** O cliente caiu no time padrão do menu, e ele está ARQUIVADO: `phone_menu_team_archived` na Central. */
-  avisarMenuComTimeArquivado(org: string, menu: Pick<MenuDoBanco, "id" | "nome">): Promise<void>;
-  /** O cliente ouviu o aviso de instabilidade INTEIRO (`emergency_heard_at`). */
-  registrarAvisoOuvido(org: string, id: string): Promise<boolean>;
-  /** A fala não tocou e a ligação seguiu sem ela: `phone_prompt_unplayable` na Central. */
-  avisarFalaIntocavel(org: string, rotulo: string): Promise<void>;
-  acharOuCriarContato(org: string, e164: string, nome: string | null): Promise<string>;
-  acharOuCriarConversa(org: string, contactId: string, troncoId: string, teamId: string | null): Promise<string>;
-  criarLigacao(l: NovaLigacao): Promise<string>;
-  /** O pedido de saída que o ramal disca — só se for DESTE atendente (a organização sai da linha). */
-  ligacaoDoAtendente(userId: string, id: string): Promise<LigacaoDoBanco | null>;
-  ligacoesVivas(): Promise<LigacaoDoBanco[]>;
-  // As escritas da ligação ficam presas à organização dela (`l.org`).
-  marcarTocando(org: string, id: string, userId: string | null): Promise<void>;
-  marcarAtendida(org: string, id: string, userId: string): Promise<void>;
-  encerrarLigacao(org: string, id: string, motivo: string): Promise<LigacaoDoBanco | null>;
-  atribuirConversa(org: string, conversationId: string, userId: string): Promise<void>;
-  registrarNaConversa(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, duracaoMs: number | null): Promise<void>;
-  avisarPerdida(l: LigacaoDoBanco): Promise<void>;
-  registrarFim(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, motivo: string): Promise<void>;
-}
+//
+// As portas (ARI, banco, registro) e os eventos da ARI moram em `portas.ts`,
+// para as mecânicas compostas aqui (`fala-no-ar.ts`, `transferencia.ts`) não
+// importarem o controlador. Reexportadas: quem importava daqui não muda.
+export type { EventoAri, PlaybackAri, PortaAri, PortaBanco, Registro } from "./portas";
 
 /** O disco das falas e a folga do relógio da fala moram na mecânica da fala no ar (`fala-no-ar.ts`). */
 export type { PortaFalas } from "./fala-no-ar";
@@ -192,40 +126,6 @@ const SEM_GRAVACAO: PortaGravacao = {
   parar: async () => undefined,
   aoEncerrar: () => undefined,
 };
-
-export interface Registro {
-  info(msg: string, campos?: Record<string, unknown>): void;
-  warn(msg: string, campos?: Record<string, unknown>): void;
-  error(msg: string, campos?: Record<string, unknown>): void;
-}
-
-// ─── eventos da ARI que importam ───────────────────────────────────────────
-
-/** O playback que a ARI devolve em `PlaybackStarted`/`PlaybackFinished` (Task 0, medido na VPS). */
-export interface PlaybackAri {
-  id: string;
-  media_uri: string;
-  target_uri: string;
-  language: string;
-  state: string;
-}
-
-/**
- * O que chega no WebSocket. `PlaybackFinished` fecha as falas (URA e fila).
- * `ChannelDtmfReceived` é lido SÓ enquanto a URA está ativa (§5.1): na fila, de
- * propósito, tecla nenhuma muda nada — o aviso de instabilidade toca INTEIRO.
- * `ChannelUserevent` é da transferência (versão 2).
- */
-export type EventoAri =
-  | { type: "StasisStart"; channel: CanalAri; args: string[] }
-  | { type: "StasisEnd"; channel: CanalAri }
-  | { type: "ChannelDestroyed"; channel: CanalAri; cause: number; cause_txt?: string }
-  | { type: "Dial"; peer: CanalAri; dialstatus: string }
-  | { type: "PlaybackFinished"; playback: PlaybackAri }
-  /** As teclas da operadora chegam por RFC 4733 (Task 0, medido na VPS). */
-  | { type: "ChannelDtmfReceived"; channel: CanalAri; digit: string; duration_ms?: number }
-  | { type: "ChannelUserevent"; eventname: string; channel?: CanalAri; userevent?: Record<string, unknown> }
-  | { type: string; [k: string]: unknown };
 
 // ─── estado por ligação ────────────────────────────────────────────────────
 
@@ -366,8 +266,13 @@ interface Feita {
   tipo: "feita";
   vcId: string;
   org: string;
+  /** Quem está com o cliente — quem ligou, ou quem pegou a transferência (v2). */
   userId: string;
-  ramal: string;
+  /** O canal do ramal de quem está com o cliente; `null` no meio de uma transferência direta. */
+  ramal: string | null;
+  /** O número do outro lado — o que aparece no ramal de quem recebe uma transferência. */
+  numero: string;
+  conversationId: string | null;
   perna: string | null;
   ponte: string;
   tom: string | null;
@@ -470,10 +375,90 @@ export class ControladorDeChamadas {
         aposFala: (l, papel, tocou) => this.aposFala(l, papel, tocou),
       },
     });
+    this.transferencias = new Transferencias<Recebida | Feita>({
+      ari: this.ari,
+      banco: this.banco,
+      falas,
+      log: this.log,
+      agora: this.agora,
+      emFila: (fn) => this.emFila(fn),
+      ganchos: {
+        vista: (l) => this.vistaDaLigacao(l),
+        ligacaoPorId: (vcId) => {
+          const l = this.porId.get(vcId);
+          return l && (l.tipo === "recebida" || l.tipo === "feita") && !l.fim ? l : null;
+        },
+        trocarAtendente: (l, novo) => this.trocarAtendente(l, novo),
+        encerrar: (l, motivo, opcoes) =>
+          l.tipo === "recebida" ? this.encerrarRecebida(l, motivo, opcoes) : this.encerrarFeita(l, motivo, opcoes),
+      },
+    });
+  }
+
+  /** Quantas transferências estão acontecendo (para testes: o mapa esvazia). */
+  get transferenciasEmCurso(): number {
+    return this.transferencias.emCurso;
+  }
+
+  /** A forma comum da ligação atendida (desenho §12.2), para a transferência. */
+  private vistaDaLigacao(l: Recebida | Feita): VistaDaLigacao {
+    if (l.tipo === "recebida") {
+      return {
+        vcId: l.vcId,
+        org: l.org,
+        ponte: l.ponte,
+        cliente: l.cliente,
+        numeroExibido: l.numeroExibido,
+        conversationId: l.conversationId,
+        teamId: l.fila.teamId,
+        atendente: l.atendidaPor && l.fila.ramal ? { canal: l.fila.ramal.canal, userId: l.fila.ramal.userId } : null,
+        atendida: Boolean(l.atendidaPor && l.ponte),
+        fim: l.fim || Boolean(l.encerrando),
+      };
+    }
+    return {
+      vcId: l.vcId,
+      org: l.org,
+      ponte: l.ponte,
+      cliente: l.perna ?? "",
+      numeroExibido: l.numero,
+      conversationId: l.conversationId,
+      teamId: null,
+      atendente: l.ramal ? { canal: l.ramal, userId: l.userId } : null,
+      atendida: l.atendida && Boolean(l.perna),
+      fim: l.fim,
+    };
+  }
+
+  /**
+   * Quem está com o cliente mudou (a transferência): o canal antigo sai do mapa
+   * — o fim dele deixa de ser o fim da ligação — e o novo entra. Quem desliga o
+   * antigo é a transferência.
+   */
+  private trocarAtendente(l: Recebida | Feita, novo: { canal: string; userId: string } | null) {
+    if (l.tipo === "recebida") {
+      const antigo = l.fila.ramal?.canal;
+      if (antigo) this.porCanal.delete(antigo);
+      l.fila.ramal = novo ? { canal: novo.canal, userId: novo.userId } : null;
+      if (novo) {
+        l.atendidaPor = novo.userId;
+        this.porCanal.set(novo.canal, l);
+      }
+      return;
+    }
+    if (l.ramal) this.porCanal.delete(l.ramal);
+    l.ramal = novo?.canal ?? null;
+    if (novo) {
+      l.userId = novo.userId;
+      this.porCanal.set(novo.canal, l);
+    }
   }
 
   /** A mecânica da fala no ar (pôr, parar, fim e relógio), comum à URA e à fila. */
   private readonly falaNoAr: FalasNoAr<Recebida, PapelDaFala>;
+
+  /** A transferência (v2): a mecânica mora em `transferencia.ts`; aqui só os ganchos. */
+  private readonly transferencias: Transferencias<Recebida | Feita>;
 
   /** Quantas ligações o controlador está acompanhando (para /healthz e testes). */
   get ativas(): number {
@@ -515,12 +500,16 @@ export class ControladorDeChamadas {
           const fim = ev as Extract<EventoAri, { type: "PlaybackFinished" }>;
           const id = fim.playback?.id;
           if (id && this.chamandoPorReproducao.has(id)) return await this.aoTerminarOChamar(fim);
+          if (await this.transferencias.aoTerminarFala(fim)) return;
           const feita = id ? this.avisoDaFeitaPorReproducao.get(id) : undefined;
           if (feita) return await this.aoTerminarOAvisoDaFeita(fim, feita);
           return await this.falaNoAr.aoTerminar(fim);
         }
         case "ChannelDtmfReceived":
           return await this.aoReceberTecla(ev as Extract<EventoAri, { type: "ChannelDtmfReceived" }>);
+        // A ordem da tela para a transferência (v2), emitida pela API como evento de usuário da ARI.
+        case "ChannelUserevent":
+          return await this.transferencias.aoReceberOrdem(ev);
         default:
           return;
       }
@@ -536,6 +525,8 @@ export class ControladorDeChamadas {
     if (papel === "entrada") return this.novaRecebida(ev.channel);
     if (papel === "saida") return this.novaFeita(ev.channel);
     if (papel === "oferta" && vcId) return this.ramalAtendeu(ev.channel, vcId);
+    // Os ramais da transferência (v2): quem recebe, quem transferiu tocando de volta, a consulta e a fila.
+    if (papelDaTransferencia(papel) && vcId) return this.transferencias.aoAtender(ev.channel, papel, vcId);
     // "perna": a perna da operadora nasce já dentro do Stasis (channels/create);
     // quem cuida dela é a ligação feita, pelos eventos Dial e ChannelDestroyed.
     if (papel === "perna") return;
@@ -1309,10 +1300,11 @@ export class ControladorDeChamadas {
     this.log.info("telefonia: ligação atendida", { voice_call: vcId, atendente: l.atendidaPor });
   }
 
-  private async encerrarRecebida(l: Recebida, motivo: string) {
+  private async encerrarRecebida(l: Recebida, motivo: string, opcoes: { ligarDeVolta: boolean } = { ligarDeVolta: false }) {
     if (l.fim) return;
     l.fim = true;
     this.pararRelogios(l);
+    await this.transferencias.aoEncerrarLigacao(l.vcId);
     l.ura = null;
     this.falaNoAr.esquecer(l);
     if (l.gravacao?.gravando) await this.pararGravacao(l.vcId);
@@ -1326,7 +1318,7 @@ export class ControladorDeChamadas {
     }
     if (l.ponte) await this.ari.destruirPonte(l.ponte).catch(() => undefined);
     this.porId.delete(l.vcId);
-    await this.finalizar(l.org, l.vcId, l.atendidaPor ? "atendida" : "perdida", motivo);
+    await this.finalizar(l.org, l.vcId, l.atendidaPor ? "atendida" : "perdida", motivo, opcoes.ligarDeVolta);
   }
 
   // ─── feita ───────────────────────────────────────────────────────────────
@@ -1380,6 +1372,8 @@ export class ControladorDeChamadas {
       org: vc.organization_id,
       userId: dono.id,
       ramal: canal.id,
+      numero: vc.peer_phone,
+      conversationId: vc.conversation_id,
       perna: null,
       ponte: ponteDe(vc.id),
       tom: null,
@@ -1504,9 +1498,10 @@ export class ControladorDeChamadas {
     }
   }
 
-  private async encerrarFeita(l: Feita, motivo: string) {
+  private async encerrarFeita(l: Feita, motivo: string, opcoes: { ligarDeVolta: boolean } = { ligarDeVolta: false }) {
     if (l.fim) return;
     l.fim = true;
+    await this.transferencias.aoEncerrarLigacao(l.vcId);
     // O tom ANTES dos canais: desligar o ramal com o chamar ainda tocando faz o
     // Asterisk registrar "Playback failed for tone:ring;tonezone=br" — medido
     // num Asterisk 20.11.1 local, só nesse caso; parado pela ARI, o mesmo tom
@@ -1529,7 +1524,7 @@ export class ControladorDeChamadas {
     if (!l.atendida && l.causaDaRede !== null) {
       ({ desfecho, motivo: motivoFinal } = fimDaSaidaNaoAtendida({ causa: l.causaDaRede, tocou: l.tocou }));
     }
-    await this.finalizar(l.org, l.vcId, desfecho, motivoFinal);
+    await this.finalizar(l.org, l.vcId, desfecho, motivoFinal, opcoes.ligarDeVolta);
   }
 
   // ─── fim de canal ────────────────────────────────────────────────────────
@@ -1537,6 +1532,8 @@ export class ControladorDeChamadas {
   private async aoDestruirCanal(ev: Extract<EventoAri, { type: "ChannelDestroyed" }>) {
     const causaVista = this.causas.get(ev.channel.id);
     this.causas.delete(ev.channel.id);
+    // Os canais da transferência (o destino tocando, quem transferiu na consulta) são dela.
+    if (await this.transferencias.aoDestruirCanal(ev.channel.id)) return;
     const l = this.porCanal.get(ev.channel.id);
     if (!l || l.fim) return;
     this.porCanal.delete(ev.channel.id);
@@ -1580,14 +1577,25 @@ export class ControladorDeChamadas {
     await this.finalizar(l.org, l.vcId, "atendida", "encerrada_apos_reinicio");
   }
 
-  private async finalizar(org: string, vcId: string, desfechoPedido: DesfechoDaLigacao, motivo: string) {
+  /**
+   * `ligarDeVolta`: a transferência que ninguém pegou (D20) — a ligação FOI
+   * atendida (o registro na conversa diz isso, com a duração), mas o cliente
+   * ficou sem ninguém, e o "Ligar de volta" abre mesmo assim, para o time dela.
+   */
+  private async finalizar(
+    org: string,
+    vcId: string,
+    desfechoPedido: DesfechoDaLigacao,
+    motivo: string,
+    ligarDeVolta = false,
+  ) {
     const l = await this.banco.encerrarLigacao(org, vcId, motivo);
     if (!l) return; // já encerrada por outro caminho
     const desfecho: DesfechoDaLigacao = l.answered_at ? "atendida" : desfechoPedido === "atendida" ? "perdida" : desfechoPedido;
     const duracao = l.answered_at ? this.agora() - new Date(l.answered_at).getTime() : null;
     await this.banco.registrarNaConversa(l, desfecho, duracao);
     // Fora do horário NÃO vira "Ligar de volta" (§5.2.1): o cliente ouviu o porquê.
-    if (desfecho === "perdida" && l.direction === "inbound" && motivo !== MOTIVO_FORA_DO_HORARIO) {
+    if ((desfecho === "perdida" && l.direction === "inbound" && motivo !== MOTIVO_FORA_DO_HORARIO) || ligarDeVolta) {
       await this.banco.avisarPerdida(l);
     }
     await this.banco.registrarFim(l, desfecho, motivo);
@@ -1612,6 +1620,12 @@ export class ControladorDeChamadas {
    * Uma fala no ar (ou uma URA) também morre aqui: risco aceito (desenho §11).
    */
   async recuperar(): Promise<void> {
+    // As transferências abertas morreram com o estado em memória do worker anterior (§12.2).
+    const canceladas = await this.banco.cancelarTransferenciasAbertas("worker_reiniciou").catch((e) => {
+      this.log.warn("telefonia: transferências abertas não canceladas na recuperação", { erro: mensagemDe(e, 160) });
+      return 0;
+    });
+    if (canceladas > 0) this.log.info("telefonia: transferências abertas canceladas no reinício", { canceladas });
     const [vivas, pontes, canais] = await Promise.all([
       this.banco.ligacoesVivas(),
       this.ari.pontes(),

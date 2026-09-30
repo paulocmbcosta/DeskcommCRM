@@ -18,7 +18,7 @@
  * Nada aqui chama a ElevenLabs (D15): o disco das falas só copia do Storage.
  */
 import { ErroAri } from "./ari";
-import type { EventoAri, PortaAri, Registro } from "./controle";
+import type { EventoAri, PortaAri, Registro } from "./portas";
 import type { FalaDoBanco } from "./repositorio";
 
 /**

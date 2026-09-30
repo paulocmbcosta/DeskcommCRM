@@ -60,6 +60,9 @@ function portaAri(ari: ClienteAri): PortaAri {
     },
     pontes: () => ari.pedir<Array<{ id: string; channels: string[] }>>("GET", "/bridges"),
     canais: () => ari.listarCanais(),
+    musicaNaPonte: (p) => ari.musicaNaPonte(p),
+    pararMusicaNaPonte: (p) => ari.pararMusicaNaPonte(p),
+    tirarDaPonte: (p, c) => ari.tirarDaPonte(p, c),
   };
 }
 
@@ -82,10 +85,19 @@ function portaBanco(pool: pg.Pool): PortaBanco {
     marcarTocando: (org, id, u) => repo.marcarTocando(pool, org, id, u),
     marcarAtendida: (org, id, u) => repo.marcarAtendida(pool, org, id, u),
     encerrarLigacao: (org, id, m) => repo.encerrarLigacao(pool, org, id, m),
-    atribuirConversa: (org, c, u) => repo.atribuirConversa(pool, org, c, u),
+    atribuirConversa: (org, c, u, m) => repo.atribuirConversa(pool, org, c, u, m),
     registrarNaConversa: (l, d, ms) => repo.registrarNaConversa(pool, l, d, ms),
     avisarPerdida: (l) => repo.avisarPerdida(pool, l),
     registrarFim: (l, d, m) => repo.registrarFim(pool, l, d, m),
+    transferenciaAberta: (org, vc, id) => repo.transferenciaAberta(pool, org, vc, id),
+    encerrarTransferencia: (org, id, fim) => repo.encerrarTransferencia(pool, org, id, fim),
+    recusarTransferenciaOrfa: (id, vc, m) => repo.recusarTransferenciaOrfa(pool, id, vc, m),
+    cancelarTransferenciasAbertas: (m) => repo.cancelarTransferenciasAbertas(pool, m),
+    marcarTocandoNaTransferencia: (org, id, u) => repo.marcarTocandoNaTransferencia(pool, org, id, u),
+    passarLigacao: (org, id, u) => repo.passarLigacao(pool, org, id, u),
+    moverParaOTime: (org, id, c, t) => repo.moverParaOTime(pool, org, id, c, t),
+    timeDaLigacao: (org, id) => repo.timeDaLigacao(pool, org, id),
+    pessoaEmLigacao: (org, u) => repo.pessoaEmLigacao(pool, org, u),
   };
 }
 
