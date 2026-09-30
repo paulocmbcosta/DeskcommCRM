@@ -7,7 +7,7 @@ import {
   REPETIR_AGUARDE_MS,
 } from "./controle";
 import { ANA, AriFalso, BIA, BancoFalso, FalasFalsas, ORG, TIME, TRONCO, canal, falaDe, tronco } from "./dubles-de-teste";
-import type { FalaDoBanco, LigacaoDoBanco, MenuDoBanco, TroncoDoBanco } from "./repositorio";
+import type { FalaDoBanco, LigacaoDoBanco, MenuDoBanco } from "./repositorio";
 
 const log = { info: () => undefined, warn: vi.fn(), error: vi.fn() };
 

@@ -29,13 +29,11 @@ const COR_DA_SITUACAO: Record<ColegaDoDiretorio["situacao"], string> = {
 
 function LinhaDoRamal({ p, aoSalvar }: { p: ColegaDoDiretorio; aoSalvar: () => void }) {
   const t = useT();
-  const [numero, setNumero] = useState(p.ramal ?? "");
+  // `null` = ninguém está editando: a linha mostra o que o servidor diz (outra aba,
+  // ou o gatilho, pode ter trocado o número); o texto digitado só existe na edição.
+  const [rascunho, setRascunho] = useState<string | null>(null);
+  const numero = rascunho ?? p.ramal ?? "";
   const [salvando, setSalvando] = useState(false);
-  // Outra aba (ou o gatilho) trocou o número: a linha segue o servidor enquanto ninguém edita aqui.
-  const [editado, setEditado] = useState(false);
-  useEffect(() => {
-    if (!editado) setNumero(p.ramal ?? "");
-  }, [p.ramal, editado]);
   const valido = REGUA_DO_RAMAL.test(numero);
   const mudou = numero !== (p.ramal ?? "");
 
@@ -44,7 +42,7 @@ function LinhaDoRamal({ p, aoSalvar }: { p: ColegaDoDiretorio; aoSalvar: () => v
     setSalvando(true);
     try {
       await apiClient.patch(`/api/v1/telefonia/ramais/${p.user_id}`, { numero });
-      setEditado(false);
+      setRascunho(null);
       aoSalvar();
     } catch (e) {
       showApiError(e);
@@ -68,10 +66,7 @@ function LinhaDoRamal({ p, aoSalvar }: { p: ColegaDoDiretorio; aoSalvar: () => v
             value={numero}
             inputMode="numeric"
             maxLength={4}
-            onChange={(e) => {
-              setEditado(true);
-              setNumero(e.target.value.replace(/\D/g, ""));
-            }}
+            onChange={(e) => setRascunho(e.target.value.replace(/\D/g, ""))}
             aria-label={t("Ramal de {nome}").replace("{nome}", p.nome)}
             aria-invalid={!valido}
             className="h-8 w-20 tabular-nums"
@@ -99,22 +94,28 @@ export function RamaisDoTelefone() {
   const t = useT();
   const [pessoas, setPessoas] = useState<ColegaDoDiretorio[] | null>(null);
   const [erro, setErro] = useState(false);
-
-  const ler = useCallback(async () => {
-    try {
-      const r = await apiClient.get<{ data: { pessoas: ColegaDoDiretorio[] } }>("/api/v1/telefonia/ramais");
-      setPessoas(r.data.pessoas);
-      setErro(false);
-    } catch {
-      setErro(true);
-    }
-  }, []);
+  // Muda depois de salvar: relê na hora, sem esperar os 10 s.
+  const [leitura, setLeitura] = useState(0);
 
   useEffect(() => {
+    let vivo = true;
+    const ler = () =>
+      apiClient
+        .get<{ data: { pessoas: ColegaDoDiretorio[] } }>("/api/v1/telefonia/ramais")
+        .then((r) => {
+          if (!vivo) return;
+          setPessoas(r.data.pessoas);
+          setErro(false);
+        })
+        .catch(() => vivo && setErro(true));
     void ler();
     const i = setInterval(() => void ler(), RELER_MS);
-    return () => clearInterval(i);
-  }, [ler]);
+    return () => {
+      vivo = false;
+      clearInterval(i);
+    };
+  }, [leitura]);
+  const reler = useCallback(() => setLeitura((n) => n + 1), []);
 
   return (
     <section className="space-y-3" data-telefonia-ramais>
@@ -141,7 +142,7 @@ export function RamaisDoTelefone() {
             </thead>
             <tbody className="[&_td:first-child]:pl-3 [&_td:last-child]:pr-3">
               {pessoas.map((p) => (
-                <LinhaDoRamal key={p.user_id} p={p} aoSalvar={() => void ler()} />
+                <LinhaDoRamal key={p.user_id} p={p} aoSalvar={reler} />
               ))}
             </tbody>
           </table>

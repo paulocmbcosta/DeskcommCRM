@@ -46,21 +46,14 @@ export const ROTULO_DA_SITUACAO: Record<SituacaoDoColega, string> = {
 
 export function useDiretorio(ativo: boolean): { diretorio: DiretorioDoTelefone | null; carregando: boolean } {
   const [diretorio, setDiretorio] = useState<DiretorioDoTelefone | null>(null);
-  const [carregando, setCarregando] = useState(false);
   useEffect(() => {
     if (!ativo) return;
     let vivo = true;
-    const ler = async () => {
-      try {
-        const r = await apiClient.get<{ data: DiretorioDoTelefone }>("/api/v1/telefonia/diretorio");
-        if (vivo) setDiretorio(r.data);
-      } catch {
-        /* a próxima leitura tenta de novo */
-      } finally {
-        if (vivo) setCarregando(false);
-      }
-    };
-    setCarregando(true);
+    const ler = () =>
+      apiClient
+        .get<{ data: DiretorioDoTelefone }>("/api/v1/telefonia/diretorio")
+        .then((r) => vivo && setDiretorio(r.data))
+        .catch(() => undefined); // a próxima leitura tenta de novo
     void ler();
     const t = setInterval(ler, RELER_DIRETORIO_MS);
     return () => {
@@ -68,7 +61,8 @@ export function useDiretorio(ativo: boolean): { diretorio: DiretorioDoTelefone |
       clearInterval(t);
     };
   }, [ativo]);
-  return { diretorio, carregando };
+  // Carregando = ligado e ainda sem a primeira resposta.
+  return { diretorio, carregando: ativo && diretorio === null };
 }
 
 /** Sem acento e em minúsculas — a busca por "joao" acha "João". */

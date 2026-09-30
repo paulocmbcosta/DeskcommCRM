@@ -9,6 +9,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
+import type * as ModuloDoPedido from "@/lib/channels/telefonia/pedido-de-transferencia";
+
 const VC = "3f1c2b8e-9a4d-4c6e-8f00-1234567890ab";
 const BIA = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const T1 = "7e000000-0000-4000-8000-000000000001";
@@ -47,7 +49,7 @@ vi.mock("@/lib/channels/telefonia/ari", () => ({
   },
 }));
 vi.mock("@/lib/channels/telefonia/pedido-de-transferencia", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@/lib/channels/telefonia/pedido-de-transferencia")>();
+  const real = await importOriginal<typeof ModuloDoPedido>();
   return {
     ...real,
     pedirTransferencia: vi.fn(async (_db: unknown, p: unknown) => {
