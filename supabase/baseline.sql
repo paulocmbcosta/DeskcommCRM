@@ -30044,6 +30044,118 @@ comment on column public.voice_calls.recording_notice_at is
 
 notify pgrst, 'reload schema';
 
+-- ---- telefonia fase 2: transferência de ligação (migration 0290) ----
+-- Racional completo no cabeçalho de supabase/migrations/20260930120000_0290_telefonia_transferencia.sql
+-- e na emenda §12 do desenho docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md.
+
+-- 1. voice_calls: o alvo da FK composta ----------------------------------------
+do $uq_ligacao$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass
+                    and conname = 'voice_calls_organization_id_id_key') then
+    alter table public.voice_calls
+      add constraint voice_calls_organization_id_id_key unique (organization_id, id);
+  end if;
+end $uq_ligacao$;
+
+-- 2. voice_call_transfers --------------------------------------------------------
+create table if not exists public.voice_call_transfers (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  voice_call_id   uuid not null,
+  requested_by    uuid references auth.users(id) on delete set null,
+  from_user_id    uuid references auth.users(id) on delete set null,
+  to_user_id      uuid references auth.users(id) on delete set null,
+  to_team_id      uuid,
+  kind            text not null,
+  status          text not null default 'open',
+  outcome         text,
+  reason          text,
+  answered_by     uuid references auth.users(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  ended_at        timestamptz,
+  unique (organization_id, id),
+  foreign key (organization_id, voice_call_id) references public.voice_calls (organization_id, id) on delete cascade,
+  -- set null só da coluna: apagar o time não apaga a história da transferência.
+  foreign key (organization_id, to_team_id) references public.attendance_teams (organization_id, id)
+    on delete set null (to_team_id)
+);
+
+do $chk_transferencias$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_kind_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_kind_check
+      check (kind in ('blind', 'attended'));
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_status_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_status_check
+      check (status in ('open', 'ended'));
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_outcome_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_outcome_check
+      check (
+        (status = 'open' and outcome is null and ended_at is null)
+        -- `outcome is not null` explícito: `null in (...)` é NULL, e CHECK com NULL passa.
+        or (status = 'ended' and ended_at is not null and outcome is not null
+            and outcome in ('answered', 'returned', 'queue_answered', 'missed', 'refused', 'cancelled'))
+      );
+  end if;
+
+  -- Exatamente um destino — no pedido. O time apagado depois (set null) deixa a
+  -- linha ENCERRADA sem destino; por isso o CHECK só vale enquanto ela está aberta.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_destino_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_destino_check
+      check (status <> 'open' or ((to_user_id is null) <> (to_team_id is null)));
+  end if;
+
+  -- D9: a consultada é só para pessoa.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_consultada_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_consultada_check
+      check (kind <> 'attended' or to_team_id is null);
+  end if;
+end $chk_transferencias$;
+
+create unique index if not exists voice_call_transfers_uma_aberta
+  on public.voice_call_transfers (voice_call_id) where status = 'open';
+create index if not exists voice_call_transfers_da_ligacao
+  on public.voice_call_transfers (organization_id, voice_call_id, created_at);
+create index if not exists voice_call_transfers_para_pessoa_aberta
+  on public.voice_call_transfers (organization_id, to_user_id) where status = 'open';
+
+-- 3. RLS, GRANT e policy ------------------------------------------------------------
+alter table public.voice_call_transfers enable row level security;
+
+revoke all on public.voice_call_transfers from public, anon, authenticated, service_role;
+grant select on public.voice_call_transfers to authenticated, service_role;
+
+drop policy if exists tenant_isolation_voice_call_transfers_all on public.voice_call_transfers;
+drop policy if exists tenant_isolation_voice_call_transfers_select on public.voice_call_transfers;
+create policy tenant_isolation_voice_call_transfers_select on public.voice_call_transfers for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+
+-- 4. Comentários -------------------------------------------------------------------
+comment on table public.voice_call_transfers is
+  'Transferências de ligação do telefone (fase 2, versão 2). Aberta (status open) enquanto acontece — no máximo uma por ligação (índice voice_call_transfers_uma_aberta) —, encerrada com outcome. Escrita só pela API (pedido) e pelo worker (desfecho); pela REST é só leitura. A corrente vai para o cartão da ligação em messages.metadata.voice_call.transferencias.';
+comment on column public.voice_call_transfers.outcome is
+  'answered (a pessoa atendeu), returned (voltou a quem transferiu), queue_answered (alguém do time pegou), missed (ninguém pegou: "Ligar de volta"), refused (o worker recusou; o porquê em reason), cancelled (o cliente desligou, quem transferiu voltou ao cliente, ou o worker reiniciou). NULL enquanto aberta.';
+comment on column public.voice_call_transfers.reason is
+  'Vocabulário aberto, sem CHECK: o motivo de refused/cancelled (destino_offline, destino_em_ligacao, ligacao_nao_atendida, voltou_ao_cliente, cliente_desligou, worker_reiniciou…). Lido pelo painel e pelo log.';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES
