@@ -321,6 +321,21 @@ const PARES: Array<{
     arquivo: "lib/telefonia/gravacao.ts",
     simbolo: "ESTADOS_DA_GRAVACAO",
   },
+  {
+    tabela: "voice_call_transfers",
+    coluna: "kind",
+    // migration 0290 — a transferência de ligação. Nasce com o par no mesmo commit.
+    // (`outcome` fica fora: o CHECK dele é cruzado com `status`; quem o prova é
+    // tests/invariants/telefonia-transferencia.test.ts.)
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "TIPOS_DE_TRANSFERENCIA",
+  },
+  {
+    tabela: "voice_call_transfers",
+    coluna: "status",
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "ESTADOS_DA_TRANSFERENCIA",
+  },
 ];
 
 /** Tira um nível de parênteses externos, se ele envolver a expressão inteira. */

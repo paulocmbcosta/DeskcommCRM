@@ -89,7 +89,7 @@ export async function criarPedidoDeSaida(
 
   const { rows: vivas } = await db.query<{ total: string; minhas: string }>(
     `select count(*) filter (where direction = 'outbound') as total,
-            count(*) filter (where owner_user_id = $3 or ringing_user_id = $3) as minhas
+            count(*) filter (where owner_user_id = $3 or ringing_user_id = $3 or peer_user_id = $3) as minhas
        from voice_calls
       where organization_id = $1 and provider = $2 and status <> 'ended'
         and started_at > now() - interval '4 hours'`,

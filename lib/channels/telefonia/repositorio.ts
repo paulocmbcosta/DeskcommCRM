@@ -23,7 +23,13 @@ import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
 import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { avisoVigente } from "@/lib/telefonia/vencimento-da-emergencia";
 import type { EstadoDaGravacao, GravacaoDaLigacao } from "@/lib/telefonia/gravacao";
-import { MOTIVO_FORA_DO_HORARIO, type DesfechoDoMenu, type MenuDaLigacao } from "@/lib/telefonia/vocabulario";
+import {
+  MOTIVO_FORA_DO_HORARIO,
+  type DesfechoDaTransferencia,
+  type DesfechoDoMenu,
+  type MenuDaLigacao,
+  type TransferenciaDaLigacao,
+} from "@/lib/telefonia/vocabulario";
 
 import { CHANNEL_PROVIDER_SIP_TRUNK, MEIO_TELEFONE } from "../capabilities";
 import type { TroncoSip, TransporteSip } from "./pjsip";
@@ -216,7 +222,9 @@ async function lerTimeNaFila(db: Queryable, organizationId: string, teamId: stri
  * zeram `is_available`), dentro do horário do time e do próprio — MENOS o teto
  * de conversas: decisão do dono (spec 20 §2.6), conversa de texto aberta não
  * impede atender o telefone. E MAIS "não está em outra ligação", de qualquer
- * canal de voz: quem está falando no WhatsApp também está ocupado.
+ * canal de voz: quem está falando no WhatsApp também está ocupado — e quem está
+ * do outro lado de uma ligação INTERNA (`peer_user_id`, v3), ou tocando numa
+ * transferência (`ringing_user_id`, v2).
  */
 export async function disponiveisNoTime(
   db: Queryable,
@@ -254,7 +262,7 @@ export async function disponiveisNoTime(
         and not exists (
           select 1 from voice_calls v
            where v.organization_id = $1 and v.status <> 'ended'
-             and (v.owner_user_id = m.user_id or v.ringing_user_id = m.user_id)
+             and (v.owner_user_id = m.user_id or v.ringing_user_id = m.user_id or v.peer_user_id = m.user_id)
              and v.started_at > now() - interval '4 hours'
         )`,
     [organizationId, teamId, fuso],
@@ -876,7 +884,7 @@ export async function atribuirConversa(
 // da ligação junto — e grava o DESFECHO. A variável do evento é ponteiro,
 // nunca autoridade (desenho §12.2).
 
-export type DesfechoDaTransferencia = "answered" | "returned" | "queue_answered" | "missed" | "refused" | "cancelled";
+export type { DesfechoDaTransferencia };
 
 export interface TransferenciaDoBanco {
   id: string;
@@ -1120,6 +1128,50 @@ async function menuDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<MenuDaL
   };
 }
 
+/**
+ * A corrente de transferências da ligação (v2), para o cartão
+ * (`TransferenciaDaLigacao`). Os nomes são os desta hora, e os dois lados da
+ * junção presos à organização da ligação. NUNCA lança, pelo mesmo motivo de
+ * `menuDoRegistro`: é cosmético, e quem chama ainda tem o "Ligar de volta".
+ */
+async function transferenciasDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<TransferenciaDaLigacao[]> {
+  try {
+    const { rows } = await db.query<{
+      kind: TransferenciaDaLigacao["tipo"];
+      outcome: TransferenciaDaLigacao["desfecho"];
+      de_nome: string | null;
+      para_nome: string | null;
+      para_time: string | null;
+      atendida_por_nome: string | null;
+    }>(
+      `select t.kind, t.outcome,
+              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = t.from_user_id) as de_nome,
+              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = t.to_user_id) as para_nome,
+              (select tm.name from attendance_teams tm where tm.id = t.to_team_id and tm.organization_id = t.organization_id) as para_time,
+              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = t.answered_by) as atendida_por_nome
+         from voice_call_transfers t
+        where t.organization_id = $1 and t.voice_call_id = $2
+          and t.outcome is distinct from 'refused'
+        order by t.created_at`,
+      [l.organization_id, l.id],
+    );
+    return rows.map((r) => ({
+      tipo: r.kind,
+      desfecho: r.outcome,
+      de_nome: r.de_nome,
+      para_nome: r.para_nome,
+      para_time: r.para_time,
+      atendida_por_nome: r.atendida_por_nome,
+    }));
+  } catch (e) {
+    logger.warn("telefonia: transferências da ligação não lidas — o registro sai sem elas", {
+      voice_call: l.id,
+      erro: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+    });
+    return [];
+  }
+}
+
 const GRAVACAO_EM_PROCESSAMENTO: GravacaoDaLigacao = { situacao: "processando", duracao_ms: null };
 
 /**
@@ -1159,6 +1211,7 @@ export async function registrarNaConversa(
   );
   if (ja.length > 0) return;
   const menu = await menuDoRegistro(db, l);
+  const transferencias = await transferenciasDoRegistro(db, l);
   try {
     await db.query(
     `insert into messages
@@ -1183,6 +1236,8 @@ export async function registrarNaConversa(
           motivo: l.end_reason ?? null,
           menu,
           ouviu_aviso: Boolean(l.emergency_heard_at),
+          // A corrente de transferências (v2), com os nomes daquela hora. Ausente sem transferência.
+          ...(transferencias.length > 0 ? { transferencias } : {}),
           // Gravada: o arquivo ainda vai ser guardado (lib/channels/telefonia/gravacoes.ts),
           // e é o processamento que troca a situação, sempre mesclando no banco.
           ...(l.recording_status === "recording" ? { gravacao: GRAVACAO_EM_PROCESSAMENTO } : {}),
