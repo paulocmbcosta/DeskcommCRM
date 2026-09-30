@@ -60,7 +60,8 @@ export const PALAVRAS_DE_OPT_OUT: ReadonlySet<string> = new Set([
   "parar",
   "pare",
   "sair",
-  "cancelar",
+  // `cancelar` NÃO está aqui — desceu para `PALAVRAS_AMBIGUAS_ISOLADAS`,
+  // abaixo, onde está o porquê.
   "descadastrar",
   "remover",
   "unsubscribe",
@@ -331,10 +332,31 @@ const FRASES_AMBIGUAS_DE_OPT_OUT: readonly RegExp[] = [
   /\bno\s+me\s+molest(?:e|en|es)\b/u,
 ];
 
-/** A mensagem inteira é a palavra-chave (ignorando pontuação e emoji de borda). */
-function ehPalavraIsolada(normalizado: string): boolean {
+/**
+ * Palavras que, SOZINHAS, sugerem saída sem dizer do QUÊ. Mesma forma de
+ * `PALAVRAS_DE_OPT_OUT` (mensagem inteira = a palavra), outro nível: não
+ * bloqueiam, fazem a IA parar e chamar uma pessoa.
+ *
+ * `cancelar` morou na lista inequívoca até 2026-09-30. Medido na produção de um
+ * provedor de internet (21–30/09): os dois bloqueios por palavra isolada foram
+ * "cancelar", e os dois eram engano — uma cliente cancelando a VISITA técnica
+ * (escreveu mais 10 vezes na semana; um gerente desbloqueou à mão) e uma
+ * cliente sem internet há 8 horas, no meio do diagnóstico, que ficou sem
+ * resposta. Das 37 mensagens de cliente com "cancel" no período, nenhuma falava
+ * de mensagem, lista ou WhatsApp; 15 falavam de plano, internet ou visita.
+ *
+ * Num provedor, numa clínica ou numa loja, "cancelar" é vocabulário de SERVIÇO.
+ * Quem tem o plano ameaçado é o cliente que mais precisa de gente, e o bloqueio
+ * o calava. No ambíguo, a IA silencia a conversa e a pessoa que atende lê e
+ * decide. Se era mesmo pedido de saída, o "sair"/"parar" que vier depois
+ * bloqueia sozinho — a tela ainda não tem gesto de BLOQUEAR, só de desbloquear.
+ */
+const PALAVRAS_AMBIGUAS_ISOLADAS: ReadonlySet<string> = new Set(["cancelar"]);
+
+/** A mensagem inteira é uma palavra da lista (ignorando pontuação e emoji de borda). */
+function ehPalavraIsolada(normalizado: string, palavras: ReadonlySet<string>): boolean {
   const somenteLetras = normalizado.replace(/[^a-z]/gu, "");
-  return PALAVRAS_DE_OPT_OUT.has(somenteLetras);
+  return palavras.has(somenteLetras);
 }
 
 /**
@@ -345,7 +367,7 @@ export function ehPedidoDeOptOut(texto: string | null | undefined): boolean {
   if (!texto) return false;
   const normalizado = normalizarTexto(texto.trim());
   if (normalizado === "") return false;
-  if (ehPalavraIsolada(normalizado)) return true;
+  if (ehPalavraIsolada(normalizado, PALAVRAS_DE_OPT_OUT)) return true;
   return FRASES_DE_OPT_OUT.some((re) => re.test(normalizado));
 }
 
@@ -358,5 +380,6 @@ export function ehOptOutProvavel(texto: string | null | undefined): boolean {
   if (!texto) return false;
   if (ehPedidoDeOptOut(texto)) return true;
   const normalizado = normalizarTexto(texto.trim());
+  if (ehPalavraIsolada(normalizado, PALAVRAS_AMBIGUAS_ISOLADAS)) return true;
   return FRASES_AMBIGUAS_DE_OPT_OUT.some((re) => re.test(normalizado));
 }
