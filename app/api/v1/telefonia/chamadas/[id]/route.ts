@@ -116,6 +116,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
             id: aberta.id,
             tipo: aberta.kind,
             de_user_id: aberta.from_user_id,
+            de_nome: aberta.de_nome,
             para_nome: aberta.para_nome,
             para_time: aberta.para_time,
             consulta,

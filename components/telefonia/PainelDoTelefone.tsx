@@ -11,10 +11,12 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { useTelefonia } from "@/components/telefonia/TelefoniaContext";
+import { useTelefonia, type EstadoDaLigacao } from "@/components/telefonia/TelefoniaContext";
+import { TransferirLigacao } from "@/components/telefonia/TransferirLigacao";
 import { Button } from "@/components/ui/button";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
-import { DotsNine, Microphone, MicrophoneSlash, Phone, PhoneX, X } from "@/lib/ui/icons";
+import { textoDaTransferencia } from "@/lib/telefonia/texto-da-transferencia";
+import { ArrowRight, DotsNine, Microphone, MicrophoneSlash, Phone, PhoneX, X } from "@/lib/ui/icons";
 import { useT } from "@/hooks/i18n/useT";
 
 function duracao(desde: number | null, agora: number): string {
@@ -57,11 +59,20 @@ function useToque(ativo: boolean) {
 
 const TECLAS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
 
+/** A frase da transferência (v2) já traduzida, com o nome no lugar — ou `null`. */
+function useFraseDaTransferencia(ligacao: EstadoDaLigacao | null, agora: number) {
+  const t = useT();
+  if (!ligacao) return null;
+  const f = textoDaTransferencia(ligacao, agora);
+  if (!f) return null;
+  return { texto: t(f.texto).replace("{nome}", f.nome ?? t("colega")), tom: f.tom };
+}
+
 /** Quanto tempo o aviso do fim da saída fica na tela sem ninguém fechar. */
 const AVISO_NA_TELA_MS = 20_000;
 
 export function PainelDoTelefone() {
-  const { ligacao, ultimoEncerramento, atender, desligar, alternarMudo, teclar } = useTelefonia();
+  const { ligacao, ultimoEncerramento, atender, desligar, alternarMudo, teclar, decidirConsulta } = useTelefonia();
   const t = useT();
   // O aviso é de UM encerramento: guardar qual foi fechado faz o próximo
   // aparecer sem efeito para "resetar".
@@ -83,6 +94,10 @@ export function PainelDoTelefone() {
 
   const tocando = ligacao?.fase === "tocando";
   useToque(tocando);
+  // O seletor da transferência é da LIGAÇÃO, como o teclado.
+  const [transferirDe, setTransferirDe] = useState<string | null>(null);
+  const transferindo = ligacao !== null && transferirDe === (ligacao.id ?? "sem-id");
+  const frase = useFraseDaTransferencia(ligacao, agora);
 
   useEffect(() => {
     if (ligacao?.fase !== "em_ligacao") return;
@@ -130,6 +145,11 @@ export function PainelDoTelefone() {
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("Ligação recebida")}</p>
           <p className="truncate text-base font-semibold">{quem}</p>
           {ligacao.nome ? <p className="truncate text-sm text-muted-foreground">{phoneForDisplay(ligacao.numero)}</p> : null}
+          {frase ? (
+            <p data-telefonia-transferencia className="truncate text-xs font-medium text-primary">
+              {frase.texto}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 gap-2">
           <Button variant="destructive" size="icon" aria-label={t("Recusar")} onClick={desligar}>
@@ -142,6 +162,12 @@ export function PainelDoTelefone() {
       </div>
     );
   }
+
+  // A consulta (v2) de quem transfere: [Completar] e [Voltar] no lugar de [Transferir].
+  const emConsulta = ligacao.transferencia?.tipo === "attended" && ligacao.papelDaEntrada !== "consulta";
+  // Só a ligação atendida, com id, sem transferência aberta — e nunca a interna (D16).
+  const podeTransferir =
+    ligacao.fase === "em_ligacao" && Boolean(ligacao.id) && !ligacao.transferencia && ligacao.papelDaEntrada !== "consulta" && !ligacao.interna;
 
   const situacao =
     ligacao.fase === "em_ligacao"
@@ -185,6 +211,42 @@ export function PainelDoTelefone() {
           </Button>
         </div>
       </div>
+      {frase ? (
+        <p
+          data-telefonia-transferencia
+          role={frase.tom === "erro" ? "alert" : "status"}
+          className={`mt-2 text-xs ${frase.tom === "erro" ? "text-destructive" : "text-muted-foreground"}`}
+        >
+          {frase.texto}
+        </p>
+      ) : null}
+      {emConsulta ? (
+        <div className="mt-2 flex gap-2">
+          <Button
+            size="sm"
+            className="h-8 flex-1 text-xs"
+            disabled={ligacao.transferencia?.consulta !== "falando"}
+            onClick={() => void decidirConsulta("completar")}
+          >
+            {t("Completar transferência")}
+          </Button>
+          <Button size="sm" variant="outline" className="h-8 flex-1 text-xs" onClick={() => void decidirConsulta("voltar")}>
+            {t("Voltar ao cliente")}
+          </Button>
+        </div>
+      ) : podeTransferir ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="mt-2 h-8 w-full gap-1.5 text-xs"
+          aria-expanded={transferindo}
+          onClick={() => setTransferirDe(transferindo ? null : (ligacao.id ?? "sem-id"))}
+        >
+          <ArrowRight size={14} aria-hidden />
+          {t("Transferir")}
+        </Button>
+      ) : null}
+      {transferindo && podeTransferir ? <TransferirLigacao onFechar={() => setTransferirDe(null)} /> : null}
       {teclado ? (
         <div className="mt-3 grid grid-cols-3 gap-1.5">
           {TECLAS.map((k) => (

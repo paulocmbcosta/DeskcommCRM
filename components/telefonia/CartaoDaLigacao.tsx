@@ -27,7 +27,14 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
 import { gravacaoDaLigacao, type GravacaoDaLigacao } from "@/lib/telefonia/gravacao";
-import { MOTIVO_FORA_DO_HORARIO, menuDaLigacao, type MenuDaLigacao } from "@/lib/telefonia/vocabulario";
+import { fraseDoElo } from "@/lib/telefonia/texto-da-transferencia";
+import {
+  MOTIVO_FORA_DO_HORARIO,
+  menuDaLigacao,
+  transferenciasDaLigacao,
+  type MenuDaLigacao,
+  type TransferenciaDaLigacao,
+} from "@/lib/telefonia/vocabulario";
 
 export interface MetadadoDaLigacao {
   id: string;
@@ -43,6 +50,8 @@ export interface MetadadoDaLigacao {
   ouviu_aviso?: boolean;
   /** A gravação (F3), lida por `gravacaoDaLigacao`; ausente = não gravada. */
   gravacao?: GravacaoDaLigacao | null;
+  /** A corrente de transferências (v2), lida por `transferenciasDaLigacao`; vazia = não houve. */
+  transferencias?: TransferenciaDaLigacao[];
 }
 
 export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
@@ -56,6 +65,7 @@ export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
     menu: menuDaLigacao(v.menu),
     ouviu_aviso: v.ouviu_aviso === true,
     gravacao: gravacaoDaLigacao(v.gravacao),
+    transferencias: transferenciasDaLigacao(v.transferencias),
   };
 }
 
@@ -283,6 +293,23 @@ export function CartaoDaLigacao({
           {ura && ligacao.ouviu_aviso ? " · " : null}
           {ligacao.ouviu_aviso ? <span data-ligacao-ouviu-aviso>{t("Ouviu o aviso de instabilidade")}</span> : null}
         </p>
+      ) : null}
+      {(ligacao.transferencias ?? []).length > 0 ? (
+        <ul className="max-w-full px-4 text-center text-xs leading-snug text-muted-foreground" data-ligacao-transferencias>
+          {(ligacao.transferencias ?? []).map((e, i) => {
+            const f = fraseDoElo(e);
+            const alguem = t("alguém");
+            const texto = t(f.modelo)
+              .replaceAll("{de}", f.de ?? alguem)
+              .replaceAll("{para}", f.para ?? alguem)
+              .replaceAll("{quem}", f.quem ?? alguem);
+            return (
+              <li key={i} data-ligacao-transferencia={e.desfecho ?? "aberta"}>
+                {texto}
+              </li>
+            );
+          })}
+        </ul>
       ) : null}
       {ligacao.gravacao ? (
         <LinhaDaGravacao vcId={ligacao.id} gravacao={ligacao.gravacao} podeOuvir={podeOuvirGravacao} />

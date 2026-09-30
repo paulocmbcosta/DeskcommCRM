@@ -43,6 +43,8 @@ export interface PessoaDoDiretorio {
   ramal: string | null;
   situacao: SituacaoDaPessoa;
   times: Array<{ id: string; nome: string }>;
+  /** Sou eu (a tela não me oferece como destino). */
+  eu: boolean;
 }
 
 export interface TimeDoDiretorio {
@@ -129,6 +131,7 @@ export async function lerDiretorio(db: Queryable, org: string, eu: string, agora
         dentroDoHorario: valida && isWithinSchedule(agenda, agora),
       }),
       times: r.times ?? [],
+      eu: r.user_id === eu,
     };
   });
 
