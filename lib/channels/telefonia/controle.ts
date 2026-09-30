@@ -27,6 +27,14 @@
  *             ligação para ESTE atendente há menos de 60 s → cria a perna da
  *             operadora, põe as duas numa ponte e disca.
  *
+ * GRAVAÇÃO (F3; desenho 2026-09-29-telefonia-gravacao-das-ligacoes-design.md):
+ *             com a organização gravando e a ligação com conversa, o AVISO DE
+ *             GRAVAÇÃO toca antes de tudo (antes do menu e da fila); tocou → a
+ *             ponte é gravada quando o atendente atende; não tocou → a ligação
+ *             segue sem gravar. Na FEITA, o aviso toca na ponte quando o cliente
+ *             atende, e a gravação começa junto. A gravação para no fim, e o
+ *             arquivo é guardado fora daqui (`gravacoes.ts`), pela porta própria.
+ *
  * Sem fala nenhuma configurada, a fila é a da fase 1, chamada por chamada: o
  * número que aponta para um time se comporta como antes. Fala sem arquivo no
  * disco, ou que o Asterisk não tocou, é PULADA — a ligação segue como se ela não
@@ -65,6 +73,7 @@ import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 import { ErroAri, type CanalAri } from "./ari";
 import { FalasNoAr, semFalaNoAr, type FalaDaLigacao, type PortaFalas } from "./fala-no-ar";
 import { donoDoEndpoint, endpointDoCanal, enderecoDeSaida, idDoRamal } from "./pjsip";
+import type { PoliticaDeGravacao } from "./repositorio-das-gravacoes";
 import type {
   DesfechoDaLigacao,
   EscolhaDoMenu,
@@ -153,6 +162,36 @@ export { FOLGA_DO_FIM_DA_FALA_MS } from "./fala-no-ar";
  */
 const SEM_DISCO: PortaFalas = { garantir: async () => null };
 
+/**
+ * A GRAVAÇÃO (F3) — porta própria, fora de `PortaAri`/`PortaBanco`: sem ela (o
+ * padrão), nenhuma ligação é gravada e o controlador é o de antes. Quem a
+ * implementa é `GravacoesDaTelefonia` (`gravacoes.ts`): a ARI grava, o banco
+ * marca, e o arquivo é guardado fora da fila serial dos eventos.
+ */
+export interface PortaGravacao {
+  /** A política da organização, lida na entrada da ligação. */
+  politica(org: string): Promise<PoliticaDeGravacao>;
+  /** Grava a ponte e marca a ligação (`recording`). `false` = não começou; a ligação segue sem. */
+  comecar(p: { org: string; vcId: string; ponte: string; avisoEm: Date }): Promise<boolean>;
+  /** Toca o aviso de gravação para todos na ponte (a ligação feita): o id do playback, ou `null` se não tocou. */
+  tocarAvisoNaPonte(ponte: string, midia: string): Promise<string | null>;
+  /** O aviso da feita falhou depois de a gravação começar: para, apaga e desmarca. */
+  descartar(org: string, vcId: string): Promise<void>;
+  /** Para a gravação e fecha o arquivo, antes de a ponte cair. Nunca lança. */
+  parar(vcId: string): Promise<void>;
+  /** A ligação gravada acabou e está registrada: guardar o arquivo. Não espera. */
+  aoEncerrar(org: string, vcId: string): void;
+}
+
+const SEM_GRAVACAO: PortaGravacao = {
+  politica: async () => ({ gravar: false, aviso: null }),
+  comecar: async () => false,
+  tocarAvisoNaPonte: async () => null,
+  descartar: async () => undefined,
+  parar: async () => undefined,
+  aoEncerrar: () => undefined,
+};
+
 export interface Registro {
   info(msg: string, campos?: Record<string, unknown>): void;
   warn(msg: string, campos?: Record<string, unknown>): void;
@@ -193,10 +232,11 @@ export type EventoAri =
  * Para que serve a fala no ar — é o que decide o que vem depois dela. As da URA
  * (`menu`, `invalida`) têm os mesmos nomes das falas da regra (`FalaDaUra`).
  */
-type PapelDaFala = "fora_do_horario" | "aviso" | "espera" | "ninguem" | FalaDaUra;
+type PapelDaFala = "gravacao" | "fora_do_horario" | "aviso" | "espera" | "ninguem" | FalaDaUra;
 
 /** Como a Central chama cada fala quando ela não toca (`phone_prompt_unplayable`). */
 const ROTULO_DA_FALA = {
+  gravacao: "aviso de gravação",
   fora_do_horario: "fora do horário",
   aviso: "aviso de instabilidade",
   espera: "aguarde",
@@ -303,6 +343,12 @@ interface Recebida {
   fala: FalaDaLigacao<PapelDaFala>;
   /** A URA, enquanto o cliente escolhe no menu; `null` antes (número de time) e depois da escolha. */
   ura: UraEmCurso | null;
+  /**
+   * A gravação (F3). `null` = esta ligação não é gravada. `avisoEm`: quando o
+   * aviso de gravação terminou de tocar — sem ele, a ponte não é gravada;
+   * `menu`: o que vem depois do aviso; `gravando`: a ponte está sendo gravada.
+   */
+  gravacao: { avisoEm: number | null; menu: MenuDoBanco | null; gravando: boolean } | null;
   /** O motivo do fim, já decidido enquanto a última fala toca ("fora do horário", "ninguém atendeu"). */
   encerrando: string | null;
   /**
@@ -325,6 +371,12 @@ interface Feita {
   ponte: string;
   tom: string | null;
   atendida: boolean;
+  /**
+   * A gravação (F3): o aviso a tocar quando o cliente atender (`null` = não é
+   * gravada) e o playback dele na ponte, enquanto toca — se ele falhar, a
+   * gravação que começou junto é descartada.
+   */
+  gravacao: { aviso: FalaDoBanco; gravando: boolean; avisoNoAr: string | null } | null;
   /** Chegou `Dial` RINGING (180) ou PROGRESS (183): a rede completou até o telefone. */
   tocou: boolean;
   causaDaRede: number | null;
@@ -380,6 +432,8 @@ export class ControladorDeChamadas {
    * mapa em que nunca esteve — não é, em caminho nenhum, o fim de uma fala.
    */
   private readonly chamandoPorReproducao = new Map<string, Recebida>();
+  /** O aviso de gravação no ar de cada ligação FEITA, pelo playback (F3). */
+  private readonly avisoDaFeitaPorReproducao = new Map<string, Feita>();
   /**
    * Por onde os relógios (toque vencido, reavaliar a fila, repetir o "aguarde")
    * entram. O laço do worker troca por sua fila serial, para um relógio nunca
@@ -396,7 +450,8 @@ export class ControladorDeChamadas {
     private readonly banco: PortaBanco,
     private readonly log: Registro,
     private readonly agora: () => number = Date.now,
-    falas: PortaFalas = SEM_DISCO,
+    private readonly falas: PortaFalas = SEM_DISCO,
+    private readonly gravacao: PortaGravacao = SEM_GRAVACAO,
   ) {
     this.falaNoAr = new FalasNoAr<Recebida, PapelDaFala>({
       ari: this.ari,
@@ -404,6 +459,9 @@ export class ControladorDeChamadas {
       log: this.log,
       emFila: (fn) => this.emFila(fn),
       rotuloDoPapel: (papel) => ROTULO_DA_FALA[papel],
+      // Sem o `PlaybackFinished`, o aviso de gravação NÃO conta como ouvido: a
+      // ligação segue, sem gravar (D3). As outras falas seguem a suposição de sempre.
+      tocouPeloRelogio: (papel) => papel !== "gravacao",
       ganchos: {
         atender: (l) => this.garantirAtendida(l),
         avisarIntocavel: (l, rotulo) => this.avisarIntocavel(l, rotulo),
@@ -456,6 +514,8 @@ export class ControladorDeChamadas {
           const fim = ev as Extract<EventoAri, { type: "PlaybackFinished" }>;
           const id = fim.playback?.id;
           if (id && this.chamandoPorReproducao.has(id)) return await this.aoTerminarOChamar(fim);
+          const feita = id ? this.avisoDaFeitaPorReproducao.get(id) : undefined;
+          if (feita) return await this.aoTerminarOAvisoDaFeita(fim, feita);
           return await this.falaNoAr.aoTerminar(fim);
         }
         case "ChannelDtmfReceived":
@@ -561,14 +621,68 @@ export class ControladorDeChamadas {
       },
       fala: semFalaNoAr(),
       ura: null,
+      gravacao: null,
       encerrando: null,
       clienteSaindo: false,
       fim: false,
     };
     this.registrar(l, canal.id);
     this.log.info("telefonia: ligação recebida", { voice_call: vcId, tronco: tronco.id, time: teamId, menu: menu?.id ?? null });
+    if (await this.avisarDaGravacao(l, menu)) return;
+    return this.depoisDaEntrada(l, menu);
+  }
+
+  /** Depois do aviso de gravação — ou sem ele: o menu do número, ou a fila do time. */
+  private async depoisDaEntrada(l: Recebida, menu: MenuDoBanco | null): Promise<void> {
+    if (l.fim) return;
     if (menu) return this.iniciarUra(l, menu);
     await this.entrarNaFila(l);
+  }
+
+  /**
+   * O AVISO DE GRAVAÇÃO (F3, D3): com a organização gravando e a ligação com
+   * conversa (número oculto não é gravado — D8), o aviso toca ANTES de tudo.
+   * `true` = a fala está no ar (o resto vem no fim dela, em `aposFala`) ou a
+   * ligação acabou; `false` = seguir já, sem gravar. A leitura da política que
+   * falha não para nada: a ligação segue, sem gravação.
+   */
+  private async avisarDaGravacao(l: Recebida, menu: MenuDoBanco | null): Promise<boolean> {
+    if (!l.conversationId) return false;
+    let politica: PoliticaDeGravacao;
+    try {
+      politica = await this.gravacao.politica(l.org);
+    } catch (e) {
+      this.log.warn("telefonia: política de gravação não lida — a ligação segue sem gravar", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      return false;
+    }
+    if (!politica.gravar || !politica.aviso || l.fim) return false;
+    l.gravacao = { avisoEm: null, menu, gravando: false };
+    const pedida = await this.falaNoAr.porNoAr(l, politica.aviso, "gravacao");
+    if (pedida !== "pulada") return true;
+    // Não tocou (sem arquivo, ou recusada pelo Asterisk): a Central já sabe, e
+    // quem não foi avisado não é gravado.
+    l.gravacao = null;
+    return false;
+  }
+
+  /** Grava a ponte. Falhar aqui nunca derruba a ligação: ela segue, sem gravação. */
+  private async comecarGravacao(org: string, vcId: string, ponte: string, avisoEm: Date): Promise<boolean> {
+    try {
+      return await this.gravacao.comecar({ org, vcId, ponte, avisoEm });
+    } catch (e) {
+      this.log.warn("telefonia: a gravação não começou — a ligação segue sem ela", { voice_call: vcId, erro: mensagemDe(e, 160) });
+      return false;
+    }
+  }
+
+  /** Para a gravação antes de a ponte cair (o arquivo fecha inteiro). */
+  private async pararGravacao(vcId: string) {
+    await this.gravacao
+      .parar(vcId)
+      .catch((e) => this.log.warn("telefonia: gravação não parada", { voice_call: vcId, erro: mensagemDe(e, 160) }));
   }
 
   /**
@@ -890,6 +1004,14 @@ export class ControladorDeChamadas {
   private async aposFala(l: Recebida, papel: PapelDaFala, tocou: boolean): Promise<void> {
     if (l.fim) return;
     switch (papel) {
+      case "gravacao": {
+        // O aviso de gravação acabou (ou não tocou): o que viria na entrada.
+        const g = l.gravacao;
+        if (!g) return this.depoisDaEntrada(l, null);
+        if (tocou) g.avisoEm = this.agora();
+        else l.gravacao = null;
+        return this.depoisDaEntrada(l, g.menu);
+      }
       case "menu":
       case "invalida": {
         // A URA: a regra decide o que vem depois do fim — ou da fala que não tocou.
@@ -1167,6 +1289,10 @@ export class ControladorDeChamadas {
     await this.ari.criarPonte(l.ponte);
     await this.ari.porNaPonte(l.ponte, l.cliente);
     await this.ari.porNaPonte(l.ponte, canal.id);
+    // Só quem ouviu o aviso de gravação até o fim é gravado (D3).
+    if (l.gravacao?.avisoEm) {
+      l.gravacao.gravando = await this.comecarGravacao(l.org, vcId, l.ponte, new Date(l.gravacao.avisoEm));
+    }
     await this.banco.marcarAtendida(l.org, vcId, l.atendidaPor);
     if (l.conversationId) {
       await this.banco.atribuirConversa(l.org, l.conversationId, l.atendidaPor).catch((e) =>
@@ -1182,6 +1308,7 @@ export class ControladorDeChamadas {
     this.pararRelogios(l);
     l.ura = null;
     this.falaNoAr.esquecer(l);
+    if (l.gravacao?.gravando) await this.pararGravacao(l.vcId);
     // O chamar ANTES dos canais: derrubar o canal com o tom tocando faz o
     // Asterisk registrar "Playback failed" (medido na ligação feita, `encerrarFeita`).
     await this.pararChamando(l);
@@ -1238,6 +1365,7 @@ export class ControladorDeChamadas {
       await this.banco.encerrarLigacao(vc.organization_id, vc.id, RECUSA_DA_SAIDA.troncoConfiguracaoInvalida);
       return recusar("tronco com configuração inválida", { voice_call: vc.id, problema: destino.problema });
     }
+    const avisoDeGravacao = await this.avisoDaFeita(vc.organization_id, vc.id, vc.conversation_id);
 
     const l: Feita = {
       tipo: "feita",
@@ -1249,6 +1377,7 @@ export class ControladorDeChamadas {
       ponte: ponteDe(vc.id),
       tom: null,
       atendida: false,
+      gravacao: avisoDeGravacao ? { aviso: avisoDeGravacao, gravando: false, avisoNoAr: null } : null,
       tocou: false,
       causaDaRede: null,
       fim: false,
@@ -1273,6 +1402,75 @@ export class ControladorDeChamadas {
     this.log.info("telefonia: ligação feita", { voice_call: vc.id, tronco: tronco.id });
   }
 
+  /**
+   * O aviso que a ligação FEITA vai tocar quando o cliente atender, se a
+   * organização grava (e a ligação tem conversa — a feita sempre tem). Lido
+   * antes de discar; a leitura que falha não impede a ligação: ela sai sem gravar.
+   */
+  private async avisoDaFeita(org: string, vcId: string, conversationId: string | null): Promise<FalaDoBanco | null> {
+    if (!conversationId) return null;
+    try {
+      const p = await this.gravacao.politica(org);
+      return p.gravar ? p.aviso : null;
+    } catch (e) {
+      this.log.warn("telefonia: política de gravação não lida — a ligação sai sem gravar", {
+        voice_call: vcId,
+        erro: mensagemDe(e, 160),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * O cliente atendeu a ligação feita: o aviso de gravação toca para os dois, na
+   * ponte, e a gravação começa junto — logo depois de o aviso ser aceito, para o
+   * próprio áudio guardar o aviso. Sem o arquivo do aviso, ou com o Asterisk
+   * recusando tocá-lo, não se grava (D3), e a Central fica sabendo como de
+   * qualquer fala que não tocou.
+   */
+  private async gravarAFeita(l: Feita) {
+    const g = l.gravacao;
+    if (!g || g.gravando || l.fim) return;
+    const midia = await this.falas.garantir(g.aviso).catch(() => null);
+    let playback: string | null = null;
+    if (midia) {
+      try {
+        playback = await this.gravacao.tocarAvisoNaPonte(l.ponte, midia);
+      } catch (e) {
+        this.log.warn("telefonia: o Asterisk não tocou o aviso de gravação", { voice_call: l.vcId, erro: mensagemDe(e, 160) });
+      }
+    }
+    if (!playback) {
+      this.log.warn("telefonia: aviso de gravação não tocou — a ligação feita segue sem gravar", { voice_call: l.vcId });
+      await this.banco
+        .avisarFalaIntocavel(l.org, ROTULO_DA_FALA.gravacao)
+        .catch((e) => this.log.warn("telefonia: aviso de fala que não tocou não gravado", { erro: mensagemDe(e, 160) }));
+      return;
+    }
+    if (l.fim) return;
+    g.avisoNoAr = playback;
+    this.avisoDaFeitaPorReproducao.set(playback, l);
+    g.gravando = await this.comecarGravacao(l.org, l.vcId, l.ponte, new Date(this.agora()));
+  }
+
+  /**
+   * O fim do aviso de gravação da FEITA. Tocou até o fim (`done`): nada a fazer.
+   * Falhou: quem não ouviu o aviso não é gravado (D3) — a gravação que começou
+   * junto é descartada. Se o evento nunca chegar, vale o que o Asterisk aceitou
+   * (o arquivo existia e o playback entrou na ponte).
+   */
+  private async aoTerminarOAvisoDaFeita(ev: Extract<EventoAri, { type: "PlaybackFinished" }>, l: Feita) {
+    this.avisoDaFeitaPorReproducao.delete(ev.playback.id);
+    const g = l.gravacao;
+    if (!g || g.avisoNoAr !== ev.playback.id) return;
+    g.avisoNoAr = null;
+    if (ev.playback.state !== "failed" || !g.gravando) return;
+    g.gravando = false;
+    await this.gravacao
+      .descartar(l.org, l.vcId)
+      .catch((e) => this.log.warn("telefonia: gravação sem aviso não descartada", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
+  }
+
   private async pararTom(l: Feita) {
     if (!l.tom) return;
     const id = l.tom;
@@ -1295,6 +1493,7 @@ export class ControladorDeChamadas {
       l.atendida = true;
       await this.banco.marcarAtendida(l.org, l.vcId, l.userId);
       this.log.info("telefonia: ligação feita atendida", { voice_call: l.vcId });
+      await this.gravarAFeita(l);
     }
   }
 
@@ -1307,6 +1506,8 @@ export class ControladorDeChamadas {
     // termina "done". Era o aviso do log de produção na saída recusada em 0,2 s,
     // em que nem PROGRESS nem ANSWER chegaram para pará-lo.
     await this.pararTom(l);
+    if (l.gravacao?.avisoNoAr) this.avisoDaFeitaPorReproducao.delete(l.gravacao.avisoNoAr);
+    if (l.gravacao?.gravando) await this.pararGravacao(l.vcId);
     for (const c of [l.ramal, l.perna]) {
       if (!c) continue;
       this.porCanal.delete(c);
@@ -1359,8 +1560,10 @@ export class ControladorDeChamadas {
       return this.encerrarFeita(l, "atendente_desligou");
     }
 
-    // Recuperada: qualquer ponta que cai derruba as outras.
+    // Recuperada: qualquer ponta que cai derruba as outras. Não se sabe se era
+    // gravada (o estado em memória morreu com o worker): parar é inofensivo.
     l.fim = true;
+    await this.pararGravacao(l.vcId);
     for (const c of l.canais) {
       this.porCanal.delete(c);
       if (c !== ev.channel.id) await this.ari.desligar(c).catch(() => undefined);
@@ -1381,6 +1584,14 @@ export class ControladorDeChamadas {
       await this.banco.avisarPerdida(l);
     }
     await this.banco.registrarFim(l, desfecho, motivo);
+    // Gravada: o arquivo vai para o Storage fora da fila serial (não espera).
+    if (l.recording_status === "recording") {
+      try {
+        this.gravacao.aoEncerrar(org, vcId);
+      } catch (e) {
+        this.log.warn("telefonia: processamento da gravação não pedido — a passada o pega", { voice_call: vcId, erro: mensagemDe(e, 160) });
+      }
+    }
     this.log.info("telefonia: ligação encerrada", { voice_call: vcId, desfecho, motivo });
   }
 

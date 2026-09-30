@@ -3167,3 +3167,40 @@ cliente desliga chegar como `PlaybackFinished` `failed` (lido no código do Aste
 música de espera recomeça do início a cada "aguarde"; a limpeza do Storage numa VPS real. Do
 som de chamando (1.50.2), tudo o que é áudio: o tom no canal do cliente da operadora, sem
 soluço de um ramal ao próximo, e a ponte se formando depois de ele parar — só na VPS.
+
+## J37 — Gravação das ligações: o aviso, o cartão com a gravação e a escuta auditada `[P0]` (2026-09-29)
+
+Pedido do dono (DYD-53, F3 da spec 20): toda ligação atendida pode ser gravada e ouvida pelo
+cartão da ligação, dentro da conversa, para análise de atendimento — e transcrita no futuro
+(F4). Desenho, com as decisões D1–D8 tomadas numa sessão autônoma (o dono dormindo), em
+`docs/superpowers/specs/2026-09-29-telefonia-gravacao-das-ligacoes-design.md`; plano em
+`docs/superpowers/plans/2026-09-29-telefonia-gravacao-das-ligacoes.md`; mapa em
+`docs/architecture/telefonia.architecture.json` (peças `gravacoes`, `rota_escuta`,
+`poda_gravacoes`…); migration 0289.
+
+`[P0]` porque gravar é dado sensível (LGPD) e porque o primeiro contato de quem liga passa a
+ser o aviso de gravação.
+
+**Como é provado.** A máquina (aviso antes do menu/fila, ponte gravada só com o aviso ouvido,
+feita gravando no ANSWER, parar no fim) em `lib/channels/telefonia/controle.test.ts` (bloco
+"gravação das ligações"); o processamento (ARI → ffmpeg → Storage → anexar → apagar, e cada
+falha) em `lib/channels/telefonia/gravacoes.test.ts`; o SQL no Postgres real em
+`tests/invariants/telefonia-gravacao.test.ts` (projeção mesclada, anonimização apagando o
+arquivo, retenção); as rotas e a tela em unidade. A API da ARI usada para gravar foi MEDIDA na
+VPS de produção em 2026-09-29, numa ponte de sonda sem ligação (gravar → parar → baixar o WAV
+→ apagar). A ligação real depende de o dono gerar o aviso e ligar a gravação.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J37.1 Conexões › Telefone › Gravação sem o aviso pronto: diz o porquê, aponta Voz e falas, e o interruptor não liga; a rota recusa com 409 do mesmo jeito | `[P0]` | em unidade (`components/connections/telefone/GravacaoDasLigacoes.test.tsx`, `app/api/v1/telefonia/gravacao/route.test.ts`); pela tela, pendente (e2e) |
+| J37.2 O admin gera e salva o "Aviso de gravação" em Voz e falas; a aba Gravação passa a mostrá-lo com "Ouvir" e liga; a auditoria registra `phone.recording_settings_changed` | `[P0]` | em unidade; pela tela, pendente |
+| J37.3 Ligação real recebida com a gravação ligada: o cliente ouve o aviso ANTES do menu; o atendente atende; ao desligar, o cartão diz "Preparando a gravação…" e, em segundos, "Ouvir a gravação (m:ss)" | `[P0]` | pendente — prova na VPS pelo dono |
+| J37.4 O atendente (papel agent, que enxerga a conversa) clica em Ouvir: o player toca; a auditoria ganha UMA linha `phone.recording_listened` | `[P0]` | em unidade (rota e cartão); pela tela, pendente |
+| J37.5 Ligação feita pelo atendente: os dois ouvem o aviso quando o cliente atende, e a gravação começa com ele | `[P0]` | pendente — prova na VPS |
+| J37.6 Aviso sem arquivo: a ligação segue sem gravar, e a Central recebe "Uma fala do telefone não tocou" | `[P1]` | em unidade (`controle.test.ts`) |
+| J37.7 Número oculto (sem conversa): nem toca o aviso nem grava | `[P1]` | em unidade (`controle.test.ts`) |
+| J37.8 Gravação que não chega ao Storage em 30 min: o cartão diz "não foi salva" e a Central abre "A gravação de uma ligação não foi salva", com "Abrir a gravação do telefone" | `[P1]` | em unidade (`gravacoes.test.ts`) e no Postgres real |
+| J37.9 A rota genérica de mídia não serve a gravação (sem auditoria) | `[P0]` | em unidade (`app/api/v1/messages/[id]/media/route.test.ts`) |
+| J37.10 Viewer, ou quem não enxerga a conversa (outro time), não ouve: sem botão, e a rota responde 403/404 | `[P0]` | em unidade (rota com RLS dublada; `CartaoDaLigacao.test.tsx`); a RLS de verdade é a das mensagens, já provada no Postgres real (0281/0283) |
+| J37.11 Anonimizar o contato apaga a gravação (fila de remoção do Storage) e limpa o cartão | `[P0]` | no Postgres real (`tests/invariants/telefonia-gravacao.test.ts`) |
+| J37.12 Passada a retenção, a poda diária apaga o arquivo e o cartão diz "Gravação apagada pelo prazo de guarda"; Storage fora não marca nada | `[P1]` | no Postgres real e em `lib/telefonia/poda-das-gravacoes.test.ts` |

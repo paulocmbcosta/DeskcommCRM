@@ -199,7 +199,13 @@ export interface AppointmentNoticeRow {
   resolved_at: string | null;
 }
 
-/** Uma chamada de voz do titular — o registro, não a gravação (não gravamos). */
+/**
+ * Uma chamada de voz do titular — o REGISTRO. Desde a F3 (migration 0289) a
+ * ligação do telefone pode ter sido gravada: `recording_status` diz se foi
+ * (`stored` = há gravação guardada, `expired` = apagada pela retenção). O áudio
+ * não vai no relatório; quem controla os dados o entrega ao titular pelo cartão
+ * da ligação, e a anonimização o apaga junto com a mídia da conversa.
+ */
 export interface VoiceCallRow {
   id: string;
   direction: string;
@@ -210,6 +216,7 @@ export interface VoiceCallRow {
   answered_at: string | null;
   ended_at: string | null;
   duration_ms: number | null;
+  recording_status: string | null;
 }
 
 export interface ExportPayload {
@@ -611,15 +618,15 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
 
   // Chamadas de voz — `contact_id` direto em `voice_calls` (migration 0232).
   //
-  // O que existe aqui é o REGISTRO da ligação, nunca o áudio: gravação está
-  // deliberadamente fora do produto (spec 18 §1.2), então não há mídia a
-  // enfileirar como acontece com foto e anexo.
+  // O que existe aqui é o REGISTRO da ligação, nunca o áudio. A gravação da
+  // ligação do telefone (F3, 0289) é mídia da mensagem da ligação: se existe,
+  // `recording_status` diz, e o arquivo segue o caminho da mídia da conversa.
   let voice_calls: VoiceCallRow[] = [];
   if (contactId) {
     const { data, error } = await admin
       .from("voice_calls")
       .select(
-        "id, direction, peer_phone, status, end_reason, started_at, answered_at, ended_at, duration_ms",
+        "id, direction, peer_phone, status, end_reason, started_at, answered_at, ended_at, duration_ms, recording_status",
       )
       .eq("organization_id", organizationId)
       .eq("contact_id", contactId)

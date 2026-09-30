@@ -11,7 +11,7 @@
  */
 
 /** `phone_prompts.kind` — uma fala por linha. */
-export const TIPOS_DE_FALA = ["menu", "invalid", "waiting", "nobody", "after_hours", "emergency"] as const;
+export const TIPOS_DE_FALA = ["menu", "invalid", "waiting", "nobody", "after_hours", "emergency", "recording_notice"] as const;
 export type TipoDeFala = (typeof TIPOS_DE_FALA)[number];
 
 /**
@@ -83,8 +83,12 @@ export function menuDaLigacao(bruto: unknown): MenuDaLigacao | null {
   };
 }
 
-/** As falas gerais da organização (`phone_settings.<tipo>_prompt_id`). */
-export const FALAS_GERAIS = ["waiting", "nobody", "after_hours"] as const;
+/**
+ * As falas gerais da organização (`phone_settings.<tipo>_prompt_id`).
+ * `recording_notice` (0289) é o AVISO DE GRAVAÇÃO: sem ele pronto, a gravação das
+ * ligações não liga (lib/telefonia/gravacao-da-org.ts).
+ */
+export const FALAS_GERAIS = ["waiting", "nobody", "after_hours", "recording_notice"] as const;
 export type FalaGeral = (typeof FALAS_GERAIS)[number];
 
 /** `voice_calls.end_reason` da ligação encerrada porque o time estava fora do horário. */

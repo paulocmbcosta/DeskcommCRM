@@ -54,7 +54,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
   // Filtro explícito de organization_id por doutrina (defense-in-depth).
   const { data: msg, error } = await supabase
     .from("messages")
-    .select("id, media_url, media_mime, media_storage_path, channel_session_id")
+    .select("id, media_url, media_mime, media_storage_path, channel_session_id, external_id")
     .eq("id", messageId)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
@@ -62,6 +62,20 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     return fail("internal_error", t("Erro ao buscar mensagem."), 500, { requestId });
   }
   if (!msg || (!msg.media_storage_path && !msg.media_url)) {
+    return fail("not_found", t("Mensagem sem mídia."), 404, { requestId });
+  }
+  // A gravação de uma ligação do telefone é a mídia da mensagem da ligação, e
+  // só sai pela rota da escuta auditada (`/api/v1/telefonia/chamadas/[id]/gravacao`):
+  // papel atendente ou acima e uma linha na auditoria por escuta. Servida aqui,
+  // qualquer um que enxerga a conversa a ouviria sem deixar rastro.
+  if (typeof msg.external_id === "string" && msg.external_id.startsWith("ligacao:")) {
+    return fail("not_found", t("Mensagem sem mídia."), 404, { requestId });
+  }
+  // O arquivo tem de ser DESTA organização: a service key assina qualquer caminho
+  // do bucket, e a linha da mensagem é escrita também pela REST. Só o prefixo da
+  // organização, que nunca muda — o da conversa não serve, porque a fusão de
+  // contatos move a mensagem sem mudar o caminho do arquivo.
+  if (msg.media_storage_path && !msg.media_storage_path.startsWith(`${activeOrg.orgId}/`)) {
     return fail("not_found", t("Mensagem sem mídia."), 404, { requestId });
   }
 

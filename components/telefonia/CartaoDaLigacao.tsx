@@ -12,12 +12,21 @@
  * o time para onde a ligação foi, ou que o cliente desligou no menu — e se ele
  * ouviu o aviso de instabilidade do time. A ligação sem nada disso (a da fase 1,
  * e a do número que toca direto no time) fica exatamente como era.
+ *
+ * Gravação (F3): a linha da gravação, quando a ligação foi gravada — preparando,
+ * "Ouvir a gravação", não salva, ou apagada pela retenção. Ouvir pede a URL à
+ * rota da ESCUTA AUDITADA (cada pedido é uma linha na auditoria) só no clique:
+ * abrir a conversa não conta como escuta. Quem não alcança o piso de papel
+ * (`voice.recording.listen`) vê que a ligação foi gravada, sem o botão.
  */
 import { format } from "date-fns";
+import { useState } from "react";
 
-import { PhoneIncoming, PhoneOutgoing, PhoneX } from "@/lib/ui/icons";
+import { PhoneIncoming, PhoneOutgoing, PhoneX, Play, X } from "@/lib/ui/icons";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
+import { apiClient } from "@/lib/api/client";
+import { gravacaoDaLigacao, type GravacaoDaLigacao } from "@/lib/telefonia/gravacao";
 import { MOTIVO_FORA_DO_HORARIO, menuDaLigacao, type MenuDaLigacao } from "@/lib/telefonia/vocabulario";
 
 export interface MetadadoDaLigacao {
@@ -32,6 +41,8 @@ export interface MetadadoDaLigacao {
   menu?: MenuDaLigacao | null;
   /** O cliente ouviu o aviso de instabilidade do time até o fim. */
   ouviu_aviso?: boolean;
+  /** A gravação (F3), lida por `gravacaoDaLigacao`; ausente = não gravada. */
+  gravacao?: GravacaoDaLigacao | null;
 }
 
 export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
@@ -44,6 +55,7 @@ export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
     motivo: typeof v.motivo === "string" ? v.motivo : null,
     menu: menuDaLigacao(v.menu),
     ouviu_aviso: v.ouviu_aviso === true,
+    gravacao: gravacaoDaLigacao(v.gravacao),
   };
 }
 
@@ -98,7 +110,130 @@ function oQueAUraFez(menu: MenuDaLigacao, t: (texto: string) => string): { situa
   return { situacao: menu.desfecho, texto: preencher(texto, valores) };
 }
 
-export function CartaoDaLigacao({ ligacao, em }: { ligacao: MetadadoDaLigacao; em: string }) {
+/**
+ * O id da ligação vem do metadado da mensagem — e a URL da escuta é montada com
+ * ele: só uuid vira pedido (achado da revisão de segurança). O resto vê "Ligação
+ * gravada", sem botão.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** O que a linha da gravação está fazendo agora, na tela. */
+type Escuta = { fase: "parada" } | { fase: "pedindo" } | { fase: "tocando"; url: string } | { fase: "erro" };
+
+/**
+ * A linha da gravação. A URL assinada vale 10 min: se o `<audio>` falha (URL
+ * vencida, rede), a linha volta ao botão, e um clique pede uma nova — que é
+ * outra escuta auditada, como deve ser.
+ */
+function LinhaDaGravacao({
+  vcId,
+  gravacao,
+  podeOuvir,
+}: {
+  vcId: string;
+  gravacao: GravacaoDaLigacao;
+  podeOuvir: boolean;
+}) {
+  const t = useT();
+  const [escuta, setEscuta] = useState<Escuta>({ fase: "parada" });
+  const classe = "max-w-full px-4 text-center text-xs leading-snug text-muted-foreground";
+
+  if (gravacao.situacao === "processando") {
+    return (
+      <p className={classe} data-ligacao-gravacao="processando">
+        {t("Preparando a gravação…")}
+      </p>
+    );
+  }
+  if (gravacao.situacao === "falhou") {
+    return (
+      <p className={classe} data-ligacao-gravacao="falhou">
+        {t("A gravação desta ligação não foi salva.")}
+      </p>
+    );
+  }
+  if (gravacao.situacao === "expirada") {
+    return (
+      <p className={classe} data-ligacao-gravacao="expirada">
+        {t("Gravação apagada pelo prazo de guarda.")}
+      </p>
+    );
+  }
+  if (!podeOuvir || !UUID.test(vcId)) {
+    return (
+      <p className={classe} data-ligacao-gravacao="pronta">
+        {t("Ligação gravada")}
+      </p>
+    );
+  }
+
+  const tempo = duracao(gravacao.duracao_ms);
+  const ouvir = async () => {
+    setEscuta({ fase: "pedindo" });
+    try {
+      const r = await apiClient.get<{ data: { url: string } }>(
+        `/api/v1/telefonia/chamadas/${encodeURIComponent(vcId)}/gravacao`,
+      );
+      setEscuta({ fase: "tocando", url: r.data.url });
+    } catch {
+      setEscuta({ fase: "erro" });
+    }
+  };
+
+  if (escuta.fase === "tocando") {
+    return (
+      <div className="flex w-full max-w-sm flex-col items-center gap-1 px-4" data-ligacao-gravacao="tocando">
+        <audio
+          controls
+          autoPlay
+          preload="auto"
+          src={escuta.url}
+          className="h-9 w-full"
+          aria-label={t("Gravação da ligação")}
+          onError={() => setEscuta({ fase: "erro" })}
+        />
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
+          onClick={() => setEscuta({ fase: "parada" })}
+        >
+          <X size={12} aria-hidden /> {t("Fechar o player")}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col items-center gap-0.5" data-ligacao-gravacao="pronta">
+      <button
+        type="button"
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-60"
+        disabled={escuta.fase === "pedindo"}
+        onClick={() => void ouvir()}
+        data-ouvir-gravacao
+      >
+        <Play size={12} weight="fill" aria-hidden />
+        {escuta.fase === "pedindo" ? t("Abrindo a gravação…") : t("Ouvir a gravação")}
+        {tempo ? <span className="tabular-nums text-muted-foreground">· {tempo}</span> : null}
+      </button>
+      {escuta.fase === "erro" ? (
+        <p className={classe} role="alert">
+          {t("Não foi possível abrir a gravação. Tente de novo.")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+export function CartaoDaLigacao({
+  ligacao,
+  em,
+  podeOuvirGravacao = false,
+}: {
+  ligacao: MetadadoDaLigacao;
+  em: string;
+  /** O piso de papel de `voice.recording.listen` (quem chama sabe o papel; o cartão não). */
+  podeOuvirGravacao?: boolean;
+}) {
   const t = useT();
   const localeDaData = useLocaleDeData();
   const recebida = ligacao.direcao === "inbound";
@@ -148,6 +283,9 @@ export function CartaoDaLigacao({ ligacao, em }: { ligacao: MetadadoDaLigacao; e
           {ura && ligacao.ouviu_aviso ? " · " : null}
           {ligacao.ouviu_aviso ? <span data-ligacao-ouviu-aviso>{t("Ouviu o aviso de instabilidade")}</span> : null}
         </p>
+      ) : null}
+      {ligacao.gravacao ? (
+        <LinhaDaGravacao vcId={ligacao.id} gravacao={ligacao.gravacao} podeOuvir={podeOuvirGravacao} />
       ) : null}
     </div>
   );

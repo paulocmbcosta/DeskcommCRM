@@ -7,9 +7,11 @@
  * enquanto ainda acha que o anterior está tocando. Uma fila serial basta: o
  * volume de eventos de telefonia é de dezenas por ligação, não de milhares.
  *
- * Ao lado da fila, a PASSADA de 60 s que não depende da ARI (`passadaDoTelefone`):
- * os avisos de instabilidade vencidos, as falas do Storage para o volume
- * `telefonia-falas` e a limpeza do Storage (desenho da fase 2, §4 e §5.5).
+ * Ao lado da fila, a PASSADA de 60 s (`passadaDoTelefone`): os avisos de
+ * instabilidade vencidos, as falas do Storage para o volume `telefonia-falas` e a
+ * limpeza do Storage (desenho da fase 2, §4 e §5.5) — que não dependem da ARI — e
+ * as GRAVAÇÕES das ligações que ficaram por guardar (F3, `gravacoes.ts`), que
+ * dependem: com o Asterisk fora, só essa etapa falha, e tenta no minuto seguinte.
  *
  * Sem `TELEFONIA_ARI_URL`/`TELEFONIA_ARI_PASSWORD` o laço não sobe — a
  * telefonia é um profile opcional do compose (spec 20 §4.3). Nem a passada: o
@@ -21,6 +23,7 @@ import type pg from "pg";
 import { ClienteAri, ErroAri, configAriDoAmbiente, type CanalAri } from "./ari";
 import { ControladorDeChamadas, type EventoAri, type PortaAri, type PortaBanco, type Registro } from "./controle";
 import { falasDoWorker, type FalasNoDisco } from "./falas-no-disco";
+import { gravacoesDoWorker, type GravacoesDaTelefonia } from "./gravacoes";
 import { idDoRamal } from "./pjsip";
 import * as repo from "./repositorio";
 import { SincronizadorDeTroncos } from "./sincronizacao";
@@ -88,6 +91,11 @@ function portaBanco(pool: pg.Pool): PortaBanco {
 
 export interface DependenciasDaPassada {
   falas: Pick<FalasNoDisco, "sincronizar" | "limparStorage">;
+  /**
+   * As gravações das ligações (F3): guardar as pendentes e apagar as órfãs do
+   * Asterisk. Ausente = a instalação não tem como guardar (sem Storage): nada a fazer.
+   */
+  gravacoes?: Pick<GravacoesDaTelefonia, "passada"> | null;
   /** `repo.desligarAvisosVencidos` com o pool do worker: desliga, audita e avisa na Central. */
   desligarAvisosVencidos: (agora: Date) => Promise<repo.AvisoDesligado[]>;
   log: Registro;
@@ -173,10 +181,19 @@ export function passadaDoTelefone(d: DependenciasDaPassada): () => Promise<void>
       await d.falas.limparStorage();
     });
   });
+  // Guarda própria: uma conversão longa (ligação de 2 h) não pode atrasar as
+  // falas nem os avisos vencidos — e vice-versa.
+  const gravacoes = semReentrancia(async () => {
+    const g = d.gravacoes;
+    if (!g) return;
+    await etapa("gravações das ligações", async () => {
+      await g.passada();
+    });
+  });
 
   return async () => {
     if (desligando()) return;
-    await Promise.all([avisos(), storage()]);
+    await Promise.all([avisos(), storage(), gravacoes()]);
   };
 }
 
@@ -221,7 +238,22 @@ export async function runTelefoniaLoop(opts: {
   }
   const ari = new ClienteAri(cfg);
   const falas = falasDoWorker(opts.pool, registroQueCalaAoDesligar(opts.log, opts.signal));
-  const ctl = new ControladorDeChamadas(portaAri(ari), portaBanco(opts.pool), opts.log, Date.now, falas);
+  // Sem cliente do Storage não há onde guardar: melhor não gravar do que gravar
+  // arquivos que ninguém vai ouvir (e que o Asterisk acumularia).
+  let gravacoes: GravacoesDaTelefonia | null = null;
+  try {
+    gravacoes = gravacoesDoWorker(opts.pool, ari, opts.log);
+  } catch (e) {
+    opts.log.error("telefonia: sem cliente do Storage — as ligações não serão gravadas", { erro: String(e).slice(0, 200) });
+  }
+  const ctl = new ControladorDeChamadas(
+    portaAri(ari),
+    portaBanco(opts.pool),
+    opts.log,
+    Date.now,
+    falas,
+    gravacoes ?? undefined,
+  );
   const sync = new SincronizadorDeTroncos(ari, opts.pool, opts.log, {
     host: new URL(cfg.baseUrl).hostname,
     senha: cfg.senha,
@@ -239,6 +271,7 @@ export async function runTelefoniaLoop(opts: {
   // nem a reconciliação dos troncos.
   const passada = passadaDoTelefone({
     falas,
+    gravacoes,
     desligarAvisosVencidos: (agora) => repo.desligarAvisosVencidos(opts.pool, agora),
     log: opts.log,
     signal: opts.signal,

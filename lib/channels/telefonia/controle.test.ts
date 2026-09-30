@@ -1845,6 +1845,340 @@ describe("URA (§5.1)", () => {
   });
 });
 
+/**
+ * A GRAVAÇÃO (F3, DYD-53; desenho 2026-09-29-telefonia-gravacao-das-ligacoes-design.md).
+ * O controlador só chama a porta: gravar a ponte, guardar e dar como perdida é de
+ * `gravacoes.ts` (provado em gravacoes.test.ts) e do banco (tests/invariants/telefonia-gravacao.test.ts).
+ */
+describe("gravação das ligações (F3)", () => {
+  const AVISO_DE_GRAVACAO = falaDe("gravacao", 3_000);
+  const SOM_DO_AVISO = "sound:/falas/gravacao";
+
+  class GravacaoFalsa {
+    politicaAtual = { gravar: true, aviso: AVISO_DE_GRAVACAO as FalaDoBanco | null };
+    falharPolitica = false;
+    recusarGravar = false;
+    tocarNaPonteFalha = false;
+    chamadas: Array<[string, ...unknown[]]> = [];
+    politica = async (org: string) => {
+      this.chamadas.push(["politica", org]);
+      if (this.falharPolitica) throw new Error("banco fora do ar");
+      return this.politicaAtual;
+    };
+    comecar = async (p: { org: string; vcId: string; ponte: string; avisoEm: Date }) => {
+      this.chamadas.push(["comecar", p.org, p.vcId, p.ponte, p.avisoEm.getTime()]);
+      if (this.recusarGravar) return false;
+      // Como `marcarGravando`: a ligação passa a `recording`.
+      const l = banco.ligacoes.get(p.vcId);
+      if (l) l.recording_status = "recording";
+      return true;
+    };
+    tocarAvisoNaPonte = async (ponte: string, midia: string) => {
+      this.chamadas.push(["tocarAvisoNaPonte", ponte, midia]);
+      return this.tocarNaPonteFalha ? null : "aviso-pb-1";
+    };
+    descartar = async (org: string, vcId: string) => {
+      this.chamadas.push(["descartar", org, vcId]);
+      // Como `desmarcarGravacao`: a ligação volta a "não gravada".
+      const l = banco.ligacoes.get(vcId);
+      if (l) l.recording_status = null;
+    };
+    parar = async (vcId: string) => {
+      this.chamadas.push(["parar", vcId]);
+    };
+    aoEncerrar = (org: string, vcId: string) => {
+      this.chamadas.push(["aoEncerrar", org, vcId]);
+    };
+    nomes() {
+      return this.chamadas.map((c) => c[0]);
+    }
+  }
+
+  let gravacao: GravacaoFalsa;
+  beforeEach(() => {
+    gravacao = new GravacaoFalsa();
+    ctl = new ControladorDeChamadas(ari, banco, log, () => Date.now(), falas, gravacao);
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+  });
+
+  describe("recebida", () => {
+    it("o aviso toca ANTES da fila; no fim dele a fila segue; o ramal atende → a ponte é gravada com a hora do aviso", async () => {
+      await entrar();
+      expect(gravacao.chamadas).toEqual([["politica", ORG]]);
+      expect(ari.falas()).toEqual([SOM_DO_AVISO]);
+      expect(ari.originados()).toEqual([]);
+      expect(banco.tem("entrou_na_fila")).toEqual([]);
+
+      vi.setSystemTime(new Date("2026-09-28T13:00:03Z"));
+      await terminou("fala-1");
+      expect(banco.tem("entrou_na_fila")).toHaveLength(1);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+
+      await ramalAtende(ari.ultimoOriginado());
+      const comecou = gravacao.chamadas.find((c) => c[0] === "comecar");
+      expect(comecou).toEqual(["comecar", ORG, "vc-1", "p-vc-1", new Date("2026-09-28T13:00:03Z").getTime()]);
+      // A gravação começa com as DUAS pernas já na ponte.
+      const nomes = ari.nomes();
+      expect(nomes.lastIndexOf("porNaPonte")).toBeGreaterThan(-1);
+
+      // Fim: para a gravação ANTES de derrubar a ponte, e pede o processamento depois do registro.
+      await destruir("cli-1");
+      expect(gravacao.nomes()).toEqual(["politica", "comecar", "parar", "aoEncerrar"]);
+      expect(gravacao.chamadas.at(-1)).toEqual(["aoEncerrar", ORG, "vc-1"]);
+      expect(banco.tem("registro")).toEqual([["registro", "vc-1", "atendida"]]);
+    });
+
+    it("com menu: o aviso de gravação toca antes do menu", async () => {
+      const MENU = "33333333-3333-3333-3333-333333333333";
+      banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
+      banco.menus.set(MENU, {
+        id: MENU,
+        nome: "Atendimento",
+        defaultTeamId: TIME,
+        timePadraoAtivo: true,
+        fala: falaDe("menu", 4_000),
+        falaInvalida: null,
+        opcoes: [{ digito: "1", teamId: TIME }],
+      });
+      await entrar();
+      expect(ari.falas()).toEqual([SOM_DO_AVISO]);
+      await terminou("fala-1");
+      expect(ari.falas()).toEqual([SOM_DO_AVISO, "sound:/falas/menu"]);
+    });
+
+    it("tecla durante o aviso não escolhe nada (a URA ainda não começou)", async () => {
+      const MENU = "33333333-3333-3333-3333-333333333333";
+      banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
+      banco.menus.set(MENU, {
+        id: MENU,
+        nome: "Atendimento",
+        defaultTeamId: TIME,
+        timePadraoAtivo: true,
+        fala: falaDe("menu", 4_000),
+        falaInvalida: null,
+        opcoes: [{ digito: "1", teamId: TIME }],
+      });
+      await entrar();
+      await ctl.tratar({ type: "ChannelDtmfReceived", channel: canal("cli-1", "x"), digit: "1" });
+      expect(banco.tem("escolha")).toEqual([]);
+      expect(ari.chamadas.filter((c) => c[0] === "pararFala")).toEqual([]);
+    });
+
+    it("aviso sem arquivo no disco: pulado, a Central fica sabendo, a fila segue e a ponte NÃO é gravada", async () => {
+      falas.semArquivo.add(AVISO_DE_GRAVACAO.id);
+      await entrar();
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aviso de gravação"]]);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      await ramalAtende(ari.ultimoOriginado());
+      await destruir("cli-1");
+      expect(gravacao.nomes()).toEqual(["politica"]);
+    });
+
+    it("o fim do aviso se perde (sem PlaybackFinished): o relógio segue a ligação, mas ela NÃO é gravada, e a Central não é avisada", async () => {
+      await entrar();
+      await vi.advanceTimersByTimeAsync(AVISO_DE_GRAVACAO.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS + 10);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      expect(banco.tem("fala_intocavel")).toEqual([]);
+      await ramalAtende(ari.ultimoOriginado());
+      expect(gravacao.nomes()).toEqual(["politica"]);
+    });
+
+    it("o Asterisk termina o aviso como `failed`: não gravada, e a fila segue", async () => {
+      await entrar();
+      await terminou("fala-1", "failed");
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+      await ramalAtende(ari.ultimoOriginado());
+      expect(gravacao.nomes()).toEqual(["politica"]);
+    });
+
+    it("o cliente desliga no meio do aviso: nada de fila, nada de gravação", async () => {
+      await entrar();
+      await clienteDesligaDuranteAFala("fala-1");
+      expect(ari.originados()).toEqual([]);
+      expect(gravacao.nomes()).toEqual(["politica"]);
+      expect(banco.tem("encerrada")).toHaveLength(1);
+    });
+
+    it("ninguém atende: o aviso tocou, mas sem ponte não há gravação nem processamento", async () => {
+      banco.disponiveis = [];
+      await entrar();
+      await terminou("fala-1");
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      expect(gravacao.nomes()).toEqual(["politica"]);
+      expect(banco.tem("encerrada")).toHaveLength(1);
+    });
+
+    it("organização que não grava, ou sem aviso pronto: a fila de sempre, sem fala a mais", async () => {
+      gravacao.politicaAtual = { gravar: false, aviso: AVISO_DE_GRAVACAO };
+      await entrar();
+      expect(ari.falas()).toEqual([]);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    });
+
+    it("gravação ligada mas o aviso não está pronto: não toca nada e não grava", async () => {
+      gravacao.politicaAtual = { gravar: true, aviso: null };
+      await entrar();
+      expect(ari.falas()).toEqual([]);
+      await ramalAtende(ari.ultimoOriginado());
+      expect(gravacao.nomes()).toEqual(["politica"]);
+    });
+
+    it("número oculto (sem conversa): nem pergunta a política", async () => {
+      await ctl.tratar({
+        type: "StasisStart",
+        channel: canal("cli-1", `PJSIP/tronco-${TRONCO}-00000001`, { caller: { name: "", number: "anonymous" } }),
+        args: ["entrada"],
+      });
+      expect(gravacao.chamadas).toEqual([]);
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    });
+
+    it("a política que lança não derruba a ligação: segue sem gravar", async () => {
+      gravacao.falharPolitica = true;
+      await entrar();
+      expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
+    });
+
+    it("a gravação que não começa não derruba a ponte nem pede processamento", async () => {
+      gravacao.recusarGravar = true;
+      await entrar();
+      await terminou("fala-1");
+      await ramalAtende(ari.ultimoOriginado());
+      expect(banco.tem("atendida")).toHaveLength(1);
+      await destruir("cli-1");
+      expect(gravacao.nomes()).toEqual(["politica", "comecar"]);
+    });
+  });
+
+  describe("feita", () => {
+    async function pedido() {
+      const id = "00000000-0000-4000-8000-000000000001";
+      banco.ligacoes.set(id, {
+        id,
+        organization_id: ORG,
+        channel_session_id: TRONCO,
+        contact_id: "contato-1",
+        conversation_id: "conversa-1",
+        direction: "outbound",
+        peer_phone: "+5561988887777",
+        status: "starting",
+        owner_user_id: ANA,
+        created_by: ANA,
+        team_id: null,
+        started_at: new Date().toISOString(),
+        answered_at: null,
+        provider: "sip_trunk",
+        sip_call_ref: `pedido-${id}`,
+      });
+      await ctl.tratar({
+        type: "StasisStart",
+        channel: canal("ramal-a", `PJSIP/ramal-${ANA}-0000000a`, {
+          dialplan: { context: "de-ramal", exten: `c-${id}`, priority: 1 },
+        }),
+        args: ["saida"],
+      });
+      return { id, perna: ari.chamadas.find((c) => c[0] === "discar")![1] as string };
+    }
+    const atende = (perna: string) =>
+      ctl.tratar({ type: "Dial", peer: canal(perna, "PJSIP/tronco-x-00000002"), dialstatus: "ANSWER" });
+
+    it("o cliente atende: o aviso toca na PONTE e a gravação começa logo depois; o fim para e pede o processamento", async () => {
+      const { id, perna } = await pedido();
+      expect(gravacao.nomes()).toEqual(["politica"]);
+      await atende(perna);
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar"]);
+      expect(gravacao.chamadas[1]).toEqual(["tocarAvisoNaPonte", `p-${id}`, SOM_DO_AVISO]);
+      expect(gravacao.chamadas[2]?.slice(0, 4)).toEqual(["comecar", ORG, id, `p-${id}`]);
+
+      await destruir(perna);
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar", "parar", "aoEncerrar"]);
+      const nomesAri = ari.nomes();
+      // Parada antes de a ponte cair.
+      expect(nomesAri.indexOf("destruirPonte")).toBeGreaterThan(-1);
+    });
+
+    it("o aviso da feita FALHA depois de começar: a gravação que começou junto é descartada", async () => {
+      const { perna } = await pedido();
+      await atende(perna);
+      await ctl.tratar({
+        type: "PlaybackFinished",
+        playback: { id: "aviso-pb-1", media_uri: SOM_DO_AVISO, target_uri: "bridge:p-x", language: "en", state: "failed" },
+      });
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar", "descartar"]);
+      // Descartada, o fim não pede processamento nem para a gravação de novo.
+      await destruir(perna);
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar", "descartar"]);
+    });
+
+    it("o aviso da feita tocou até o fim: a gravação segue", async () => {
+      const { perna } = await pedido();
+      await atende(perna);
+      await ctl.tratar({
+        type: "PlaybackFinished",
+        playback: { id: "aviso-pb-1", media_uri: SOM_DO_AVISO, target_uri: "bridge:p-x", language: "en", state: "done" },
+      });
+      await destruir(perna);
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte", "comecar", "parar", "aoEncerrar"]);
+    });
+
+    it("ninguém atende do outro lado: sem aviso, sem gravação", async () => {
+      const { perna } = await pedido();
+      await destruir(perna, 19);
+      expect(gravacao.nomes()).toEqual(["politica"]);
+    });
+
+    it("aviso sem arquivo no disco: não grava, e a Central fica sabendo", async () => {
+      falas.semArquivo.add(AVISO_DE_GRAVACAO.id);
+      const { perna } = await pedido();
+      await atende(perna);
+      expect(gravacao.nomes()).toEqual(["politica"]);
+      expect(banco.tem("fala_intocavel")).toEqual([["fala_intocavel", ORG, "aviso de gravação"]]);
+    });
+
+    it("o Asterisk recusa tocar o aviso na ponte: não grava", async () => {
+      gravacao.tocarNaPonteFalha = true;
+      const { perna } = await pedido();
+      await atende(perna);
+      expect(gravacao.nomes()).toEqual(["politica", "tocarAvisoNaPonte"]);
+    });
+
+    it("organização que não grava: a ligação sai como sempre", async () => {
+      gravacao.politicaAtual = { gravar: false, aviso: AVISO_DE_GRAVACAO };
+      const { perna } = await pedido();
+      await atende(perna);
+      expect(gravacao.nomes()).toEqual(["politica"]);
+    });
+  });
+
+  it("recuperada após reinício: parar é pedido (o estado em memória morreu), e a gravada é processada", async () => {
+    const id = "vc-9";
+    banco.ligacoes.set(id, {
+      id,
+      organization_id: ORG,
+      channel_session_id: TRONCO,
+      contact_id: "contato-1",
+      conversation_id: "conversa-1",
+      direction: "inbound",
+      peer_phone: "+5561988887777",
+      status: "connected",
+      owner_user_id: ANA,
+      created_by: null,
+      team_id: TIME,
+      started_at: new Date().toISOString(),
+      answered_at: new Date().toISOString(),
+      provider: "sip_trunk",
+      sip_call_ref: "cli-9",
+      recording_status: "recording",
+    });
+    ari.pontesVivas = [{ id: `p-${id}`, channels: ["cli-9", "ramal-9"] }];
+    ari.canaisVivos = [{ id: "cli-9" }, { id: "ramal-9" }];
+    await ctl.recuperar();
+    await destruir("cli-9");
+    expect(gravacao.nomes()).toEqual(["parar", "aoEncerrar"]);
+  });
+});
+
 describe("o som de chamando na fila (DYD-52): com atendente livre, o chamar — não 'todos ocupados'", () => {
   // Medido em produção na 1.50.1: menu → tecla 2 → o José atendeu em 16 s, mas enquanto o ramal
   // dele tocava o cliente ouviu "Todos os nossos atendentes estão ocupados…". Aqui o "aguarde" e o

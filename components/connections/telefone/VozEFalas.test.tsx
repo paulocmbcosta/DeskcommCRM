@@ -195,7 +195,7 @@ beforeEach(() => {
     oferecida: true,
     chave: { cadastrada: true, last4: "1234" },
     voz: { voice_id: "v1", model_id: "eleven_multilingual_v2" },
-    falas: { waiting: null, nobody: null, after_hours: null },
+    falas: { waiting: null, nobody: null, after_hours: null, recording_notice: null },
   };
 });
 afterEach(() => {
@@ -263,11 +263,13 @@ describe("aba Voz e falas — o que aparece antes de qualquer fala", () => {
 });
 
 describe("aba Voz e falas — gerar prévia, ouvir, salvar e usar", () => {
-  it("as três falas com o texto sugerido; 'Salvar e usar' só depois da prévia, e com o hash dela", async () => {
+  it("as quatro falas com o texto sugerido; 'Salvar e usar' só depois da prévia, e com o hash dela", async () => {
     const post = vi.spyOn(apiClient, "post");
     pintar();
     const c = await cartao("after_hours");
-    expect(document.querySelectorAll("[data-fala-geral]")).toHaveLength(3);
+    // As três da fila e o aviso de gravação (0289), que também nasce com o texto sugerido.
+    expect(document.querySelectorAll("[data-fala-geral]")).toHaveLength(4);
+    expect(campoDe(await cartao("recording_notice"))).toHaveValue(TEXTO_SUGERIDO.recording_notice);
     expect(campoDe(c)).toHaveValue(TEXTO_SUGERIDO.after_hours);
     expect(estadoDe(c)).toBe("ausente");
     expect(salvarDe(c)).toBeDisabled();

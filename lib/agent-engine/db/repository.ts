@@ -78,6 +78,8 @@ export type InboxKind =
   | 'phone_prompt_unplayable'
   | 'phone_emergency_expired'
   | 'phone_menu_team_archived'
+  // (migration 0289) A gravação de uma ligação não pôde ser guardada em 30 min.
+  | 'phone_recording_failed'
   | 'other';
 
 export interface InboxItemRow {

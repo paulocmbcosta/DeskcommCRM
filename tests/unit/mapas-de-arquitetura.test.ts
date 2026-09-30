@@ -262,6 +262,37 @@ describe("mapas de arquitetura — coerência interna", () => {
       "falta o cartão do laço de retorno da URA e das falas",
     ).toBe(true);
   });
+
+  it("a GRAVAÇÃO das ligações (F3) está no mapa da telefonia, e nenhuma peça nova é ilha", () => {
+    // DoD 13 para a F3 (desenho docs/superpowers/specs/2026-09-29-telefonia-gravacao-das-ligacoes-design.md):
+    // a gravação sai da ponte do Asterisk, passa pelo worker, vira mídia da
+    // mensagem da ligação, é ouvida pela escuta auditada e apagada pela retenção.
+    const m = JSON.parse(
+      fs.readFileSync(path.join(DIR, "telefonia.architecture.json"), "utf8"),
+    ) as Mapa & { cards?: Array<{ title: string; items: string[] }> };
+    const grau = (id: string) =>
+      (m.edges ?? []).filter((e) => e.from === id || e.to === id).length;
+    for (const peca of ["gravacoes", "rota_gravacao", "rota_escuta", "poda_gravacoes", "aba_gravacao", "cartao_gravacao", "bucket_midia"]) {
+      expect(grau(peca), `${peca} com menos de 2 arestas — é ilha pelo invariante 1`).toBeGreaterThanOrEqual(2);
+    }
+    const arestas = (m.edges ?? []).map((e) => `${e.from}→${e.to}`);
+    expect(arestas).toEqual(
+      expect.arrayContaining([
+        "controle→gravacoes",
+        "gravacoes→ari",
+        "gravacoes→bucket_midia",
+        "gravacoes→t_messages",
+        "cartao_gravacao→rota_escuta",
+        "rota_escuta→t_audit",
+        "poda_gravacoes→bucket_midia",
+        "central→aba_gravacao",
+      ]),
+    );
+    expect(
+      (m.cards ?? []).some((c) => /GRAVAÇÃO/.test(c.title) && /invariante 7/.test(c.title) && c.items.length > 0),
+      "falta o cartão do laço de retorno da gravação",
+    ).toBe(true);
+  });
 });
 
 /**

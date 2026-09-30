@@ -91,3 +91,23 @@ export function useMenusDoTelefone(ligado = true, { releAoVoltar = false }: { re
     queryFn: async () => (await apiClient.get<{ data: RespostaDosMenus }>("/api/v1/telefonia/menus")).data,
   });
 }
+
+/** `GET /api/v1/telefonia/gravacao` (admin) — a política de gravação das ligações (F3). */
+export interface GravacaoDoTelefone {
+  oferecida: boolean;
+  ativa: boolean;
+  retencao_dias: number;
+  /** As retenções que a rota aceita (`RETENCOES_DA_GRAVACAO_DIAS`). */
+  retencoes: number[];
+  /** O aviso de gravação configurado (pronto ou não). Sem ele pronto, a gravação não liga. */
+  aviso: FalaPublica | null;
+}
+
+export const CHAVE_DA_GRAVACAO = ["telefonia", "gravacao"] as const;
+
+export function useGravacaoDoTelefone() {
+  return useQuery({
+    queryKey: CHAVE_DA_GRAVACAO,
+    queryFn: async () => (await apiClient.get<{ data: GravacaoDoTelefone }>("/api/v1/telefonia/gravacao")).data,
+  });
+}

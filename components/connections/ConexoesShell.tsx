@@ -12,6 +12,7 @@ import { ConnectionsClient } from "./ConnectionsClient";
 import { TemplatesClient } from "./TemplatesClient";
 import { TemplatesParceiroClient } from "./TemplatesParceiroClient";
 import { MenusDoTelefone } from "./telefone/MenusDoTelefone";
+import { GravacaoDasLigacoes } from "./telefone/GravacaoDasLigacoes";
 import { VozEFalas } from "./telefone/VozEFalas";
 import { useT } from "@/hooks/i18n/useT";
 
@@ -66,9 +67,11 @@ export function ConexoesShell({
   // escolhe o canal, então a aba de dentro mora em `?sub=` — o mesmo padrão de
   // `?aba=oficial&sub=templates`. É para cá que a Central aponta: "uma fala não
   // tocou" → `sub=falas`, menu com time arquivado → `sub=menus`
-  // (lib/ai/inbox-destino.ts). Sem `sub` (ou com o de outro canal), Números.
+  // (lib/ai/inbox-destino.ts); gravação que não foi salva → `sub=gravacao` (F3).
+  // Sem `sub` (ou com o de outro canal), Números.
   const subParam = params.get("sub");
-  const subDoTelefone = subParam === "menus" ? "menus" : subParam === "falas" ? "falas" : "numeros";
+  const subDoTelefone =
+    subParam === "menus" ? "menus" : subParam === "falas" ? "falas" : subParam === "gravacao" ? "gravacao" : "numeros";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
     const q = new URLSearchParams();
@@ -120,6 +123,7 @@ export function ConexoesShell({
             <TabsTrigger value="numeros">{t("Números")}</TabsTrigger>
             <TabsTrigger value="menus">{t("Menus")}</TabsTrigger>
             <TabsTrigger value="falas">{t("Voz e falas")}</TabsTrigger>
+            <TabsTrigger value="gravacao">{t("Gravação")}</TabsTrigger>
           </TabsList>
           <TabsContent value="numeros" className="mt-0">
             <CanalTelefoneClient />
@@ -129,6 +133,9 @@ export function ConexoesShell({
           </TabsContent>
           <TabsContent value="falas" className="mt-0">
             <VozEFalas />
+          </TabsContent>
+          <TabsContent value="gravacao" className="mt-0">
+            <GravacaoDasLigacoes />
           </TabsContent>
         </Tabs>
       </TabsContent>

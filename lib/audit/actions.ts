@@ -658,6 +658,16 @@ export const AUDIT_ACTIONS = [
   "phone.emergency_deactivated",
   // Gravado pelo WORKER na passada de 60 s, sem ator: o aviso venceu sozinho.
   "phone.emergency_expired",
+  // Telefonia — gravação das ligações (F3, migration 0289). A política da
+  // organização (ligar/desligar, retenção) mudou: `metadata` = antes e depois.
+  "phone.recording_settings_changed",
+  // Alguém pediu para OUVIR uma gravação (a "escuta auditada" da spec 20): uma
+  // linha por URL assinada entregue. `metadata`: a conversa; nunca o caminho do arquivo.
+  "phone.recording_listened",
+  // A poda diária (cron data-retention) apagou gravações vencidas pela retenção
+  // da organização. Uma linha por organização e rodada com efeito; `metadata`:
+  // quantas. Sem ator (sistema).
+  "phone.recordings_expired",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

@@ -314,6 +314,13 @@ const PARES: Array<{
     arquivo: "lib/telefonia/vocabulario.ts",
     simbolo: "DESFECHOS_DO_MENU",
   },
+  {
+    tabela: "voice_calls",
+    coluna: "recording_status",
+    // migration 0289 — o ciclo da gravação da ligação. Nasce com o par no mesmo commit.
+    arquivo: "lib/telefonia/gravacao.ts",
+    simbolo: "ESTADOS_DA_GRAVACAO",
+  },
 ];
 
 /** Tira um nível de parênteses externos, se ele envolver a expressão inteira. */

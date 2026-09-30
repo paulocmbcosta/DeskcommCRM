@@ -53,6 +53,13 @@ describe("destinos da Central", () => {
     const [agente] = await resolverDestinosDosAvisos(leitor().client, ORG, "agent", [aviso("phone_menu_team_archived", null, null)]);
     expect(agente?.destination.estado).toBe("sem_permissao");
   });
+  it("gravação de ligação não salva (F3): rótulo de telefone e a aba da gravação, só para quem administra", async () => {
+    expect(KIND_LABEL.phone_recording_failed).toBe("A gravação de uma ligação não foi salva");
+    const [admin] = await resolverDestinosDosAvisos(leitor().client, ORG, "admin", [aviso("phone_recording_failed", null, null)]);
+    expect(admin?.destination).toMatchObject({ estado: "disponivel", href: "/app/connections?aba=telefone&sub=gravacao" });
+    const [agente] = await resolverDestinosDosAvisos(leitor().client, ORG, "agent", [aviso("phone_recording_failed", null, null)]);
+    expect(agente?.destination.estado).toBe("sem_permissao");
+  });
   it.each([
     ["handoff", "conversation", `/app/inbox/${ID}`], ["job_dead", "conversation", `/app/inbox/${ID}`],
     ["handoff", "contact", `/app/contacts/${ID}`], ["other", "lead", `/app/pipelines/${PIPELINE}?lead=${ID}`],

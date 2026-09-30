@@ -174,10 +174,14 @@ export async function vozDaOrganizacao(db: Queryable, organizationId: string): P
 }
 
 /** A coluna de `phone_settings` de cada fala geral — lista fechada: nunca texto de fora no SQL. */
-export const COLUNA_DA_FALA_GERAL: Record<FalaGeral, "waiting_prompt_id" | "nobody_prompt_id" | "after_hours_prompt_id"> = {
+export const COLUNA_DA_FALA_GERAL: Record<
+  FalaGeral,
+  "waiting_prompt_id" | "nobody_prompt_id" | "after_hours_prompt_id" | "recording_notice_prompt_id"
+> = {
   waiting: "waiting_prompt_id",
   nobody: "nobody_prompt_id",
   after_hours: "after_hours_prompt_id",
+  recording_notice: "recording_notice_prompt_id",
 };
 
 export async function falasGeraisDaOrg(
@@ -188,8 +192,10 @@ export async function falasGeraisDaOrg(
     waiting_prompt_id: string | null;
     nobody_prompt_id: string | null;
     after_hours_prompt_id: string | null;
+    recording_notice_prompt_id: string | null;
   }>(
-    "select waiting_prompt_id, nobody_prompt_id, after_hours_prompt_id from phone_settings where organization_id = $1",
+    `select waiting_prompt_id, nobody_prompt_id, after_hours_prompt_id, recording_notice_prompt_id
+       from phone_settings where organization_id = $1`,
     [organizationId],
   );
   const s = rows[0];
@@ -202,6 +208,7 @@ export async function falasGeraisDaOrg(
     waiting: await ler(s?.waiting_prompt_id),
     nobody: await ler(s?.nobody_prompt_id),
     after_hours: await ler(s?.after_hours_prompt_id),
+    recording_notice: await ler(s?.recording_notice_prompt_id),
   };
 }
 

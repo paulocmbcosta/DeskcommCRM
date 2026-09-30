@@ -83,6 +83,14 @@ export const POLITICAS_DE_AVISO = {
     orientacao: "Escolha outro time padrão para o menu. Enquanto isso, quem não escolhe uma opção cai num time que ninguém atende.",
     geral: { papel: "admin", href: "/app/connections?aba=telefone&sub=menus", rotulo: "Revisar os menus do telefone" },
   },
+  // Sem referência: a gravação que se perdeu não volta, e o que se conserta é o
+  // serviço (telefonia, Storage, conversor). A porta é a aba da gravação, onde o
+  // administrador vê a política e o estado do aviso.
+  phone_recording_failed: {
+    refs: [],
+    orientacao: "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.",
+    geral: { papel: "admin", href: "/app/connections?aba=telefone&sub=gravacao", rotulo: "Abrir a gravação do telefone" },
+  },
   phone_emergency_expired: {
     refs: [],
     orientacao: "Se a instabilidade continua, ligue o aviso de novo no time.",

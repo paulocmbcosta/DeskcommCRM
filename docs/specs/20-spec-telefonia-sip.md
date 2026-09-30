@@ -371,7 +371,7 @@ Navegador do atendente (JsSIP) ────────────────�
 | F2 v1 | URA e falas: menu por tecla com time padrão, "aguarde", "ninguém atendeu", fora do horário pela agenda do time (com um WhatsApp conectado, o texto sugerido traz o número dele), aviso de instabilidade por time. Desenho: `docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`; plano: `docs/superpowers/plans/2026-09-28-telefonia-fase2-v1-ura.md`; migration 0288 | implementada; prova na VPS pendente (J36 do mapa de jornadas) — publicada? `grep -n 'Menu de voz (URA)' CHANGELOG.md` |
 | F2 v2 | Transferência direta e consultada (§5.3 do mesmo desenho) | a fazer |
 | F2 v3 | Ramais (§5.4 do mesmo desenho) | a fazer |
-| F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada | a fazer |
+| F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada. Desenho (com as decisões D1–D8, tomadas na ausência do dono): `docs/superpowers/specs/2026-09-29-telefonia-gravacao-das-ligacoes-design.md`; plano: `docs/superpowers/plans/2026-09-29-telefonia-gravacao-das-ligacoes.md`; migration 0289; DYD-53 | implementada — publicada? `grep -n 'Gravação das ligações do telefone' CHANGELOG.md`; prova com ligação real depende de o dono ligar a gravação (J37 do mapa de jornadas) |
 | F4 | Transcrição em português dentro da conversa | a fazer |
 | F5 | Relatórios por time | a fazer |
 
@@ -504,7 +504,8 @@ existe ainda**, é dívida declarada — não ausência de defeito.
   (`lib/telefonia/numero.ts`).
 
 **Qual a continuidade IA↔humano?**
-- A IA não participa da ligação: não há agente de voz (transcrição é a F4). O registro da
+- A IA não participa da ligação: não há agente de voz (transcrição é a F4 — e a gravação da F3
+  já é a mídia da mensagem da ligação, então a F4 só emite `media.derive_requested` para ela). O registro da
   ligação é `outbound`/`system` de propósito, para não acordar turno nem termômetro.
 - IA → humano: não se aplica.
 - Humano → IA: **não existe ainda.** O contexto do agente

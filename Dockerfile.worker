@@ -15,6 +15,12 @@ ENV APP_VERSION=$APP_VERSION
 # pnpm fixado na versão do lockfile do repo (pnpm 10 bloquearia build scripts).
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
+# ffmpeg: a GRAVAÇÃO das ligações do telefone (F3; lib/channels/telefonia/gravacoes.ts).
+# O Asterisk grava WAV (o Asterisk do Alpine não escreve Opus/Ogg — medido na VPS),
+# e o worker converte para MP3 antes de guardar no Storage: ~1/5 do tamanho.
+# Pacote do Alpine, como no Dockerfile do app (derivação de vídeo).
+RUN apk add --no-cache ffmpeg
+
 COPY package.json pnpm-lock.yaml ./
 COPY patches ./patches
 RUN pnpm install --frozen-lockfile

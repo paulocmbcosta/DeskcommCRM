@@ -16,7 +16,7 @@ import { useConversationNotes } from "@/hooks/inbox/useConversationNotes";
 import { useDeleteNote } from "@/hooks/inbox/useDeleteNote";
 import { useReagir } from "@/hooks/inbox/useReagir";
 import { useDebugToggle } from "@/hooks/ai/useDebugToggle";
-import { useActiveOrg, useUser } from "@/hooks/auth/AuthProvider";
+import { useActiveOrg, usePermission, useUser } from "@/hooks/auth/AuthProvider";
 import { ROLE_RANK } from "@/lib/auth/types";
 import type { Message, Note } from "@/lib/types/messaging";
 
@@ -76,6 +76,9 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
       ? (m: Message, emoji: string) => reagir.mutate({ messageId: m.id, emoji })
       : undefined;
   const canManage = activeOrg != null && ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager;
+  // Ouvir a gravação de uma ligação (F3): o piso de papel é da AÇÃO, e a rota da
+  // escuta confere o mesmo piso (e audita). Quem não alcança vê "Ligação gravada".
+  const podeOuvirGravacao = usePermission("voice.recording.listen");
   const { enabled: debugCitations } = useDebugToggle(activeOrg?.role ?? null);
 
   const messages: Message[] = useMemo(
@@ -258,6 +261,7 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
                   key={`msg-${item.data.id}`}
                   ligacao={ligacaoDaMensagem(item.data.metadata)!}
                   em={item.data.created_at}
+                  podeOuvirGravacao={podeOuvirGravacao}
                 />
               ) : (
                 <MessageBubble

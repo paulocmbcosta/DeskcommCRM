@@ -696,6 +696,7 @@ jobs:
         inbox-checks-reacoes-e-nome.spec.ts
         devolver-ao-proprio-time.spec.ts
         telefonia-ura-e-falas.spec.ts
+        telefonia-gravacao.spec.ts
       # `telefonia-ura-e-falas` (fase 2 da telefonia, 2026-09-29) cria a PRÓPRIA
       # organização, com admin e atendente sem MFA, e não toca a organização
       # compartilhada — a vizinhança desta parte não muda por ela. Sobe a
@@ -703,6 +704,9 @@ jobs:
       # depende de `TELEFONIA_ARI_URL`/`_PASSWORD` no `.env.e2e`, que o gerador
       # só escreve com `E2E_TELEFONIA=1` — e o passo "Gerar o .env.e2e" só o
       # passa nesta parte. Spec que dependa da telefonia mora AQUI.
+      # `telefonia-gravacao` (F3, DYD-53) segue o mesmo desenho: organização
+      # própria, admin e atendente sem MFA, e a ligação gravada SEMEADA (nada
+      # escuta a ARI); sobe um MP3 de 1 s no Storage local para o player tocar.
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts
