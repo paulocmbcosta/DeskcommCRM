@@ -346,3 +346,133 @@ As peças novas do mapa e suas arestas:
 - **OOM do worker** (investigação separada): a fase 2 acrescenta pouco uso de memória. O paliativo `NODE_OPTIONS` segue valendo.
 - **Ordem da tela perdida** se o worker reiniciar naquele segundo. O atendente clica de novo; a API responde em sucesso só depois de emitir, e o painel reflete o estado real da ligação.
 - **Janela de 24 h do Storage conta da criação** (versão 1, registrado na revisão de segurança): a limpeza apaga o objeto criado há mais de 24 h sem referência, não o sem USO há 24 h. Uma prévia que reaproveita um áudio antigo sem referência — voltar ao texto anterior, por exemplo — pode ser apagada antes do "Salvar e usar". O salvar recusa com `previa_ausente`, e a pessoa gera a prévia de novo, pagando uma síntese. Melhoria futura: usar `last_accessed_at` do Storage, se ele for atualizado no download, ou renovar a idade ao reaproveitar.
+
+## 12. Emenda de 2026-09-30 — transferência (v2) e ramais (v3) fechadas com o dono
+
+Brainstorming de 2026-09-30 (sessão "Telefonia: transferência e ramais"). O dono **confirmou D9, D10 e D11 como estão** e fechou os pontos abaixo. Onde esta seção diverge de §3.2, §3.3, §5.3, §5.4 e §6 (itens 5 e 7), **vale esta seção**.
+
+### 12.1 Decisões novas
+
+| # | Decisão | Escolha |
+|---|---|---|
+| D16 | Que ligação pode ser transferida | **Recebida e feita.** A interna (v3) não |
+| D17 | Quem pode ser escolhido | Só quem está **disponível**. Offline, em ligação, **em pausa** e **fora do horário** aparecem em cinza, com o motivo, e não podem ser escolhidos. A pausa é respeitada como no rodízio. A mesma régua vale para a ligação interna |
+| D18 | Onde se vê o ramal | **No telefone do cabeçalho** ("Seu ramal: 201"), em **Conexões › Telefone › Ramais** (só admin: lista todos, a situação de cada um e edita o número) e **na busca** da transferência e do discador. A coluna em Membros (§6.7) **sai** |
+| D19 | O que o cliente ouve durante a transferência | **Música na ponte dele.** A ponte `p-<ligação>` vive a ligação inteira, e a gravação (F3) continua nela, gravando a música da espera. A ponte de consulta **não** é gravada, e quem recebe não ouve o aviso de gravação de novo |
+| D20 | A fila da transferência (para time, e o fim de D10) | **Só toques.** Rodízio do time (`proximoToque`), 20 s por pessoa, 2 voltas, até 120 s sem ninguém livre, com quem transferiu fora do rodízio. Música o tempo todo, sem "aguarde", sem aviso de instabilidade e sem "fora do horário". Esgotou: toca `ninguem` na ponte, se houver, e a ligação vira perdida com "Ligar de volta" para o time |
+| D21 | "O time da ligação" (D10) | Recebida: o time da fila, do número ou do menu. Feita: o time da conversa. Sem time: vira perdida, com "Ligar de volta" para quem transferiu |
+| D22 | Formato do ramal | 2 a 4 dígitos, **sem começar por 0**, porque o 0 é o prefixo de saída da operadora. Automático a partir de 201. Quem perde o papel de atendimento, ou o acesso, **libera** o número |
+| D23 | Ligação interna | `voice_calls` com `direction = 'internal'`, sem número da empresa (`channel_session_id` nulo), `peer_user_id` = quem recebe e `peer_phone` = o ramal dele. Não cria contato nem conversa, não passa pela operadora e não é gravada. Quem recebe vê "Ligação interna · Ana (201)" |
+
+### 12.2 Worker (caminho A da sessão: a fase "em conversa" comum)
+
+- **A forma comum.** Recebida e feita atendidas têm a mesma forma: a ponte `p-<ligação>`, o canal do cliente (na recebida, `cliente`; na feita, `perna`) e o canal do atendente. A transferência opera sobre essa forma, num módulo próprio, `lib/channels/telefonia/transferencia.ts`, no molde de `fala-no-ar.ts`: um grupo de estado com relógios próprios e ganchos para o controlador. O controlador só roteia eventos.
+- **As portas** (`PortaAri`, `Registro`, `EventoAri`) vão para `lib/channels/telefonia/portas.ts` antes da transferência. Isso fecha o ciclo de tipos entre `controle.ts` e `fala-no-ar.ts` (notas da v1, item 1).
+- **Os papéis novos de canal** (`appArgs`):
+  - `transf,<ligação>`: o ramal de quem recebe a direta;
+  - `volta,<ligação>`: o ramal de quem transferiu, tocando de volta;
+  - `consulta,<ligação>`: o ramal do colega, na ponte de consulta `k-<ligação>`;
+  - `fila,<ligação>`: o toque da fila da transferência;
+  - `interna,<ligação>`: quem recebe a ligação interna.
+  - Todos vão com os headers `X-Ligacao-Id` e, conforme o caso, `X-Transferida-Por` ou `X-Interna-De`.
+- **A ordem.** A API emite `POST /events/user/telefonia_transferencia?application=crm`, com as variáveis `acao` (`transferir`, `completar` ou `voltar`), `transferencia_id` e `voice_call_id`. O worker **relê a transferência no banco** pelo id, com a organização junto, e age só sobre o que o banco diz. A variável do evento é ponteiro, nunca autoridade. O formato real do evento é medido na VPS antes de o worker depender dele, com uma aplicação Stasis de sonda de outro nome, nunca uma segunda conexão ao app `crm`.
+- **Revalidação no worker:**
+  - a ligação está viva em memória, atendida e sem outra transferência;
+  - o destino tem ramal online e não está em ligação.
+  - Se falhar, a transferência fecha `refused`, com o motivo, e o painel mostra.
+- **Direta para pessoa:**
+  1. `musicaNaPonte`, depois `tirarDaPonte` e desligar o canal de quem transferiu.
+  2. `ringing_user_id` = o destino, e o ramal dele toca por 20 s.
+  3. Atendeu: entra na ponte, a música para, a ligação passa para ele (`owner_user_id`, sem mexer em `answered_at`) e a conversa também (`fn_conversation_assign`, motivo `transfer`).
+  4. Recusou, caiu ou deu 20 s: é a vez de quem transferiu.
+  5. Quem transferiu não atendeu: fila de D20/D21.
+- **Direta para time:** a fila de D20. A conversa muda para o time. Quem atende fica com a ligação e com a conversa.
+- **Consultada:**
+  - `musicaNaPonte`; quem transferiu sai da ponte do cliente **sem ser desligado** e entra em `k-<ligação>`, onde o ramal do colega toca;
+  - **Completar:** o colega passa para `p-`, `k-` é destruída e quem transferiu é desligado;
+  - **Voltar**, o colega recusar ou o colega não atender em 20 s: quem transferiu volta a `p-`, a música para e o colega (se atendeu) é desligado;
+  - quem transferiu desliga com o colega na linha: completa;
+  - quem transferiu desliga com o colega ainda tocando: vira direta;
+  - o cliente desliga: tudo encerra (`cancelled`).
+- **Uma por vez**, também no banco: índice único parcial em `voice_call_transfers (voice_call_id) where ended_at is null`.
+- **Reinício do worker:** as transferências abertas são fechadas `cancelled` com motivo `worker_reiniciou` na recuperação. É o mesmo risco aceito em §11.
+- **Ligação interna (v3):**
+  - o navegador disca `c-<ligação>`, como na feita;
+  - o worker vê `direction = 'internal'`, confere dono, validade (60 s) e destino (mesma organização, papel de atendimento, disponível) e origina `interna,<ligação>` para o ramal do colega por 20 s;
+  - atendeu: ponte `p-`, `status = connected`;
+  - não atendeu, recusou ou ocupado: tom de ocupado para quem ligou, e fim com o motivo.
+- **URA com `accepts_extension` (v3):**
+  - depois da primeira tecla, espera 2 s por mais dígitos (até 4);
+  - 2 a 4 dígitos que são ramal de alguém disponível: toca nessa pessoa por 20 s (como `oferta`); não atendeu, vai à fila do time padrão do menu;
+  - ramal inexistente ou indisponível: `invalid` e repete;
+  - 1 dígito continua sendo opção, com 2 s de atraso.
+- **Ocupado:** as regras de "em ligação" (`disponiveisNoTime`, o diretório) passam a olhar também `peer_user_id` (interna) e o destino de uma transferência aberta.
+
+### 12.3 Dados
+
+- **0290 (transferência): `voice_call_transfers`.**
+  - Colunas: `organization_id`, `voice_call_id`, `requested_by`, `from_user_id`, `to_user_id` **ou** `to_team_id` (CHECK: exatamente um), `kind` (`blind` ou `attended`) e `status` (`open` ou `ended`).
+  - `outcome`: `answered`, `returned`, `queue_answered`, `missed`, `refused` ou `cancelled`, com CHECK; nulo enquanto aberta.
+  - Também: `reason` (vocabulário aberto), `answered_by`, `created_at` e `ended_at`.
+  - As FKs compostas `(organization_id, voice_call_id)` e `(organization_id, to_team_id)` pedem um `unique (organization_id, id)` novo em `voice_calls`.
+  - RLS só de leitura (`tenant_isolation_voice_call_transfers_select`); a escrita é pela API e pelo worker.
+- **0291 (ramais): `phone_extensions`** (`organization_id`, `user_id`, `number`, `updated_by`):
+  - CHECK `^[1-9][0-9]{1,3}$`; `unique (organization_id, number)`; `unique (organization_id, user_id)`.
+  - `fn_proximo_ramal(org)` devolve o menor livre a partir de 201.
+  - Um gatilho em `user_organizations`, `security definer` com trava por organização (`pg_advisory_xact_lock`), dá ramal a quem ganha papel de atendimento e o tira de quem perde (papel `viewer` ou `revoked_at`).
+  - Backfill de quem já existe.
+  - `voice_calls`:
+    - o CHECK de `direction` passa a aceitar `internal`;
+    - `channel_session_id` perde o `not null`, com CHECK `direction = 'internal' or channel_session_id is not null`;
+    - `peer_user_id` novo.
+
+### 12.4 API
+
+- **Transferir:** `POST /api/v1/telefonia/chamadas/[id]/transferir` (agent+).
+  - Corpo: `{ modo: 'direta' | 'consultada', para: { user_id } | { team_id } }`.
+  - Quem pode: o dono atual da ligação, ou gerente ou admin.
+  - Condições: a ligação está `connected`, `direction` não é `internal`, e o destino passa em D17. Um time fora do horário é recusado.
+  - A consultada só aceita pessoa.
+  - Efeito: grava a transferência `open`, emite o evento e responde 202. Audita `phone.call_transferred`.
+- **Completar ou voltar:** `POST /api/v1/telefonia/chamadas/[id]/transferencia`, com `{ acao: 'completar' | 'voltar' }`. Só quem transferiu, ou gerente ou admin.
+- **Ler a ligação:** `GET /api/v1/telefonia/chamadas/[id]` ganha `transferencia` (a aberta, com nomes) e `transferida_por` (para quem recebeu).
+- **Diretório:** `GET /api/v1/telefonia/diretorio` (agent+) devolve:
+  - `meu_ramal`;
+  - `pessoas`: nome, ramal, situação (`disponivel`, `em_ligacao`, `em_pausa`, `fora_do_horario` ou `offline`) e times;
+  - `times`: nome, disponíveis e `aberto` ou `fora_do_horario`.
+  - O "online" vem de uma leitura só de `GET /endpoints/PJSIP` na ARI.
+- **v3:**
+  - `PATCH /api/v1/telefonia/ramais/[userId]` com `{ numero }` (admin). Recusa com 409 `ramal_em_uso`. Audita `phone.extension_changed`;
+  - `POST /api/v1/telefonia/chamadas` aceita `{ ramal }` e cria a interna, recusando com motivo quem não passa em D17;
+  - `POST /api/v1/telefonia/ramal` devolve também `numero`.
+
+### 12.5 Telas
+
+- **Painel do telefone:**
+  - botão **Transferir**, com uma busca por nome ou ramal: pessoas com situação, times com disponíveis ou "fora do horário";
+  - os botões são [Transferir] e [Falar antes] para pessoa, e [Transferir] para time;
+  - durante a transferência, a situação ("Transferindo para Bruno…");
+  - na consulta: "Falando com Bruno · cliente em espera", com [Completar transferência] e [Voltar ao cliente];
+  - quem recebe vê "Transferida por Ana · cliente João";
+  - quem recebe de volta vê "Bruno não atendeu, o cliente voltou";
+  - o motivo de uma recusa aparece no próprio painel.
+- **Discador do cabeçalho:** "Seu ramal: 201". O campo aceita nome ou ramal e sugere colegas com a situação. Ramal de 2 a 4 dígitos liga para o colega.
+- **Conexões › Telefone › Ramais** (`?aba=telefone&sub=ramais`, admin): nome, ramal (editável), times e situação, relida a cada 10 s.
+- **Cartão da ligação:** a corrente de transferências ("Ana transferiu para Bruno · Bruno atendeu"), gravada no fim da ligação em `metadata.voice_call.transferencias`.
+- **Menus:** o interruptor "O cliente pode digitar o ramal" (`accepts_extension`).
+
+### 12.6 Prova
+
+- **Unitários:** `controle.test.ts` e `transferencia.test.ts` (ARI de mentira) cobrem todos os caminhos de 12.2. Também as rotas e o diretório.
+- **`test:db`:**
+  - RLS de `voice_call_transfers` e `phone_extensions` entre 2 organizações;
+  - o índice de uma aberta por ligação;
+  - o gatilho, o backfill, a liberação e a corrida de dois ramais simultâneos;
+  - os CHECKs novos de `voice_calls`;
+  - install e update do baseline.
+- **e2e no Actions:** a aba Ramais (admin edita, conflito), "Seu ramal" e a busca do discador.
+- **VPS:**
+  - a medição do evento de usuário (sonda);
+  - o deploy com 307, health, tronco `Registered` e conntrack 5060;
+  - os objetos da 0290 e da 0291 no banco e os ramais do backfill.
+  - A prova com ligação e duas contas `agent` em dois navegadores é do dono, pelo roteiro entregue.
