@@ -307,9 +307,56 @@ describe("ehPedidoDeOptOut — pedido INEQUÍVOCO, o que autoriza bloquear", () 
     expect(ehPedidoDeOptOut("tem como parar a dor?")).toBe(false);
   });
 
-  it("cancelar sozinho sai; cancelar UMA COISA fica", () => {
-    expect(ehPedidoDeOptOut("cancelar")).toBe(true);
+  it("cancelar UMA COISA fica, e não escala", () => {
     expect(ehPedidoDeOptOut("quero cancelar o pedido")).toBe(false);
+    expect(ehOptOutProvavel("quero cancelar o pedido")).toBe(false);
+  });
+});
+
+/**
+ * `cancelar` SOZINHO não bloqueia mais: escala para uma pessoa.
+ *
+ * Medido na produção de um provedor de internet (21–30/09/2026): TODOS
+ * os bloqueios automáticos do período foram engano, e os dois por palavra
+ * isolada foram "cancelar". Nenhuma das 37 mensagens de cliente com a raiz
+ * "cancel" falava de mensagem, lista ou WhatsApp; 15 falavam de plano,
+ * internet ou visita. Os dois casos, com a mensagem nossa que veio antes:
+ *
+ *   atendente: "…pela manhã confirmou se consegue receber…"  → "cancelar"
+ *     (era a VISITA; a cliente escreveu mais 10 vezes na semana e um gerente
+ *     teve de desbloquear à mão)
+ *   IA: "Os aparelhos estão ligados na tomada?"              → "Cancelar"
+ *     (cliente sem internet há 8 h, insatisfeita, ficou sem resposta)
+ *
+ * Num provedor, numa clínica ou numa loja, "cancelar" é vocabulário de
+ * SERVIÇO — o plano, a visita, a consulta, o pedido. Por isso a palavra
+ * sozinha desce para o nível ambíguo: a IA para e chama um humano, que lê a
+ * conversa e decide. Se era mesmo pedido para sair, ele bloqueia; se era o
+ * plano, é justamente o cliente que mais precisa de atendimento.
+ */
+describe("cancelar sozinho — ambíguo: escala para uma pessoa, não bloqueia", () => {
+  const CANCELAR_SOZINHO = ["cancelar", "Cancelar", "CANCELAR", "Cancelar.", "CANCELAR!", " cancelar "];
+
+  it.each(CANCELAR_SOZINHO)("não bloqueia: %j", (texto) => {
+    expect(ehPedidoDeOptOut(texto), `bloquearia ${JSON.stringify(texto)}`).toBe(false);
+  });
+
+  it.each(CANCELAR_SOZINHO)("escala para humano: %j", (texto) => {
+    expect(ehOptOutProvavel(texto), `deixaria a IA seguir em ${JSON.stringify(texto)}`).toBe(true);
+  });
+
+  it("as outras palavras isoladas seguem bloqueando na hora", () => {
+    // CONTROLE: a mudança é da palavra `cancelar`, não do mecanismo de palavra
+    // isolada. Sem isto, apagar `ehPalavraIsolada` inteira deixaria esta
+    // suíte verde.
+    for (const palavra of ["sair", "SAIR!", "parar", "pare", "stop", "descadastrar", "baja", "salir"]) {
+      expect(ehPedidoDeOptOut(palavra), palavra).toBe(true);
+    }
+  });
+
+  it("cancelar com objeto de comunicação segue bloqueando", () => {
+    expect(ehPedidoDeOptOut("quero cancelar a inscrição")).toBe(true);
+    expect(ehPedidoDeOptOut("quero cancelar a assinatura das mensagens")).toBe(true);
   });
 });
 
