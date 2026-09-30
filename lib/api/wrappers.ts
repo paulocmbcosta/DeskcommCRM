@@ -42,7 +42,8 @@ export type ApiResponse<T> = ApiSuccess<T> | ApiError;
 // -----------------------------------------------------------------------------
 
 type OkOptions = {
-  status?: 200 | 201 | 204;
+  /** 202: aceito, ainda não feito (a ordem foi entregue a um worker que age depois). */
+  status?: 200 | 201 | 202 | 204;
   meta?: ApiSuccess<unknown>["meta"];
   requestId?: string;
   headers?: HeadersInit;

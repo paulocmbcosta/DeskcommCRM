@@ -668,6 +668,13 @@ export const AUDIT_ACTIONS = [
   // da organização. Uma linha por organização e rodada com efeito; `metadata`:
   // quantas. Sem ator (sistema).
   "phone.recordings_expired",
+  // Telefonia — transferência de ligação (v2, migration 0290). O PEDIDO, gravado
+  // pela API; o desfecho fica em `voice_call_transfers` (o worker). `metadata`:
+  // modo, destino e, em completar/voltar, a ação.
+  "phone.call_transferred",
+  // Telefonia — ramais (v3, migration 0291): o admin trocou o número do ramal
+  // de alguém. `metadata`: antes e depois.
+  "phone.extension_changed",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */
