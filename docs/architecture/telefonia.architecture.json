@@ -526,6 +526,62 @@
       "col": 16,
       "type": "database",
       "label": "Storage `whatsapp-media` (PRIVADO) — a gravação é a MÍDIA da mensagem da ligação: `<org>/<conversa>/<mensagem>.mp3`. Por estar ali, a anonimização do contato (0235) a põe na `storage_redaction_queue` sem mudar a cascata"
+    },
+    {
+      "id": "transferencia",
+      "lane": "worker",
+      "col": 10,
+      "type": "backend",
+      "label": "`transferencia.ts` (`Transferencias`, v2) — a TRANSFERÊNCIA sobre a forma comum da ligação atendida (ponte `p-<id>`, cliente, atendente): direta para pessoa (toca `transf` 20 s → não atendeu, `volta` a quem transferiu → a FILA do time, só toques, com quem transferiu fora do rodízio), direta para time, consultada (ponte `k-<id>`, completar, voltar, quem transferiu desliga com o colega na linha → completa, ainda tocando → vira direta). Música NA PONTE do cliente o tempo todo (D19). A ordem vem como evento de usuário da ARI e é relida do banco; revalida (online, em ligação) e fecha `refused` com motivo; o cliente desligando fecha `cancelled`; reinício do worker cancela as abertas"
+    },
+    {
+      "id": "rota_transferir",
+      "lane": "api",
+      "col": 19,
+      "type": "backend",
+      "label": "`POST /api/v1/telefonia/chamadas/[id]/transferir` e `…/transferencia` (agent+; dono da ligação ou gerente+) + `pedido-de-transferencia.ts` — confere a ligação (atendida, não interna), o destino pela régua de D17 (só disponível; time no horário), grava o PEDIDO `open` (uma por ligação, pelo índice único) e emite a ordem `telefonia_transferencia` pela ARI (202); a ordem que não sai recusa a linha. Audita `phone.call_transferred`"
+    },
+    {
+      "id": "rota_diretorio",
+      "lane": "api",
+      "col": 20,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/diretorio` (agent+) + `diretorio.ts` — pessoas com ramal, times e a SITUAÇÃO de agora (disponível, em ligação, em pausa, fora do horário, offline; D17), com o online de UMA leitura de `GET /endpoints/PJSIP`; os times com quantos estão livres e aberto/fora do horário"
+    },
+    {
+      "id": "rota_ramais",
+      "lane": "api",
+      "col": 21,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/ramais` e `PATCH /…/ramais/[userId]` (admin) + `interna.ts` — a lista e a troca do número (2 a 4 dígitos sem 0 na frente; 409 `ramal_em_uso`; audita `phone.extension_changed`); `POST /chamadas` com `{ ramal }` cria a ligação INTERNA (D23) e `POST /ramal` devolve o número"
+    },
+    {
+      "id": "painel_transferir",
+      "lane": "tela",
+      "col": 16,
+      "type": "frontend",
+      "label": "Painel da ligação (`PainelDoTelefone` + `TransferirLigacao`) — [Transferir] com busca por nome ou ramal (só o disponível pode ser escolhido; os outros em cinza com o motivo), [Falar antes], na consulta [Completar transferência] e [Voltar ao cliente]; o que o painel diz é a regra pura `texto-da-transferencia.ts` (\"Transferida por Ana\", \"Bruno não atendeu, o cliente voltou\", a recusa com o motivo)"
+    },
+    {
+      "id": "aba_ramais",
+      "lane": "tela",
+      "col": 17,
+      "type": "frontend",
+      "label": "Conexões › Telefone › Ramais (`?aba=telefone&sub=ramais`, `RamaisDoTelefone.tsx`, admin) — nome, ramal editável, times e situação, relida a cada 10 s; o discador do cabeçalho mostra \"Seu ramal: 201\" e liga para ramal ou nome (`discador.ts`); o editor de menu ganha \"O cliente pode digitar o ramal\""
+    },
+    {
+      "id": "t_transferencias",
+      "lane": "banco",
+      "col": 16,
+      "type": "database",
+      "label": "`voice_call_transfers` (0290) — pedido e desfecho de cada transferência: destino pessoa OU time, `blind`/`attended` (consultada só para pessoa), `open`→`ended` com `outcome` (`answered`, `returned`, `queue_answered`, `missed`, `refused`, `cancelled`) e `reason`; uma aberta por ligação (índice único parcial); FKs compostas; RLS só de leitura"
+    },
+    {
+      "id": "t_ramais",
+      "lane": "banco",
+      "col": 17,
+      "type": "database",
+      "label": "`phone_extensions` (0291) — o número do ramal de cada pessoa (201…), dado pelo gatilho `trg_ramal_por_papel` a quem ganha papel de atendimento e liberado de quem perde, com trava por organização; `voice_calls` aceita `direction = internal` sem número da empresa e com `peer_user_id`"
     }
   ],
   "edges": [
@@ -695,7 +751,28 @@
     { "from": "poda_gravacoes", "to": "t_voice_calls", "label": "`stored` → `expired` pela retenção da org" },
     { "from": "poda_gravacoes", "to": "bucket_midia", "label": "remove ANTES de marcar" },
     { "from": "poda_gravacoes", "to": "t_audit", "label": "`phone.recordings_expired` por organização" },
-    { "from": "central", "to": "aba_gravacao", "label": "`phone_recording_failed` → \"Abrir a gravação do telefone\"" }
+    { "from": "central", "to": "aba_gravacao", "label": "`phone_recording_failed` → \"Abrir a gravação do telefone\"" },
+    { "from": "controle", "to": "transferencia", "label": "os eventos da transferência (a ordem, os papéis `transf`/`volta`/`consulta`/`fila`, o fim dos canais e da ligação)" },
+    { "from": "transferencia", "to": "ari", "label": "música na ponte, tirar da ponte, ponte de consulta `k-<id>`, originar o ramal do destino" },
+    { "from": "transferencia", "to": "t_transferencias", "label": "relê o pedido pelo id e grava o desfecho" },
+    { "from": "transferencia", "to": "t_voice_calls", "label": "`ringing_user_id` (sem mexer no status), o novo dono, o time" },
+    { "from": "transferencia", "to": "t_conversations", "label": "a conversa passa a quem atendeu (`transfer`) ou ao time (`team_transfer`)" },
+    { "from": "transferencia", "to": "central", "label": "ninguém pegou → \"Ligar de volta\" para o time (`voice_call_missed`)" },
+    { "from": "painel_transferir", "to": "rota_transferir", "label": "Transferir / Falar antes / Completar / Voltar" },
+    { "from": "painel_transferir", "to": "rota_diretorio", "label": "a busca: pessoas e times com a situação de agora" },
+    { "from": "rota_transferir", "to": "t_transferencias", "label": "grava o pedido `open` (uma por ligação)" },
+    { "from": "rota_transferir", "to": "ari", "label": "emite o evento de usuário `telefonia_transferencia`" },
+    { "from": "rota_transferir", "to": "t_audit", "label": "`phone.call_transferred`" },
+    { "from": "rota_diretorio", "to": "t_ramais", "label": "o ramal de cada pessoa" },
+    { "from": "rota_diretorio", "to": "ari", "label": "quem está online (`GET /endpoints/PJSIP`)" },
+    { "from": "aba_ramais", "to": "rota_ramais", "label": "lista e troca o número" },
+    { "from": "rota_ramais", "to": "t_ramais", "label": "troca o número (409 se for de outra pessoa)" },
+    { "from": "rota_ramais", "to": "t_audit", "label": "`phone.extension_changed`" },
+    { "from": "rota_ramais", "to": "t_voice_calls", "label": "cria a ligação interna (`direction = internal`)" },
+    { "from": "controle", "to": "t_ramais", "label": "a URA com ramal traduz o número digitado em pessoa; a interna toca o colega" },
+    { "from": "painel_transferir", "to": "t_transferencias", "label": "a corrente de transferências no cartão da ligação (gravada no fim em `metadata.voice_call.transferencias`)" },
+    { "from": "aba_ramais", "to": "rota_diretorio", "label": "o discador do cabeçalho: \"Seu ramal\" e os colegas por nome ou ramal, com a situação" },
+    { "from": "aba_ramais", "to": "aba_menus", "label": "\"O cliente pode digitar o ramal\" no menu (`accepts_extension`)" }
   ],
   "cards": [
     {
@@ -741,6 +818,17 @@
         "A ARI grava antes de o banco marcar: se o banco falha, a gravação é parada e apagada — nunca uma ligação `recording` sem arquivo, que viraria alarme falso",
         "Retenção: a poda diária apaga o arquivo e o cartão passa a dizer \"apagada pelo prazo de guarda\"; Storage fora não marca nada e tenta no dia seguinte",
         "O que NÃO fecha sozinho: número oculto (sem conversa) não é gravado — decisão D8 do desenho; a transcrição (F4) não existe ainda"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Fase 2, versões 2 e 3 — TRANSFERÊNCIA e RAMAIS: o laço de retorno (invariante 7)",
+      "items": [
+        "Transferência que não pega: a pessoa não atende → o cliente volta para quem transferiu (\"Bruno não atendeu, o cliente voltou\"); ninguém atende → a fila do time; ninguém do time → \"Ligar de volta\" na Central, para o time. Muitos `returned` aparecem na corrente do cartão de cada ligação",
+        "Destino que não pode receber (offline, em ligação, pausa, fora do horário, time fechado): a API recusa antes, com o motivo; o que mudou entre a tela e o worker volta como `refused` com o motivo, e o painel mostra",
+        "A ordem que não chega ao worker (ARI fora): a rota recusa a linha e responde 503 — a transferência aberta nunca trava a próxima; worker reiniciado cancela as abertas (`worker_reiniciou`)",
+        "Ramal digitado na URA que não existe, ou de quem está ocupado: conta como tecla errada (a fala de inválida e o menu, e o time padrão na terceira); a pessoa do ramal que não atende passa a ligação à fila inteira do time padrão",
+        "Ligação interna sem resposta (colega offline, ocupado, não atendeu): tom de ocupado para quem ligou e fim, sem Central — não há cliente esperando"
       ]
     }
   ]
