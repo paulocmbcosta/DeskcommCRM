@@ -8,6 +8,22 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.51.0] — 2026-09-30
+
+### Adicionado
+
+- **Gravação das ligações do telefone, com aviso, ouvida pelo cartão da ligação** As ligações do telefone podem ser gravadas. Em Conexões › Telefone › Gravação, quem administra
+  liga a gravação e escolhe por quanto tempo guardar (90 dias por padrão). Antes, é preciso gerar e
+  salvar o **aviso de gravação** na aba Voz e falas ("Esta ligação poderá ser gravada…"): sem ele,
+  a gravação não liga. Quem liga ouve o aviso no começo, antes do menu; quem recebe a ligação do
+  atendente ouve quando atende. Só a conversa com o atendente é gravada — o menu e a espera não.
+
+  A gravação aparece no cartão da ligação, dentro da conversa: "Preparando a gravação…" e, em
+  seguida, **Ouvir a gravação**. Ouvem atendentes, gestores e administradores que enxergam a
+  conversa, e cada escuta fica registrada na auditoria. Gravação vencida é apagada sozinha;
+  anonimizar um contato apaga as gravações dele; gravação que não pôde ser salva vira aviso na
+  Central. A gravação vem desligada: nada muda até alguém ligá-la.
+
 ## [1.50.2] — 2026-09-29
 
 ### Corrigido
@@ -5795,7 +5811,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.2...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.0...HEAD
+[1.51.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.2...v1.51.0
 [1.50.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.1...v1.50.2
 [1.50.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.49.1...v1.50.0
