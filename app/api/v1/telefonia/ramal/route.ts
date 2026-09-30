@@ -18,6 +18,7 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
 import { ClienteAri, configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
+import { meuRamal } from "@/lib/channels/telefonia/interna";
 import { credencialDoRamal } from "@/lib/channels/telefonia/ramal";
 import { numerosParaLigar } from "@/lib/channels/telefonia/saida";
 import { env } from "@/lib/env";
@@ -75,6 +76,8 @@ export async function POST(req: NextRequest): Promise<Response> {
         senha: cred.senha,
         ws_url: wsDoNavegador(req),
         numeros,
+        // O número do ramal (v3) — "Seu ramal: 201" no telefone do cabeçalho.
+        numero: await meuRamal(getRequestPool(), authz.org.orgId, authz.user.id).catch(() => null),
       },
       { requestId },
     );

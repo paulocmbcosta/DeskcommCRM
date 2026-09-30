@@ -94,6 +94,7 @@ function fala(extra: Partial<FalaPublica> = {}): FalaPublica {
 
 function menuPrincipal(extra: Partial<MenuPublico> = {}): MenuPublico {
   return {
+    aceita_ramal: false,
     id: "m1",
     nome: "Principal",
     time_padrao_id: T_SUPORTE,
@@ -137,6 +138,7 @@ function gravado(id: string, c: Record<string, unknown>): MenuPublico {
   const f = c.fala as { texto: string; hash: string };
   const fi = c.fala_invalida as { texto: string; hash: string } | null;
   return {
+    aceita_ramal: c.aceita_ramal === true,
     id,
     nome: String(c.nome),
     time_padrao_id: String(c.time_padrao_id),

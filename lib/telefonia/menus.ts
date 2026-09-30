@@ -87,6 +87,8 @@ export const menuSchema = z
     fala: falaParaSalvarSchema,
     // Ausente ou `null` = o menu não tem fala de tecla inválida (a URA só repete o menu).
     fala_invalida: falaParaSalvarSchema.nullish().transform((v) => v ?? null),
+    // v3: o cliente pode digitar o ramal de alguém. Ausente = não (a tela da v1 não manda).
+    aceita_ramal: z.boolean().optional().default(false),
   })
   .strict();
 
@@ -329,16 +331,17 @@ async function gravarMenuEOpcoes(
   if (menuId) {
     await c.query(
       `update phone_menus
-          set name = $3, default_team_id = $4, prompt_id = $5, invalid_prompt_id = $6, updated_at = now()
+          set name = $3, default_team_id = $4, prompt_id = $5, invalid_prompt_id = $6, accepts_extension = $7,
+              updated_at = now()
         where id = $1 and organization_id = $2 and archived_at is null`,
-      [menuId, org, e.nome, e.time_padrao_id, falas.prompt_id, falas.invalid_prompt_id],
+      [menuId, org, e.nome, e.time_padrao_id, falas.prompt_id, falas.invalid_prompt_id, e.aceita_ramal],
     );
     await c.query("delete from phone_menu_options where menu_id = $1 and organization_id = $2", [menuId, org]);
   } else {
     const { rows } = await c.query<{ id: string }>(
-      `insert into phone_menus (organization_id, name, default_team_id, prompt_id, invalid_prompt_id)
-       values ($1, $2, $3, $4, $5) returning id`,
-      [org, e.nome, e.time_padrao_id, falas.prompt_id, falas.invalid_prompt_id],
+      `insert into phone_menus (organization_id, name, default_team_id, prompt_id, invalid_prompt_id, accepts_extension)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [org, e.nome, e.time_padrao_id, falas.prompt_id, falas.invalid_prompt_id, e.aceita_ramal],
     );
     menuId = rows[0]!.id;
   }
@@ -384,6 +387,7 @@ async function descreverMenu(
     fala_invalida: falaInvalida,
     pronto: fala.status === "ready" && (!falaInvalida || falaInvalida.status === "ready"),
     numeros: numeros.map(rotuloDoNumero),
+    aceita_ramal: e.aceita_ramal,
   };
 }
 
@@ -479,6 +483,7 @@ interface LinhaDoMenu {
   fala_invalida: FalaPublica | null;
   /** Nome e número de cada um; a lista devolve o rótulo pronto (`rotuloDoNumero`). */
   numeros: NumeroDoMenu[];
+  aceita_ramal: boolean;
 }
 
 /**
@@ -504,6 +509,7 @@ const comDataIso = (f: FalaPublica | null): FalaPublica | null =>
 export async function menusDaOrg(db: Queryable, organizationId: string): Promise<MenuPublico[]> {
   const { rows } = await db.query<LinhaDoMenu>(
     `select m.id, m.name as nome, m.default_team_id as time_padrao_id, dt.name as time_padrao_nome,
+            m.accepts_extension as aceita_ramal,
             coalesce((select jsonb_agg(jsonb_build_object('tecla', o.digit, 'time_id', o.team_id, 'time_nome', t.name)
                                        order by o.digit)
                         from phone_menu_options o

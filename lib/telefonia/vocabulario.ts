@@ -381,6 +381,8 @@ export interface MenuPublico {
   pronto: boolean;
   /** Os números que tocam este menu, com o rótulo pronto: "Recepção · (61) 3686-1503", ou só um dos dois. */
   numeros: string[];
+  /** O cliente pode digitar o ramal de alguém (v3, `accepts_extension`). */
+  aceita_ramal: boolean;
   ultimos_7_dias: UltimosSeteDias;
 }
 

@@ -253,6 +253,7 @@ describe("menuPorId e o menu do número", () => {
     expect(menu).toEqual({
       id: MENU,
       nome: "Principal",
+      aceitaRamal: false,
       defaultTeamId: ABERTO,
       timePadraoAtivo: true,
       fala: { id: PRONTA, storagePath: caminho(ORG, "a"), duracaoMs: 1500 },

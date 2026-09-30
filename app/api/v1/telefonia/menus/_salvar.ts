@@ -154,6 +154,7 @@ export async function salvarMenu(req: NextRequest, idBruto: string | null): Prom
         nome: e.nome,
         opcoes: e.opcoes,
         time_padrao_id: e.time_padrao_id,
+        aceita_ramal: e.aceita_ramal,
         com_fala_invalida: Boolean(e.fala_invalida),
         fala_invalida_descartada: r.falaInvalidaDescartada,
       },
