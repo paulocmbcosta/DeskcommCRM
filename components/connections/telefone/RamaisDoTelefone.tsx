@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { REGUA_DO_RAMAL } from "@/lib/telefonia/vocabulario";
 
 const RELER_MS = 10_000;
@@ -67,7 +68,7 @@ function LinhaDoRamal({ p, aoSalvar }: { p: ColegaDoDiretorio; aoSalvar: () => v
             inputMode="numeric"
             maxLength={4}
             onChange={(e) => setRascunho(e.target.value.replace(/\D/g, ""))}
-            aria-label={t("Ramal de {nome}").replace("{nome}", p.nome)}
+            aria-label={trocarMarcador(t("Ramal de {nome}"), "{nome}", p.nome)}
             aria-invalid={!valido}
             className="h-8 w-20 tabular-nums"
           />

@@ -22,6 +22,7 @@
 import { format } from "date-fns";
 import { useState } from "react";
 
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { PhoneIncoming, PhoneOutgoing, PhoneX, Play, X } from "@/lib/ui/icons";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
@@ -299,10 +300,11 @@ export function CartaoDaLigacao({
           {(ligacao.transferencias ?? []).map((e, i) => {
             const f = fraseDoElo(e);
             const alguem = t("alguém");
-            const texto = t(f.modelo)
-              .replaceAll("{de}", f.de ?? alguem)
-              .replaceAll("{para}", f.para ?? alguem)
-              .replaceAll("{quem}", f.quem ?? alguem);
+            const texto = trocarMarcador(
+              trocarMarcador(trocarMarcador(t(f.modelo), "{de}", f.de ?? alguem), "{para}", f.para ?? alguem),
+              "{quem}",
+              f.quem ?? alguem,
+            );
             return (
               <li key={i} data-ligacao-transferencia={e.desfecho ?? "aberta"}>
                 {texto}

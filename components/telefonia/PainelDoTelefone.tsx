@@ -16,6 +16,7 @@ import { TransferirLigacao } from "@/components/telefonia/TransferirLigacao";
 import { Button } from "@/components/ui/button";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
 import { textoDaTransferencia } from "@/lib/telefonia/texto-da-transferencia";
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { ArrowRight, DotsNine, Microphone, MicrophoneSlash, Phone, PhoneX, X } from "@/lib/ui/icons";
 import { useT } from "@/hooks/i18n/useT";
 
@@ -65,7 +66,7 @@ function useFraseDaTransferencia(ligacao: EstadoDaLigacao | null, agora: number)
   if (!ligacao) return null;
   const f = textoDaTransferencia(ligacao, agora);
   if (!f) return null;
-  return { texto: t(f.texto).replace("{nome}", f.nome ?? t("colega")), tom: f.tom };
+  return { texto: trocarMarcador(t(f.texto), "{nome}", f.nome ?? t("colega")), tom: f.tom };
 }
 
 /** Quanto tempo o aviso do fim da saída fica na tela sem ninguém fechar. */
@@ -131,7 +132,7 @@ export function PainelDoTelefone() {
   const quem = ligacao.interna
     ? ligacao.nome
       ? `${ligacao.nome} (${ligacao.numero})`
-      : t("Ramal {n}").replace("{n}", ligacao.numero)
+      : trocarMarcador(t("Ramal {n}"), "{n}", ligacao.numero)
     : ligacao.nome || phoneForDisplay(ligacao.numero) || t("Número não identificado");
   const inicial = (quem.trim().charAt(0) || "?").toUpperCase();
 

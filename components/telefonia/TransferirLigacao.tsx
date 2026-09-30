@@ -20,6 +20,7 @@ import { useTelefonia } from "@/components/telefonia/TelefoniaContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/hooks/i18n/useT";
+import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { MagnifyingGlass, X } from "@/lib/ui/icons";
 
 const ORDEM_DA_SITUACAO = ["disponivel", "em_ligacao", "em_pausa", "fora_do_horario", "offline"] as const;
@@ -117,7 +118,7 @@ export function TransferirLigacao({ onFechar }: { onFechar: () => void }) {
                   {aberto
                     ? x.disponiveis === 1
                       ? t("1 disponível")
-                      : t("{n} disponíveis").replace("{n}", String(x.disponiveis))
+                      : trocarMarcador(t("{n} disponíveis"), "{n}", String(x.disponiveis))
                     : t("Fora do horário")}
                 </p>
               </div>
