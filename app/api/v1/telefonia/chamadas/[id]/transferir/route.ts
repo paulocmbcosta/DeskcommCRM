@@ -58,6 +58,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!cfg) return fail("telefonia_indisponivel", t("Esta instalação não tem telefonia ligada."), 409, { requestId });
   const id = z.string().uuid().safeParse((await ctx.params).id);
   if (!id.success) return fail("not_found", t("Ligação não encontrada."), 404, { requestId });
+  const vcId = id.data;
   const corpo = pedidoSchema.safeParse(await req.json().catch(() => null));
   if (!corpo.success) return fail("validation_failed", t("Escolha para quem transferir."), 422, { requestId });
 
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     org: authz.org.orgId,
     userId: authz.user.id,
     papel: authz.org.role,
-    vcId: id.data,
+    vcId: vcId,
     modo: corpo.data.modo,
     para: corpo.data.para,
     agora: new Date(),
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     await ari.emitirEvento(EVENTO_DA_TRANSFERENCIA, {
       acao: "transferir",
       transferencia_id: r.id,
-      voice_call_id: id.data,
+      voice_call_id: vcId,
     });
   } catch (e) {
     logger.warn("[telefonia] ordem de transferência não entregue ao worker", {
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     actorUserId: authz.user.id,
     organizationId: authz.org.orgId,
     resourceType: "voice_call",
-    resourceId: id.data,
+    resourceId: vcId,
     metadata: { transferencia_id: r.id, modo: corpo.data.modo, para: corpo.data.para, de: r.fromUserId },
     requestId,
   });

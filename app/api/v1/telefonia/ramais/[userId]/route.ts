@@ -32,6 +32,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ userId: s
 
   const userId = z.string().uuid().safeParse((await ctx.params).userId);
   if (!userId.success) return fail("not_found", t("Essa pessoa não tem ramal nesta organização."), 404, { requestId });
+  const alvoId = userId.data;
   const corpo = corpoSchema.safeParse(await req.json().catch(() => null));
   if (!corpo.success) {
     return fail("validation_failed", t("O ramal tem de 2 a 4 dígitos e não começa por 0."), 422, { requestId });
@@ -39,7 +40,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ userId: s
 
   const r = await trocarRamal(getRequestPool(), {
     organizationId: authz.org.orgId,
-    userId: userId.data,
+    userId: alvoId,
     numero: corpo.data.numero,
     por: authz.user.id,
   });
@@ -54,10 +55,10 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ userId: s
       actorUserId: authz.user.id,
       organizationId: authz.org.orgId,
       resourceType: "phone_extension",
-      resourceId: userId.data,
+      resourceId: alvoId,
       metadata: { antes: r.antes, depois: corpo.data.numero },
       requestId,
     });
   }
-  return ok({ user_id: userId.data, numero: corpo.data.numero }, { requestId });
+  return ok({ user_id: alvoId, numero: corpo.data.numero }, { requestId });
 }
