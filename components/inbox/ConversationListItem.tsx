@@ -5,7 +5,7 @@ import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import type { Locale } from "date-fns";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { useT } from "@/hooks/i18n/useT";
-import { CheckCircle, Clock, Globe, HourglassMedium, Phone, PhoneCall, Robot, Siren, SmileySad, Thermometer, UsersThree } from "@/lib/ui/icons";
+import { CheckCircle, Clock, Globe, HourglassMedium, PhoneCall, Robot, Siren, SmileySad, Thermometer, UsersThree, WhatsappLogo } from "@/lib/ui/icons";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { OwnerBadge } from "@/components/kanban/OwnerBadge";
@@ -17,7 +17,7 @@ import { phoneForDisplay } from "@/lib/channels/phone-variants";
 import { esperaDaConversa, esperaDispensada, estaNaFilaDoTime, formatarEspera, type NivelDeEspera } from "@/lib/inbox/espera";
 import type { ReguaDeEspera } from "@/lib/schemas/settings";
 import { formatarNota, pedeAtencao, ROTULO_DA_FAIXA, sentimentoDaConversa } from "@/lib/inbox/sentimento";
-import { canalPorExtenso as canalInteiro, rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
+import { canalComNumero, finalDoCanal } from "@/lib/inbox/rotulo-do-canal";
 
 interface Props {
   conversation: ConversationWithContact;
@@ -102,6 +102,20 @@ const COR_DO_COMANDO: Record<string, string> = {
   ninguem: "bg-muted-foreground/60",
   encerrada: "bg-muted-foreground/30",
 };
+
+/**
+ * A COR DO SELO SAI DO MEIO (`conversations.channel`), não do provider.
+ *
+ * Verde, roxo e azul para o olho separar WhatsApp, telefone e chat do site sem
+ * ler — pedido do dono do produto: o rótulo antigo era texto cinza com o mesmo
+ * ícone de telefone para WhatsApp e ligação. Cor nunca é a única informação:
+ * cada selo carrega ícone e texto próprios.
+ */
+const COR_DO_MEIO = {
+  whatsapp: "bg-canal-whatsapp-bg text-canal-whatsapp-fg",
+  phone: "bg-canal-fone-bg text-canal-fone-fg",
+  site_chat: "bg-canal-site-bg text-canal-site-fg",
+} as const;
 
 function initials(name: string | null | undefined, fallback: string): string {
   const v = (name ?? "").trim();
@@ -192,13 +206,23 @@ export function ConversationListItem({
   // dois canais é o que decide o tom da resposta e qual número a pessoa vê
   // respondendo. Cai no nome do canal quando não há número (canal recém-criado).
   const canal = conversation.channel_sessions ?? null;
-  const rotuloCanal = rotuloDoCanal(canal);
-  // O `title` diz o NÚMERO inteiro: o rótulo abrevia, e quem precisa conferir
-  // por qual linha a pessoa entrou não deveria ter de abrir a conversa.
-  const canalPorExtenso = canalInteiro(canal);
   const veioDoSite = conversation.channel === "site_chat";
   // Telefonia SIP (spec 20): conversa que é o registro das ligações do contato.
   const porTelefone = conversation.channel === "phone";
+  const meio = veioDoSite ? "site_chat" : porTelefone ? "phone" : "whatsapp";
+  // O SELO: curto e de largura previsível. No WhatsApp, os 4 últimos dígitos —
+  // é o que separa dois números da mesma empresa. Telefone e site dizem o meio
+  // por extenso: ali o meio JÁ é a resposta, e ele vem da própria conversa.
+  const textoDoSelo = veioDoSite ? t("Site") : porTelefone ? t("Fone") : finalDoCanal(canal);
+  // O `title` diz o apelido e o NÚMERO inteiro: o selo abrevia, e quem precisa
+  // conferir por qual linha a pessoa entrou não deveria ter de abrir a conversa.
+  const canalPorExtenso = canalComNumero(canal);
+  const prefixoDoTitulo = veioDoSite
+    ? t("Entrou pelo chat do site")
+    : porTelefone
+      ? t("Ligações pelo telefone")
+      : t("Entrou pelo WhatsApp");
+  const tituloDoSelo = canalPorExtenso ? `${prefixoDoTitulo} · ${canalPorExtenso}` : prefixoDoTitulo;
 
   const temSelos =
     visibleTags.length > 0 ||
@@ -253,7 +277,8 @@ export function ConversationListItem({
   // conversa que TEM time seria mentira de tela.
   const rotuloDoTime =
     typeof nomeDoTime === "string" ? nomeDoTime : nomeDoTime === null && orgTemTimes ? t("Sem time") : null;
-  const mostrarRodape = rotuloDoTime !== null || (mostrarCanal && rotuloCanal !== null);
+  const mostrarSelo = mostrarCanal && textoDoSelo !== null;
+  const mostrarRodape = rotuloDoTime !== null || mostrarSelo;
 
   return (
     <button
@@ -435,10 +460,12 @@ export function ConversationListItem({
 
         {mostrarRodape && (
           <div
-            // `flex-wrap`: em coluna estreita o canal desce para a linha de baixo
-            // em vez de cortar o nome do time — reticências aqui escondem
-            // justamente o que o rodapé existe para dizer.
-            className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-text-muted"
+            // UMA linha, sempre. O selo do canal tem largura fixa e fica no canto
+            // direito; quem cede espaço é o nome do time, que ganha reticências
+            // e diz o nome inteiro no `title`. Já foi `flex-wrap`, e com time de
+            // nome comprido o canal caía para a linha de baixo — o card mudava de
+            // altura de uma conversa para a outra e o olho não tinha onde procurar.
+            className="mt-1 flex items-center gap-2 text-[11px] text-text-muted"
             data-testid="rodape-da-conversa"
           >
             {rotuloDoTime !== null && (
@@ -447,29 +474,27 @@ export function ConversationListItem({
                 <span className="truncate">{rotuloDoTime}</span>
               </span>
             )}
-            {mostrarCanal && rotuloCanal !== null && (
+            {mostrarSelo && (
               <span
-                className="flex min-w-0 items-center gap-1"
-                title={
-                  veioDoSite
-                    ? `${t("Entrou pelo chat do site")} · ${rotuloCanal}`
-                    : porTelefone
-                      ? `${t("Ligações pelo telefone")} · ${canalPorExtenso ?? rotuloCanal}`
-                      : `${t("Entrou por")} ${canalPorExtenso ?? rotuloCanal}`
-                }
-                data-meio={veioDoSite ? "site_chat" : porTelefone ? "phone" : "whatsapp"}
+                className={cn(
+                  "ml-auto inline-flex h-[18px] shrink-0 items-center gap-1 rounded-sm px-1.5 font-semibold tabular-nums",
+                  COR_DO_MEIO[meio],
+                )}
+                title={tituloDoSelo}
+                data-testid="selo-do-canal"
+                data-meio={meio}
               >
                 {/* O ícone acompanha o MEIO (`conversations.channel`), não o
                     provider: telefone numa conversa que veio de um site diz ao
                     atendente para procurar um número que não existe. */}
                 {veioDoSite ? (
-                  <Globe size={12} weight="regular" className="shrink-0" aria-hidden />
+                  <Globe size={12} weight="bold" className="shrink-0" aria-hidden />
                 ) : porTelefone ? (
-                  <PhoneCall size={12} weight="regular" className="shrink-0" aria-hidden />
+                  <PhoneCall size={12} weight="fill" className="shrink-0" aria-hidden />
                 ) : (
-                  <Phone size={12} weight="regular" className="shrink-0" aria-hidden />
+                  <WhatsappLogo size={12} weight="fill" className="shrink-0" aria-hidden />
                 )}
-                <span className="truncate">{rotuloCanal}</span>
+                {textoDoSelo}
               </span>
             )}
           </div>

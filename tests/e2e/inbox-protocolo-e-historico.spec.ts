@@ -213,8 +213,12 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     // O card diz DE QUEM é e POR ONDE entrou, antes de abrir — e há quanto tempo espera.
     const rodape = card.getByTestId("rodape-da-conversa");
     await expect(rodape).toContainText("Cobrança");
-    await expect(rodape).toContainText("Whats Suporte · 4063");
-    // Nada cortado: o rodapé existe para dizer o nome INTEIRO do time e do canal.
+    // O canal é um SELO: só os 4 últimos dígitos; o apelido e o número inteiro vão no title.
+    const selo = rodape.getByTestId("selo-do-canal");
+    await expect(selo).toHaveText("4063");
+    await expect(selo).toHaveAttribute("data-meio", "whatsapp");
+    await expect(selo).toHaveAttribute("title", /Whats Suporte/);
+    // Nada cortado aqui: "Cobrança" cabe inteiro ao lado do selo.
     const cortado = await rodape.evaluate((el) =>
       [...el.querySelectorAll("span.truncate")].some((s) => s.scrollWidth > s.clientWidth + 1),
     );

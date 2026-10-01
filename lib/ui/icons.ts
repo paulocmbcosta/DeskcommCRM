@@ -109,6 +109,8 @@ export {
   DotsNine,
   Backspace,
   PhoneCall,
+  // selo do canal no card do Inbox: o meio WhatsApp tem ícone próprio
+  WhatsappLogo,
   Paperclip,
   Microphone,
   MicrophoneSlash,

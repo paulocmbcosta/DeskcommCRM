@@ -94,6 +94,15 @@
   --color-info: #4a7a93;
   --color-info-bg: rgba(74, 122, 147, 0.12);
   --color-info-fg: #355d72;
+  /* Selo do canal no card do Inbox: uma cor por MEIO (WhatsApp, telefone, chat
+     do site). Não reaproveita `success`/`info`: cor de estado num selo de canal
+     leria como "deu certo", e o canal não é estado. */
+  --color-canal-whatsapp-bg: rgba(63, 140, 80, 0.15);
+  --color-canal-whatsapp-fg: #2c6638;
+  --color-canal-fone-bg: rgba(112, 78, 170, 0.15);
+  --color-canal-fone-fg: #563a8c;
+  --color-canal-site-bg: rgba(74, 122, 147, 0.16);
+  --color-canal-site-fg: #2f566b;
 
   /* Spacing (4-base) */
   --space-0: 0px;
@@ -296,6 +305,15 @@
   --color-info: #4a7a93;
   --color-info-bg: rgba(74, 122, 147, 0.12);
   --color-info-fg: #355d72;
+  /* Selo do canal no card do Inbox: uma cor por MEIO (WhatsApp, telefone, chat
+     do site). Não reaproveita `success`/`info`: cor de estado num selo de canal
+     leria como "deu certo", e o canal não é estado. */
+  --color-canal-whatsapp-bg: rgba(63, 140, 80, 0.15);
+  --color-canal-whatsapp-fg: #2c6638;
+  --color-canal-fone-bg: rgba(112, 78, 170, 0.15);
+  --color-canal-fone-fg: #563a8c;
+  --color-canal-site-bg: rgba(74, 122, 147, 0.16);
+  --color-canal-site-fg: #2f566b;
   --shadow-xs: 0 1px 2px 0 rgba(20, 18, 14, 0.04);
   --shadow-sm: 0 1px 2px 0 rgba(20, 18, 14, 0.05), 0 1px 1px 0 rgba(20, 18, 14, 0.03);
   --shadow-md: 0 4px 12px -2px rgba(20, 18, 14, 0.06), 0 2px 4px -1px rgba(20, 18, 14, 0.04);
@@ -398,6 +416,12 @@
   --color-info: #7da9bf;
   --color-info-bg: rgba(125, 169, 191, 0.18);
   --color-info-fg: #9bbfd2;
+  --color-canal-whatsapp-bg: rgba(110, 190, 125, 0.18);
+  --color-canal-whatsapp-fg: #93d6a0;
+  --color-canal-fone-bg: rgba(160, 130, 220, 0.22);
+  --color-canal-fone-fg: #c9b6f2;
+  --color-canal-site-bg: rgba(110, 165, 195, 0.2);
+  --color-canal-site-fg: #a3cee2;
 
   /* Shadows — heavier in dark */
   --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.30);
@@ -522,6 +546,12 @@
   --color-info: var(--color-info);
   --color-info-bg: var(--color-info-bg);
   --color-info-fg: var(--color-info-fg);
+  --color-canal-whatsapp-bg: var(--color-canal-whatsapp-bg);
+  --color-canal-whatsapp-fg: var(--color-canal-whatsapp-fg);
+  --color-canal-fone-bg: var(--color-canal-fone-bg);
+  --color-canal-fone-fg: var(--color-canal-fone-fg);
+  --color-canal-site-bg: var(--color-canal-site-bg);
+  --color-canal-site-fg: var(--color-canal-site-fg);
 
   /* Aliases shadcn (consumers ainda não migrados). Espelham 1:1 o que o
      `tailwind.config.ts` mapeava — inclusive `ring`, que apontava para a
