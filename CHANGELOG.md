@@ -8,6 +8,28 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.52.0] — 2026-10-01
+
+### Adicionado
+
+- **Ramais — cada atendente ganha um número, e os colegas ligam entre si** Cada pessoa que atende o telefone ganha um ramal sozinha, a partir de 201, e o telefone do
+  cabeçalho mostra "Seu ramal". Para falar com um colega, digite o ramal ou o nome dele no
+  discador: a ligação é interna, não passa pela operadora e não custa nada. Em Conexões ›
+  Telefone › Ramais, quem administra vê todos os ramais, a situação de cada pessoa e pode
+  trocar os números. No menu de voz, a opção "O cliente pode digitar o ramal" deixa quem já
+  conhece o ramal falar direto com a pessoa. Os ramais de quem já atende são criados sozinhos
+  na atualização; você não precisa fazer nada.
+
+- **Transferir uma ligação para um colega ou para um time** No painel da ligação apareceu o botão Transferir. Ele mostra os colegas e os times, com a
+  situação de cada um agora: só quem está disponível pode ser escolhido, e os outros
+  aparecem em cinza com o motivo (em ligação, em pausa, fora do horário ou sem o telefone
+  conectado). Dá para transferir direto ou "Falar antes": o cliente fica ouvindo música
+  enquanto você conversa com o colega, e então você completa a transferência ou volta ao
+  cliente. Se o colega não atende, o cliente volta para você; se você também não atende, a
+  ligação vai para a fila do time. Quem recebe vê quem transferiu, e o cartão da ligação na
+  conversa conta a corrente inteira. Vale para ligações recebidas e feitas. Você não precisa
+  fazer nada para começar a usar.
+
 ## [1.51.2] — 2026-09-30
 
 ### Alterado
@@ -5845,7 +5867,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.2...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.0...HEAD
+[1.52.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.2...v1.52.0
 [1.51.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.1...v1.51.2
 [1.51.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.0...v1.51.1
 [1.51.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.2...v1.51.0
