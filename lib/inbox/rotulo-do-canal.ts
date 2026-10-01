@@ -34,6 +34,30 @@ export function rotuloDoCanal(canal: CanalRotulavel | null | undefined): string 
   return apelido ?? numero;
 }
 
+/**
+ * O que cabe no SELO do card: os quatro últimos dígitos do número da empresa.
+ *
+ * O card tem ~270px de texto, e "Totus · 3025" ao lado de um time de nome
+ * comprido quebrava o rodapé em duas linhas. O apelido saiu do card (segue no
+ * `title`, no painel e no filtro, onde há espaço): com dois números da mesma
+ * empresa ele é a MESMA palavra nos dois, e quem desempata são os dígitos.
+ *
+ * Sem número (canal recém-criado), o apelido — cortado, porque o selo não
+ * encolhe e um apelido longo empurraria o time para fora da linha.
+ */
+const LIMITE_DO_APELIDO_NO_SELO = 10;
+
+export function finalDoCanal(canal: CanalRotulavel | null | undefined): string | null {
+  if (!canal) return null;
+  const final = (preenchido(canal.phone_number) ?? "").replace(/\D/g, "").slice(-4);
+  if (final) return final;
+  const apelido = preenchido(canal.display_name);
+  if (!apelido) return null;
+  return apelido.length > LIMITE_DO_APELIDO_NO_SELO
+    ? `${apelido.slice(0, LIMITE_DO_APELIDO_NO_SELO).trimEnd()}…`
+    : apelido;
+}
+
 /** Por extenso, para `title` e leitor de tela: o número inteiro quando existe. */
 export function canalPorExtenso(canal: CanalRotulavel | null | undefined): string | null {
   if (!canal) return null;

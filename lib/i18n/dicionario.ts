@@ -157,6 +157,9 @@ export const DICIONARIO: Traducoes = {
   "Ligação recebida": { es: "Llamada recibida" },
   "Ligação sem resposta": { es: "Llamada sin respuesta" },
   "Ligações pelo telefone": { es: "Llamadas por teléfono" },
+  // Selo do canal no card do Inbox
+  "Fone": { es: "Tel." },
+  "Site": { es: "Sitio" },
   "Nenhum (só ligações de saída)": { es: "Ninguno (solo llamadas salientes)" },
   "Nenhum time recebe as ligações deste número": { es: "Ningún equipo recibe las llamadas de este número" },
   "Novo número": { es: "Nuevo número" },
