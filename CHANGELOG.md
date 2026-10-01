@@ -8,6 +8,28 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.51.2] — 2026-09-30
+
+### Alterado
+
+- **O aviso de gravação toca depois do menu, logo antes de chamar o atendente** Com a gravação das ligações ligada, quem liga ouvia o aviso "esta ligação poderá ser
+  gravada" logo no começo, antes do menu. Agora o cliente ouve primeiro o menu e escolhe a
+  opção. O aviso toca na hora de passar a ligação para o atendente, logo antes da frase
+  de transferência. Quem desliga no menu, ou liga fora do horário, não ouve o aviso, porque
+  essas ligações não chegam a ser gravadas. Só a conversa com o atendente é gravada, sempre
+  depois do aviso, como antes. Nas ligações feitas pelo atendente, nada mudou: o aviso toca
+  quando o cliente atende.
+
+### Corrigido
+
+- **Ligações recebidas voltam a tocar no navegador dos atendentes** Depois de algumas atualizações, as ligações recebidas pelo telefone paravam de tocar no
+  navegador dos atendentes. Os atendentes apareciam on-line e disponíveis e o menu
+  funcionava, mas ninguém era chamado. Isso acontecia porque, a cada atualização, o
+  servidor de telefonia ganhava um nome sorteado. Quando esse nome começava por número, o
+  telefone do navegador recusava a chamada em silêncio. Agora esse servidor tem sempre o
+  mesmo nome, e esse nome é aceito pelo navegador. As ligações feitas não eram afetadas.
+  Você não precisa fazer nada: a atualização recria o servidor de telefonia com o nome certo.
+
 ## [1.51.1] — 2026-09-30
 
 ### Corrigido
@@ -5823,7 +5845,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.2...HEAD
+[1.51.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.1...v1.51.2
 [1.51.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.0...v1.51.1
 [1.51.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.2...v1.51.0
 [1.50.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.50.1...v1.50.2
