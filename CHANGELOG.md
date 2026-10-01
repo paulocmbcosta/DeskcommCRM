@@ -8,6 +8,18 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.52.1] — 2026-10-01
+
+### Alterado
+
+- **Inbox — o canal de cada conversa virou um selo colorido e curto** No card da lista de conversas, o canal por onde a pessoa entrou deixou de ser um texto cinza
+  com o nome e um trecho do número. Agora é um selo colorido, sempre no canto direito do rodapé:
+  verde com o símbolo do WhatsApp e os quatro últimos dígitos do número da empresa, roxo com
+  "Fone" para as ligações, azul com "Site" para o chat do site. O nome do canal e o número
+  inteiro aparecem ao passar o mouse sobre o selo. O rodapé passou a ter sempre uma linha só:
+  quando o nome do time é comprido, é ele que ganha reticências, e o canal não cai mais para a
+  linha de baixo. Nada a fazer na atualização.
+
 ## [1.52.0] — 2026-10-01
 
 ### Adicionado
@@ -5867,7 +5879,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.1...HEAD
+[1.52.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.0...v1.52.1
 [1.52.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.2...v1.52.0
 [1.51.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.1...v1.51.2
 [1.51.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.0...v1.51.1
