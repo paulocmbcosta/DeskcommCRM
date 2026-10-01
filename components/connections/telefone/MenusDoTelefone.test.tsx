@@ -94,6 +94,7 @@ function fala(extra: Partial<FalaPublica> = {}): FalaPublica {
 
 function menuPrincipal(extra: Partial<MenuPublico> = {}): MenuPublico {
   return {
+    aceita_ramal: false,
     id: "m1",
     nome: "Principal",
     time_padrao_id: T_SUPORTE,
@@ -137,6 +138,7 @@ function gravado(id: string, c: Record<string, unknown>): MenuPublico {
   const f = c.fala as { texto: string; hash: string };
   const fi = c.fala_invalida as { texto: string; hash: string } | null;
   return {
+    aceita_ramal: c.aceita_ramal === true,
     id,
     nome: String(c.nome),
     time_padrao_id: String(c.time_padrao_id),
@@ -491,6 +493,7 @@ describe("aba Menus — o editor", () => {
     expect(enviados("POST", "/api/v1/telefonia/falas/previa")).toHaveLength(0);
     expect(enviados("PATCH", "/api/v1/telefonia/menus/m1")).toEqual([
       {
+        aceita_ramal: false,
         nome: "Principal",
         opcoes: [
           { tecla: "1", time_id: T_SUPORTE },
@@ -503,6 +506,14 @@ describe("aba Menus — o editor", () => {
     ]);
     await waitFor(() => expect(document.querySelector("[data-editor-de-menu]")).toBeNull());
     expect(toast.success).toHaveBeenCalledWith("Menu salvo.");
+  });
+
+  it("o interruptor 'O cliente pode digitar o ramal' (v3) vai no corpo do salvar", async () => {
+    pintar();
+    const editor = await abrirEditor();
+    await userEvent.click(within(editor).getByRole("switch", { name: "O cliente pode digitar o ramal" }));
+    await userEvent.click(salvarDe(editor));
+    expect(enviados("PATCH", "/api/v1/telefonia/menus/m1")).toEqual([expect.objectContaining({ aceita_ramal: true })]);
   });
 
   it("a fala de tecla inválida em uso vai com o hash dela; apagar o texto tira a fala do menu", async () => {
@@ -624,6 +635,7 @@ describe("aba Menus — o editor", () => {
       const criacoes = chamadas("POST", "/api/v1/telefonia/menus");
       expect(criacoes).toHaveLength(2);
       expect(criacoes[0]!.corpo).toEqual({
+        aceita_ramal: false,
         nome: "Atendimento",
         opcoes: [
           { tecla: "1", time_id: T_SUPORTE },

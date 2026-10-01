@@ -332,3 +332,31 @@ describe("a gravação no cartão", () => {
     expect(container.querySelector("[data-ligacao-gravacao]")?.textContent).toBe("Preparando la grabación…");
   });
 });
+
+describe("a corrente de transferências (v2)", () => {
+  it("cada elo vira uma frase, com os nomes daquela hora; registro sem corrente não mostra nada", () => {
+    const base = {
+      voice_call: { id: "vc-1", direcao: "inbound", desfecho: "atendida", duracao_ms: 60_000, atendente_nome: "Bia" },
+    };
+    const semCorrente = ligacaoDaMensagem(base)!;
+    const { container, rerender } = render(<CartaoDaLigacao ligacao={semCorrente} em="2026-09-30T13:00:00Z" />);
+    expect(container.querySelector("[data-ligacao-transferencias]")).toBeNull();
+
+    const comCorrente = ligacaoDaMensagem({
+      voice_call: {
+        ...base.voice_call,
+        transferencias: [
+          { tipo: "blind", desfecho: "returned", de_nome: "Ana", para_nome: "Bruno", para_time: null, atendida_por_nome: "Ana" },
+          { tipo: "blind", desfecho: "queue_answered", de_nome: "Ana", para_nome: null, para_time: "Suporte", atendida_por_nome: "Bia" },
+          { tipo: "desconhecido", desfecho: "answered" },
+        ],
+      },
+    })!;
+    rerender(<CartaoDaLigacao ligacao={comCorrente} em="2026-09-30T13:00:00Z" />);
+    const elos = [...container.querySelectorAll("[data-ligacao-transferencia]")].map((e) => e.textContent);
+    expect(elos).toEqual([
+      "Ana transferiu para Bruno · não atendeu, voltou para Ana",
+      "Ana transferiu para Suporte · Bia atendeu",
+    ]);
+  });
+});

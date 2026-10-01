@@ -293,6 +293,35 @@ describe("mapas de arquitetura — coerência interna", () => {
       "falta o cartão do laço de retorno da gravação",
     ).toBe(true);
   });
+
+  it("a TRANSFERÊNCIA e os RAMAIS (fase 2, v2 e v3) estão no mapa da telefonia, e nenhuma peça nova é ilha", () => {
+    // DoD 13 para a emenda §12 do desenho: a ordem sai da tela, passa pela API e
+    // pela ARI, o worker age e grava o desfecho; o ramal nasce no banco e é
+    // lido pelo diretório, pela URA e pela ligação interna.
+    const m = JSON.parse(
+      fs.readFileSync(path.join(DIR, "telefonia.architecture.json"), "utf8"),
+    ) as Mapa & { cards?: Array<{ title: string; items: string[] }> };
+    const grau = (id: string) => (m.edges ?? []).filter((e) => e.from === id || e.to === id).length;
+    for (const peca of ["transferencia", "rota_transferir", "rota_diretorio", "rota_ramais", "painel_transferir", "aba_ramais", "t_transferencias", "t_ramais"]) {
+      expect(grau(peca), `${peca} com menos de 2 arestas — é ilha pelo invariante 1`).toBeGreaterThanOrEqual(2);
+    }
+    const arestas = (m.edges ?? []).map((e) => `${e.from}→${e.to}`);
+    expect(arestas).toEqual(
+      expect.arrayContaining([
+        "painel_transferir→rota_transferir",
+        "rota_transferir→ari",
+        "controle→transferencia",
+        "transferencia→t_transferencias",
+        "transferencia→central",
+        "aba_ramais→rota_ramais",
+        "rota_ramais→t_audit",
+      ]),
+    );
+    expect(
+      (m.cards ?? []).some((c) => /TRANSFERÊNCIA/.test(c.title) && /invariante 7/.test(c.title) && c.items.length > 0),
+      "falta o cartão do laço de retorno da transferência e dos ramais",
+    ).toBe(true);
+  });
 });
 
 /**

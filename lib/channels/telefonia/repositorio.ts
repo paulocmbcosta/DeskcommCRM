@@ -23,7 +23,13 @@ import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
 import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 import { avisoVigente } from "@/lib/telefonia/vencimento-da-emergencia";
 import type { EstadoDaGravacao, GravacaoDaLigacao } from "@/lib/telefonia/gravacao";
-import { MOTIVO_FORA_DO_HORARIO, type DesfechoDoMenu, type MenuDaLigacao } from "@/lib/telefonia/vocabulario";
+import {
+  MOTIVO_FORA_DO_HORARIO,
+  type DesfechoDaTransferencia,
+  type DesfechoDoMenu,
+  type MenuDaLigacao,
+  type TransferenciaDaLigacao,
+} from "@/lib/telefonia/vocabulario";
 
 import { CHANNEL_PROVIDER_SIP_TRUNK, MEIO_TELEFONE } from "../capabilities";
 import type { TroncoSip, TransporteSip } from "./pjsip";
@@ -216,7 +222,9 @@ async function lerTimeNaFila(db: Queryable, organizationId: string, teamId: stri
  * zeram `is_available`), dentro do horário do time e do próprio — MENOS o teto
  * de conversas: decisão do dono (spec 20 §2.6), conversa de texto aberta não
  * impede atender o telefone. E MAIS "não está em outra ligação", de qualquer
- * canal de voz: quem está falando no WhatsApp também está ocupado.
+ * canal de voz: quem está falando no WhatsApp também está ocupado — e quem está
+ * do outro lado de uma ligação INTERNA (`peer_user_id`, v3), ou tocando numa
+ * transferência (`ringing_user_id`, v2).
  */
 export async function disponiveisNoTime(
   db: Queryable,
@@ -254,7 +262,7 @@ export async function disponiveisNoTime(
         and not exists (
           select 1 from voice_calls v
            where v.organization_id = $1 and v.status <> 'ended'
-             and (v.owner_user_id = m.user_id or v.ringing_user_id = m.user_id)
+             and (v.owner_user_id = m.user_id or v.ringing_user_id = m.user_id or v.peer_user_id = m.user_id)
              and v.started_at > now() - interval '4 hours'
         )`,
     [organizationId, teamId, fuso],
@@ -384,6 +392,8 @@ export interface MenuDoBanco {
    * (`lib/telefonia/ura.ts`): toca a fala de tecla inválida e repete o menu.
    */
   opcoes: Array<{ digito: string; teamId: string }>;
+  /** O cliente pode digitar o ramal de alguém (v3, `accepts_extension`). Opcional no tipo para os testes da v1. */
+  aceitaRamal?: boolean;
 }
 
 const falaOuNada = (id: string | null, caminho: string | null, duracaoMs: number | null): FalaDoBanco | null =>
@@ -406,8 +416,9 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     invalida_caminho: string | null;
     invalida_duracao: number | null;
     opcoes: Array<{ digito: string; teamId: string }>;
+    accepts_extension: boolean;
   }>(
-    `select m.id, m.name as nome, m.default_team_id,
+    `select m.id, m.name as nome, m.default_team_id, m.accepts_extension,
             (d.id is not null and d.archived_at is null) as time_padrao_ativo,
             p.id as fala_id, p.storage_path as fala_caminho, p.duration_ms as fala_duracao,
             i.id as invalida_id, i.storage_path as invalida_caminho, i.duration_ms as invalida_duracao,
@@ -438,6 +449,7 @@ export async function menuPorId(db: Queryable, organizationId: string, menuId: s
     fala: falaOuNada(r.fala_id, r.fala_caminho, r.fala_duracao),
     falaInvalida: falaOuNada(r.invalida_id, r.invalida_caminho, r.invalida_duracao),
     opcoes: r.opcoes,
+    aceitaRamal: r.accepts_extension === true,
   };
 }
 
@@ -752,7 +764,7 @@ export interface LigacaoDoBanco {
   channel_session_id: string;
   contact_id: string | null;
   conversation_id: string | null;
-  direction: "inbound" | "outbound";
+  direction: "inbound" | "outbound" | "internal";
   peer_phone: string;
   status: string;
   owner_user_id: string | null;
@@ -770,12 +782,14 @@ export interface LigacaoDoBanco {
   end_reason?: string | null;
   /** O ciclo da gravação (0289). `recording` no fim = há arquivo a guardar. */
   recording_status?: EstadoDaGravacao | null;
+  /** Na ligação interna (0291): quem recebe. */
+  peer_user_id?: string | null;
 }
 
 /** As colunas de `LigacaoDoBanco` — uma lista só para leitura, recuperação e encerramento. */
 const COLUNAS_DA_LIGACAO = `id, organization_id, channel_session_id, contact_id, conversation_id, direction,
   peer_phone, status, owner_user_id, created_by, team_id, started_at, answered_at,
-  provider, sip_call_ref, menu_id, menu_digit, menu_outcome, emergency_heard_at, end_reason, recording_status`;
+  provider, sip_call_ref, menu_id, menu_digit, menu_outcome, emergency_heard_at, end_reason, recording_status, peer_user_id`;
 
 /**
  * A ligação `id`, se ela for DESTE atendente (`owner_user_id`) — o pedido de
@@ -849,18 +863,208 @@ export async function encerrarLigacao(
   return rows[0] ?? null;
 }
 
-/** A conversa passa a ser de quem atendeu — o mesmo gesto de "assumir". */
+/**
+ * A conversa passa a ser de quem atendeu — o mesmo gesto de "assumir" (`claim`).
+ * Na transferência (v2) o motivo é `transfer`, que o evento de atribuição já
+ * conhece: a corrente fica legível no histórico da conversa.
+ */
 export async function atribuirConversa(
   db: Queryable,
   organizationId: string,
   conversationId: string,
   userId: string,
+  motivo: "claim" | "transfer" = "claim",
 ): Promise<void> {
-  await db.query("select 1 from public.fn_conversation_assign($1, $2, $3, 'claim')", [
+  await db.query("select 1 from public.fn_conversation_assign($1, $2, $3, $4)", [
     organizationId,
     conversationId,
     userId,
+    motivo,
   ]);
+}
+
+// ─── transferência (fase 2, versão 2; migration 0290) ─────────────────────
+//
+// A API grava o PEDIDO (a linha `open`) e avisa o worker pela ARI; o worker
+// relê a linha aqui — pelo id, com a organização DA LIGAÇÃO em memória e o id
+// da ligação junto — e grava o DESFECHO. A variável do evento é ponteiro,
+// nunca autoridade (desenho §12.2).
+
+export type { DesfechoDaTransferencia };
+
+export interface TransferenciaDoBanco {
+  id: string;
+  kind: "blind" | "attended";
+  fromUserId: string | null;
+  toUserId: string | null;
+  toTeamId: string | null;
+}
+
+/** A transferência ABERTA `id` desta ligação, nesta organização — ou `null`. */
+export async function transferenciaAberta(
+  db: Queryable,
+  organizationId: string,
+  voiceCallId: string,
+  id: string,
+): Promise<TransferenciaDoBanco | null> {
+  const { rows } = await db.query<{
+    id: string;
+    kind: "blind" | "attended";
+    from_user_id: string | null;
+    to_user_id: string | null;
+    to_team_id: string | null;
+  }>(
+    `select id, kind, from_user_id, to_user_id, to_team_id
+       from voice_call_transfers
+      where id = $1 and organization_id = $2 and voice_call_id = $3 and status = 'open'`,
+    [id, organizationId, voiceCallId],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, kind: r.kind, fromUserId: r.from_user_id, toUserId: r.to_user_id, toTeamId: r.to_team_id } : null;
+}
+
+/** Fecha a transferência com o desfecho. Idempotente: a que já fechou não muda. */
+export async function encerrarTransferencia(
+  db: Queryable,
+  organizationId: string,
+  id: string,
+  fim: { desfecho: DesfechoDaTransferencia; motivo: string | null; atendidaPor: string | null },
+): Promise<void> {
+  await db.query(
+    `update voice_call_transfers
+        set status = 'ended', outcome = $3, reason = $4, answered_by = $5, ended_at = now()
+      where id = $1 and organization_id = $2 and status = 'open'`,
+    [id, organizationId, fim.desfecho, fim.motivo, fim.atendidaPor],
+  );
+}
+
+/**
+ * A ordem chegou para uma ligação que este worker não acompanha (reiniciou, ou
+ * ela acabou): a transferência é recusada, senão a linha `open` travaria a
+ * próxima tentativa na mesma ligação (índice de uma aberta por vez). Sem
+ * organização de propósito — não há ligação em memória de onde tirá-la —, mas
+ * presa ao PAR (transferência, ligação) que a própria ordem trouxe.
+ */
+export async function recusarTransferenciaOrfa(db: Queryable, id: string, voiceCallId: string, motivo: string): Promise<void> {
+  await db.query(
+    `update voice_call_transfers
+        set status = 'ended', outcome = 'refused', reason = $3, ended_at = now()
+      where id = $1 and voice_call_id = $2 and status = 'open'`,
+    [id, voiceCallId, motivo],
+  );
+}
+
+/**
+ * Na (re)conexão do worker: toda transferência aberta morreu com o estado em
+ * memória do worker anterior (risco aceito, desenho §11). Varre a instalação,
+ * como `ligacoesVivas`.
+ */
+export async function cancelarTransferenciasAbertas(db: Queryable, motivo: string): Promise<number> {
+  const { rowCount } = await db.query(
+    `update voice_call_transfers
+        set status = 'ended', outcome = 'cancelled', reason = $1, ended_at = now()
+      where status = 'open'`,
+    [motivo],
+  );
+  return rowCount ?? 0;
+}
+
+/**
+ * Tocando para `userId` DURANTE a transferência: só o `ringing_user_id` (o
+ * "ocupado" que o distribuidor e o diretório leem). O `status` fica
+ * `connected` — `marcarTocando` o poria em `ringing`, e o painel e o
+ * `recuperar()` leriam a ligação como não atendida.
+ */
+export async function marcarTocandoNaTransferencia(
+  db: Queryable,
+  organizationId: string,
+  id: string,
+  userId: string | null,
+): Promise<void> {
+  await db.query(
+    `update voice_calls set ringing_user_id = $3, updated_at = now()
+      where id = $1 and organization_id = $2 and status <> 'ended'`,
+    [id, organizationId, userId],
+  );
+}
+
+/** A ligação passa a ser de `userId` (a transferência pegou). `answered_at` não muda: é de quando o cliente foi atendido. */
+export async function passarLigacao(db: Queryable, organizationId: string, id: string, userId: string): Promise<void> {
+  await db.query(
+    `update voice_calls set owner_user_id = $3, ringing_user_id = null, updated_at = now()
+      where id = $1 and organization_id = $2 and status <> 'ended'`,
+    [id, organizationId, userId],
+  );
+}
+
+/**
+ * Transferência para um TIME: a ligação e a conversa vão para ele. A conversa
+ * sai de quem a tinha (é o gesto de `fn_conversation_set_team`, que exige
+ * sessão de usuário — o worker não tem), com o evento `team_transfer` no
+ * histórico; quem atender a fila fica com ela (`atribuirConversa`, `transfer`).
+ * Time de outra organização, ou arquivado, não recebe nada.
+ */
+export async function moverParaOTime(
+  db: Queryable,
+  organizationId: string,
+  id: string,
+  conversationId: string | null,
+  teamId: string,
+): Promise<void> {
+  await db.query(
+    `with time as (
+       select t.id from attendance_teams t
+        where t.id = $3 and t.organization_id = $2 and t.archived_at is null
+     ), ligacao as (
+       update voice_calls v set team_id = time.id, updated_at = now()
+         from time
+        where v.id = $1 and v.organization_id = $2
+       returning v.id
+     ), antes as (
+       select c.assigned_to_user_id as dono from conversations c
+        where c.id = $4 and c.organization_id = $2
+     ), conversa as (
+       update conversations c
+          set team_id = time.id, assigned_to_user_id = null, assignee_kind = null, updated_at = now()
+         from time
+        where c.id = $4 and c.organization_id = $2
+       returning c.id
+     )
+     insert into conversation_assignment_events (organization_id, conversation_id, from_user_id, to_user_id, changed_by, reason)
+     select $2, $4, antes.dono, null, null, 'team_transfer'
+       from antes, conversa
+      where antes.dono is not null`,
+    [id, organizationId, teamId, conversationId],
+  );
+}
+
+/** O time da ligação (D21): o dela (recebida: fila, número ou menu) ou, sem ele, o da conversa (feita). */
+export async function timeDaLigacao(db: Queryable, organizationId: string, id: string): Promise<string | null> {
+  const { rows } = await db.query<{ time: string | null }>(
+    `select coalesce(v.team_id, c.team_id) as time
+       from voice_calls v
+       left join conversations c on c.id = v.conversation_id and c.organization_id = v.organization_id
+      where v.id = $1 and v.organization_id = $2`,
+    [id, organizationId],
+  );
+  return rows[0]?.time ?? null;
+}
+
+/**
+ * A pessoa está numa ligação viva desta organização — falando, tocando, ou do
+ * outro lado de uma ligação interna (v3). A mesma régua do "ocupado" de
+ * `disponiveisNoTime`, para uma pessoa só.
+ */
+export async function pessoaEmLigacao(db: Queryable, organizationId: string, userId: string): Promise<boolean> {
+  const { rows } = await db.query(
+    `select 1 from voice_calls v
+      where v.organization_id = $1 and v.status <> 'ended'
+        and (v.owner_user_id = $2 or v.ringing_user_id = $2 or v.peer_user_id = $2)
+        and v.started_at > now() - interval '4 hours'
+      limit 1`,
+    [organizationId, userId],
+  );
+  return rows.length > 0;
 }
 
 function duracaoLegivel(ms: number | null): string {
@@ -930,6 +1134,50 @@ async function menuDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<MenuDaL
   };
 }
 
+/**
+ * A corrente de transferências da ligação (v2), para o cartão
+ * (`TransferenciaDaLigacao`). Os nomes são os desta hora, e os dois lados da
+ * junção presos à organização da ligação. NUNCA lança, pelo mesmo motivo de
+ * `menuDoRegistro`: é cosmético, e quem chama ainda tem o "Ligar de volta".
+ */
+async function transferenciasDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<TransferenciaDaLigacao[]> {
+  try {
+    const { rows } = await db.query<{
+      kind: TransferenciaDaLigacao["tipo"];
+      outcome: TransferenciaDaLigacao["desfecho"];
+      de_nome: string | null;
+      para_nome: string | null;
+      para_time: string | null;
+      atendida_por_nome: string | null;
+    }>(
+      `select t.kind, t.outcome,
+              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = t.from_user_id) as de_nome,
+              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = t.to_user_id) as para_nome,
+              (select tm.name from attendance_teams tm where tm.id = t.to_team_id and tm.organization_id = t.organization_id) as para_time,
+              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = t.answered_by) as atendida_por_nome
+         from voice_call_transfers t
+        where t.organization_id = $1 and t.voice_call_id = $2
+          and t.outcome is distinct from 'refused'
+        order by t.created_at`,
+      [l.organization_id, l.id],
+    );
+    return rows.map((r) => ({
+      tipo: r.kind,
+      desfecho: r.outcome,
+      de_nome: r.de_nome,
+      para_nome: r.para_nome,
+      para_time: r.para_time,
+      atendida_por_nome: r.atendida_por_nome,
+    }));
+  } catch (e) {
+    logger.warn("telefonia: transferências da ligação não lidas — o registro sai sem elas", {
+      voice_call: l.id,
+      erro: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+    });
+    return [];
+  }
+}
+
 const GRAVACAO_EM_PROCESSAMENTO: GravacaoDaLigacao = { situacao: "processando", duracao_ms: null };
 
 /**
@@ -947,7 +1195,8 @@ export async function registrarNaConversa(
   desfecho: DesfechoDaLigacao,
   duracaoMs: number | null,
 ): Promise<void> {
-  if (!l.conversation_id || !l.contact_id) return;
+  // A interna (v3) não tem conversa nem contato: não há onde registrar.
+  if (!l.conversation_id || !l.contact_id || l.direction === "internal") return;
   let quem: string | null = null;
   if (l.owner_user_id) {
     const { rows } = await db.query<{ nome: string | null }>(
@@ -969,6 +1218,7 @@ export async function registrarNaConversa(
   );
   if (ja.length > 0) return;
   const menu = await menuDoRegistro(db, l);
+  const transferencias = await transferenciasDoRegistro(db, l);
   try {
     await db.query(
     `insert into messages
@@ -993,6 +1243,8 @@ export async function registrarNaConversa(
           motivo: l.end_reason ?? null,
           menu,
           ouviu_aviso: Boolean(l.emergency_heard_at),
+          // A corrente de transferências (v2), com os nomes daquela hora. Ausente sem transferência.
+          ...(transferencias.length > 0 ? { transferencias } : {}),
           // Gravada: o arquivo ainda vai ser guardado (lib/channels/telefonia/gravacoes.ts),
           // e é o processamento que troca a situação, sempre mesclando no banco.
           ...(l.recording_status === "recording" ? { gravacao: GRAVACAO_EM_PROCESSAMENTO } : {}),
@@ -1108,4 +1360,57 @@ export async function registrarFim(
     usuarioId: l.owner_user_id,
     payload: { canal: "telefone", desfecho, motivo },
   });
+}
+
+// ─── ramais e ligação interna (fase 2, versão 3; migration 0291) ──────────
+
+/** Quem tem o ramal `numero` NESTA organização — `null` se ninguém. */
+export async function donoDoRamal(db: Queryable, organizationId: string, numero: string): Promise<string | null> {
+  const { rows } = await db.query<{ user_id: string }>(
+    `select e.user_id from phone_extensions e
+       join user_organizations uo on uo.user_id = e.user_id and uo.organization_id = e.organization_id
+        and uo.revoked_at is null and uo.role in ('agent', 'manager', 'admin')
+      where e.organization_id = $1 and e."number" = $2`,
+    [organizationId, numero],
+  );
+  return rows[0]?.user_id ?? null;
+}
+
+/** O nome e o ramal de quem liga — o que aparece no telefone do colega ("Ana (201)"). */
+export async function quemLiga(db: Queryable, organizationId: string, userId: string): Promise<{ nome: string; ramal: string | null }> {
+  const { rows } = await db.query<{ nome: string | null; ramal: string | null }>(
+    `select coalesce(nullif(u.raw_user_meta_data->>'full_name', ''), u.email) as nome,
+            (select e."number" from phone_extensions e where e.organization_id = $1 and e.user_id = u.id) as ramal
+       from auth.users u where u.id = $2`,
+    [organizationId, userId],
+  );
+  return { nome: rows[0]?.nome ?? "", ramal: rows[0]?.ramal ?? null };
+}
+
+/**
+ * O colega pode receber a ligação interna `vcId` agora? Membro com papel de
+ * atendimento desta organização, disponível (sem pausa), e sem OUTRA ligação
+ * viva — a própria interna já o marca como `peer_user_id`, então ela fica de
+ * fora da conta. O "online" é da ARI, e o horário próprio a API já conferiu.
+ */
+export async function colegaLivreParaInterna(
+  db: Queryable,
+  organizationId: string,
+  userId: string,
+  vcId: string,
+): Promise<boolean> {
+  const { rows } = await db.query(
+    `select 1 from user_organizations uo
+       join attendant_availability a on a.organization_id = uo.organization_id and a.user_id = uo.user_id and a.is_available
+      where uo.organization_id = $1 and uo.user_id = $2 and uo.revoked_at is null
+        and uo.role in ('agent', 'manager', 'admin')
+        and not exists (
+          select 1 from voice_calls v
+           where v.organization_id = $1 and v.status <> 'ended' and v.id <> $3
+             and (v.owner_user_id = $2 or v.ringing_user_id = $2 or v.peer_user_id = $2)
+             and v.started_at > now() - interval '4 hours'
+        )`,
+    [organizationId, userId, vcId],
+  );
+  return rows.length > 0;
 }

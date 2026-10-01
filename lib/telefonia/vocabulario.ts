@@ -83,6 +83,99 @@ export function menuDaLigacao(bruto: unknown): MenuDaLigacao | null {
   };
 }
 
+// ─── transferência (fase 2, versão 2; migration 0290) ─────────────────────
+
+/** `voice_call_transfers.kind` — direta (`blind`) ou consultada (`attended`, só para pessoa). */
+export const TIPOS_DE_TRANSFERENCIA = ["blind", "attended"] as const;
+export type TipoDeTransferencia = (typeof TIPOS_DE_TRANSFERENCIA)[number];
+
+/** `voice_call_transfers.status`. */
+export const ESTADOS_DA_TRANSFERENCIA = ["open", "ended"] as const;
+
+/**
+ * `voice_call_transfers.outcome` — preenchido só no fim. O CHECK do banco é
+ * cruzado com `status` (nulo enquanto aberta), então o espelho mecânico
+ * (vocabulario-banco-x-typescript) não o lê; o invariante da 0290
+ * (tests/invariants/telefonia-transferencia.test.ts) prova o vocabulário.
+ */
+export const DESFECHOS_DA_TRANSFERENCIA = ["answered", "returned", "queue_answered", "missed", "refused", "cancelled"] as const;
+export type DesfechoDaTransferencia = (typeof DESFECHOS_DA_TRANSFERENCIA)[number];
+
+/**
+ * Um elo da corrente de transferências de uma ligação, como fica no registro da
+ * conversa (`messages.metadata.voice_call.transferencias`). Quem ESCREVE é o
+ * worker no fim da ligação (`registrarNaConversa`); quem LÊ é o cartão da
+ * ligação, sempre por `transferenciasDaLigacao`. Os nomes são os daquela hora.
+ */
+export interface TransferenciaDaLigacao {
+  tipo: TipoDeTransferencia;
+  desfecho: DesfechoDaTransferencia | null;
+  de_nome: string | null;
+  para_nome: string | null;
+  para_time: string | null;
+  atendida_por_nome: string | null;
+}
+
+/** Lê a corrente e NUNCA lança: elo que não sustenta o que houve é descartado. */
+export function transferenciasDaLigacao(bruto: unknown): TransferenciaDaLigacao[] {
+  if (!Array.isArray(bruto)) return [];
+  const elos: TransferenciaDaLigacao[] = [];
+  for (const item of bruto) {
+    if (!item || typeof item !== "object") continue;
+    const t = item as Record<string, unknown>;
+    if (!TIPOS_DE_TRANSFERENCIA.includes(t.tipo as TipoDeTransferencia)) continue;
+    const desfecho =
+      t.desfecho === null || t.desfecho === undefined
+        ? null
+        : DESFECHOS_DA_TRANSFERENCIA.includes(t.desfecho as DesfechoDaTransferencia)
+          ? (t.desfecho as DesfechoDaTransferencia)
+          : undefined;
+    if (desfecho === undefined) continue;
+    elos.push({
+      tipo: t.tipo as TipoDeTransferencia,
+      desfecho,
+      de_nome: textoOuNulo(t.de_nome),
+      para_nome: textoOuNulo(t.para_nome),
+      para_time: textoOuNulo(t.para_time),
+      atendida_por_nome: textoOuNulo(t.atendida_por_nome),
+    });
+  }
+  return elos;
+}
+
+/**
+ * Por que uma transferência foi recusada ou cancelada (`voice_call_transfers.reason`,
+ * vocabulário aberto): o texto que o painel mostra. Em português; a tela passa
+ * por `t()`. Motivo desconhecido cai no genérico.
+ */
+export const MENSAGEM_DO_MOTIVO_DA_TRANSFERENCIA: Record<string, string> = {
+  destino_offline: "A pessoa está sem o telefone conectado.",
+  destino_em_ligacao: "A pessoa está em outra ligação.",
+  ligacao_nao_atendida: "A ligação ainda não foi atendida.",
+  ja_ha_transferencia: "Já há uma transferência acontecendo nesta ligação.",
+  dono_mudou: "A ligação mudou de mãos antes da transferência.",
+  ligacao_mudou: "A ligação mudou de mãos antes da transferência.",
+  destino_e_quem_transferiu: "Escolha outra pessoa: a ligação já está com você.",
+  ligacao_desconhecida: "O serviço de telefonia não encontrou a ligação. Tente de novo.",
+  worker_reiniciou: "O serviço de telefonia reiniciou no meio da transferência.",
+  voltou_ao_cliente: "Você voltou ao cliente.",
+  destino_nao_atendeu: "A pessoa não atendeu.",
+  destino_desligou: "A pessoa desligou.",
+  cliente_desligou: "O cliente desligou.",
+  ninguem_atendeu: "Ninguém do time atendeu.",
+  fila_esgotada: "Ninguém do time ficou livre a tempo.",
+  sem_time: "A ligação não tem time para onde ir.",
+};
+export const MENSAGEM_GENERICA_DA_TRANSFERENCIA = "A transferência não aconteceu.";
+
+// ─── ramais (fase 2, versão 3; migration 0291) ─────────────────────────────
+
+/**
+ * 2 a 4 dígitos, sem começar por 0 (D22 — o 0 é o prefixo de saída da
+ * operadora). A mesma régua do CHECK `phone_extensions_number_check`.
+ */
+export const REGUA_DO_RAMAL = /^[1-9][0-9]{1,3}$/;
+
 /**
  * As falas gerais da organização (`phone_settings.<tipo>_prompt_id`).
  * `recording_notice` (0289) é o AVISO DE GRAVAÇÃO: sem ele pronto, a gravação das
@@ -296,6 +389,8 @@ export interface MenuPublico {
   pronto: boolean;
   /** Os números que tocam este menu, com o rótulo pronto: "Recepção · (61) 3686-1503", ou só um dos dois. */
   numeros: string[];
+  /** O cliente pode digitar o ramal de alguém (v3, `accepts_extension`). */
+  aceita_ramal: boolean;
   ultimos_7_dias: UltimosSeteDias;
 }
 

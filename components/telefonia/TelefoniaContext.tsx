@@ -40,6 +40,8 @@ interface Ramal {
   senha?: string;
   ws_url?: string;
   numeros?: NumeroDaEmpresa[];
+  /** O número do ramal desta pessoa (v3) — "Seu ramal: 201". */
+  numero?: string | null;
 }
 
 export interface EstadoDaLigacao {
@@ -53,7 +55,46 @@ export interface EstadoDaLigacao {
   conversaId: string | null;
   atendidaEm: number | null;
   mudo: boolean;
+  /**
+   * Por que o ramal tocou (header `X-Transferencia`, v2): `transf`/`fila` = é
+   * uma transferência chegando; `volta` = a que eu transferi voltou; `consulta`
+   * = um colega quer falar antes; `null` = uma ligação comum.
+   */
+  papelDaEntrada: string | null;
+  /** A transferência ABERTA desta ligação (v2), como o banco a vê. */
+  transferencia: TransferenciaAberta | null;
+  /** Quem me transferiu esta ligação (a transferência que pegou em mim). */
+  transferidaPor: string | null;
+  /** A última transferência que fechou envolvendo a mim (o painel diz o que houve). */
+  ultimaTransferencia: UltimaTransferencia | null;
+  /** Ligação interna (v3): entre ramais, sem cliente — não pode ser transferida (D16). */
+  interna: boolean;
 }
+
+export interface TransferenciaAberta {
+  id: string;
+  tipo: "blind" | "attended";
+  de_user_id: string | null;
+  de_nome: string | null;
+  para_nome: string | null;
+  para_time: string | null;
+  /** Consultada: o colega ainda tocando, ou já na linha comigo. */
+  consulta: "tocando" | "falando" | null;
+}
+
+export interface UltimaTransferencia {
+  id: string;
+  tipo: "blind" | "attended";
+  desfecho: string | null;
+  motivo: string | null;
+  de_nome: string | null;
+  para_nome: string | null;
+  para_time: string | null;
+  fui_eu: boolean;
+  fechada_em: string | null;
+}
+
+export type DestinoDaTransferencia = { user_id: string } | { team_id: string };
 
 export interface Encerramento {
   motivo: string;
@@ -74,13 +115,20 @@ interface ContextoDoTelefone {
   /** A organização tem telefone (mesmo que o ramal ainda esteja conectando). */
   disponivel: boolean;
   numeros: NumeroDaEmpresa[];
+  /** O número do ramal desta pessoa (v3); `null` = sem ramal. */
+  meuRamal: string | null;
   ligacao: EstadoDaLigacao | null;
   ultimoEncerramento: Encerramento | null;
-  ligar(p: { contatoId?: string; numero?: string; numeroDaEmpresaId?: string; nome?: string | null }): Promise<void>;
+  /** Com `ramal`, a ligação interna para um colega (v3). */
+  ligar(p: { contatoId?: string; numero?: string; ramal?: string; numeroDaEmpresaId?: string; nome?: string | null }): Promise<void>;
   atender(): void;
   desligar(): void;
   alternarMudo(): void;
   teclar(digito: string): void;
+  /** Transfere a ligação em curso (v2). `false` = a API recusou (o motivo já apareceu). */
+  transferir(p: { modo: "direta" | "consultada"; para: DestinoDaTransferencia }): Promise<boolean>;
+  /** Na consulta: passa o cliente ao colega (`completar`) ou volta ao cliente (`voltar`). */
+  decidirConsulta(acao: "completar" | "voltar"): Promise<void>;
 }
 
 const Contexto = createContext<ContextoDoTelefone | null>(null);
@@ -92,6 +140,7 @@ export function useTelefonia(): ContextoDoTelefone {
       pronto: false,
       disponivel: false,
       numeros: [],
+      meuRamal: null,
       ligacao: null,
       ultimoEncerramento: null,
       ligar: async () => undefined,
@@ -99,6 +148,8 @@ export function useTelefonia(): ContextoDoTelefone {
       desligar: () => undefined,
       alternarMudo: () => undefined,
       teclar: () => undefined,
+      transferir: async () => false,
+      decidirConsulta: async () => undefined,
     };
   }
   return c;
@@ -115,6 +166,11 @@ interface DetalheDaLigacao {
   conversation_id: string | null;
   contact_id: string | null;
   contact_name: string | null;
+  // v2 (transferência) e v3 (interna)
+  peer_user_name?: string | null;
+  transferencia?: TransferenciaAberta | null;
+  transferida_por?: { de_nome: string | null } | null;
+  ultima_transferencia?: UltimaTransferencia | null;
 }
 
 const RETENTAR_REGISTRO_MS = 15_000;
@@ -274,6 +330,8 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
           }
           sessaoRef.current = s;
           const id = ev.request.getHeader("X-Ligacao-Id") ?? null;
+          // A ligação interna (v3) traz quem liga no header; o nome e o ramal vêm na bina.
+          const interna = Boolean(ev.request.getHeader("X-Interna-De"));
           setLigacao({
             id,
             direcao: "entrada",
@@ -284,6 +342,11 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
             conversaId: null,
             atendidaEm: null,
             mudo: false,
+            papelDaEntrada: ev.request.getHeader("X-Transferencia") ?? null,
+            transferencia: null,
+            transferidaPor: null,
+            ultimaTransferencia: null,
+            interna,
           });
         }
         s.on("ended", () => limparSessao("encerrada"));
@@ -339,12 +402,17 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
           const atendeu = l.direcao === "saida" && d.status === "connected" && l.fase !== "em_ligacao";
           return {
             ...l,
-            nome: d.contact_name ?? l.nome,
+            // Na interna que EU fiz (v3), quem está do outro lado é o colega.
+            nome: d.contact_name ?? (l.direcao === "saida" && d.direction === "internal" ? d.peer_user_name : undefined) ?? l.nome,
             numero: d.peer_phone || l.numero,
             contatoId: d.contact_id,
             conversaId: d.conversation_id,
             fase: atendeu ? "em_ligacao" : l.fase === "discando" && d.status === "ringing" ? "chamando" : l.fase,
             atendidaEm: atendeu ? Date.now() : l.atendidaEm,
+            transferencia: d.transferencia ?? null,
+            transferidaPor: d.transferida_por?.de_nome ?? null,
+            ultimaTransferencia: d.ultima_transferencia ?? null,
+            interna: d.direction === "internal",
           };
         });
       } catch {
@@ -352,10 +420,11 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
       }
     };
     void ler();
-    // Só a saída precisa de leitura contínua (saber quando atenderam); a
-    // entrada lê uma vez, para o nome e a conversa.
-    if (fase === "em_ligacao" || fase === "tocando") return () => void (vivo = false);
-    const t = setInterval(ler, 1_500);
+    // O toque lê uma vez (o nome, a conversa, quem transferiu). Em ligação, a
+    // leitura segue — mais espaçada — porque a transferência (v2) muda o que o
+    // painel diz: "chamando Bruno…", "Bruno atendeu", a recusa e o motivo.
+    if (fase === "tocando") return () => void (vivo = false);
+    const t = setInterval(ler, fase === "em_ligacao" ? 2_000 : 1_500);
     return () => {
       vivo = false;
       clearInterval(t);
@@ -369,10 +438,15 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
       let pedido: { id: string; destino: string };
       try {
         pedido = (
-          await apiClient.post<{ data: { id: string; destino: string } }>("/api/v1/telefonia/chamadas", {
-            ...(p.contatoId ? { contact_id: p.contatoId } : { numero: p.numero }),
-            ...(p.numeroDaEmpresaId ? { numero_da_empresa_id: p.numeroDaEmpresaId } : {}),
-          })
+          await apiClient.post<{ data: { id: string; destino: string } }>(
+            "/api/v1/telefonia/chamadas",
+            p.ramal
+              ? { ramal: p.ramal }
+              : {
+                  ...(p.contatoId ? { contact_id: p.contatoId } : { numero: p.numero }),
+                  ...(p.numeroDaEmpresaId ? { numero_da_empresa_id: p.numeroDaEmpresaId } : {}),
+                },
+          )
         ).data;
       } catch (e) {
         showApiError(e);
@@ -385,12 +459,17 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
         id: pedido.id,
         direcao: "saida",
         fase: "discando",
-        numero: p.numero ?? "",
+        numero: p.ramal ?? p.numero ?? "",
         nome: p.nome ?? null,
         contatoId: p.contatoId ?? null,
         conversaId: null,
         atendidaEm: null,
         mudo: false,
+        papelDaEntrada: null,
+        transferencia: null,
+        transferidaPor: null,
+        ultimaTransferencia: null,
+        interna: Boolean(p.ramal),
       });
       const s = ua.call(`sip:${pedido.destino}@${window.location.hostname}`, {
         mediaConstraints: { audio: true, video: false },
@@ -432,11 +511,41 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
     sessaoRef.current?.sendDTMF(digito);
   }, []);
 
+  // A transferência (v2): a API confere e manda a ordem ao serviço de telefonia;
+  // o que acontece depois chega pela leitura da ligação (efeito 3).
+  const idAtual = ligacao?.id ?? null;
+  const transferir = useCallback<ContextoDoTelefone["transferir"]>(
+    async (p) => {
+      if (!idAtual) return false;
+      try {
+        await apiClient.post(`/api/v1/telefonia/chamadas/${idAtual}/transferir`, p);
+        return true;
+      } catch (e) {
+        showApiError(e);
+        return false;
+      }
+    },
+    [idAtual],
+  );
+
+  const decidirConsulta = useCallback<ContextoDoTelefone["decidirConsulta"]>(
+    async (acao) => {
+      if (!idAtual) return;
+      try {
+        await apiClient.post(`/api/v1/telefonia/chamadas/${idAtual}/transferencia`, { acao });
+      } catch (e) {
+        showApiError(e);
+      }
+    },
+    [idAtual],
+  );
+
   const valor = useMemo<ContextoDoTelefone>(
     () => ({
       pronto,
       disponivel: Boolean(ramal?.ativo),
       numeros: ramal?.numeros ?? [],
+      meuRamal: ramal?.numero ?? null,
       ligacao,
       ultimoEncerramento,
       ligar,
@@ -444,8 +553,10 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
       desligar,
       alternarMudo,
       teclar,
+      transferir,
+      decidirConsulta,
     }),
-    [pronto, ramal, ligacao, ultimoEncerramento, ligar, atender, desligar, alternarMudo, teclar],
+    [pronto, ramal, ligacao, ultimoEncerramento, ligar, atender, desligar, alternarMudo, teclar, transferir, decidirConsulta],
   );
 
   return (

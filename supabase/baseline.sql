@@ -30044,6 +30044,286 @@ comment on column public.voice_calls.recording_notice_at is
 
 notify pgrst, 'reload schema';
 
+-- ---- telefonia fase 2: transferência de ligação (migration 0290) ----
+-- Racional completo no cabeçalho de supabase/migrations/20260930120000_0290_telefonia_transferencia.sql
+-- e na emenda §12 do desenho docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md.
+
+-- 1. voice_calls: o alvo da FK composta ----------------------------------------
+do $uq_ligacao$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass
+                    and conname = 'voice_calls_organization_id_id_key') then
+    alter table public.voice_calls
+      add constraint voice_calls_organization_id_id_key unique (organization_id, id);
+  end if;
+end $uq_ligacao$;
+
+-- 2. voice_call_transfers --------------------------------------------------------
+create table if not exists public.voice_call_transfers (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  voice_call_id   uuid not null,
+  requested_by    uuid references auth.users(id) on delete set null,
+  from_user_id    uuid references auth.users(id) on delete set null,
+  to_user_id      uuid references auth.users(id) on delete set null,
+  to_team_id      uuid,
+  kind            text not null,
+  status          text not null default 'open',
+  outcome         text,
+  reason          text,
+  answered_by     uuid references auth.users(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  ended_at        timestamptz,
+  unique (organization_id, id),
+  foreign key (organization_id, voice_call_id) references public.voice_calls (organization_id, id) on delete cascade,
+  -- set null só da coluna: apagar o time não apaga a história da transferência.
+  foreign key (organization_id, to_team_id) references public.attendance_teams (organization_id, id)
+    on delete set null (to_team_id)
+);
+
+do $chk_transferencias$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_kind_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_kind_check
+      check (kind in ('blind', 'attended'));
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_status_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_status_check
+      check (status in ('open', 'ended'));
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_outcome_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_outcome_check
+      check (
+        (status = 'open' and outcome is null and ended_at is null)
+        -- `outcome is not null` explícito: `null in (...)` é NULL, e CHECK com NULL passa.
+        or (status = 'ended' and ended_at is not null and outcome is not null
+            and outcome in ('answered', 'returned', 'queue_answered', 'missed', 'refused', 'cancelled'))
+      );
+  end if;
+
+  -- Exatamente um destino — no pedido. O time apagado depois (set null) deixa a
+  -- linha ENCERRADA sem destino; por isso o CHECK só vale enquanto ela está aberta.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_destino_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_destino_check
+      check (status <> 'open' or ((to_user_id is null) <> (to_team_id is null)));
+  end if;
+
+  -- D9: a consultada é só para pessoa.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_transfers'::regclass
+                    and conname = 'voice_call_transfers_consultada_check') then
+    alter table public.voice_call_transfers add constraint voice_call_transfers_consultada_check
+      check (kind <> 'attended' or to_team_id is null);
+  end if;
+end $chk_transferencias$;
+
+create unique index if not exists voice_call_transfers_uma_aberta
+  on public.voice_call_transfers (voice_call_id) where status = 'open';
+create index if not exists voice_call_transfers_da_ligacao
+  on public.voice_call_transfers (organization_id, voice_call_id, created_at);
+create index if not exists voice_call_transfers_para_pessoa_aberta
+  on public.voice_call_transfers (organization_id, to_user_id) where status = 'open';
+
+-- 3. RLS, GRANT e policy ------------------------------------------------------------
+alter table public.voice_call_transfers enable row level security;
+
+revoke all on public.voice_call_transfers from public, anon, authenticated, service_role;
+grant select on public.voice_call_transfers to authenticated, service_role;
+
+drop policy if exists tenant_isolation_voice_call_transfers_all on public.voice_call_transfers;
+drop policy if exists tenant_isolation_voice_call_transfers_select on public.voice_call_transfers;
+create policy tenant_isolation_voice_call_transfers_select on public.voice_call_transfers for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+
+-- 4. Comentários -------------------------------------------------------------------
+comment on table public.voice_call_transfers is
+  'Transferências de ligação do telefone (fase 2, versão 2). Aberta (status open) enquanto acontece — no máximo uma por ligação (índice voice_call_transfers_uma_aberta) —, encerrada com outcome. Escrita só pela API (pedido) e pelo worker (desfecho); pela REST é só leitura. A corrente vai para o cartão da ligação em messages.metadata.voice_call.transferencias.';
+comment on column public.voice_call_transfers.outcome is
+  'answered (a pessoa atendeu), returned (voltou a quem transferiu), queue_answered (alguém do time pegou), missed (ninguém pegou: "Ligar de volta"), refused (o worker recusou; o porquê em reason), cancelled (o cliente desligou, quem transferiu voltou ao cliente, ou o worker reiniciou). NULL enquanto aberta.';
+comment on column public.voice_call_transfers.reason is
+  'Vocabulário aberto, sem CHECK: o motivo de refused/cancelled (destino_offline, destino_em_ligacao, ligacao_nao_atendida, voltou_ao_cliente, cliente_desligou, worker_reiniciou…). Lido pelo painel e pelo log.';
+
+notify pgrst, 'reload schema';
+
+-- ---- telefonia fase 2: ramais (migration 0291) ----
+-- Racional completo no cabeçalho de supabase/migrations/20260930130000_0291_telefonia_ramais.sql
+-- e na emenda §12 do desenho docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md.
+
+-- 1. phone_extensions --------------------------------------------------------------
+create table if not exists public.phone_extensions (
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  user_id         uuid not null references auth.users(id) on delete cascade,
+  "number"        text not null,
+  updated_by      uuid references auth.users(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  primary key (organization_id, user_id),
+  unique (organization_id, "number")
+);
+
+do $chk_ramais$
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.phone_extensions'::regclass
+                    and conname = 'phone_extensions_number_check') then
+    -- Número fora da régua (só com o CHECK derrubado à mão) sai: o gatilho e o
+    -- backfill abaixo devolvem um válido a quem ainda tem papel de atendimento.
+    delete from public.phone_extensions where "number" !~ '^[1-9][0-9]{1,3}$';
+    alter table public.phone_extensions add constraint phone_extensions_number_check
+      check ("number" ~ '^[1-9][0-9]{1,3}$');
+  end if;
+end $chk_ramais$;
+
+-- 2. o próximo número livre ---------------------------------------------------------
+create or replace function public.fn_proximo_ramal(p_org uuid)
+returns text language sql stable set search_path = public as $$
+  select g.n::text
+    from generate_series(201, 9999) as g(n)
+   where not exists (select 1 from public.phone_extensions e
+                      where e.organization_id = p_org and e."number" = g.n::text)
+   order by g.n
+   limit 1
+$$;
+revoke execute on function public.fn_proximo_ramal(uuid) from public, anon, authenticated;
+grant execute on function public.fn_proximo_ramal(uuid) to service_role;
+
+-- 3. o gatilho: ganhou papel de atendimento → ramal; perdeu → libera ----------------
+create or replace function public.fn_ramal_por_papel()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_org     uuid := coalesce(new.organization_id, old.organization_id);
+  v_user    uuid := coalesce(new.user_id, old.user_id);
+  v_atende  boolean := tg_op <> 'DELETE' and new.revoked_at is null and new.role in ('agent', 'manager', 'admin');
+  v_numero  text;
+begin
+  -- Uma organização por vez: duas admissões simultâneas não pegam o mesmo número.
+  perform pg_advisory_xact_lock(hashtext('phone_extensions'), hashtext(v_org::text));
+  if v_atende then
+    if not exists (select 1 from public.phone_extensions where organization_id = v_org and user_id = v_user) then
+      v_numero := public.fn_proximo_ramal(v_org);
+      -- Sem número livre (9.799 ramais) a pessoa fica sem ramal — nunca sem a admissão.
+      if v_numero is not null then
+        insert into public.phone_extensions (organization_id, user_id, "number")
+        values (v_org, v_user, v_numero)
+        on conflict do nothing;
+      end if;
+    end if;
+  else
+    delete from public.phone_extensions where organization_id = v_org and user_id = v_user;
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end $$;
+-- Função de gatilho: ninguém a chama (o gatilho dispara com o dono). Fora de
+-- `authenticated` também: é `security definer` que escreve.
+revoke execute on function public.fn_ramal_por_papel() from public, anon, authenticated;
+grant execute on function public.fn_ramal_por_papel() to service_role;
+
+drop trigger if exists trg_ramal_por_papel on public.user_organizations;
+create trigger trg_ramal_por_papel
+  after insert or update of role, revoked_at or delete on public.user_organizations
+  for each row execute function public.fn_ramal_por_papel();
+
+-- 4. backfill -------------------------------------------------------------------------
+do $backfill_ramais$
+declare
+  r record;
+  v_numero text;
+begin
+  for r in
+    select uo.organization_id, uo.user_id
+      from public.user_organizations uo
+     where uo.revoked_at is null and uo.role in ('agent', 'manager', 'admin')
+       and not exists (select 1 from public.phone_extensions e
+                        where e.organization_id = uo.organization_id and e.user_id = uo.user_id)
+     order by uo.organization_id, uo.created_at, uo.user_id
+  loop
+    v_numero := public.fn_proximo_ramal(r.organization_id);
+    if v_numero is not null then
+      insert into public.phone_extensions (organization_id, user_id, "number")
+      values (r.organization_id, r.user_id, v_numero)
+      on conflict do nothing;
+    end if;
+  end loop;
+  -- E libera o de quem já não atende (o gatilho não existia quando o papel mudou).
+  delete from public.phone_extensions e
+   where not exists (select 1 from public.user_organizations uo
+                      where uo.organization_id = e.organization_id and uo.user_id = e.user_id
+                        and uo.revoked_at is null and uo.role in ('agent', 'manager', 'admin'));
+end $backfill_ramais$;
+
+-- 5. voice_calls: a ligação interna ---------------------------------------------------
+alter table public.voice_calls
+  add column if not exists peer_user_id uuid references auth.users(id) on delete set null;
+
+alter table public.voice_calls alter column channel_session_id drop not null;
+
+do $chk_interna$
+begin
+  -- A lista só cresce (`internal`): nenhuma linha existente a viola.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_direction_check'
+                    and pg_get_constraintdef(oid) like '%internal%') then
+    alter table public.voice_calls drop constraint if exists voice_calls_direction_check;
+    alter table public.voice_calls add constraint voice_calls_direction_check
+      check (direction in ('inbound', 'outbound', 'internal'));
+  end if;
+
+  -- Sem número da empresa, só a interna. Toda linha existente tem número (a coluna era NOT NULL).
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_canal_ou_interna_check') then
+    alter table public.voice_calls add constraint voice_calls_canal_ou_interna_check
+      check (direction = 'internal' or channel_session_id is not null);
+  end if;
+
+  -- A interna e quem está do outro lado dela são do TELEFONE (a REST escreve a linha do WaCalls).
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass and conname = 'voice_calls_interna_so_no_telefone_check') then
+    update public.voice_calls set peer_user_id = null where provider <> 'sip_trunk' and peer_user_id is not null;
+    alter table public.voice_calls add constraint voice_calls_interna_so_no_telefone_check
+      check (provider = 'sip_trunk' or (direction <> 'internal' and peer_user_id is null));
+  end if;
+end $chk_interna$;
+
+-- "Em outra ligação" também para quem está do OUTRO lado de uma interna.
+create index if not exists idx_voice_calls_vivas_por_colega
+  on public.voice_calls (organization_id, peer_user_id)
+  where status <> 'ended' and peer_user_id is not null;
+
+-- 6. RLS, GRANT e policy -----------------------------------------------------------
+alter table public.phone_extensions enable row level security;
+
+revoke all on public.phone_extensions from public, anon, authenticated, service_role;
+grant select on public.phone_extensions to authenticated, service_role;
+
+drop policy if exists tenant_isolation_phone_extensions_all on public.phone_extensions;
+drop policy if exists tenant_isolation_phone_extensions_select on public.phone_extensions;
+create policy tenant_isolation_phone_extensions_select on public.phone_extensions for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+
+create or replace trigger trg_phone_extensions_updated_at
+  before update on public.phone_extensions for each row execute function public.fn_set_updated_at();
+
+-- 7. Comentários -------------------------------------------------------------------
+comment on table public.phone_extensions is
+  'O número do ramal de cada pessoa na organização (fase 2, versão 3). Dado pelo gatilho trg_ramal_por_papel a quem ganha papel de atendimento (a partir de 201, fn_proximo_ramal) e liberado de quem perde. O admin troca pela API (Conexões › Telefone › Ramais). É endereço para humanos: a identidade SIP do navegador segue ramal-<user_id>.';
+comment on column public.phone_extensions."number" is
+  '2 a 4 dígitos, sem começar por 0 (o 0 é o prefixo de saída da operadora). Único na organização.';
+comment on column public.voice_calls.peer_user_id is
+  'Na ligação interna (direction = internal): quem recebe. É o "ocupado" do outro lado — o distribuidor e o diretório não tocam para quem está numa interna.';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

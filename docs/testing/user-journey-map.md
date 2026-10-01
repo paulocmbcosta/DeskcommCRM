@@ -3204,3 +3204,43 @@ VPS de produção em 2026-09-29, numa ponte de sonda sem ligação (gravar → p
 | J37.10 Viewer, ou quem não enxerga a conversa (outro time), não ouve: sem botão, e a rota responde 403/404 | `[P0]` | em unidade (rota com RLS dublada; `CartaoDaLigacao.test.tsx`); a RLS de verdade é a das mensagens, já provada no Postgres real (0281/0283) |
 | J37.11 Anonimizar o contato apaga a gravação (fila de remoção do Storage) e limpa o cartão | `[P0]` | no Postgres real (`tests/invariants/telefonia-gravacao.test.ts`) |
 | J37.12 Passada a retenção, a poda diária apaga o arquivo e o cartão diz "Gravação apagada pelo prazo de guarda"; Storage fora não marca nada | `[P1]` | no Postgres real e em `lib/telefonia/poda-das-gravacoes.test.ts` |
+
+## J38 — Transferência de ligação e ramais `[P0]` (2026-09-30)
+
+Pedido do dono (DYD-10, fase 2, versões 2 e 3): transferir a ligação para um colega ou para
+um time, direto ou "falando antes", e ramais para os atendentes ligarem entre si e para o
+cliente digitar na URA. Decisões D9–D11 e D16–D23 na emenda §12 de
+`docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md`; plano
+em `docs/superpowers/plans/2026-09-30-telefonia-v2-v3-transferencia-e-ramais.md`; mapa em
+`docs/architecture/telefonia.architecture.json` (peças `transferencia`, `rota_transferir`,
+`rota_diretorio`, `aba_ramais`…); migrations 0290 e 0291.
+
+`[P0]` porque é o cliente no meio: uma transferência que se perde é um cliente que desliga sem
+atendimento.
+
+**Como é provado.** A máquina da transferência (todos os caminhos de §12.2) em
+`lib/channels/telefonia/transferencia.test.ts`; a interna e a URA com ramal em
+`lib/channels/telefonia/ramais.test.ts`; a regra da URA em `lib/telefonia/ura.test.ts`; o que o
+painel diz em `lib/telefonia/texto-da-transferencia.test.ts`; o SQL no Postgres real em
+`tests/invariants/telefonia-transferencia.test.ts`, `telefonia-ramais.test.ts`,
+`telefonia-repositorio-da-transferencia.test.ts`, `telefonia-pedido-de-transferencia.test.ts`
+e `telefonia-ligacao-interna.test.ts`. **Nada disso passou pela VPS**: o formato do evento de
+usuário da ARI não foi medido (sessão sem acesso à VPS), e nenhuma ligação real foi transferida.
+O roteiro da prova é `docs/runbooks/telefonia-transferencia-e-ramais.md`.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J38.1 A atende uma recebida e clica Transferir: a busca mostra colegas com a situação (só disponível clicável) e times com os livres ou "fora do horário" | `[P0]` | em unidade (regras e rota); pela tela, pendente |
+| J38.2 Direta para B: o cliente ouve música, B toca e vê "Transferida por A", atende e fica com a ligação e a conversa | `[P0]` | em unidade (`transferencia.test.ts`); na VPS, pendente |
+| J38.3 B não atende: o cliente volta para A ("B não atendeu, o cliente voltou"); A também não → a fila do time, sem A no rodízio | `[P0]` | em unidade; na VPS, pendente |
+| J38.4 Ninguém do time pega: "ninguém atendeu" e "Ligar de volta" na Central para o time; o cartão diz que a ligação foi atendida | `[P0]` | em unidade; na VPS, pendente |
+| J38.5 Falar antes: A fala com B com o cliente em espera; Completar passa o cliente a B; Voltar ao cliente devolve a A | `[P0]` | em unidade; na VPS, pendente |
+| J38.6 A desliga no meio da consulta: com B na linha completa; com B tocando vira direta | `[P1]` | em unidade |
+| J38.7 O cliente desliga no meio: tudo encerra, `cancelled` | `[P1]` | em unidade |
+| J38.8 Destino que ficou indisponível entre a tela e o worker: recusa com o motivo no painel | `[P1]` | em unidade e no Postgres real |
+| J38.9 Ligação feita também é transferida | `[P1]` | em unidade |
+| J38.10 Todo atendente ganha ramal a partir de 201; quem vira viewer ou é removido libera o número | `[P0]` | no Postgres real (gatilho, backfill, corrida de duas admissões) |
+| J38.11 "Seu ramal: 201" no discador; digitar 202 ou o nome liga para o colega (ligação interna, sem operadora, sem conversa) | `[P0]` | em unidade (discador, rota e worker); na VPS, pendente |
+| J38.12 Admin troca o ramal em Conexões › Telefone › Ramais; número de outra pessoa → "Esse ramal já é de outra pessoa." | `[P1]` | no Postgres real; pela tela, pendente |
+| J38.13 Menu com "O cliente pode digitar o ramal": digitar 202 toca direto em B; B não atende → a fila do time padrão; ramal inexistente → tecla inválida | `[P0]` | em unidade; na VPS, pendente (só o …9197 manda tecla) |
+

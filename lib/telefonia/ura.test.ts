@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ESPERA_APOS_O_MENU_MS,
+  ESPERA_ENTRE_DIGITOS_MS,
   ESTADO_INICIAL_DA_URA,
   VEZES_DO_MENU,
   passoDaUra,
@@ -211,5 +212,64 @@ describe("URA — a regra pura (D5)", () => {
       expect(() => passoDaUra(menu, congelado, evento)).not.toThrow();
       expect(congelado).toEqual(antes);
     }
+  });
+});
+
+describe("menu que aceita ramal (v3)", () => {
+  const menuComRamal = {
+    opcoes: [
+      { digito: "1", teamId: "suporte" },
+      { digito: "2", teamId: "financeiro" },
+    ],
+    defaultTeamId: "padrao",
+    temFalaInvalida: true,
+    aceitaRamal: true,
+  };
+  const passo = (e: Parameters<typeof passoDaUra>[1], ev: Parameters<typeof passoDaUra>[2]) => passoDaUra(menuComRamal, e, ev);
+
+  it("a primeira tecla para a fala e espera 2 s pela próxima; um dígito só vira a opção", () => {
+    const a = passo(ESTADO_INICIAL_DA_URA, { tipo: "tecla", digito: "1" });
+    expect(a.acao).toEqual({ tipo: "esperar_digitos", ms: ESPERA_ENTRE_DIGITOS_MS, seq: 1, pararAtual: true });
+    const b = passo(a.estado, { tipo: "prazo_dos_digitos", seq: 1 });
+    expect(b.acao).toEqual({ tipo: "encaminhar", teamId: "suporte", desfecho: "chosen", digito: "1", pararAtual: false });
+  });
+
+  it("2 a 4 dígitos são um ramal; o quarto decide sem esperar", () => {
+    let e = passo(ESTADO_INICIAL_DA_URA, { tipo: "tecla", digito: "2" }).estado;
+    e = passo(e, { tipo: "tecla", digito: "0" }).estado;
+    const tres = passo(e, { tipo: "tecla", digito: "1" });
+    expect(tres.acao).toMatchObject({ tipo: "esperar_digitos", seq: 3 });
+    expect(passo(tres.estado, { tipo: "prazo_dos_digitos", seq: 3 }).acao).toEqual({ tipo: "ramal", numero: "201" });
+    const quatro = passo(tres.estado, { tipo: "tecla", digito: "5" });
+    expect(quatro.acao).toEqual({ tipo: "ramal", numero: "2015" });
+  });
+
+  it("# encerra a digitação; o prazo velho é ignorado", () => {
+    let e = passo(ESTADO_INICIAL_DA_URA, { tipo: "tecla", digito: "2" }).estado;
+    e = passo(e, { tipo: "tecla", digito: "0" }).estado;
+    expect(passo(e, { tipo: "prazo_dos_digitos", seq: 1 }).acao).toEqual({ tipo: "ignorar" });
+    expect(passo(e, { tipo: "tecla", digito: "#" }).acao).toEqual({ tipo: "ramal", numero: "20" });
+  });
+
+  it("ramal que não serve é tecla errada: a fala de inválida e o menu; na terceira, o time padrão", () => {
+    let e = passo(ESTADO_INICIAL_DA_URA, { tipo: "tecla", digito: "9" }).estado;
+    e = passo(e, { tipo: "tecla", digito: "9" }).estado;
+    e = passo(e, { tipo: "prazo_dos_digitos", seq: 2 }).estado;
+    expect(e.fase).toBe("ramal");
+    // Enquanto confere, nada muda o rumo.
+    expect(passo(e, { tipo: "tecla", digito: "1" }).acao).toEqual({ tipo: "ignorar" });
+    const invalido = passo(e, { tipo: "ramal_invalido" });
+    expect(invalido.acao).toEqual({ tipo: "tocar", fala: "invalida", pararAtual: false });
+    expect(invalido.estado).toMatchObject({ fase: "tocando", vez: 2, houveInvalida: true });
+    const naTerceira = passo({ fase: "ramal", vez: 3, houveInvalida: true }, { tipo: "ramal_invalido" });
+    expect(naTerceira.acao).toMatchObject({ tipo: "encaminhar", teamId: "padrao", desfecho: "default_invalid" });
+  });
+
+  it("sem aceitar ramal, a tecla decide na hora, como antes", () => {
+    const semRamal = { ...menuComRamal, aceitaRamal: false };
+    expect(passoDaUra(semRamal, ESTADO_INICIAL_DA_URA, { tipo: "tecla", digito: "2" }).acao).toMatchObject({
+      tipo: "encaminhar",
+      teamId: "financeiro",
+    });
   });
 });

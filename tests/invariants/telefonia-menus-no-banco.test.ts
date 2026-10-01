@@ -116,6 +116,7 @@ const armazem = {
 
 const entrada = (e: Partial<EntradaDoMenu> = {}): EntradaDoMenu => ({
   nome: "Principal",
+  aceita_ramal: false,
   opcoes: [
     { tecla: "1", time_id: TIME_A1 },
     { tecla: "2", time_id: TIME_A2 },

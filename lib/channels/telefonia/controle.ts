@@ -74,83 +74,25 @@ import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 import { ErroAri, type CanalAri } from "./ari";
 import { FalasNoAr, semFalaNoAr, type FalaDaLigacao, type PortaFalas } from "./fala-no-ar";
 import { donoDoEndpoint, endpointDoCanal, enderecoDeSaida, idDoRamal } from "./pjsip";
+import type { EventoAri, PortaAri, PortaBanco, Registro } from "./portas";
 import type { PoliticaDeGravacao } from "./repositorio-das-gravacoes";
 import type {
   DesfechoDaLigacao,
-  EscolhaDoMenu,
   FalaDoBanco,
   FalasGerais,
   LigacaoDoBanco,
   MenuDoBanco,
-  NovaLigacao,
   TimeParaAFila,
   TroncoDoBanco,
 } from "./repositorio";
+import { Transferencias, papelDaTransferencia, type VistaDaLigacao } from "./transferencia";
 
 // ─── portas ────────────────────────────────────────────────────────────────
-
-export interface PortaAri {
-  atender(canal: string): Promise<unknown>;
-  indicarChamando(canal: string): Promise<unknown>;
-  desligar(canal: string, motivo?: "normal" | "busy" | "congestion" | "no_answer"): Promise<unknown>;
-  originar(p: {
-    endpoint: string;
-    appArgs: string;
-    callerId?: string;
-    prazoS: number;
-    variaveis?: Record<string, string>;
-  }): Promise<{ id: string }>;
-  criarCanal(p: { endpoint: string; appArgs: string; callerId?: string }): Promise<{ id: string }>;
-  discar(canal: string, prazoS: number): Promise<unknown>;
-  criarPonte(id: string): Promise<{ id: string }>;
-  porNaPonte(ponte: string, canal: string): Promise<unknown>;
-  destruirPonte(ponte: string): Promise<unknown>;
-  musicaDeEspera(canal: string): Promise<unknown>;
-  pararMusica(canal: string): Promise<unknown>;
-  tocarTom(canal: string, tom: "ring" | "busy" | "congestion"): Promise<{ id: string }>;
-  pararReproducao(id: string): Promise<unknown>;
-  /** Toca uma fala do telefone (URA, aguarde, aviso) e devolve o id do playback. */
-  tocarFala(canal: string, midia: string): Promise<string>;
-  /** Para uma fala em andamento. Um playback que já terminou não é erro. */
-  pararFala(playbackId: string): Promise<unknown>;
-  /** O ramal está registrado (há navegador para tocar)? */
-  ramalOnline(userId: string): Promise<boolean>;
-  /** Pontes vivas com os canais de cada uma — para `recuperar()`. */
-  pontes(): Promise<Array<{ id: string; channels: string[] }>>;
-  canais(): Promise<Array<{ id: string }>>;
-}
-
-export interface PortaBanco {
-  troncoPorId(id: string): Promise<TroncoDoBanco | null>;
-  disponiveisNoTime(org: string, teamId: string, agora: Date): Promise<CandidatoAoToque[]>;
-  /** A entrada na fila: fora do horário/aberto/indisponível e o aviso de instabilidade vigente. */
-  timeParaAFila(org: string, teamId: string, agora: Date): Promise<TimeParaAFila>;
-  falasGerais(org: string): Promise<FalasGerais>;
-  /** A URA (§5.1): o menu do número e o que o cliente escolheu nele. */
-  menuPorId(org: string, menuId: string): Promise<MenuDoBanco | null>;
-  /** A escolha na ligação — e a conversa SEM DONO acompanha o time escolhido (visibilidade por time, 0281). */
-  registrarEscolhaDoMenu(org: string, id: string, e: EscolhaDoMenu): Promise<boolean>;
-  /** O cliente caiu no time padrão do menu, e ele está ARQUIVADO: `phone_menu_team_archived` na Central. */
-  avisarMenuComTimeArquivado(org: string, menu: Pick<MenuDoBanco, "id" | "nome">): Promise<void>;
-  /** O cliente ouviu o aviso de instabilidade INTEIRO (`emergency_heard_at`). */
-  registrarAvisoOuvido(org: string, id: string): Promise<boolean>;
-  /** A fala não tocou e a ligação seguiu sem ela: `phone_prompt_unplayable` na Central. */
-  avisarFalaIntocavel(org: string, rotulo: string): Promise<void>;
-  acharOuCriarContato(org: string, e164: string, nome: string | null): Promise<string>;
-  acharOuCriarConversa(org: string, contactId: string, troncoId: string, teamId: string | null): Promise<string>;
-  criarLigacao(l: NovaLigacao): Promise<string>;
-  /** O pedido de saída que o ramal disca — só se for DESTE atendente (a organização sai da linha). */
-  ligacaoDoAtendente(userId: string, id: string): Promise<LigacaoDoBanco | null>;
-  ligacoesVivas(): Promise<LigacaoDoBanco[]>;
-  // As escritas da ligação ficam presas à organização dela (`l.org`).
-  marcarTocando(org: string, id: string, userId: string | null): Promise<void>;
-  marcarAtendida(org: string, id: string, userId: string): Promise<void>;
-  encerrarLigacao(org: string, id: string, motivo: string): Promise<LigacaoDoBanco | null>;
-  atribuirConversa(org: string, conversationId: string, userId: string): Promise<void>;
-  registrarNaConversa(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, duracaoMs: number | null): Promise<void>;
-  avisarPerdida(l: LigacaoDoBanco): Promise<void>;
-  registrarFim(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, motivo: string): Promise<void>;
-}
+//
+// As portas (ARI, banco, registro) e os eventos da ARI moram em `portas.ts`,
+// para as mecânicas compostas aqui (`fala-no-ar.ts`, `transferencia.ts`) não
+// importarem o controlador. Reexportadas: quem importava daqui não muda.
+export type { EventoAri, PlaybackAri, PortaAri, PortaBanco, Registro } from "./portas";
 
 /** O disco das falas e a folga do relógio da fala moram na mecânica da fala no ar (`fala-no-ar.ts`). */
 export type { PortaFalas } from "./fala-no-ar";
@@ -192,40 +134,6 @@ const SEM_GRAVACAO: PortaGravacao = {
   parar: async () => undefined,
   aoEncerrar: () => undefined,
 };
-
-export interface Registro {
-  info(msg: string, campos?: Record<string, unknown>): void;
-  warn(msg: string, campos?: Record<string, unknown>): void;
-  error(msg: string, campos?: Record<string, unknown>): void;
-}
-
-// ─── eventos da ARI que importam ───────────────────────────────────────────
-
-/** O playback que a ARI devolve em `PlaybackStarted`/`PlaybackFinished` (Task 0, medido na VPS). */
-export interface PlaybackAri {
-  id: string;
-  media_uri: string;
-  target_uri: string;
-  language: string;
-  state: string;
-}
-
-/**
- * O que chega no WebSocket. `PlaybackFinished` fecha as falas (URA e fila).
- * `ChannelDtmfReceived` é lido SÓ enquanto a URA está ativa (§5.1): na fila, de
- * propósito, tecla nenhuma muda nada — o aviso de instabilidade toca INTEIRO.
- * `ChannelUserevent` é da transferência (versão 2).
- */
-export type EventoAri =
-  | { type: "StasisStart"; channel: CanalAri; args: string[] }
-  | { type: "StasisEnd"; channel: CanalAri }
-  | { type: "ChannelDestroyed"; channel: CanalAri; cause: number; cause_txt?: string }
-  | { type: "Dial"; peer: CanalAri; dialstatus: string }
-  | { type: "PlaybackFinished"; playback: PlaybackAri }
-  /** As teclas da operadora chegam por RFC 4733 (Task 0, medido na VPS). */
-  | { type: "ChannelDtmfReceived"; channel: CanalAri; digit: string; duration_ms?: number }
-  | { type: "ChannelUserevent"; eventname: string; channel?: CanalAri; userevent?: Record<string, unknown> }
-  | { type: string; [k: string]: unknown };
 
 // ─── estado por ligação ────────────────────────────────────────────────────
 
@@ -270,8 +178,11 @@ interface UraEmCurso {
   menu: MenuDoBanco;
   regra: MenuDaUra;
   estado: EstadoDaUra;
-  /** `prazo`: os 5 s depois do menu. A `vez` da espera fica presa no timer, não aqui (`armarPrazoDaUra`). */
-  relogios: Relogios<"prazo">;
+  /**
+   * `prazo`: os 5 s depois do menu. A `vez` da espera fica presa no timer, não aqui (`armarPrazoDaUra`).
+   * `digitos`: a espera pela próxima tecla, no menu que aceita ramal (v3).
+   */
+  relogios: Relogios<"prazo" | "digitos">;
 }
 
 /** A fila do time (§5.2): o que ela lê na entrada e o que faz enquanto o cliente espera. */
@@ -290,6 +201,11 @@ interface FilaDaLigacao {
   toque: EstadoDoToque;
   /** O ramal que está tocando agora. */
   ramal: { canal: string; userId: string } | null;
+  /**
+   * O cliente digitou o ramal de alguém na URA (v3): essa pessoa toca PRIMEIRO,
+   * sozinha, por 20 s; não atendeu → a fila do time padrão do menu, inteira.
+   */
+  direto: { userId: string; tentou: boolean } | null;
   /**
    * O playback do SOM DE CHAMANDO no canal do cliente (o tom `ring` da zona
    * `br`), enquanto um ramal toca na ligação já atendida (DYD-52). Um só do
@@ -366,8 +282,13 @@ interface Feita {
   tipo: "feita";
   vcId: string;
   org: string;
+  /** Quem está com o cliente — quem ligou, ou quem pegou a transferência (v2). */
   userId: string;
-  ramal: string;
+  /** O canal do ramal de quem está com o cliente; `null` no meio de uma transferência direta. */
+  ramal: string | null;
+  /** O número do outro lado — o que aparece no ramal de quem recebe uma transferência. */
+  numero: string;
+  conversationId: string | null;
   perna: string | null;
   ponte: string;
   tom: string | null;
@@ -384,6 +305,29 @@ interface Feita {
   fim: boolean;
 }
 
+/**
+ * A ligação INTERNA (v3, D23): de ramal para ramal, sem operadora, sem contato,
+ * sem conversa e sem gravação. Quem liga disca `c-<id>`, como na feita; o
+ * colega toca por 20 s (`interna,<id>`); atendeu → a ponte; não atendeu,
+ * recusou ou está ocupado → tom de ocupado para quem ligou, e fim.
+ */
+interface Interna {
+  tipo: "interna";
+  vcId: string;
+  org: string;
+  /** Quem liga, e o canal do ramal dele. */
+  userId: string;
+  ramal: string;
+  ponte: string;
+  /** Quem recebe, e o canal do ramal dele enquanto toca ou fala. */
+  colega: string;
+  canalDoColega: string | null;
+  tom: string | null;
+  atendida: boolean;
+  relogio: Relogio | null;
+  fim: boolean;
+}
+
 /** Só a vigia do fim: ligação reencontrada depois de um reinício do worker. */
 interface Recuperada {
   tipo: "recuperada";
@@ -394,7 +338,7 @@ interface Recuperada {
   fim: boolean;
 }
 
-type Ligacao = Recebida | Feita | Recuperada;
+type Ligacao = Recebida | Feita | Interna | Recuperada;
 
 /**
  * Depois de tocar tanto sem atender, a rede pode derrubar a ligação: atende e
@@ -403,6 +347,8 @@ type Ligacao = Recebida | Feita | Recuperada;
 const ATENDER_E_CHAMAR_APOS_MS = 45_000;
 /** Ligação de saída: prazo para a pessoa do outro lado atender. */
 const PRAZO_DA_SAIDA_S = 60;
+/** A interna não atendida: quanto tempo quem ligou ouve o ocupado antes de o canal cair. */
+const OCUPADO_DA_INTERNA_MS = 4_000;
 /** A API cria a voice_calls e o navegador disca logo em seguida — mais que isto é reuso. */
 const VALIDADE_DO_PEDIDO_DE_SAIDA_MS = 60_000;
 /** Música entre um "aguarde" e o próximo (desenho §5.2.4: ~40 s). */
@@ -470,10 +416,90 @@ export class ControladorDeChamadas {
         aposFala: (l, papel, tocou) => this.aposFala(l, papel, tocou),
       },
     });
+    this.transferencias = new Transferencias<Recebida | Feita>({
+      ari: this.ari,
+      banco: this.banco,
+      falas,
+      log: this.log,
+      agora: this.agora,
+      emFila: (fn) => this.emFila(fn),
+      ganchos: {
+        vista: (l) => this.vistaDaLigacao(l),
+        ligacaoPorId: (vcId) => {
+          const l = this.porId.get(vcId);
+          return l && (l.tipo === "recebida" || l.tipo === "feita") && !l.fim ? l : null;
+        },
+        trocarAtendente: (l, novo) => this.trocarAtendente(l, novo),
+        encerrar: (l, motivo, opcoes) =>
+          l.tipo === "recebida" ? this.encerrarRecebida(l, motivo, opcoes) : this.encerrarFeita(l, motivo, opcoes),
+      },
+    });
+  }
+
+  /** Quantas transferências estão acontecendo (para testes: o mapa esvazia). */
+  get transferenciasEmCurso(): number {
+    return this.transferencias.emCurso;
+  }
+
+  /** A forma comum da ligação atendida (desenho §12.2), para a transferência. */
+  private vistaDaLigacao(l: Recebida | Feita): VistaDaLigacao {
+    if (l.tipo === "recebida") {
+      return {
+        vcId: l.vcId,
+        org: l.org,
+        ponte: l.ponte,
+        cliente: l.cliente,
+        numeroExibido: l.numeroExibido,
+        conversationId: l.conversationId,
+        teamId: l.fila.teamId,
+        atendente: l.atendidaPor && l.fila.ramal ? { canal: l.fila.ramal.canal, userId: l.fila.ramal.userId } : null,
+        atendida: Boolean(l.atendidaPor && l.ponte),
+        fim: l.fim || Boolean(l.encerrando),
+      };
+    }
+    return {
+      vcId: l.vcId,
+      org: l.org,
+      ponte: l.ponte,
+      cliente: l.perna ?? "",
+      numeroExibido: l.numero,
+      conversationId: l.conversationId,
+      teamId: null,
+      atendente: l.ramal ? { canal: l.ramal, userId: l.userId } : null,
+      atendida: l.atendida && Boolean(l.perna),
+      fim: l.fim,
+    };
+  }
+
+  /**
+   * Quem está com o cliente mudou (a transferência): o canal antigo sai do mapa
+   * — o fim dele deixa de ser o fim da ligação — e o novo entra. Quem desliga o
+   * antigo é a transferência.
+   */
+  private trocarAtendente(l: Recebida | Feita, novo: { canal: string; userId: string } | null) {
+    if (l.tipo === "recebida") {
+      const antigo = l.fila.ramal?.canal;
+      if (antigo) this.porCanal.delete(antigo);
+      l.fila.ramal = novo ? { canal: novo.canal, userId: novo.userId } : null;
+      if (novo) {
+        l.atendidaPor = novo.userId;
+        this.porCanal.set(novo.canal, l);
+      }
+      return;
+    }
+    if (l.ramal) this.porCanal.delete(l.ramal);
+    l.ramal = novo?.canal ?? null;
+    if (novo) {
+      l.userId = novo.userId;
+      this.porCanal.set(novo.canal, l);
+    }
   }
 
   /** A mecânica da fala no ar (pôr, parar, fim e relógio), comum à URA e à fila. */
   private readonly falaNoAr: FalasNoAr<Recebida, PapelDaFala>;
+
+  /** A transferência (v2): a mecânica mora em `transferencia.ts`; aqui só os ganchos. */
+  private readonly transferencias: Transferencias<Recebida | Feita>;
 
   /** Quantas ligações o controlador está acompanhando (para /healthz e testes). */
   get ativas(): number {
@@ -515,12 +541,16 @@ export class ControladorDeChamadas {
           const fim = ev as Extract<EventoAri, { type: "PlaybackFinished" }>;
           const id = fim.playback?.id;
           if (id && this.chamandoPorReproducao.has(id)) return await this.aoTerminarOChamar(fim);
+          if (await this.transferencias.aoTerminarFala(fim)) return;
           const feita = id ? this.avisoDaFeitaPorReproducao.get(id) : undefined;
           if (feita) return await this.aoTerminarOAvisoDaFeita(fim, feita);
           return await this.falaNoAr.aoTerminar(fim);
         }
         case "ChannelDtmfReceived":
           return await this.aoReceberTecla(ev as Extract<EventoAri, { type: "ChannelDtmfReceived" }>);
+        // A ordem da tela para a transferência (v2), emitida pela API como evento de usuário da ARI.
+        case "ChannelUserevent":
+          return await this.transferencias.aoReceberOrdem(ev);
         default:
           return;
       }
@@ -536,6 +566,10 @@ export class ControladorDeChamadas {
     if (papel === "entrada") return this.novaRecebida(ev.channel);
     if (papel === "saida") return this.novaFeita(ev.channel);
     if (papel === "oferta" && vcId) return this.ramalAtendeu(ev.channel, vcId);
+    // O colega atendeu a ligação interna (v3).
+    if (papel === "interna" && vcId) return this.colegaAtendeu(ev.channel, vcId);
+    // Os ramais da transferência (v2): quem recebe, quem transferiu tocando de volta, a consulta e a fila.
+    if (papelDaTransferencia(papel) && vcId) return this.transferencias.aoAtender(ev.channel, papel, vcId);
     // "perna": a perna da operadora nasce já dentro do Stasis (channels/create);
     // quem cuida dela é a ligação feita, pelos eventos Dial e ChannelDestroyed.
     if (papel === "perna") return;
@@ -611,6 +645,7 @@ export class ControladorDeChamadas {
         inicioDosToques: this.agora(),
         toque: ESTADO_INICIAL,
         ramal: null,
+        direto: null,
         chamando: null,
         inicioDoChamar: 0,
         chamarCurto: 0,
@@ -898,6 +933,14 @@ export class ControladorDeChamadas {
 
   private async tocarProximo(l: Recebida): Promise<void> {
     if (l.fim || l.atendidaPor || l.encerrando) return;
+    // O ramal digitado na URA (v3) toca primeiro, sozinho.
+    const direto = l.fila.direto;
+    if (direto && !direto.tentou) {
+      direto.tentou = true;
+      await this.chamarNaLinha(l);
+      if (l.fim) return;
+      return this.tocarRamal(l, direto.userId);
+    }
     let disponiveis: CandidatoAoToque[];
     try {
       disponiveis = await this.disponiveisComRamal(l);
@@ -942,10 +985,15 @@ export class ControladorDeChamadas {
       if (l.fim) return;
     }
 
+    return this.tocarRamal(l, p.userId);
+  }
+
+  /** Toca UM ramal por 20 s (`oferta`): o do rodízio, ou o digitado na URA. */
+  private async tocarRamal(l: Recebida, userId: string): Promise<void> {
     let canalDoRamal: { id: string };
     try {
       canalDoRamal = await this.ari.originar({
-        endpoint: `PJSIP/${idDoRamal(p.userId)}`,
+        endpoint: `PJSIP/${idDoRamal(userId)}`,
         appArgs: `oferta,${l.vcId}`,
         callerId: l.numeroExibido,
         prazoS: Math.round(TOQUE_POR_ATENDENTE_MS / 1000),
@@ -959,9 +1007,9 @@ export class ControladorDeChamadas {
       });
       return this.tocarProximo(l);
     }
-    l.fila.ramal = { canal: canalDoRamal.id, userId: p.userId };
+    l.fila.ramal = { canal: canalDoRamal.id, userId };
     this.porCanal.set(canalDoRamal.id, l);
-    await this.marcarTocando(l, p.userId);
+    await this.marcarTocando(l, userId);
     // Rede de segurança: se o Asterisk não derrubar o toque no prazo, derrubamos.
     const canalEsperado = canalDoRamal.id;
     this.armar(l, TOQUE_POR_ATENDENTE_MS + 3_000, async () => {
@@ -1075,9 +1123,14 @@ export class ControladorDeChamadas {
   private async iniciarUra(l: Recebida, menu: MenuDoBanco): Promise<void> {
     const ura: UraEmCurso = {
       menu,
-      regra: { opcoes: menu.opcoes, defaultTeamId: menu.defaultTeamId, temFalaInvalida: menu.falaInvalida !== null },
+      regra: {
+        opcoes: menu.opcoes,
+        defaultTeamId: menu.defaultTeamId,
+        temFalaInvalida: menu.falaInvalida !== null,
+        aceitaRamal: menu.aceitaRamal === true,
+      },
       estado: ESTADO_INICIAL_DA_URA,
-      relogios: { prazo: null },
+      relogios: { prazo: null, digitos: null },
     };
     l.ura = ura;
     return this.tocarNaUra(l, ura, "menu");
@@ -1122,6 +1175,14 @@ export class ControladorDeChamadas {
         this.pararPrazoDaUra(ura);
         if (acao.pararAtual) await this.falaNoAr.pararAtual(l);
         return this.sairDaUra(l, ura, acao);
+      case "esperar_digitos":
+        // Menu que aceita ramal: a fala para na primeira tecla, e a próxima tem 2 s para vir.
+        pararRelogio(ura.relogios, "prazo");
+        if (acao.pararAtual) await this.falaNoAr.pararAtual(l);
+        return this.armarPrazoDosDigitos(l, ura, acao.ms, acao.seq);
+      case "ramal":
+        this.pararPrazoDaUra(ura);
+        return this.discarRamalNaUra(l, ura, acao.numero);
       default: {
         const _nunca: never = acao;
         return _nunca;
@@ -1151,6 +1212,60 @@ export class ControladorDeChamadas {
 
   private pararPrazoDaUra(ura: UraEmCurso) {
     pararRelogio(ura.relogios, "prazo");
+    pararRelogio(ura.relogios, "digitos");
+  }
+
+  /** A espera pela próxima tecla (v3). Como o prazo do menu, o timer guarda a `seq` de quando foi armado. */
+  private armarPrazoDosDigitos(l: Recebida, ura: UraEmCurso, ms: number, seq: number) {
+    pararRelogio(ura.relogios, "digitos");
+    if (l.fim) return;
+    ura.relogios.digitos = setTimeout(() => {
+      ura.relogios.digitos = null;
+      if (l.fim || l.ura !== ura) return;
+      void this.emFila(() => this.executarUra(l, ura, { tipo: "prazo_dos_digitos", seq })).catch((e) =>
+        this.log.error("telefonia: prazo dos dígitos falhou", { erro: String(e) }),
+      );
+    }, ms);
+  }
+
+  /**
+   * O cliente digitou um ramal (v3): se é de alguém desta organização que pode
+   * atender agora (ramal online, sem pausa, sem outra ligação), a URA acaba e
+   * essa pessoa toca primeiro, sozinha; senão é como tecla errada, e a regra
+   * decide (a fala de inválida e o menu, ou o time padrão).
+   */
+  private async discarRamalNaUra(l: Recebida, ura: UraEmCurso, numero: string): Promise<void> {
+    let userId: string | null = null;
+    try {
+      userId = await this.banco.donoDoRamal(l.org, numero);
+      if (userId) {
+        const online = await this.ari.ramalOnline(userId).catch(() => false);
+        const livre = online && (await this.banco.colegaLivreParaInterna(l.org, userId, l.vcId));
+        if (!livre) userId = null;
+      }
+    } catch (e) {
+      this.log.warn("telefonia: ramal digitado na URA não conferido — tratado como inválido", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      userId = null;
+    }
+    if (l.fim || l.ura !== ura) return;
+    if (!userId) {
+      this.log.info("telefonia: ramal digitado na URA não serve", { voice_call: l.vcId, menu: ura.menu.id });
+      return this.executarUra(l, ura, { tipo: "ramal_invalido" });
+    }
+    l.ura = null;
+    l.fila.teamId = ura.menu.defaultTeamId;
+    l.fila.direto = { userId, tentou: false };
+    try {
+      await this.banco.registrarEscolhaDoMenu(l.org, l.vcId, { digito: null, desfecho: "chosen", teamId: ura.menu.defaultTeamId });
+    } catch (e) {
+      this.log.warn("telefonia: escolha do ramal na URA não gravada", { voice_call: l.vcId, erro: mensagemDe(e, 160) });
+    }
+    this.log.info("telefonia: a URA levou ao ramal digitado", { voice_call: l.vcId, menu: ura.menu.id });
+    // O aviso de gravação (se houver) e então o toque direto — sem as falas do time.
+    return this.avisarEChamar(l);
   }
 
   /**
@@ -1309,10 +1424,11 @@ export class ControladorDeChamadas {
     this.log.info("telefonia: ligação atendida", { voice_call: vcId, atendente: l.atendidaPor });
   }
 
-  private async encerrarRecebida(l: Recebida, motivo: string) {
+  private async encerrarRecebida(l: Recebida, motivo: string, opcoes: { ligarDeVolta: boolean } = { ligarDeVolta: false }) {
     if (l.fim) return;
     l.fim = true;
     this.pararRelogios(l);
+    await this.transferencias.aoEncerrarLigacao(l.vcId);
     l.ura = null;
     this.falaNoAr.esquecer(l);
     if (l.gravacao?.gravando) await this.pararGravacao(l.vcId);
@@ -1326,7 +1442,7 @@ export class ControladorDeChamadas {
     }
     if (l.ponte) await this.ari.destruirPonte(l.ponte).catch(() => undefined);
     this.porId.delete(l.vcId);
-    await this.finalizar(l.org, l.vcId, l.atendidaPor ? "atendida" : "perdida", motivo);
+    await this.finalizar(l.org, l.vcId, l.atendidaPor ? "atendida" : "perdida", motivo, opcoes.ligarDeVolta);
   }
 
   // ─── feita ───────────────────────────────────────────────────────────────
@@ -1345,6 +1461,8 @@ export class ControladorDeChamadas {
     // Só o pedido DESTE atendente: o de outro nem volta do banco.
     const vc = await this.banco.ligacaoDoAtendente(dono.id, m[1]!);
     if (!vc) return recusar("pedido inexistente");
+    // A ligação interna (v3) tem o mesmo pedido e a mesma catraca, e outro caminho.
+    if (vc.direction === "internal") return this.novaInterna(canal, vc, dono.id, recusar);
     // A autorização inteira da ligação de saída: o pedido existe, é de saída,
     // ainda não começou, é DESTE atendente e é recente. A senha do ramal, sozinha,
     // não disca para lugar nenhum.
@@ -1380,6 +1498,8 @@ export class ControladorDeChamadas {
       org: vc.organization_id,
       userId: dono.id,
       ramal: canal.id,
+      numero: vc.peer_phone,
+      conversationId: vc.conversation_id,
       perna: null,
       ponte: ponteDe(vc.id),
       tom: null,
@@ -1504,9 +1624,10 @@ export class ControladorDeChamadas {
     }
   }
 
-  private async encerrarFeita(l: Feita, motivo: string) {
+  private async encerrarFeita(l: Feita, motivo: string, opcoes: { ligarDeVolta: boolean } = { ligarDeVolta: false }) {
     if (l.fim) return;
     l.fim = true;
+    await this.transferencias.aoEncerrarLigacao(l.vcId);
     // O tom ANTES dos canais: desligar o ramal com o chamar ainda tocando faz o
     // Asterisk registrar "Playback failed for tone:ring;tonezone=br" — medido
     // num Asterisk 20.11.1 local, só nesse caso; parado pela ARI, o mesmo tom
@@ -1529,7 +1650,139 @@ export class ControladorDeChamadas {
     if (!l.atendida && l.causaDaRede !== null) {
       ({ desfecho, motivo: motivoFinal } = fimDaSaidaNaoAtendida({ causa: l.causaDaRede, tocou: l.tocou }));
     }
-    await this.finalizar(l.org, l.vcId, desfecho, motivoFinal);
+    await this.finalizar(l.org, l.vcId, desfecho, motivoFinal, opcoes.ligarDeVolta);
+  }
+
+  // ─── interna (v3) ────────────────────────────────────────────────────────
+
+  private async novaInterna(
+    canal: CanalAri,
+    vc: LigacaoDoBanco,
+    donoId: string,
+    recusar: (motivo: string, extra?: Record<string, unknown>) => Promise<void>,
+  ) {
+    // A mesma catraca da feita: o pedido é deste atendente, não começou e é recente.
+    if (vc.status !== "starting") return recusar("pedido já usado", { voice_call: vc.id });
+    if (vc.owner_user_id !== donoId) return recusar("pedido de outro atendente", { voice_call: vc.id });
+    if (this.agora() - new Date(vc.started_at).getTime() > VALIDADE_DO_PEDIDO_DE_SAIDA_MS) {
+      await this.banco.encerrarLigacao(vc.organization_id, vc.id, "pedido_expirado");
+      return recusar("pedido expirado", { voice_call: vc.id });
+    }
+    const colega = vc.peer_user_id ?? null;
+    if (!colega || colega === donoId) {
+      await this.banco.encerrarLigacao(vc.organization_id, vc.id, "interna_sem_colega");
+      return recusar("interna sem colega", { voice_call: vc.id });
+    }
+
+    const l: Interna = {
+      tipo: "interna",
+      vcId: vc.id,
+      org: vc.organization_id,
+      userId: donoId,
+      ramal: canal.id,
+      ponte: ponteDe(vc.id),
+      colega,
+      canalDoColega: null,
+      tom: null,
+      atendida: false,
+      relogio: null,
+      fim: false,
+    };
+    this.registrar(l, canal.id);
+    await this.ari.atender(canal.id);
+    await this.ari.criarPonte(l.ponte);
+    await this.ari.porNaPonte(l.ponte, canal.id);
+
+    // Revalida o colega AGORA (D17): ramal online, sem pausa, sem outra ligação.
+    const online = await this.ari.ramalOnline(colega).catch(() => false);
+    const livre = online && (await this.banco.colegaLivreParaInterna(l.org, colega, l.vcId).catch(() => false));
+    if (!livre) return this.internaSemResposta(l, online ? "colega_ocupado" : "colega_offline");
+
+    const quem = await this.banco.quemLiga(l.org, donoId).catch(() => ({ nome: "", ramal: null as string | null }));
+    // O que o telefone do colega mostra: "Ana" <201>. Aspas e sinais saem do nome.
+    const nome = quem.nome.replace(/["<>\\]/g, "").slice(0, 60);
+    const callerId = quem.ramal ? `"${nome}" <${quem.ramal}>` : nome || undefined;
+    l.tom = (await this.ari.tocarTom(canal.id, "ring").catch(() => null))?.id ?? null;
+    let canalDoColega: { id: string };
+    try {
+      canalDoColega = await this.ari.originar({
+        endpoint: `PJSIP/${idDoRamal(colega)}`,
+        appArgs: `interna,${l.vcId}`,
+        ...(callerId ? { callerId } : {}),
+        prazoS: Math.round(TOQUE_POR_ATENDENTE_MS / 1000),
+        variaveis: { "PJSIP_HEADER(add,X-Ligacao-Id)": l.vcId, "PJSIP_HEADER(add,X-Interna-De)": donoId },
+      });
+    } catch (e) {
+      this.log.warn("telefonia: o ramal do colega não tocou — interna sem resposta", { voice_call: l.vcId, erro: mensagemDe(e, 160) });
+      return this.internaSemResposta(l, "colega_offline");
+    }
+    if (l.fim) {
+      await this.ari.desligar(canalDoColega.id).catch(() => undefined);
+      return;
+    }
+    l.canalDoColega = canalDoColega.id;
+    this.porCanal.set(canalDoColega.id, l);
+    await this.banco.marcarTocando(l.org, l.vcId, colega).catch(() => undefined);
+    const esperado = canalDoColega.id;
+    l.relogio = setTimeout(() => {
+      l.relogio = null;
+      void this.emFila(async () => {
+        if (!l.fim && !l.atendida && l.canalDoColega === esperado) await this.ari.desligar(esperado, "no_answer").catch(() => undefined);
+      }).catch((e) => this.log.error("telefonia: relógio da interna falhou", { erro: String(e) }));
+    }, TOQUE_POR_ATENDENTE_MS + 3_000);
+    this.log.info("telefonia: ligação interna", { voice_call: l.vcId });
+  }
+
+  private async colegaAtendeu(canal: CanalAri, vcId: string) {
+    const l = this.porId.get(vcId);
+    if (!l || l.tipo !== "interna" || l.fim || l.atendida || l.canalDoColega !== canal.id) {
+      await this.ari.desligar(canal.id);
+      return;
+    }
+    if (l.relogio) clearTimeout(l.relogio);
+    l.relogio = null;
+    await this.pararTomDaInterna(l);
+    await this.ari.porNaPonte(l.ponte, canal.id);
+    l.atendida = true;
+    // O dono segue quem ligou; `peer_user_id` é quem atendeu.
+    await this.banco.marcarAtendida(l.org, l.vcId, l.userId);
+    this.log.info("telefonia: ligação interna atendida", { voice_call: l.vcId });
+  }
+
+  private async pararTomDaInterna(l: Interna) {
+    const id = l.tom;
+    l.tom = null;
+    if (id) await this.ari.pararReproducao(id).catch(() => undefined);
+  }
+
+  /** O colega não atendeu, recusou, está ocupado ou offline: o ocupado para quem ligou, e o fim. */
+  private async internaSemResposta(l: Interna, motivo: string) {
+    if (l.fim) return;
+    if (l.relogio) clearTimeout(l.relogio);
+    await this.pararTomDaInterna(l);
+    l.tom = (await this.ari.tocarTom(l.ramal, "busy").catch(() => null))?.id ?? null;
+    l.relogio = setTimeout(() => {
+      l.relogio = null;
+      void this.emFila(() => this.encerrarInterna(l, motivo)).catch((e) =>
+        this.log.error("telefonia: fim da interna falhou", { erro: String(e) }),
+      );
+    }, OCUPADO_DA_INTERNA_MS);
+  }
+
+  private async encerrarInterna(l: Interna, motivo: string) {
+    if (l.fim) return;
+    l.fim = true;
+    if (l.relogio) clearTimeout(l.relogio);
+    l.relogio = null;
+    await this.pararTomDaInterna(l);
+    for (const c of [l.ramal, l.canalDoColega]) {
+      if (!c) continue;
+      this.porCanal.delete(c);
+      await this.ari.desligar(c).catch(() => undefined);
+    }
+    await this.ari.destruirPonte(l.ponte).catch(() => undefined);
+    this.porId.delete(l.vcId);
+    await this.finalizar(l.org, l.vcId, l.atendida ? "atendida" : "sem_resposta", motivo);
   }
 
   // ─── fim de canal ────────────────────────────────────────────────────────
@@ -1537,6 +1790,8 @@ export class ControladorDeChamadas {
   private async aoDestruirCanal(ev: Extract<EventoAri, { type: "ChannelDestroyed" }>) {
     const causaVista = this.causas.get(ev.channel.id);
     this.causas.delete(ev.channel.id);
+    // Os canais da transferência (o destino tocando, quem transferiu na consulta) são dela.
+    if (await this.transferencias.aoDestruirCanal(ev.channel.id)) return;
     const l = this.porCanal.get(ev.channel.id);
     if (!l || l.fim) return;
     this.porCanal.delete(ev.channel.id);
@@ -1552,6 +1807,14 @@ export class ControladorDeChamadas {
         l.fila.ramal = null;
         pararRelogio(l.fila.relogios, "reavaliar");
         await this.marcarTocando(l, null);
+        // O ramal digitado na URA não atendeu (v3): a fila do time padrão do menu,
+        // inteira — fora do horário, aviso de instabilidade, os ramais. O chamar
+        // para antes: a fila decide de novo o que o cliente ouve.
+        if (l.fila.direto?.tentou) {
+          l.fila.direto = null;
+          await this.pararChamando(l);
+          return this.entrarNaFila(l);
+        }
         return this.tocarProximo(l);
       }
       return;
@@ -1567,6 +1830,15 @@ export class ControladorDeChamadas {
       return this.encerrarFeita(l, "atendente_desligou");
     }
 
+    if (l.tipo === "interna") {
+      if (ev.channel.id === l.canalDoColega) {
+        if (l.atendida) return this.encerrarInterna(l, "colega_desligou");
+        l.canalDoColega = null;
+        return this.internaSemResposta(l, causa === 17 ? "colega_ocupado" : "colega_nao_atendeu");
+      }
+      return this.encerrarInterna(l, "atendente_desligou");
+    }
+
     // Recuperada: qualquer ponta que cai derruba as outras. Não se sabe se era
     // gravada (o estado em memória morreu com o worker): parar é inofensivo.
     l.fim = true;
@@ -1580,14 +1852,25 @@ export class ControladorDeChamadas {
     await this.finalizar(l.org, l.vcId, "atendida", "encerrada_apos_reinicio");
   }
 
-  private async finalizar(org: string, vcId: string, desfechoPedido: DesfechoDaLigacao, motivo: string) {
+  /**
+   * `ligarDeVolta`: a transferência que ninguém pegou (D20) — a ligação FOI
+   * atendida (o registro na conversa diz isso, com a duração), mas o cliente
+   * ficou sem ninguém, e o "Ligar de volta" abre mesmo assim, para o time dela.
+   */
+  private async finalizar(
+    org: string,
+    vcId: string,
+    desfechoPedido: DesfechoDaLigacao,
+    motivo: string,
+    ligarDeVolta = false,
+  ) {
     const l = await this.banco.encerrarLigacao(org, vcId, motivo);
     if (!l) return; // já encerrada por outro caminho
     const desfecho: DesfechoDaLigacao = l.answered_at ? "atendida" : desfechoPedido === "atendida" ? "perdida" : desfechoPedido;
     const duracao = l.answered_at ? this.agora() - new Date(l.answered_at).getTime() : null;
     await this.banco.registrarNaConversa(l, desfecho, duracao);
     // Fora do horário NÃO vira "Ligar de volta" (§5.2.1): o cliente ouviu o porquê.
-    if (desfecho === "perdida" && l.direction === "inbound" && motivo !== MOTIVO_FORA_DO_HORARIO) {
+    if ((desfecho === "perdida" && l.direction === "inbound" && motivo !== MOTIVO_FORA_DO_HORARIO) || ligarDeVolta) {
       await this.banco.avisarPerdida(l);
     }
     await this.banco.registrarFim(l, desfecho, motivo);
@@ -1612,6 +1895,12 @@ export class ControladorDeChamadas {
    * Uma fala no ar (ou uma URA) também morre aqui: risco aceito (desenho §11).
    */
   async recuperar(): Promise<void> {
+    // As transferências abertas morreram com o estado em memória do worker anterior (§12.2).
+    const canceladas = await this.banco.cancelarTransferenciasAbertas("worker_reiniciou").catch((e) => {
+      this.log.warn("telefonia: transferências abertas não canceladas na recuperação", { erro: mensagemDe(e, 160) });
+      return 0;
+    });
+    if (canceladas > 0) this.log.info("telefonia: transferências abertas canceladas no reinício", { canceladas });
     const [vivas, pontes, canais] = await Promise.all([
       this.banco.ligacoesVivas(),
       this.ari.pontes(),

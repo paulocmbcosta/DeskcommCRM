@@ -8,6 +8,9 @@
  * A política antifraude mora aqui e se repete no controlador: só número
  * brasileiro geográfico com DDD, só por número da própria organização,
  * no máximo 5 saídas simultâneas por organização e uma por atendente.
+ *
+ * v3: com `{ ramal }`, a ligação INTERNA para um colega — sem operadora, sem
+ * contato e sem conversa (`criarPedidoInterno`, lib/channels/telefonia/interna.ts).
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -17,7 +20,9 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { getRequestPool } from "@/lib/agent-engine/db/request-pool";
-import { configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
+import { ClienteAri, configAriDoAmbiente } from "@/lib/channels/telefonia/ari";
+import { ramaisOnline } from "@/lib/channels/telefonia/diretorio";
+import { MENSAGEM_DA_RECUSA_DA_INTERNA, REGUA_DO_RAMAL, criarPedidoInterno } from "@/lib/channels/telefonia/interna";
 import { MENSAGEM_DO_PEDIDO, criarPedidoDeSaida } from "@/lib/channels/telefonia/saida";
 import { MENSAGEM_DA_RECUSA } from "@/lib/telefonia/numero";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -31,9 +36,14 @@ const pedidoSchema = z
     contact_id: z.string().uuid().nullish(),
     numero: z.string().trim().min(1).max(40).nullish(),
     numero_da_empresa_id: z.string().uuid().nullish(),
+    // v3: o ramal de um colega (2 a 4 dígitos) — a ligação interna.
+    ramal: z.string().regex(REGUA_DO_RAMAL).nullish(),
   })
   .strict()
-  .refine((p) => Boolean(p.contact_id) !== Boolean(p.numero), "informe contact_id OU numero");
+  .refine(
+    (p) => [p.contact_id, p.numero, p.ramal].filter(Boolean).length === 1,
+    "informe contact_id, numero OU ramal",
+  );
 
 export async function POST(req: NextRequest): Promise<Response> {
   const supportDenied = await requireSupportWrite();
@@ -49,7 +59,34 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
   const parsed = pedidoSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
-    return fail("validation_failed", t("Informe o contato ou o número."), 422, { requestId });
+    return fail("validation_failed", t("Informe o contato, o número ou o ramal."), 422, { requestId });
+  }
+
+  // A ligação interna (v3): para o ramal de um colega, sem operadora.
+  if (parsed.data.ramal) {
+    const cfgAri = configAriDoAmbiente()!;
+    const interna = await criarPedidoInterno(getRequestPool(), {
+      organizationId: authz.org.orgId,
+      userId: authz.user.id,
+      ramal: parsed.data.ramal,
+      agora: new Date(),
+      online: await ramaisOnline(new ClienteAri(cfgAri)),
+    });
+    if (!interna.ok) {
+      return fail(interna.motivo, t(MENSAGEM_DA_RECUSA_DA_INTERNA[interna.motivo]), interna.motivo === "ramal_inexistente" ? 404 : 409, {
+        requestId,
+      });
+    }
+    void audit({
+      action: "phone_call.started",
+      actorUserId: authz.user.id,
+      organizationId: authz.org.orgId,
+      resourceType: "voice_call",
+      resourceId: interna.id,
+      metadata: { interna: true, ramal: parsed.data.ramal, colega: interna.colega },
+      requestId,
+    });
+    return ok({ id: interna.id, destino: `c-${interna.id}`, contact_id: null, interna: true }, { requestId, status: 201 });
   }
 
   const r = await criarPedidoDeSaida(getRequestPool(), {

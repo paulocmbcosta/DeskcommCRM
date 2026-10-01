@@ -41,6 +41,13 @@ import type { DesfechoDoMenu } from "./vocabulario";
 
 export const ESPERA_APOS_O_MENU_MS = 5_000;
 export const VEZES_DO_MENU = 3;
+/**
+ * Menu que aceita ramal (v3, `accepts_extension`): depois de cada tecla, quanto
+ * se espera pela próxima antes de decidir. Um dígito continua sendo opção — com
+ * este atraso; 2 a 4 dígitos são um ramal.
+ */
+export const ESPERA_ENTRE_DIGITOS_MS = 2_000;
+export const DIGITOS_DO_RAMAL_MAX = 4;
 
 export interface OpcaoDaUra {
   digito: string;
@@ -51,6 +58,8 @@ export interface MenuDaUra {
   opcoes: readonly OpcaoDaUra[];
   defaultTeamId: string;
   temFalaInvalida: boolean;
+  /** O cliente pode digitar o ramal de alguém (v3). Ausente = não. */
+  aceitaRamal?: boolean;
 }
 
 export type FalaDaUra = "menu" | "invalida";
@@ -69,6 +78,21 @@ export type EstadoDaUra =
       readonly vez: number;
       readonly houveInvalida: boolean;
     }
+  | {
+      /** Menu que aceita ramal: o cliente está digitando, e a próxima tecla ainda pode vir. */
+      readonly fase: "digitando";
+      readonly vez: number;
+      readonly houveInvalida: boolean;
+      readonly digitos: string;
+      /** Identidade do prazo entre dígitos — o `prazo_dos_digitos` velho é ignorado. */
+      readonly seq: number;
+    }
+  | {
+      /** Digitou um ramal: o controlador confere se ele existe e está livre. */
+      readonly fase: "ramal";
+      readonly vez: number;
+      readonly houveInvalida: boolean;
+    }
   | { readonly fase: "decidida" };
 
 export const ESTADO_INICIAL_DA_URA: Readonly<EstadoDaUra> = Object.freeze({
@@ -83,13 +107,57 @@ export type EventoDaUra =
   | { tipo: "fim_da_fala" }
   | { tipo: "prazo"; vez: number }
   /** A fala no ar (ou a que ia tocar) não tocou. */
-  | { tipo: "fala_falhou" };
+  | { tipo: "fala_falhou" }
+  /** Venceu a espera pela próxima tecla (menu que aceita ramal). */
+  | { tipo: "prazo_dos_digitos"; seq: number }
+  /** O ramal digitado não existe, ou a pessoa não pode atender agora: é como tecla errada. */
+  | { tipo: "ramal_invalido" };
 
 export type AcaoDaUra =
   | { tipo: "tocar"; fala: FalaDaUra; pararAtual: boolean }
   | { tipo: "esperar"; ms: number; vez: number }
   | { tipo: "encaminhar"; teamId: string; desfecho: DesfechoDoMenu; digito: string | null; pararAtual: boolean }
+  /** Esperar a próxima tecla (menu que aceita ramal). */
+  | { tipo: "esperar_digitos"; ms: number; seq: number; pararAtual: boolean }
+  /** O cliente digitou um ramal: o controlador procura a pessoa. */
+  | { tipo: "ramal"; numero: string }
   | { tipo: "ignorar" };
+
+type Passo = { estado: EstadoDaUra; acao: AcaoDaUra };
+
+/** Uma tecla (ou um ramal que não serve) que não leva a lugar nenhum: a fala de inválida e o menu, ou o time padrão. */
+function invalida(menu: MenuDaUra, vezAtual: number, pararAtual: boolean): Passo {
+  const vez = vezAtual + 1;
+  if (vez > VEZES_DO_MENU) {
+    return {
+      estado: { fase: "decidida" },
+      acao: { tipo: "encaminhar", teamId: menu.defaultTeamId, desfecho: "default_invalid", digito: null, pararAtual },
+    };
+  }
+  const fala: FalaDaUra = menu.temFalaInvalida ? "invalida" : "menu";
+  return { estado: { fase: "tocando", vez, fala, houveInvalida: true }, acao: { tipo: "tocar", fala, pararAtual } };
+}
+
+/** Uma tecla só: a opção, ou inválida. */
+function umaTecla(menu: MenuDaUra, digito: string, vez: number, pararAtual: boolean): Passo {
+  const opcao = menu.opcoes.find((o) => o.digito === digito);
+  if (opcao) {
+    return {
+      estado: { fase: "decidida" },
+      acao: { tipo: "encaminhar", teamId: opcao.teamId, desfecho: "chosen", digito: opcao.digito, pararAtual },
+    };
+  }
+  return invalida(menu, vez, pararAtual);
+}
+
+/** Acabou a digitação: 1 dígito é opção; 2 a 4, um ramal. */
+function fimDaDigitacao(menu: MenuDaUra, e: Extract<EstadoDaUra, { fase: "digitando" }>): Passo {
+  if (e.digitos.length === 1) return umaTecla(menu, e.digitos, e.vez, false);
+  return {
+    estado: { fase: "ramal", vez: e.vez, houveInvalida: e.houveInvalida },
+    acao: { tipo: "ramal", numero: e.digitos },
+  };
+}
 
 export function passoDaUra(
   menu: MenuDaUra,
@@ -98,9 +166,41 @@ export function passoDaUra(
 ): { estado: EstadoDaUra; acao: AcaoDaUra } {
   if (estado.fase === "decidida") return { estado, acao: { tipo: "ignorar" } };
 
+  // O ramal digitado está sendo conferido: só a resposta do controlador conta.
+  if (estado.fase === "ramal") {
+    if (evento.tipo !== "ramal_invalido") return { estado, acao: { tipo: "ignorar" } };
+    return invalida(menu, estado.vez, false);
+  }
+
+  // Menu que aceita ramal, com o cliente digitando.
+  if (estado.fase === "digitando") {
+    if (evento.tipo === "prazo_dos_digitos") {
+      if (evento.seq !== estado.seq) return { estado, acao: { tipo: "ignorar" } };
+      return fimDaDigitacao(menu, estado);
+    }
+    if (evento.tipo !== "tecla") return { estado, acao: { tipo: "ignorar" } };
+    // `#` encerra a digitação; `*` é ignorado.
+    if (evento.digito === "#") return fimDaDigitacao(menu, estado);
+    if (!/^[0-9]$/.test(evento.digito)) return { estado, acao: { tipo: "ignorar" } };
+    const digitando = { ...estado, digitos: estado.digitos + evento.digito, seq: estado.seq + 1 };
+    if (digitando.digitos.length >= DIGITOS_DO_RAMAL_MAX) return fimDaDigitacao(menu, digitando);
+    return {
+      estado: digitando,
+      acao: { tipo: "esperar_digitos", ms: ESPERA_ENTRE_DIGITOS_MS, seq: digitando.seq, pararAtual: false },
+    };
+  }
+
   switch (evento.tipo) {
     case "tecla": {
       const pararAtual = estado.fase === "tocando";
+      // Menu que aceita ramal: a primeira tecla abre a digitação (1 dígito
+      // continua sendo opção, com o atraso da espera). `*` e `#` seguem inválidas.
+      if (menu.aceitaRamal && /^[0-9]$/.test(evento.digito)) {
+        return {
+          estado: { fase: "digitando", vez: estado.vez, houveInvalida: estado.houveInvalida, digitos: evento.digito, seq: 1 },
+          acao: { tipo: "esperar_digitos", ms: ESPERA_ENTRE_DIGITOS_MS, seq: 1, pararAtual },
+        };
+      }
       const opcao = menu.opcoes.find((o) => o.digito === evento.digito);
       if (opcao) {
         return {
@@ -174,6 +274,9 @@ export function passoDaUra(
         },
       };
     }
+    case "prazo_dos_digitos":
+    case "ramal_invalido":
+      return { estado, acao: { tipo: "ignorar" } };
     default: {
       const _nunca: never = evento;
       return _nunca;
