@@ -116,11 +116,11 @@ describe("0087 · o canal da sessão chega ao clone", () => {
   it("o mesmo número em DOIS providers na mesma org é RECUSADO", () => {
     // ⚠️ A trava é `channel_sessions_phone_per_org_unique`, do snapshot original —
     // NÃO o `channel_sessions_org_phone_uniq` que o plano da Task 6 mandava criar.
-    // Ela já responde ao invariante ("um número vive em UM provider") porque não
-    // olha o provider: o par (org, número) é único, ponto. Criar o índice seria
-    // duplicar a checagem em toda escrita e colocar uma trava NÃO-deferível ao
-    // lado de uma DEFERRABLE INITIALLY DEFERRED — quebrando no meio qualquer
-    // transação que hoje troca números entre duas sessões.
+    // Ela responde ao invariante ("um número vive em UM transporte de MENSAGEM")
+    // sem nomear os dois providers: o par (org, número) é único entre os canais
+    // ativos que não são telefone. O telefone tem a trava dele desde a 0292 — o
+    // mesmo número pode atender pelo WhatsApp e ser linha de voz, e quem cobra
+    // isso é `numero-unico-por-meio.test.ts`.
     const org = novaOrg(`inv-0087-d-${Date.now()}`);
     const fone = `'+5531999998888'`;
     insertSession(org, { waha_session_name: `'s-d1'`, phone_number: fone });

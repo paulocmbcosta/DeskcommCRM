@@ -22,6 +22,8 @@
  *     uma página longa, a TopBar gruda logo abaixo das faixas, sem sobreposição;
  *     e na Inbox o composer inteiro fica dentro da janela, sem a página rolar pela
  *     altura da faixa.
+ *  7. o número que já atende pelo WhatsApp entra em Conexões › Telefone (migration
+ *     0292): o mesmo número em dois MEIOS não é repetição, e a tela não o recusa.
  *
  * ORGANIZAÇÃO PRÓPRIA, e não a compartilhada do seed: admin e atendente nascem
  * aqui, sem MFA (a política padrão não exige), como em
@@ -60,7 +62,7 @@ import { createClient } from "@supabase/supabase-js";
 import { expect, test, type Page } from "@playwright/test";
 import { Pool } from "pg";
 
-import { CHANNEL_PROVIDER_SIP_TRUNK } from "../../lib/channels/capabilities";
+import { CHANNEL_PROVIDER_SIP_TRUNK, CHANNEL_PROVIDER_WAHA } from "../../lib/channels/capabilities";
 import { AMOSTRAS_POR_SEGUNDO, pcm16ParaUlaw } from "../../lib/telefonia/ulaw";
 import { MODELO_DE_VOZ_PADRAO } from "../../lib/telefonia/vocabulario";
 import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
@@ -78,6 +80,8 @@ const VOZ = { voice_id: "voz-e2e-1", name: "Ana E2E", category: "premade", previ
 const TIME_A = { id: randomUUID(), nome: `Suporte URA ${SUFIXO}` };
 const TIME_B = { id: randomUUID(), nome: `Financeiro URA ${SUFIXO}` };
 const NUMERO = { id: randomUUID(), nome: `Número URA ${SUFIXO}`, e164: `+55613000${QUATRO_DIGITOS}` };
+/** O tronco que o caso do "mesmo número" cadastra pela tela, com o número do canal de WhatsApp. */
+const FIXO = { nome: `Fixo da empresa ${SUFIXO}`, usuario: `fixo${SUFIXO}` };
 const MENU_NOME = `Menu E2E ${SUFIXO}`;
 
 /** A janela da prova: a mesma das specs vizinhas que medem layout. */
@@ -393,7 +397,12 @@ test.describe("telefonia — URA e falas pela tela", () => {
             where organization_id = $1`,
           [orgId],
         );
-        await sql(`update public.channel_sessions set archived_at = now() where id = $1 and organization_id = $2`, [NUMERO.id, orgId]);
+        // Os dois troncos: o do beforeAll e o que o caso do "mesmo número" cadastra pela tela.
+        await sql(
+          `update public.channel_sessions set archived_at = now()
+            where organization_id = $1 and provider = $2 and archived_at is null`,
+          [orgId, CHANNEL_PROVIDER_SIP_TRUNK],
+        );
       }
     } finally {
       await pool.end();
@@ -716,5 +725,41 @@ test.describe("telefonia — URA e falas pela tela", () => {
     });
 
     expect(foraDoContrato, "pedido à ElevenLabs falsa fora do contrato do cliente").toEqual([]);
+  });
+
+  test("o número que já atende pelo WhatsApp entra em Conexões › Telefone — o mesmo número, dois meios", async ({ page }) => {
+    // Relato de 2026-10-02 (migration 0292): o fixo da empresa é o número do
+    // WhatsApp e também a linha de voz na operadora. A tela recusava com "Esse
+    // número já está conectado nesta organização" a quem nunca o tinha ligado na
+    // telefonia — a trava do número não distinguia mensagem de telefone.
+    test.setTimeout(120_000);
+    const DO_WHATSAPP = `+55613001${QUATRO_DIGITOS}`; // o canal de WhatsApp do beforeAll
+    await page.setViewportSize(JANELA);
+    await entrar(page, admin.email, admin.senha);
+    await page.goto("/app/connections?aba=telefone");
+    await page.getByRole("tab", { name: "Números", exact: true }).click();
+    await expect(page.locator("[data-telefonia-numero]").filter({ hasText: NUMERO.nome })).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole("button", { name: "Adicionar outro número" }).click();
+    const formulario = page.locator("[data-telefonia-formulario]");
+    await formulario.locator("#tel-nome").fill(FIXO.nome);
+    await formulario.locator("#tel-numero").fill(`(61) 3001-${QUATRO_DIGITOS}`);
+    await formulario.locator("#tel-servidor").fill("voip.e2e-ura.com.br");
+    await formulario.locator("#tel-usuario").fill(FIXO.usuario);
+    await formulario.locator("#tel-senha").fill(`Local-${randomUUID()}`);
+    await formulario.getByRole("button", { name: "Salvar e conectar" }).click();
+
+    // O formulário fecha e o número entra na lista; a recusa antiga não aparece.
+    await expect(page.locator("[data-telefonia-numero]").filter({ hasText: FIXO.nome })).toBeVisible({ timeout: 20_000 });
+    await expect(formulario).toHaveCount(0);
+    await expect(page.getByText("Esse número já está conectado nesta organização.")).toHaveCount(0);
+
+    const ativos = await sql<{ provider: string }>(
+      `select provider from public.channel_sessions
+        where organization_id = $1 and phone_number = $2 and archived_at is null order by provider`,
+      [orgId, DO_WHATSAPP],
+    );
+    expect(ativos.map((a) => a.provider)).toEqual([CHANNEL_PROVIDER_SIP_TRUNK, CHANNEL_PROVIDER_WAHA]);
+    await page.screenshot({ path: `${EVIDENCIA}/e2e-mesmo-numero-whatsapp-e-telefone.png`, fullPage: true });
   });
 });

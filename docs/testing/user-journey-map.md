@@ -3032,6 +3032,7 @@ ordem do toque) e `lib/telefonia/numero.test.ts` (a política de número).
 | J35.12 Instalação com a telefonia DESLIGADA (o estado de toda VPS nova): a aba Telefone diz que está desligada e como ligar, e nenhum botão de ligar aparece em lugar nenhum | `[P0]` | pendente de prova |
 | J35.13 Remover o número: some da lista, o registro na operadora é solto, e as conversas e ligações antigas continuam no Inbox | `[P1]` | pendente de prova |
 | J35.16 Ligar a telefonia numa instalação JÁ na última versão (`telefonia` em `COMPOSE_PROFILES`, `TELEFONIA_ARI_URL`, `bash hostgator-setup-kit/update.sh`): o script sobe o Asterisk em vez de responder "Nada a atualizar" | `[P0]` | **decisão do script coberta** — `tests/shell/update-guard.test.sh` caso 14, com controles (tudo no alvo, profile desligado, stack parada) e seis sabotagens. **Defeito lido no código em 2026-09-28, não medido em VPS:** os critérios de `image_desatualizada` só olhavam app, worker e scheduler; e quem chegou à 1.48.0 pelo `update.sh` da 1.47.0 ficava sem `ASTERISK_IMAGE` e sem `TELEFONIA_ARI_PASSWORD`. **NÃO medido:** numa VPS real, nem pela tela — a prova é com `docker` dublado |
+| J35.17 O número que já atende pelo **WhatsApp** da organização entra em Conexões › Telefone: o mesmo número em dois meios (o fixo da empresa na API oficial e na operadora) não é repetição, e a tela não recusa | `[P0]` | **banco PROVADO, tela com spec** — `tests/invariants/numero-unico-por-meio.test.ts` (os dois sentidos, a cura do banco antigo) e `telefonia-menus-no-banco.test.ts` (o `criarNumero` de verdade); pela tela, o caso "o mesmo número, dois meios" de `tests/e2e/telefonia-ura-e-falas.spec.ts` (parte 3 do CI). Ver o defeito 7 abaixo |
 
 **Defeitos que a prova pela tela achou, e que já estão consertados no código** (cada um está
 anotado "medido na prova pela tela" no arquivo do conserto):
@@ -3052,6 +3053,12 @@ anotado "medido na prova pela tela" no arquivo do conserto):
 6. Quem estava com o app aberto quando o primeiro número foi conectado ficava sem telefone até
    recarregar a página. Agora o navegador pergunta de novo a cada minuto e quando a aba volta
    ao foco (`components/telefonia/TelefoniaContext.tsx`).
+7. **Achado em produção em 2026-10-02, não na prova pela tela:** cadastrar em Conexões ›
+   Telefone o número que a organização já usava no WhatsApp oficial respondia "Esse número já
+   está conectado nesta organização" a quem nunca o tinha ligado na telefonia. A trava de número
+   único de `channel_sessions` é do tempo em que a tabela só tinha WhatsApp e não olha o
+   provider; a 0286 a herdou. Agora a trava é por MEIO — mensagem e telefone não disputam o
+   número (migration 0292). A prova da fase 1 usou um número só de telefone e não passou por aqui.
 
 **Revisão de segurança de 2026-09-28** (lista completa e testes no §10.2 da spec): tronco
 identificado só pelo registro (J35.14); `/telefonia/ws` atrás de autorização que não renova a
