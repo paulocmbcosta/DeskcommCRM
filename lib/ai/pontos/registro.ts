@@ -308,6 +308,18 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     registraEm: "llm_calls",
   },
   {
+    id: "handoff_team_classify",
+    rotulo: "Escolher o setor de quem pede um atendente",
+    oQueFaz:
+      "Quando o cliente escreve que quer falar com um atendente, a conversa é passada para uma pessoa na hora, sem esperar a IA. Este ponto lê a conversa e o \"quando usar\" de cada time para decidir em qual fila ela entra. Na dúvida, não escolhe: a conversa vai para a fila geral.",
+    papel: "entender",
+    exige: {},
+    emissor: "lib/agent-engine/agent/setor-do-pedido.ts",
+    sintomaDeFalha:
+      "Quem pede um atendente continua sendo passado na hora, mas cai na fila geral: qualquer atendente disponível recebe a conversa, de qualquer setor, e alguém precisa transferir à mão.",
+    registraEm: "llm_calls",
+  },
+  {
     id: "followup_classify",
     rotulo: "Ler a resposta ao follow-up",
     oQueFaz:

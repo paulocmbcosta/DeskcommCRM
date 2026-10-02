@@ -32,7 +32,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type pg from 'pg';
 
-import { applyRequestHumanHandoff } from './human-handoff';
+import { applyRequestHumanHandoff, performHumanHandoff } from './human-handoff';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const LEAD = '22222222-2222-4222-8222-222222222222';
@@ -247,5 +247,143 @@ describe('performHumanHandoff · pede o rodízio da fila humana', () => {
 
     expect(res.ok).toBe(true);
     expect(log.warn).toHaveBeenCalled();
+  });
+});
+
+/**
+ * O PEDIDO DE HUMANO ESCOLHE O SETOR — depois da trava, antes do rodízio.
+ *
+ * Medido em produção em 2026-10-02: o desvio determinístico ("falar com um
+ * atendente") passava sem time, e o rodízio entregava a qualquer setor — lead
+ * comercial no Suporte, 16 trocas manuais em 20 passagens. Quem escolhe setor
+ * era só a ferramenta do modelo, que o desvio não alcança.
+ *
+ * `escolherTime` é o resolvedor tardio. As três posições erradas, e o que cada
+ * uma quebraria:
+ *  - ANTES de `force_human`: a escalação passa a esperar um provedor de modelo;
+ *  - DEPOIS do rodízio: o cron distribui para a organização inteira antes de o
+ *    time existir — o defeito de sempre, com um time gravado tarde demais;
+ *  - lançando para fora: quem pediu um atendente fica sem passagem nenhuma.
+ */
+describe('performHumanHandoff · escolherTime (o setor de quem pede um atendente)', () => {
+  const pedidoDeRodizio = (c: { sql: string }) => /fn_request_channel_routing/i.test(c.sql);
+  const gravaTime = (c: { sql: string }) => /update conversations set team_id/i.test(c.sql);
+
+  function base() {
+    return { reason: 'requested_human', conversationSummary: 'resumo', log: logFalso() };
+  }
+
+  it('roda DEPOIS da trava e do silêncio, e o time é gravado ANTES do rodízio', async () => {
+    const { pool, chamadas } = poolFalso();
+    let chamadasNaHoraDaEscolha = -1;
+    const escolherTime = vi.fn(async () => {
+      chamadasNaHoraDaEscolha = chamadas.length;
+      return { id: TIME_SUPORTE, name: 'Suporte técnico' };
+    });
+
+    await performHumanHandoff(pool, IDS, { ...base(), escolherTime });
+
+    expect(escolherTime).toHaveBeenCalledTimes(1);
+    const iTrava = chamadas.findIndex((c) => /set force_human = true/i.test(c.sql));
+    const iSilencio = chamadas.findIndex((c) => /bot_silenced_until = \$3/i.test(c.sql));
+    const iTime = chamadas.findIndex(gravaTime);
+    const iRodizio = chamadas.findIndex(pedidoDeRodizio);
+    expect(iTrava).toBeGreaterThanOrEqual(0);
+    expect(iSilencio).toBeGreaterThanOrEqual(0);
+    expect(
+      chamadasNaHoraDaEscolha,
+      'o setor foi escolhido antes de a IA ser silenciada — a escalação esperou o modelo',
+    ).toBeGreaterThan(Math.max(iTrava, iSilencio));
+    expect(iTime, 'o time escolhido não foi gravado').toBeGreaterThanOrEqual(0);
+    expect(chamadas[iTime]?.params).toEqual([TIME_SUPORTE, CONVERSA, ORG]);
+    expect(iRodizio, 'rodízio pedido antes do time: distribuiria fora do setor').toBeGreaterThan(iTime);
+  });
+
+  it('resolvedor que devolve null: fila geral, e o rodízio é pedido do mesmo jeito', async () => {
+    const { pool, chamadas } = poolFalso();
+
+    await performHumanHandoff(pool, IDS, { ...base(), escolherTime: async () => null });
+
+    expect(chamadas.some(gravaTime)).toBe(false);
+    expect(chamadas.filter(pedidoDeRodizio)).toHaveLength(1);
+  });
+
+  it('resolvedor que LANÇA não derruba a passagem — vira aviso no log e fila geral', async () => {
+    const { pool, chamadas } = poolFalso();
+    const log = logFalso() as unknown as { warn: ReturnType<typeof vi.fn> };
+
+    await expect(
+      performHumanHandoff(pool, IDS, {
+        reason: 'requested_human',
+        conversationSummary: 'resumo',
+        log: log as never,
+        escolherTime: async () => {
+          throw new Error('provedor fora do ar');
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(chamadas.some((c) => /set force_human = true/i.test(c.sql))).toBe(true);
+    expect(chamadas.some(gravaTime)).toBe(false);
+    expect(chamadas.filter(pedidoDeRodizio)).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it('teamId explícito vence: o resolvedor nem é chamado', async () => {
+    const { pool, chamadas } = poolFalso();
+    const escolherTime = vi.fn(async () => ({ id: TIME_SUPORTE, name: 'Suporte técnico' }));
+
+    await performHumanHandoff(pool, IDS, { ...base(), teamId: TIME_FINANCEIRO, escolherTime });
+
+    expect(escolherTime, 'o agente já escolheu o setor — perguntar de novo é custo e risco').not.toHaveBeenCalled();
+    expect(chamadas.find(gravaTime)?.params).toEqual([TIME_FINANCEIRO, CONVERSA, ORG]);
+  });
+
+  it('o aviso da Central diz qual setor foi escolhido automaticamente', async () => {
+    const { pool, chamadas } = poolFalso();
+
+    await performHumanHandoff(pool, IDS, {
+      ...base(),
+      escolherTime: async () => ({ id: TIME_SUPORTE, name: 'Suporte técnico' }),
+    });
+
+    const inbox = chamadas.find((c) => /insert into agent_inbox_items/i.test(c.sql));
+    expect(String(inbox?.params[2])).toContain('Setor escolhido automaticamente: Suporte técnico');
+  });
+
+  it('a atividade da passagem registra o time e a ORIGEM da escolha', async () => {
+    // O laço de retorno: `team_origem = classificador` seguido de uma troca manual
+    // (`routing.team_changed`) é o erro do classificador, medível por consulta.
+    const { pool, chamadas, query } = poolFalso();
+    const original = query.getMockImplementation();
+    query.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      // Um lead aberto, para a atividade ter onde ser gravada.
+      if (/from crm_leads l/i.test(sql)) {
+        return {
+          rows: [{
+            id: '66666666-6666-4666-8666-666666666666', organization_id: ORG, pipeline_id: 'p',
+            status: 'open', last_activity_at: null, created_at: '2026-10-01T00:00:00Z',
+          }],
+          rowCount: 1,
+        } as never;
+      }
+      return original!(sql, params);
+    });
+
+    await performHumanHandoff(pool, IDS, {
+      ...base(),
+      escolherTime: async () => ({ id: TIME_SUPORTE, name: 'Suporte técnico' }),
+    });
+
+    // O payload viaja como texto JSON num dos parâmetros do INSERT da atividade.
+    const payload = chamadas
+      .flatMap((c) => c.params)
+      .find((p): p is string => typeof p === 'string' && p.includes('team_origem'));
+    expect(payload, 'a atividade não registrou a origem da escolha').toBeDefined();
+    expect(JSON.parse(payload!)).toMatchObject({
+      conversation_id: CONVERSA,
+      team_id: TIME_SUPORTE,
+      team_origem: 'classificador',
+    });
   });
 });

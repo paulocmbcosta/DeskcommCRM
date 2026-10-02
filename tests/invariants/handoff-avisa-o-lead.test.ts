@@ -274,6 +274,10 @@ describe("pedido explícito de atendente", () => {
     expect(rows[0]!.force_human, "a passagem não aconteceu — o teste mediu outra coisa").toBe(true);
   });
 
+  // Esta organização NÃO tem times. Com times, o desvio faz UMA chamada de modelo
+  // — depois do aviso e da trava — para escolher o setor da fila; quem mede isso é
+  // `pedido-de-humano-escolhe-o-setor.test.ts`. O que este caso guarda continua
+  // valendo: avisar e silenciar não dependem de modelo nenhum.
   it("nenhum token gasto: o desvio segue determinístico", async () => {
     await rodaTurnoCom("preciso de falar com atendente");
     expect(modeloChamado, "o desvio passou a chamar o modelo — custo por pedido de humano").toBe(0);

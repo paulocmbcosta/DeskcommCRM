@@ -409,6 +409,22 @@
       "type": "service",
       "label": "lib/escalacao/atendimento-manual.ts",
       "sublabel": "pausarIaPorAtendimentoManual — pessoa respondeu por fora do CRM (pausa COM PRAZO)"
+    },
+    {
+      "id": "setorDoPedido",
+      "lane": "motor",
+      "col": 7,
+      "type": "service",
+      "label": "setor-do-pedido.ts",
+      "sublabel": "a qual fila vai quem pede um atendente"
+    },
+    {
+      "id": "times",
+      "lane": "dados",
+      "col": 8,
+      "type": "database",
+      "label": "attendance_teams",
+      "sublabel": "o 'quando usar' de cada setor"
     }
   ],
   "edges": [
@@ -843,6 +859,36 @@
       "from": "novoAtendimento",
       "to": "atendimentos",
       "label": "reabrir a conversa dispara o trigger da 0266: episódio novo, protocolo novo — é onde 'começa do zero' ganha data"
+    },
+    {
+      "id": "e73",
+      "from": "avisoMotor",
+      "to": "setorDoPedido",
+      "label": "pedido explícito de humano: depois do aviso e da trava, performHumanHandoff chama escolherTime"
+    },
+    {
+      "id": "e74",
+      "from": "times",
+      "to": "setorDoPedido",
+      "label": "timesAtivos — a mesma lista que a ferramenta de transferência mostra ao modelo"
+    },
+    {
+      "id": "e75",
+      "from": "setorDoPedido",
+      "to": "conversas",
+      "label": "grava team_id ANTES de pedir o rodízio; sem escolha (none, falha, demora) fica a fila geral"
+    },
+    {
+      "id": "e76",
+      "from": "setorDoPedido",
+      "to": "central",
+      "label": "o aviso diz 'Setor escolhido automaticamente: <nome>'"
+    },
+    {
+      "id": "e77",
+      "from": "setorDoPedido",
+      "to": "atividades",
+      "label": "handoff_triggered leva team_id e team_origem (classificador | agente) — o erro vira medível contra routing.team_changed"
     }
   ],
   "cards": [

@@ -4,9 +4,11 @@ import { guardServiceEffect } from "@/lib/atendimento/fronteira-server";
  * clara e imediata é EXIGÊNCIA fiscalizada da Meta, não fallback). Dois gatilhos, uma
  * ação idempotente:
  *   1. DETERMINÍSTICO — regex PT-BR na última mensagem do lead ("falar com atendente",
- *      "quero falar com uma pessoa"…). Roda no runtime ANTES do modelo: o turno não gasta
- *      LLM. Ele AVISA o lead (texto de código, `avisarLeadDaEscalacao`) e só então silencia
- *      — nesta ordem, porque `force_human` arma o `stopGate` e mata todo envio posterior.
+ *      "quero falar com uma pessoa"…). Roda no runtime ANTES do modelo: avisar e silenciar
+ *      não dependem de LLM. Ele AVISA o lead (texto de código, `avisarLeadDaEscalacao`) e
+ *      só então silencia — nesta ordem, porque `force_human` arma o `stopGate` e mata todo
+ *      envio posterior. O ÚNICO uso de modelo deste gatilho vem depois da trava: escolher
+ *      o setor (`escolherTime`, abaixo), e só em organização que tem times.
  *   2. TOOL request_human_handoff — o modelo aciona quando percebe o limite da automação.
  *
  * A ação (performHumanHandoff), idempotente e at-least-once — TUDO no mesmo banco agora
@@ -15,6 +17,7 @@ import { guardServiceEffect } from "@/lib/atendimento/fronteira-server";
  *   (b) conversa: status transiciona SÓ 'ai_handling'→'pending' (CASE — nunca pisa em
  *       claimed/closed) + bot_silenced_until='infinity' + last_handoff_at/reason;
  *   (c) cancela os crons PENDENTES do lead (follow-ups agendados não disparam após handoff);
+ *   (c') escolhe o setor, quando o chamador não trouxe um e deu um resolvedor (`escolherTime`);
  *   (d) cria agent_inbox_items(kind='handoff') com o resumo (dedup por episódio aberto);
  *   (f) grava o time de destino, quando houver, e (g) SÓ ENTÃO pede o rodízio da fila humana.
  *
@@ -141,6 +144,21 @@ export async function performHumanHandoff(
      * chamador. Ausente/nulo = fila geral, o comportamento de antes.
      */
     teamId?: string | null;
+    /**
+     * Resolvedor TARDIO do setor, para o chamador que não sabe o time na hora de
+     * passar — o desvio determinístico de "falar com um atendente", que nunca
+     * chega à ferramenta do modelo. Chamado só quando `teamId` não veio.
+     *
+     * Roda DEPOIS da trava, do silêncio e do cancelamento dos crons, e ANTES do
+     * pedido de rodízio — as duas pontas importam. Antes da trava, a escalação
+     * esperaria um provedor de modelo; depois do rodízio, o cron distribuiria
+     * para a organização inteira antes de o time existir (medido em produção em
+     * 2026-10-02: lead comercial entregue ao Suporte).
+     *
+     * `null` = fila geral. Lançar também: a falha vira aviso no log e a
+     * passagem segue — escolher o setor é um extra dela, nunca condição.
+     */
+    escolherTime?: () => Promise<{ id: string; name: string } | null>;
     log: Logger;
   },
 ): Promise<void> {
@@ -175,6 +193,25 @@ export async function performHumanHandoff(
   await guardServiceEffect();
   await cancelPendingCronsForLead(db, ids.tenantId, ids.leadId);
 
+  // (c') O SETOR, quando ninguém o trouxe. Aqui e não antes: a IA já está calada e
+  // o lead já foi avisado, então o tempo do modelo não chega a ninguém. Aqui e não
+  // depois: (d) e (e) contam qual setor foi, e (g) só pode pedir o rodízio com o
+  // time gravado.
+  let teamId = opts.teamId ?? null;
+  let timeEscolhido: { id: string; name: string } | null = null;
+  if (teamId === null && opts.escolherTime !== undefined) {
+    try {
+      timeEscolhido = await opts.escolherTime();
+    } catch (err) {
+      opts.log.warn('handoff: setor não escolhido — a conversa segue para a fila geral', {
+        error: err instanceof Error ? err.message.slice(0, 200) : 'erro desconhecido',
+      });
+    }
+    teamId = timeEscolhido?.id ?? null;
+  }
+  /** Quem decidiu o setor — é o que torna o erro do classificador medível depois. */
+  const origemDoTime = timeEscolhido !== null ? 'classificador' : teamId !== null ? 'agente' : null;
+
   // (d) inbox de escalação com o resumo da conversa. Dedup por episódio ABERTO (mesmo padrão
   // do escalateJailbreakPromise): 2× no mesmo handoff aberto → 1 item.
   await guardServiceEffect();
@@ -188,7 +225,7 @@ export async function performHumanHandoff(
     [
       ids.tenantId,
       opts.inboxTitle ?? 'Handoff humano solicitado — assumir a conversa',
-      `Motivo: ${opts.reason}. ${linhaDoAviso(opts.avisoAoLead)}Resumo da conversa até aqui:\n${opts.conversationSummary}`,
+      `Motivo: ${opts.reason}. ${linhaDoAviso(opts.avisoAoLead)}${linhaDoSetor(timeEscolhido)}Resumo da conversa até aqui:\n${opts.conversationSummary}`,
       ids.leadId,
     ],
   );
@@ -213,7 +250,12 @@ export async function performHumanHandoff(
       sourceModule: 'human-handoff',
       sourceId: ids.conversationId,
       reason: 'Atendimento passado para uma pessoa',
-      payload: { conversation_id: ids.conversationId },
+      // `team_origem` fecha o laço: 'classificador' seguido de uma troca manual
+      // de time (`routing.team_changed`) é a escolha automática que errou.
+      payload: {
+        conversation_id: ids.conversationId,
+        ...(teamId !== null ? { team_id: teamId, team_origem: origemDoTime } : {}),
+      },
     });
     if (!roteou.routed) {
       opts.log.warn('handoff: atividade não roteada para um negócio', { reason: roteou.reason });
@@ -232,11 +274,11 @@ export async function performHumanHandoff(
   //
   // `organization_id` no WHERE mesmo com o id da conversa em mãos: este módulo roda
   // sob service role, que bypassa RLS (anti-pattern nº 10).
-  if (opts.teamId) {
+  if (teamId) {
     await guardServiceEffect();
     await db.query(
       `update conversations set team_id = $1 where id = $2 and organization_id = $3`,
-      [opts.teamId, ids.conversationId, ids.tenantId],
+      [teamId, ids.conversationId, ids.tenantId],
     );
   }
 
@@ -259,6 +301,7 @@ export async function performHumanHandoff(
   // PII fora do log: só ids/motivo — nunca o resumo da conversa (regra dura 8).
   opts.log.info('handoff humano aplicado (force_human + silêncio + crons cancelados + inbox + rodízio)', {
     reason: opts.reason,
+    team_origem: origemDoTime,
   });
 }
 
@@ -273,6 +316,16 @@ function linhaDoAviso(aviso: { avisado: boolean; porque?: string } | undefined):
   if (aviso === undefined) return '';
   if (aviso.avisado) return 'O cliente JÁ FOI avisado de que uma pessoa vai assumir. ';
   return `⚠️ O cliente NÃO foi avisado (${aviso.porque ?? 'motivo desconhecido'}) — ele está esperando sem saber. `;
+}
+
+/**
+ * A linha do aviso da Central que diz para onde a conversa foi mandada SEM uma
+ * pessoa ter escolhido. Só existe quando o setor veio do classificador: quem
+ * abre o aviso precisa saber que aquela fila foi um palpite — e que, se estiver
+ * errada, é Transferir.
+ */
+function linhaDoSetor(time: { name: string } | null): string {
+  return time === null ? '' : `Setor escolhido automaticamente: ${time.name}. `;
 }
 
 /** Whitelist EXATA do payload da tool (mesmo padrão .strict() da F2-10/F3-02). */
@@ -292,7 +345,7 @@ const PAYLOAD_TEACHING =
   'conversa vêm do runtime, nunca do payload da tool.';
 
 /** Uma linha por time ATIVO da organização — resolve o slug e ensina de uma vez só. */
-interface TimeAtivo {
+export interface TimeAtivo {
   id: string;
   slug: string;
   name: string;
@@ -316,10 +369,13 @@ interface TimeAtivo {
  * supabase-js, é o que deixa a prévia do botão Testar sem nenhuma ida HTTP
  * (`tests/invariants/autonomia-preview-core.test.ts` a proíbe).
  *
+ * Exportada para o classificador de setor do pedido de humano
+ * (`setor-do-pedido.ts`): a terceira porta que escolhe time lê a MESMA lista.
+ *
  * `order by name` é contrato: o catálogo entra no prefixo cacheado da
  * organização, e ordem instável invalidaria o cache a cada turno.
  */
-async function timesAtivos(db: pg.Pool, tenantId: string): Promise<TimeAtivo[]> {
+export async function timesAtivos(db: pg.Pool, tenantId: string): Promise<TimeAtivo[]> {
   const { rows } = await db.query<TimeAtivo>(
     `select id, slug, name, description
        from attendance_teams
