@@ -862,9 +862,9 @@
     },
     {
       "id": "e73",
-      "from": "avisoMotor",
-      "to": "setorDoPedido",
-      "label": "pedido explícito de humano: depois do aviso e da trava, performHumanHandoff chama escolherTime"
+      "from": "setorDoPedido",
+      "to": "avisoMotor",
+      "label": "pedido explícito de humano: o setor é escolhido ANTES do aviso e da trava (Jev; sem chave ou sem resposta, o modelo auxiliar)"
     },
     {
       "id": "e74",
@@ -876,7 +876,7 @@
       "id": "e75",
       "from": "setorDoPedido",
       "to": "conversas",
-      "label": "grava team_id ANTES de pedir o rodízio; sem escolha (none, falha, demora) fica a fila geral"
+      "label": "performHumanHandoff recebe timeAutomatico e grava team_id antes de pedir o rodízio; sem escolha fica a fila geral"
     },
     {
       "id": "e76",

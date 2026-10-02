@@ -4,11 +4,11 @@ import { guardServiceEffect } from "@/lib/atendimento/fronteira-server";
  * clara e imediata é EXIGÊNCIA fiscalizada da Meta, não fallback). Dois gatilhos, uma
  * ação idempotente:
  *   1. DETERMINÍSTICO — regex PT-BR na última mensagem do lead ("falar com atendente",
- *      "quero falar com uma pessoa"…). Roda no runtime ANTES do modelo: avisar e silenciar
- *      não dependem de LLM. Ele AVISA o lead (texto de código, `avisarLeadDaEscalacao`) e
- *      só então silencia — nesta ordem, porque `force_human` arma o `stopGate` e mata todo
- *      envio posterior. O ÚNICO uso de modelo deste gatilho vem depois da trava: escolher
- *      o setor (`escolherTime`, abaixo), e só em organização que tem times.
+ *      "quero falar com uma pessoa"…). Roda no runtime ANTES do modelo do agente. Ele AVISA
+ *      o lead (texto de código, `avisarLeadDaEscalacao`) e só então silencia — nesta ordem,
+ *      porque `force_human` arma o `stopGate` e mata todo envio posterior. O ÚNICO uso de
+ *      IA deste gatilho vem antes de tudo isso: escolher o setor (`setor-do-pedido.ts`), só
+ *      em organização que tem times, com teto de espera, e sem nunca impedir a passagem.
  *   2. TOOL request_human_handoff — o modelo aciona quando percebe o limite da automação.
  *
  * A ação (performHumanHandoff), idempotente e at-least-once — TUDO no mesmo banco agora
@@ -17,7 +17,6 @@ import { guardServiceEffect } from "@/lib/atendimento/fronteira-server";
  *   (b) conversa: status transiciona SÓ 'ai_handling'→'pending' (CASE — nunca pisa em
  *       claimed/closed) + bot_silenced_until='infinity' + last_handoff_at/reason;
  *   (c) cancela os crons PENDENTES do lead (follow-ups agendados não disparam após handoff);
- *   (c') escolhe o setor, quando o chamador não trouxe um e deu um resolvedor (`escolherTime`);
  *   (d) cria agent_inbox_items(kind='handoff') com o resumo (dedup por episódio aberto);
  *   (f) grava o time de destino, quando houver, e (g) SÓ ENTÃO pede o rodízio da fila humana.
  *
@@ -145,20 +144,21 @@ export async function performHumanHandoff(
      */
     teamId?: string | null;
     /**
-     * Resolvedor TARDIO do setor, para o chamador que não sabe o time na hora de
-     * passar — o desvio determinístico de "falar com um atendente", que nunca
-     * chega à ferramenta do modelo. Chamado só quando `teamId` não veio.
+     * O time que o CLASSIFICADOR escolheu (`escolherSetorDoPedido`), para o
+     * chamador que não passa pela ferramenta do modelo — o desvio determinístico
+     * de "falar com um atendente". Vale só quando `teamId` não veio.
      *
-     * Roda DEPOIS da trava, do silêncio e do cancelamento dos crons, e ANTES do
-     * pedido de rodízio — as duas pontas importam. Antes da trava, a escalação
-     * esperaria um provedor de modelo; depois do rodízio, o cron distribuiria
-     * para a organização inteira antes de o time existir (medido em produção em
-     * 2026-10-02: lead comercial entregue ao Suporte).
+     * Chega PRONTO, e é de propósito: a escolha acontece antes de a passagem
+     * começar. Escolher aqui dentro, depois do silêncio, deixaria a conversa
+     * fora da IA e sem time pelo tempo de uma chamada de modelo — e o cron de
+     * rodízio, que roda uma vez por minuto, a distribuiria para a organização
+     * inteira nessa janela (o defeito medido em produção em 2026-10-02: lead
+     * comercial entregue ao Suporte).
      *
-     * `null` = fila geral. Lançar também: a falha vira aviso no log e a
-     * passagem segue — escolher o setor é um extra dela, nunca condição.
+     * Separado de `teamId` porque a ORIGEM importa: o aviso da Central diz que
+     * foi automático, e a atividade grava `team_origem` para o erro ser medível.
      */
-    escolherTime?: () => Promise<{ id: string; name: string } | null>;
+    timeAutomatico?: { id: string; name: string } | null;
     log: Logger;
   },
 ): Promise<void> {
@@ -193,22 +193,10 @@ export async function performHumanHandoff(
   await guardServiceEffect();
   await cancelPendingCronsForLead(db, ids.tenantId, ids.leadId);
 
-  // (c') O SETOR, quando ninguém o trouxe. Aqui e não antes: a IA já está calada e
-  // o lead já foi avisado, então o tempo do modelo não chega a ninguém. Aqui e não
-  // depois: (d) e (e) contam qual setor foi, e (g) só pode pedir o rodízio com o
-  // time gravado.
-  let teamId = opts.teamId ?? null;
-  let timeEscolhido: { id: string; name: string } | null = null;
-  if (teamId === null && opts.escolherTime !== undefined) {
-    try {
-      timeEscolhido = await opts.escolherTime();
-    } catch (err) {
-      opts.log.warn('handoff: setor não escolhido — a conversa segue para a fila geral', {
-        error: err instanceof Error ? err.message.slice(0, 200) : 'erro desconhecido',
-      });
-    }
-    teamId = timeEscolhido?.id ?? null;
-  }
+  // O DESTINO, decidido antes de qualquer efeito. O time explícito (a ferramenta
+  // do modelo) vence o do classificador.
+  const timeEscolhido = opts.teamId ? null : (opts.timeAutomatico ?? null);
+  const teamId = opts.teamId ?? timeEscolhido?.id ?? null;
   /** Quem decidiu o setor — é o que torna o erro do classificador medível depois. */
   const origemDoTime = timeEscolhido !== null ? 'classificador' : teamId !== null ? 'agente' : null;
 

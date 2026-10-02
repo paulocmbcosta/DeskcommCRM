@@ -251,101 +251,65 @@ describe('performHumanHandoff · pede o rodízio da fila humana', () => {
 });
 
 /**
- * O PEDIDO DE HUMANO ESCOLHE O SETOR — depois da trava, antes do rodízio.
+ * O PEDIDO DE HUMANO CHEGA COM O SETOR ESCOLHIDO — `timeAutomatico`.
  *
  * Medido em produção em 2026-10-02: o desvio determinístico ("falar com um
  * atendente") passava sem time, e o rodízio entregava a qualquer setor — lead
  * comercial no Suporte, 16 trocas manuais em 20 passagens. Quem escolhe setor
  * era só a ferramenta do modelo, que o desvio não alcança.
  *
- * `escolherTime` é o resolvedor tardio. As três posições erradas, e o que cada
- * uma quebraria:
- *  - ANTES de `force_human`: a escalação passa a esperar um provedor de modelo;
- *  - DEPOIS do rodízio: o cron distribui para a organização inteira antes de o
- *    time existir — o defeito de sempre, com um time gravado tarde demais;
- *  - lançando para fora: quem pediu um atendente fica sem passagem nenhuma.
+ * O classificador (`setor-do-pedido.ts`) roda ANTES desta função e entrega o
+ * time pronto. A passagem em si não chama nada de fora: entre calar a IA e
+ * pedir o rodízio só há escritas no banco. Uma chamada de modelo ali dentro
+ * deixaria a conversa fora da IA e sem time por segundos — e o cron de rodízio
+ * a distribuiria para a organização inteira nessa janela.
  */
-describe('performHumanHandoff · escolherTime (o setor de quem pede um atendente)', () => {
+describe('performHumanHandoff · timeAutomatico (o setor de quem pede um atendente)', () => {
   const pedidoDeRodizio = (c: { sql: string }) => /fn_request_channel_routing/i.test(c.sql);
   const gravaTime = (c: { sql: string }) => /update conversations set team_id/i.test(c.sql);
+  const AUTOMATICO = { id: TIME_SUPORTE, name: 'Suporte técnico' };
 
   function base() {
     return { reason: 'requested_human', conversationSummary: 'resumo', log: logFalso() };
   }
 
-  it('roda DEPOIS da trava e do silêncio, e o time é gravado ANTES do rodízio', async () => {
+  it('grava o time do classificador, e SÓ DEPOIS pede o rodízio', async () => {
     const { pool, chamadas } = poolFalso();
-    let chamadasNaHoraDaEscolha = -1;
-    const escolherTime = vi.fn(async () => {
-      chamadasNaHoraDaEscolha = chamadas.length;
-      return { id: TIME_SUPORTE, name: 'Suporte técnico' };
-    });
 
-    await performHumanHandoff(pool, IDS, { ...base(), escolherTime });
+    await performHumanHandoff(pool, IDS, { ...base(), timeAutomatico: AUTOMATICO });
 
-    expect(escolherTime).toHaveBeenCalledTimes(1);
-    const iTrava = chamadas.findIndex((c) => /set force_human = true/i.test(c.sql));
-    const iSilencio = chamadas.findIndex((c) => /bot_silenced_until = \$3/i.test(c.sql));
     const iTime = chamadas.findIndex(gravaTime);
     const iRodizio = chamadas.findIndex(pedidoDeRodizio);
-    expect(iTrava).toBeGreaterThanOrEqual(0);
-    expect(iSilencio).toBeGreaterThanOrEqual(0);
-    expect(
-      chamadasNaHoraDaEscolha,
-      'o setor foi escolhido antes de a IA ser silenciada — a escalação esperou o modelo',
-    ).toBeGreaterThan(Math.max(iTrava, iSilencio));
     expect(iTime, 'o time escolhido não foi gravado').toBeGreaterThanOrEqual(0);
     expect(chamadas[iTime]?.params).toEqual([TIME_SUPORTE, CONVERSA, ORG]);
     expect(iRodizio, 'rodízio pedido antes do time: distribuiria fora do setor').toBeGreaterThan(iTime);
   });
 
-  it('resolvedor que devolve null: fila geral, e o rodízio é pedido do mesmo jeito', async () => {
+  it('sem time automático (null): fila geral, e o rodízio é pedido do mesmo jeito', async () => {
     const { pool, chamadas } = poolFalso();
 
-    await performHumanHandoff(pool, IDS, { ...base(), escolherTime: async () => null });
+    await performHumanHandoff(pool, IDS, { ...base(), timeAutomatico: null });
 
     expect(chamadas.some(gravaTime)).toBe(false);
     expect(chamadas.filter(pedidoDeRodizio)).toHaveLength(1);
   });
 
-  it('resolvedor que LANÇA não derruba a passagem — vira aviso no log e fila geral', async () => {
+  it('teamId explícito vence o do classificador, e a origem registrada é o agente', async () => {
     const { pool, chamadas } = poolFalso();
-    const log = logFalso() as unknown as { warn: ReturnType<typeof vi.fn> };
 
-    await expect(
-      performHumanHandoff(pool, IDS, {
-        reason: 'requested_human',
-        conversationSummary: 'resumo',
-        log: log as never,
-        escolherTime: async () => {
-          throw new Error('provedor fora do ar');
-        },
-      }),
-    ).resolves.toBeUndefined();
+    await performHumanHandoff(pool, IDS, { ...base(), teamId: TIME_FINANCEIRO, timeAutomatico: AUTOMATICO });
 
-    expect(chamadas.some((c) => /set force_human = true/i.test(c.sql))).toBe(true);
-    expect(chamadas.some(gravaTime)).toBe(false);
-    expect(chamadas.filter(pedidoDeRodizio)).toHaveLength(1);
-    expect(log.warn).toHaveBeenCalled();
-  });
-
-  it('teamId explícito vence: o resolvedor nem é chamado', async () => {
-    const { pool, chamadas } = poolFalso();
-    const escolherTime = vi.fn(async () => ({ id: TIME_SUPORTE, name: 'Suporte técnico' }));
-
-    await performHumanHandoff(pool, IDS, { ...base(), teamId: TIME_FINANCEIRO, escolherTime });
-
-    expect(escolherTime, 'o agente já escolheu o setor — perguntar de novo é custo e risco').not.toHaveBeenCalled();
     expect(chamadas.find(gravaTime)?.params).toEqual([TIME_FINANCEIRO, CONVERSA, ORG]);
+    const inbox = chamadas.find((c) => /insert into agent_inbox_items/i.test(c.sql));
+    expect(String(inbox?.params[2]), 'disse "automático" de um setor que o agente escolheu').not.toContain(
+      'Setor escolhido automaticamente',
+    );
   });
 
   it('o aviso da Central diz qual setor foi escolhido automaticamente', async () => {
     const { pool, chamadas } = poolFalso();
 
-    await performHumanHandoff(pool, IDS, {
-      ...base(),
-      escolherTime: async () => ({ id: TIME_SUPORTE, name: 'Suporte técnico' }),
-    });
+    await performHumanHandoff(pool, IDS, { ...base(), timeAutomatico: AUTOMATICO });
 
     const inbox = chamadas.find((c) => /insert into agent_inbox_items/i.test(c.sql));
     expect(String(inbox?.params[2])).toContain('Setor escolhido automaticamente: Suporte técnico');
@@ -370,10 +334,7 @@ describe('performHumanHandoff · escolherTime (o setor de quem pede um atendente
       return original!(sql, params);
     });
 
-    await performHumanHandoff(pool, IDS, {
-      ...base(),
-      escolherTime: async () => ({ id: TIME_SUPORTE, name: 'Suporte técnico' }),
-    });
+    await performHumanHandoff(pool, IDS, { ...base(), timeAutomatico: AUTOMATICO });
 
     // O payload viaja como texto JSON num dos parâmetros do INSERT da atividade.
     const payload = chamadas

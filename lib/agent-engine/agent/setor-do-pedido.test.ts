@@ -15,14 +15,21 @@
  * fora do ar, resposta torta, slug inventado, demora: tudo isso devolve `null`
  * — a fila geral de antes — e nada lança.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 import type pg from 'pg';
 
 import {
+  ASSUNTO_MINIMO_NO_JEV,
   CONFIANCA_MINIMA_DO_SETOR,
+  CONFIANCA_MINIMA_DO_SETOR_NO_JEV,
   escolherSetorDoPedido,
+  lerRespostaDoJev,
   lerVereditoDoSetor,
   montarPromptDoSetor,
+  perguntasDoJev,
 } from './setor-do-pedido';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
@@ -120,6 +127,20 @@ describe('montarPromptDoSetor', () => {
     expect(
       lerVereditoDoSetor('{"porque":"quer contratar","setor":"comercial","confidence":0.9}', SETORES),
     ).toEqual({ slug: 'comercial', confianca: 0.9 });
+  });
+
+  it('áudio e imagem chegam sem a moldura do agente — só o que o cliente disse', () => {
+    // `frameMediaBody` embrulha o derivado numa instrução para o AGENTE. Para o
+    // classificador ela comia metade dos 500 caracteres e trazia uma ordem
+    // ("NUNCA responda…") para dentro do bloco de conversa.
+    const audio =
+      '[Mídia do cliente: ele enviou um áudio e o sistema já processou o conteúdo pra você. ' +
+      'Trate o texto abaixo como se você mesma tivesse visto/ouvido — NUNCA responda que não ' +
+      'consegue ver/ouvir mídia. Comente ou use o conteúdo naturalmente.]\n' +
+      'Conteúdo: quero falar com um atendente, minha internet caiu';
+    const p = montarPromptDoSetor(SETORES, [{ direction: 'inbound', body: audio }]);
+    expect(p).toContain('cliente: Conteúdo: quero falar com um atendente, minha internet caiu');
+    expect(p).not.toContain('NUNCA responda');
   });
 
   it('fala vazia (mídia sem texto) não vira linha', () => {
@@ -220,8 +241,10 @@ describe('escolherSetorDoPedido', () => {
     const log = logFalso();
     const r = await escolherSetorDoPedido(pool, {} as never, entrada(), {
       log: log as never,
+      // Um endpoint compatível com OpenAI pode ECOAR o prompt na mensagem de erro
+      // — e o prompt é a conversa do cliente. O log leva só a classe do erro.
       runModelCall: vi.fn(async () => {
-        throw new Error('provedor fora do ar');
+        throw new Error('invalid request: "cliente: Vim do site e quero falar com um atendente"');
       }) as never,
     });
     expect(r).toBeNull();
@@ -263,5 +286,244 @@ describe('escolherSetorDoPedido', () => {
     );
     expect(r).toBeNull();
     expect(runModelCall).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * PELO JEV, QUANDO HÁ CHAVE DA OPENROUTER — e o modelo do agente como reserva.
+ *
+ * Medido na VPS de produção em 2026-10-02, com 20 conversas sintéticas e os seis
+ * times da Totus. UMA pergunta só (`choice` com a opção `none`) errava o caso
+ * que motivou o conserto: o texto pronto do site de comparação caía em `none`
+ * 8 de 8 — o Jev lê ao pé da letra, e a mensagem diz mesmo "quero falar com um
+ * atendente". DUAS perguntas — "há assunto além do pedido?" (noul) e "qual
+ * setor?" (choice, sem `none`) — fizeram 20 de 20, p50 de 0,26 s, e a primeira
+ * separa sozinha quem não disse o assunto (0,03 e 0,04 contra 0,80 ou mais).
+ */
+describe('perguntasDoJev', () => {
+  it('são DUAS perguntas: há assunto (noul) e qual setor (choice sem none)', () => {
+    const p = perguntasDoJev(SETORES) as {
+      tem_assunto: { type: string };
+      setor: { type: string; criteria: Record<string, string> };
+    };
+    expect(p.tem_assunto.type).toBe('noul');
+    expect(p.setor.type).toBe('choice');
+    expect(Object.keys(p.setor.criteria)).toEqual(['comercial', 'suporte-tecnico']);
+    expect(p.setor.criteria, 'none dentro do choice rouba a probabilidade do setor certo').not.toHaveProperty('none');
+    expect(p.setor.criteria.comercial).toContain('Quem quer contratar internet');
+  });
+
+  it('setor sem "quando usar" entra com o nome', () => {
+    const p = perguntasDoJev([{ id: 'x', slug: 'provisionamento', name: 'Provisionamento', description: '' }]) as {
+      setor: { criteria: Record<string, string> };
+    };
+    expect(p.setor.criteria.provisionamento).toBe('Provisionamento');
+  });
+});
+
+const corpoDoJev = (temAssunto: number, choice: string, confidence: number) => ({
+  model: 'typesafe/jev-1.13-20260917',
+  answers: { tem_assunto: { noul: temAssunto }, setor: { choice, confidence } },
+  usage: { input_tokens: 320, cost: 0.00002 },
+});
+
+describe('lerRespostaDoJev', () => {
+  it('assunto presente e setor confiante: o slug', () => {
+    expect(lerRespostaDoJev(corpoDoJev(0.9, 'comercial', 0.69), SETORES)).toMatchObject({
+      tipo: 'setor',
+      slug: 'comercial',
+    });
+  });
+
+  it('sem assunto: fila geral, mesmo com um setor "confiante" (o choice sempre escolhe algum)', () => {
+    // Medido: "quero falar com um atendente" sozinho → suporte-tecnico 0.58, assunto 0.03.
+    expect(lerRespostaDoJev(corpoDoJev(ASSUNTO_MINIMO_NO_JEV - 0.01, 'suporte-tecnico', 0.99), SETORES)).toEqual({
+      tipo: 'sem_escolha',
+    });
+  });
+
+  it('setor abaixo do piso: fila geral', () => {
+    expect(
+      lerRespostaDoJev(corpoDoJev(0.9, 'comercial', CONFIANCA_MINIMA_DO_SETOR_NO_JEV - 0.01), SETORES),
+    ).toEqual({ tipo: 'sem_escolha' });
+  });
+
+  it('slug fora da lista ou corpo fora do formato: contrato quebrado (cai para a reserva)', () => {
+    expect(lerRespostaDoJev(corpoDoJev(0.9, 'financeiro', 0.99), SETORES)).toEqual({ tipo: 'contrato' });
+    expect(lerRespostaDoJev({ answers: {} }, SETORES)).toEqual({ tipo: 'contrato' });
+    expect(lerRespostaDoJev(null, SETORES)).toEqual({ tipo: 'contrato' });
+  });
+});
+
+describe('escolherSetorDoPedido · pelo Jev', () => {
+  const comChave = { chaveDoJev: async () => 'sk-or-chave-de-teste-123456' };
+  const jevQueResponde = (corpo: unknown) =>
+    vi.fn(async () => ({ ok: true as const, corpo, status: 200, latenciaMs: 260 }));
+  const jevQueFalha = (tipo: 'temporaria' | 'conta' | 'contrato', status: number | null) =>
+    vi.fn(async () => ({ ok: false as const, falha: { tipo, status, detalhe: 'detalhe redigido' }, latenciaMs: 5000 }));
+
+  it('com chave, quem escolhe é o Jev — e o modelo do agente nem é chamado', async () => {
+    const { pool } = poolFalso();
+    const runModelCall = modeloQueResponde('{"setor":"suporte-tecnico","confidence":0.99}');
+    const consultarJev = jevQueResponde(corpoDoJev(0.9, 'comercial', 0.69));
+    const r = await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      runModelCall: runModelCall as never,
+      consultarJev: consultarJev as never,
+      ...comChave,
+    });
+    expect(r).toEqual({ id: TIME_COMERCIAL, name: 'Comercial' });
+    expect(consultarJev).toHaveBeenCalledTimes(1);
+    expect(runModelCall, 'pagou duas classificações pela mesma conversa').not.toHaveBeenCalled();
+  });
+
+  it('o Jev recebe a conversa como estado e as duas perguntas, no modelo fixado', async () => {
+    const { pool } = poolFalso();
+    const consultarJev = jevQueResponde(corpoDoJev(0.9, 'comercial', 0.69));
+    await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      consultarJev: consultarJev as never,
+      ...comChave,
+    });
+    const e = (consultarJev.mock.calls[0] as unknown[])[0] as {
+      apiKey: string;
+      modelo: string;
+      estado: { conversa: Array<{ quem: string; texto: string }> };
+      perguntas: Record<string, unknown>;
+    };
+    expect(e.modelo).toBe('typesafe/jev-1.13');
+    expect(e.estado.conversa[0]).toEqual({ quem: 'cliente', texto: FALAS[0]!.body });
+    expect(Object.keys(e.perguntas)).toEqual(['tem_assunto', 'setor']);
+  });
+
+  it('Jev diz que não há assunto: fila geral, SEM consultar a reserva', async () => {
+    // A resposta do Jev é resposta. Reserva é para quando ele não respondeu.
+    const { pool } = poolFalso();
+    const runModelCall = modeloQueResponde('{"setor":"comercial","confidence":0.99}');
+    const r = await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      runModelCall: runModelCall as never,
+      consultarJev: jevQueResponde(corpoDoJev(0.03, 'suporte-tecnico', 0.58)) as never,
+      ...comChave,
+    });
+    expect(r).toBeNull();
+    expect(runModelCall).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['temporaria', 503],
+    ['conta', 402],
+    ['contrato', 400],
+  ] as const)('Jev falhou (%s): a reserva é o modelo do agente', async (tipo, status) => {
+    const { pool } = poolFalso();
+    const runModelCall = modeloQueResponde('{"setor":"comercial","confidence":0.92}');
+    const r = await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      runModelCall: runModelCall as never,
+      consultarJev: jevQueFalha(tipo, status) as never,
+      ...comChave,
+    });
+    expect(r).toEqual({ id: TIME_COMERCIAL, name: 'Comercial' });
+    expect(runModelCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('Jev devolveu um setor que não existe: contrato quebrado, vale a reserva', async () => {
+    const { pool } = poolFalso();
+    const runModelCall = modeloQueResponde('{"setor":"comercial","confidence":0.92}');
+    const r = await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      runModelCall: runModelCall as never,
+      consultarJev: jevQueResponde(corpoDoJev(0.9, 'financeiro', 0.99)) as never,
+      ...comChave,
+    });
+    expect(r).toEqual({ id: TIME_COMERCIAL, name: 'Comercial' });
+  });
+
+  it('sem chave da OpenRouter: o Jev nem é chamado, e a reserva escolhe', async () => {
+    const { pool } = poolFalso();
+    const consultarJev = jevQueResponde(corpoDoJev(0.9, 'suporte-tecnico', 0.99));
+    const r = await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      runModelCall: modeloQueResponde('{"setor":"comercial","confidence":0.92}') as never,
+      consultarJev: consultarJev as never,
+      chaveDoJev: async () => null,
+    });
+    expect(r).toEqual({ id: TIME_COMERCIAL, name: 'Comercial' });
+    expect(consultarJev).not.toHaveBeenCalled();
+  });
+
+  it('a chamada do Jev vira linha em llm_calls — sem chave e sem texto do cliente', async () => {
+    const { pool, query } = poolFalso();
+    await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      consultarJev: jevQueResponde(corpoDoJev(0.9, 'comercial', 0.69)) as never,
+      ...comChave,
+    });
+    const insert = query.mock.calls.find(([sql]) => /insert into llm_calls/i.test(String(sql))) as
+      | [string, unknown[]]
+      | undefined;
+    expect(insert, 'a chamada do Jev não apareceria em IA › Execuções').toBeDefined();
+    const params = insert![1];
+    expect(params).toContain(ORG);
+    expect(params).toContain('handoff_team_classify');
+    expect(params).toContain('openrouter');
+    expect(params).toContain('typesafe/jev-1.13-20260917');
+    const tudo = JSON.stringify(params);
+    expect(tudo).not.toContain('sk-or-chave');
+    expect(tudo).not.toContain('Vim do site');
+  });
+
+  it('a falha do Jev também vira linha, como erro', async () => {
+    const { pool, query } = poolFalso();
+    await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      runModelCall: modeloQueResponde('{"setor":"none","confidence":0.9}') as never,
+      consultarJev: jevQueFalha('temporaria', 503) as never,
+      ...comChave,
+    });
+    const insert = query.mock.calls.find(([sql]) => /insert into llm_calls/i.test(String(sql))) as
+      | [string, unknown[]]
+      | undefined;
+    expect(insert?.[1]).toContain('erro');
+    expect(insert?.[1]).toContain(503);
+  });
+
+  it('registro que falha não derruba a escolha', async () => {
+    const { pool, query } = poolFalso();
+    const original = query.getMockImplementation()!;
+    query.mockImplementation(async (sql: string) => {
+      if (/insert into llm_calls/i.test(sql)) throw new Error('tabela travada');
+      return original(sql);
+    });
+    const r = await escolherSetorDoPedido(pool, {} as never, entrada(), {
+      log: logFalso() as never,
+      consultarJev: jevQueResponde(corpoDoJev(0.9, 'comercial', 0.69)) as never,
+      ...comChave,
+    });
+    expect(r).toEqual({ id: TIME_COMERCIAL, name: 'Comercial' });
+  });
+});
+
+/**
+ * O SÍTIO DE CHAMADA, lido do fonte. Os casos acima injetam `model` e
+ * `llmOverride` à mão, e o invariante de banco não tem agente publicado — então
+ * apagar o `...argsAux(undefined)` do desvio deixava tudo verde, e a reserva
+ * passaria a sair com o modelo PADRÃO da organização no provider que ela tiver:
+ * a forma exata do defeito que `aux-model-args.ts` existe para impedir.
+ */
+describe('o desvio de pedido de humano, em inbound-turn.ts', () => {
+  const fonte = readFileSync(path.join(__dirname, 'inbound-turn.ts'), 'utf8');
+  const inicio = fonte.indexOf('await escolherSetorDoPedido(');
+  const chamada = fonte.slice(inicio, fonte.indexOf('const aviso = await avisarLeadDaEscalacao', inicio));
+
+  it('chama o classificador uma vez só, e ANTES do aviso ao lead', () => {
+    expect(inicio, 'o desvio não pergunta o setor').toBeGreaterThan(-1);
+    expect(fonte.split('await escolherSetorDoPedido(').length - 1).toBe(1);
+    expect(chamada.length, 'o aviso ao lead veio antes da escolha do setor').toBeGreaterThan(0);
+    expect(chamada.length).toBeLessThan(1500);
+  });
+
+  it('empresta à reserva o modelo E o provider do agente publicado', () => {
+    expect(chamada).toContain('...argsAux(undefined)');
   });
 });

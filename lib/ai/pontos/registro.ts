@@ -311,7 +311,7 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     id: "handoff_team_classify",
     rotulo: "Escolher o setor de quem pede um atendente",
     oQueFaz:
-      "Quando o cliente escreve que quer falar com um atendente, a conversa é passada para uma pessoa na hora, sem esperar a IA. Este ponto lê a conversa e o \"quando usar\" de cada time para decidir em qual fila ela entra. Na dúvida, não escolhe: a conversa vai para a fila geral.",
+      "Quando o cliente escreve que quer falar com um atendente, a conversa é passada para uma pessoa sem esperar a resposta da IA. Este ponto lê a conversa e o \"quando usar\" de cada time para decidir em qual fila ela entra. Na dúvida, não escolhe: a conversa vai para a fila geral. Com uma chave da OpenRouter usa o Jev, mais barato e mais rápido; sem ela, ou se o Jev não responder, usa o modelo escolhido aqui.",
     papel: "entender",
     exige: {},
     emissor: "lib/agent-engine/agent/setor-do-pedido.ts",

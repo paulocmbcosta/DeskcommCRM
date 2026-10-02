@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import pg from "pg";
 
 import type * as InboundTurn from "@/lib/agent-engine/agent/inbound-turn";
@@ -24,16 +24,19 @@ import type * as ObsLogger from "@/lib/agent-engine/obs/logger";
  * ## Por que banco de verdade
  *
  * O unit de `human-handoff.test.ts` prova a ordem das queries num pool falso. Ele
- * não prova que o DESVIO injeta o resolvedor, nem que o que chega ao modelo é a
- * conversa real, nem que `conversations.team_id` fica gravado. E a ordem que
- * importa — o aviso sai e a trava arma ANTES de qualquer modelo — só se mede
- * olhando o banco de dentro do envio e de dentro da chamada de modelo.
+ * não prova que o DESVIO pergunta o setor, nem que o que chega ao classificador é
+ * a conversa real, nem que `conversations.team_id` fica gravado.
+ *
+ * E a ordem que importa só se mede olhando o banco de dentro da chamada: o setor
+ * é escolhido ANTES de a passagem começar. Uma chamada de IA entre calar a
+ * conversa e gravar o time deixaria, por segundos, uma conversa fora da IA e sem
+ * time — e o cron de rodízio (uma vez por minuto) a entregaria a qualquer setor.
  *
  * ## Harness
  *
- * O mesmo de `handoff-avisa-o-lead.test.ts`. O modelo de mentira aqui é ATOR em
- * metade dos casos (responde o setor) e continua CONTROLE na outra (organização
- * sem times não pode chamá-lo).
+ * O mesmo de `handoff-avisa-o-lead.test.ts`. O modelo de mentira é a RESERVA (a
+ * organização do teste não tem chave da OpenRouter); os casos do Jev ligam a
+ * chave da instalação e trocam o `fetch` por um que responde como a System One.
  */
 
 const container = process.env.TEST_DB_CONTAINER;
@@ -73,9 +76,9 @@ let m: Modules;
 
 interface ChamadaDeModelo {
   prompt: string;
-  /** `contacts.force_human` NO INSTANTE da chamada — a prova de que a trava veio antes. */
+  /** `contacts.force_human` NO INSTANTE da chamada — a passagem ainda não pode ter começado. */
   forceHumanNaChamada: boolean;
-  /** Quantos envios ao lead já tinham saído — a prova de que o aviso veio antes. */
+  /** Quantos envios ao lead já tinham saído — o setor vem antes do aviso. */
   enviosAntes: number;
 }
 
@@ -83,6 +86,17 @@ let enviados: Array<{ body: string; modelosAntes: number }> = [];
 let chamadasDeModelo: ChamadaDeModelo[] = [];
 /** O que o modelo de mentira responde. `null` = lança, como um provedor fora do ar. */
 let respostaDoModelo: string | null = null;
+
+/** As chamadas à System One (o Jev), com a trava lida no instante de cada uma. */
+let chamadasDoJev: Array<{ corpo: string; forceHumanNaChamada: boolean }> = [];
+/** O que o Jev de mentira responde: um corpo, ou um status HTTP de erro. */
+let respostaDoJev: { corpo: unknown } | { status: number } = { status: 503 };
+
+const corpoDoJev = (temAssunto: number, choice: string, confidence: number) => ({
+  model: "typesafe/jev-1.13-teste",
+  answers: { tem_assunto: { noul: temAssunto }, setor: { choice, confidence } },
+  usage: { input_tokens: 300, cost: 0.00002 },
+});
 
 const USO = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -110,10 +124,15 @@ function modeloDeMentira() {
   };
 }
 
-function montaHandler() {
+function montaHandler(comJev: boolean) {
   return m.createInboundTurnHandler({
     crmCfg: { supabase: {} as never },
-    llmCfg: { anthropicApiKey: "fake" } as never,
+    // A chave da INSTALAÇÃO (`OPENROUTER_API_KEY`) é o último degrau da escada do
+    // Jev; a organização do teste não cadastrou nenhuma.
+    llmCfg: {
+      anthropicApiKey: "fake",
+      ...(comJev ? { openrouterApiKey: "sk-or-chave-de-teste-0123456789" } : {}),
+    } as never,
     knobs: {
       historyLimit: 10,
       maxContextTokens: 1000,
@@ -154,7 +173,7 @@ function montaHandler() {
 }
 
 /** Grava um inbound e roda UM turno completo por cima dele. */
-async function rodaTurnoCom(texto: string): Promise<void> {
+async function rodaTurnoCom(texto: string, opcoes: { comJev?: boolean } = {}): Promise<void> {
   const msgId = crypto.randomUUID();
   await pool.query(
     `insert into messages (id, organization_id, conversation_id, channel_session_id, contact_id,
@@ -178,7 +197,7 @@ async function rodaTurnoCom(texto: string): Promise<void> {
   const [claimed] = await m.queue.claimJobs(pool, { workerId: "setor", maxConcurrency: 1 });
   expect(claimed?.id).toBe(job.id);
   try {
-    await montaHandler()(claimed!, pool, { workerId: "setor" });
+    await montaHandler(opcoes.comJev === true)(claimed!, pool, { workerId: "setor" });
     await m.queue.completeJob(pool, claimed!.id, "setor");
   } catch (err) {
     await m.queue.failJob(pool, claimed!.id, "setor", err);
@@ -239,10 +258,35 @@ beforeAll(async () => {
   );
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 beforeEach(async () => {
   enviados = [];
   chamadasDeModelo = [];
+  chamadasDoJev = [];
   respostaDoModelo = '{"setor":"comercial","confidence":0.93}';
+  respostaDoJev = { status: 503 };
+  // O Jev fala HTTP direto (não passa pelo registry de modelos): quem o
+  // substitui é o `fetch`. Qualquer outra URL segue para o `fetch` de verdade.
+  const fetchReal = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (!url.endsWith("/systemone")) return fetchReal(input as never, init);
+    const { rows } = await pool.query<{ force_human: boolean }>(
+      "select force_human from contacts where id = $1",
+      [CONTACT],
+    );
+    chamadasDoJev.push({
+      corpo: String(init?.body ?? ""),
+      forceHumanNaChamada: rows[0]?.force_human === true,
+    });
+    return "status" in respostaDoJev
+      ? new Response('{"error":{"message":"fora do ar"}}', { status: respostaDoJev.status })
+      : new Response(JSON.stringify(respostaDoJev.corpo), { status: 200 });
+  });
+  await pool.query("delete from llm_calls where organization_id = $1", [ORG]);
   await pool.query("delete from messages where organization_id = $1", [ORG]);
   await pool.query("delete from send_ledger where organization_id = $1", [ORG]);
   await pool.query("delete from outbound_copies where organization_id = $1", [ORG]);
@@ -284,27 +328,26 @@ describe("pedido de atendente numa organização COM times", () => {
     expect(prompt).toContain("Internet sem sinal");
   });
 
-  it("o aviso ao lead saiu ANTES de qualquer modelo ser chamado", async () => {
-    // A escalação não pode esperar um provedor: quem pede um atendente ouve na
-    // hora, e o setor se decide depois.
+  it("o setor é escolhido ANTES de a passagem começar", async () => {
+    // A asserção que impede alguém de mover a escolha para DENTRO da passagem.
+    // Com a IA já calada e o time ainda por gravar, o cron de rodízio — que roda
+    // uma vez por minuto e só espera a IA sair — distribuiria a conversa para a
+    // organização inteira: o defeito de origem, por corrida.
     await rodaTurnoCom(PEDIDO_COMERCIAL);
-    expect(enviados).toHaveLength(1);
-    expect(enviados[0]!.modelosAntes, "o aviso esperou o classificador").toBe(0);
-    expect(chamadasDeModelo[0]!.enviosAntes).toBe(1);
-  });
-
-  it("o modelo só é chamado com a IA já fora da conversa", async () => {
-    await rodaTurnoCom(PEDIDO_COMERCIAL);
+    expect(chamadasDeModelo).toHaveLength(1);
     expect(
       chamadasDeModelo[0]!.forceHumanNaChamada,
-      "o setor foi escolhido antes da trava — um modelo lento seguraria a passagem",
-    ).toBe(true);
+      "a IA foi chamada com a conversa já fora da IA e ainda sem time",
+    ).toBe(false);
+    expect(chamadasDeModelo[0]!.enviosAntes, "o aviso saiu antes de o setor ser escolhido").toBe(0);
+    expect(enviados).toHaveLength(1);
+    expect(enviados[0]!.modelosAntes).toBe(1);
   });
 
-  it("o rodízio é pedido DEPOIS de o time estar gravado", async () => {
-    // O pedido que nasce com a conversa fica pendente (aqui não há cron). O que
-    // importa é que, depois da passagem, existe um pedido aberto e a conversa
-    // que ele aponta JÁ tem time: o cron que o atender filtra pelo setor.
+  it("depois da passagem há um pedido de rodízio aberto, e a conversa já tem time", async () => {
+    // A conversa nasce `ai_handling`, então nenhum pedido de rodízio existe antes:
+    // o que está aberto aqui é o da própria passagem, e o cron que o atender lê
+    // o `team_id` e procura só dentro do setor.
     await rodaTurnoCom(PEDIDO_COMERCIAL);
     const { rows } = await pool.query<{ status: string }>(
       `select status from event_log
@@ -356,6 +399,76 @@ describe("pedido de atendente numa organização COM times", () => {
   });
 });
 
+describe("com chave da OpenRouter, quem escolhe é o Jev", () => {
+  beforeEach(cadastraTimes);
+
+  it("o Jev escolhe o setor, e o modelo de reserva nem é chamado", async () => {
+    respostaDoJev = { corpo: corpoDoJev(0.9, "comercial", 0.69) };
+    await rodaTurnoCom(PEDIDO_COMERCIAL, { comJev: true });
+    expect((await conversa()).team_id).toBe(TIME_COMERCIAL);
+    expect(chamadasDoJev).toHaveLength(1);
+    expect(chamadasDeModelo, "pagou duas classificações pela mesma conversa").toHaveLength(0);
+  });
+
+  it("o Jev recebe a conversa real e os setores, ANTES de a passagem começar", async () => {
+    respostaDoJev = { corpo: corpoDoJev(0.9, "comercial", 0.69) };
+    await rodaTurnoCom(PEDIDO_COMERCIAL, { comJev: true });
+    const pedido = JSON.parse(chamadasDoJev[0]!.corpo) as {
+      model: string;
+      state: { conversa: Array<{ quem: string; texto: string }> };
+      questions: { setor: { criteria: Record<string, string> } };
+    };
+    expect(pedido.model).toBe("typesafe/jev-1.13");
+    expect(pedido.state.conversa[0]!.texto).toContain("500 MEGA");
+    expect(Object.keys(pedido.questions.setor.criteria).sort()).toEqual(["comercial", "suporte-tecnico"]);
+    expect(chamadasDoJev[0]!.forceHumanNaChamada).toBe(false);
+  });
+
+  it("a chamada do Jev aparece em llm_calls, no ponto certo", async () => {
+    respostaDoJev = { corpo: corpoDoJev(0.9, "comercial", 0.69) };
+    await rodaTurnoCom(PEDIDO_COMERCIAL, { comJev: true });
+    const { rows } = await pool.query<{ provider: string; model: string; status: string; contact_id: string }>(
+      "select provider, model, status, contact_id from llm_calls where organization_id = $1 and purpose = 'handoff_team_classify'",
+      [ORG],
+    );
+    expect(rows).toEqual([
+      { provider: "openrouter", model: "typesafe/jev-1.13-teste", status: "ok", contact_id: CONTACT },
+    ]);
+  });
+
+  it("o Jev diz que não há assunto: fila geral, sem consultar a reserva", async () => {
+    respostaDoJev = { corpo: corpoDoJev(0.03, "suporte-tecnico", 0.58) };
+    await rodaTurnoCom("quero falar com um atendente", { comJev: true });
+    const c = await conversa();
+    expect(c.motivo).toBe("requested_human");
+    expect(c.team_id).toBeNull();
+    expect(chamadasDeModelo).toHaveLength(0);
+  });
+
+  it("o Jev fora do ar: a reserva escolhe, e a falha fica registrada", async () => {
+    respostaDoJev = { status: 503 };
+    await rodaTurnoCom(PEDIDO_COMERCIAL, { comJev: true });
+    expect((await conversa()).team_id, "a reserva não assumiu quando o Jev caiu").toBe(TIME_COMERCIAL);
+    expect(chamadasDeModelo).toHaveLength(1);
+    const { rows } = await pool.query<{ provider: string; status: string }>(
+      "select provider, status from llm_calls where organization_id = $1 and purpose = 'handoff_team_classify' order by created_at",
+      [ORG],
+    );
+    expect(rows.map((r) => `${r.provider}:${r.status}`)).toContain("openrouter:erro");
+  });
+
+  it("o Jev E a reserva fora do ar: a passagem acontece inteira, na fila geral", async () => {
+    respostaDoJev = { status: 503 };
+    respostaDoModelo = null;
+    await rodaTurnoCom(PEDIDO_COMERCIAL, { comJev: true });
+    const c = await conversa();
+    expect(c.status).toBe("pending");
+    expect(c.silencio).toBe("infinity");
+    expect(c.team_id).toBeNull();
+    expect(enviados).toHaveLength(1);
+  });
+});
+
 describe("pedido de atendente numa organização SEM times", () => {
   it("nenhum modelo é chamado: o desvio segue sem gastar token", async () => {
     await rodaTurnoCom(PEDIDO_COMERCIAL);
@@ -363,6 +476,12 @@ describe("pedido de atendente numa organização SEM times", () => {
     expect(c.motivo).toBe("requested_human");
     expect(c.team_id).toBeNull();
     expect(chamadasDeModelo, "classificou setor onde não há setor para escolher").toHaveLength(0);
+  });
+
+  it("nem com chave da OpenRouter: o Jev também não é chamado", async () => {
+    await rodaTurnoCom(PEDIDO_COMERCIAL, { comJev: true });
+    expect(chamadasDoJev).toHaveLength(0);
+    expect((await conversa()).motivo).toBe("requested_human");
   });
 });
 

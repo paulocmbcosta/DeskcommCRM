@@ -16,68 +16,78 @@ contém "quero falar com um atendente": todo lead de lá cai no desvio.
 
 ## O que muda
 
-O desvio continua avisando o cliente e silenciando a IA exatamente como hoje, sem modelo. **Depois**
-da trava e **antes** de pedir o rodízio, a passagem pergunta a um classificador auxiliar a qual setor
-a conversa pertence e grava `conversations.team_id`.
+Antes de avisar o cliente e de começar a passagem, o desvio pergunta a um classificador a qual setor
+a conversa pertence, e entrega a resposta pronta a `performHumanHandoff`.
 
 ```
-aviso ao lead → force_human + silêncio + crons cancelados → [escolhe o setor] → inbox → atividade
-              → grava team_id → pede o rodízio
+[escolhe o setor] → aviso ao lead → force_human + silêncio + crons cancelados → inbox → atividade
+                  → grava team_id → pede o rodízio
 ```
 
 ### Peças
 
 1. **`lib/agent-engine/agent/setor-do-pedido.ts`** (novo) — `escolherSetorDoPedido`. Lê os times
-   ativos (mesma query da ferramenta de transferência), monta o prompt com `slug: nome — quando usar`
-   e as últimas falas da conversa, chama o modelo auxiliar pelo seam (`runModelCall`, purpose
-   `handoff_team_classify`) e devolve `{ id, name }` ou `null`. Mesmo molde de
-   `intent-classifier.ts`. Nunca lança.
-2. **`performHumanHandoff`** ganha `escolherTime?: () => Promise<{ id; name } | null>`, chamado só
-   quando `teamId` não veio. Falha do resolvedor não derruba a passagem.
-3. **`inbound-turn.ts`** — o desvio de pedido explícito injeta o resolvedor. O desvio de suspeita de
-   opt-out **não**: quem confirma bloqueio não é um setor.
-4. **`lib/ai/pontos/registro.ts`** — ponto novo `handoff_team_classify`, papel "entender",
-   configurável no painel de provedores.
+   ativos (a mesma query da ferramenta de transferência) e as últimas 12 falas da conversa (500
+   caracteres cada, sem a moldura que o motor põe em volta de áudio e imagem) e devolve
+   `{ id, name }` ou `null`. Nunca lança.
+   - **Com chave da OpenRouter** (da organização, senão a da instalação): o Jev, pela System One,
+     com duas perguntas — "há assunto além do pedido?" (noul) e "qual setor?" (choice só com os
+     times).
+   - **Sem chave, ou se o Jev não responder**: um modelo auxiliar pelo seam (`runModelCall`), no
+     molde de `intent-classifier.ts`, com o modelo e o provider do agente publicado.
+   - As duas vias gravam em `llm_calls` com `purpose = handoff_team_classify`.
+2. **`performHumanHandoff`** ganha `timeAutomatico?: { id; name } | null`. Vale quando `teamId` não
+   veio; a origem (`classificador`) vai para o aviso da Central e para a atividade.
+3. **`inbound-turn.ts`** — o desvio de pedido explícito chama o classificador antes do aviso. O
+   desvio de suspeita de opt-out **não**: quem confirma bloqueio não é um setor.
+4. **`lib/ai/pontos/registro.ts`** — ponto novo `handoff_team_classify`, papel "entender"; em
+   `PONTOS_QUE_HERDAM_DO_AGENTE` para a tela de Provedores mostrar o modelo certo da reserva.
 
 ### Quando o setor NÃO é escolhido (fila geral, o comportamento de hoje)
 
-- organização sem time ativo (o modelo nem é chamado — o desvio segue sem gastar token);
-- o modelo responde `none`, um slug que não existe, ou confiança abaixo de 0,6 (o mesmo piso padrão
-  do roteador de intenção);
-- o modelo falha, é recusado por orçamento ou passa de 10 s.
+- organização sem time ativo (nenhuma chamada é feita — o desvio segue sem gastar token);
+- o Jev responde que não há assunto além do pedido (< 0,5), ou o setor fica abaixo de 0,5;
+- a reserva responde `none`, um slug que não existe, ou confiança abaixo de 0,6 (o piso padrão do
+  roteador de intenção);
+- o Jev e a reserva falham, são recusados ou passam do tempo (4 s e 8 s).
 
 Em nenhum desses casos a passagem deixa de acontecer.
 
-### Por que o modelo auxiliar, e não o Jev
+### Por que antes da passagem, e não dentro dela
 
-O Jev é ~5× mais rápido (p50 0,3 s contra 1,5 s na Totus), mas só existe com chave da OpenRouter —
-exigiria um segundo caminho de reserva, como o do sentimento. O modelo auxiliar roda em toda
-instalação, lê os mesmos "quando usar" que a ferramenta de transferência lê (as duas portas decidem
-com o mesmo material), entra em `llm_calls` e no painel de provedores sem código extra. A latência
-não chega ao cliente: ele já foi avisado, e o rodízio roda uma vez por minuto.
+A primeira versão escolhia o setor **depois** de silenciar a IA, para a escalação não esperar um
+provedor. A revisão independente mostrou o custo: entre calar a conversa e gravar o time ela fica
+fora da IA e sem time pelo tempo de uma chamada, e o cron de rodízio — que roda uma vez por minuto e
+só espera a IA sair — a distribui para a organização inteira nessa janela. Era o defeito de origem,
+por corrida, em cerca de 6% das passagens a 3,5 s de espera.
 
-### Por que depois da trava
+Escolhendo antes, a passagem volta a ser um bloco só de escritas no banco, como sempre foi. O preço
+é o aviso ao lead esperar a escolha: ~0,3 s pelo Jev, com teto de 12 s no pior caso (Jev e reserva
+fora do ar).
 
-O aviso e o silêncio são exigência (escalação imediata) e não podem esperar um provedor. Feita depois,
-a escolha do setor só atrasa o pedido de rodízio. Se o worker morrer no meio, a conversa já está
-silenciada e a próxima mensagem do cliente pede o rodízio pelo drain — fila geral, como hoje.
+### Medição (2026-10-02)
 
-### O prompt pede a razão antes do setor
+20 conversas **sintéticas** — 13 casos e mais 7 repetições do texto pronto do site de comparação —
+com os seis times da Totus como a empresa os descreveu. Nenhum dado de cliente. O Jev foi medido na
+VPS de produção, com a chave que já está lá; os outros, nesta máquina.
 
-Medido com modelos reais e 13 conversas sintéticas (nenhum dado de cliente), usando os seis times da
-Totus como a empresa os descreveu. Na primeira versão do prompt o `gpt-5-mini` mandou justamente o
-texto pronto do site de comparação para `none` em 6 de 8 tentativas ("só pediu um atendente").
-Pedir um `porque` curto antes do `setor`, e dizer para usar o que o cliente já preencheu, levou os
-três modelos medidos a 20 de 20 (os 13 casos + 7 repetições do texto pronto), sem nenhum setor
-errado e mantendo `none` nos dois casos em que o cliente só pede atendente:
-
-| modelo | acertos | setor errado | p50 | máximo |
+| quem escolhe | acertos | setor errado | p50 | máximo |
 |---|---|---|---|---|
-| `gpt-5.6-terra` (o que a Totus usa) | 20/20 | 0 | 1,9 s | 6,1 s |
-| `gpt-5-mini` | 20/20 | 0 | 3,4 s | 4,7 s |
-| `claude-haiku-4-5` | 20/20 | 0 | 1,2 s | 1,4 s |
+| Jev, duas perguntas (o que foi para o código) | 20/20 | 0 | 0,26 s | 0,33 s |
+| Jev, uma pergunta com a opção `none` | 12/20 a 16/20 | 0 | 0,27 s | 0,75 s |
+| `gpt-5.6-terra` (reserva; o modelo da Totus) | 20/20 | 0 | 1,9 s | 6,1 s |
+| `gpt-5-mini` (reserva) | 20/20 | 0 | 3,4 s | 4,7 s |
+| `claude-haiku-4-5` (reserva) | 20/20 | 0 | 1,2 s | 1,4 s |
 
-O `porque` não é lido, logado nem gravado: é paráfrase da conversa do cliente.
+Dois achados que mudaram o desenho:
+
+- **O Jev precisa de duas perguntas.** Com uma só, o texto pronto caía em `none` 8 de 8: ele lê ao
+  pé da letra, a mensagem diz mesmo "quero falar com um atendente", e o `none` roubava a
+  probabilidade do Comercial. "Há assunto?" separa sozinho quem não disse nada (0,03 e 0,04 contra
+  0,80 ou mais).
+- **A reserva precisa do porquê antes do setor.** Sem o campo `porque` no JSON, o `gpt-5-mini`
+  respondia `none` para o mesmo texto em 6 de 8. O `porque` não é lido, logado nem gravado: é
+  paráfrase da conversa do cliente.
 
 ## Registro e retorno
 
@@ -91,13 +101,17 @@ O `porque` não é lido, logado nem gravado: é paráfrase da conversa do client
 
 ## Testes
 
-- Unit do módulo novo (prompt, leitura do veredito, falha, tempo, sem times).
-- Unit de `performHumanHandoff`: o resolvedor roda depois de `force_human` e antes do rodízio; falha
-  não derruba; `teamId` explícito não o chama.
-- Invariante com Postgres: turno inteiro com times cadastrados grava `team_id`; aviso sai antes de
-  qualquer chamada de modelo; modelo que falha deixa a passagem íntegra e sem time.
+- Unit do módulo novo: as duas vias, as perguntas, a leitura das respostas, falha, tempo, sem times,
+  registro em `llm_calls`, nada do cliente em log.
+- Unit de `performHumanHandoff`: o time do classificador é gravado antes do rodízio; time explícito
+  vence; a Central e a atividade contam a origem.
+- Invariante com Postgres: o turno inteiro com times cadastrados grava `team_id`; a escolha acontece
+  antes de a passagem começar; Jev fora do ar cai para a reserva; os dois fora do ar deixam a
+  passagem íntegra e sem time.
 
-## Fora de escopo
+## Fora de escopo, e o que fica como está
 
-Conversa que chega à fila sem passar por passagem nenhuma (IA desligada no canal) continua sem time.
-O desvio de suspeita de opt-out continua na fila geral.
+- Conversa que chega à fila sem passar por passagem nenhuma (IA desligada no canal) continua sem time.
+- O desvio de suspeita de opt-out e a passagem por teto de gasto continuam na fila geral.
+- Conversa devolvida ao automático mantém o `team_id` anterior: se o classificador não escolher, ela
+  volta para a fila daquele time, não para a geral. Já era assim.
