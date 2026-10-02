@@ -8,6 +8,23 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.52.2] — 2026-10-02
+
+### Corrigido
+
+- **Telefone — o número que já atende pelo WhatsApp pode ser conectado como telefone** Quem tentava conectar em Conexões › Telefone um número que a empresa já usava no WhatsApp
+  recebia "Esse número já está conectado nesta organização", mesmo sem nunca ter ligado esse
+  número na telefonia. É um caso comum: o fixo da empresa atende pelo WhatsApp oficial e também
+  é a linha de voz na operadora.
+
+  O sistema tratava o número como repetido porque a regra de "um número por organização" valia
+  para todos os canais juntos. Agora ela vale por meio: o mesmo número pode estar no WhatsApp e
+  no telefone ao mesmo tempo. Continua recusado o que é repetição de verdade — o mesmo número em
+  dois canais de WhatsApp, ou em dois cadastros de telefone.
+
+  Nada a fazer na atualização. Quem recebeu a recusa pode cadastrar o número de novo depois de
+  atualizar.
+
 ## [1.52.1] — 2026-10-01
 
 ### Alterado
@@ -5879,7 +5896,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.2...HEAD
+[1.52.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.1...v1.52.2
 [1.52.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.0...v1.52.1
 [1.52.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.2...v1.52.0
 [1.51.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.1...v1.51.2
