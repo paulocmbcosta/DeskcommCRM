@@ -30324,6 +30324,58 @@ comment on column public.voice_calls.peer_user_id is
 
 notify pgrst, 'reload schema';
 
+-- ---- o número é único por MEIO: mensagem e telefone não disputam (migration 0292) ----
+-- Racional completo no cabeçalho de
+-- supabase/migrations/20261002204500_0292_numero_unico_por_meio.sql.
+--
+-- A trava do snapshot (`channel_sessions_phone_per_org_unique`, índice parcial
+-- desde a 0107) não olha o provider, e a telefonia (0286) a herdou: cadastrar em
+-- Conexões › Telefone o número FIXO que já atende pelo WhatsApp oficial era
+-- recusado como repetido (`numero_ja_existe`). O mesmo número em dois MEIOS não é
+-- repetição — a trava vira duas: uma entre os canais que não são telefone (o
+-- MESMO NOME, que o invariante da 0087 cobra dentro do erro) e uma entre os
+-- troncos de telefone.
+--
+-- O bloco da 0107, lá em cima, segue criando a definição antiga `if not exists`:
+-- num banco novo ela nasce e é trocada aqui, na mesma aplicação e com a tabela
+-- vazia; num banco que já passou por aqui o nome existe e aquele `create` não
+-- faz nada. Derrubar e recriar acontecem NO MESMO comando (uma transação: a
+-- tabela nunca fica sem a trava) e só enquanto a definição em vigor é a antiga —
+-- o `update.sh` não reconstrói o índice a cada versão.
+--
+-- Auto-curativo: a trava antiga é ESTRITAMENTE mais forte que as duas novas
+-- (todos os ativos vs. dois subconjuntos disjuntos deles) — nenhum banco que a
+-- satisfazia pode violar qualquer uma, então não há dado a deduplicar antes.
+do $$
+begin
+  if exists (
+    select 1
+      from pg_index i
+      join pg_class c on c.oid = i.indexrelid
+     where c.relname = 'channel_sessions_phone_per_org_unique'
+       and c.relnamespace = 'public'::regnamespace
+       and pg_get_indexdef(i.indexrelid) not like '%sip_trunk%'
+  ) then
+    drop index public.channel_sessions_phone_per_org_unique;
+    create unique index channel_sessions_phone_per_org_unique
+      on public.channel_sessions (organization_id, phone_number)
+      where archived_at is null and provider <> 'sip_trunk';
+  end if;
+end $$;
+
+create unique index if not exists channel_sessions_phone_per_org_unique
+  on public.channel_sessions (organization_id, phone_number)
+  where archived_at is null and provider <> 'sip_trunk';
+
+create unique index if not exists channel_sessions_sip_phone_per_org_unique
+  on public.channel_sessions (organization_id, phone_number)
+  where archived_at is null and provider = 'sip_trunk';
+
+comment on index public.channel_sessions_phone_per_org_unique is
+  'Um número vive em UM canal ativo que não é telefone (migration 0292). O tronco SIP tem a trava dele: o mesmo número pode atender pelo WhatsApp e ser linha de voz.';
+comment on index public.channel_sessions_sip_phone_per_org_unique is
+  'Um número vive em UM tronco de telefone ativo por organização (migration 0292). Par da channel_sessions_phone_per_org_unique, que cobre os demais canais.';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

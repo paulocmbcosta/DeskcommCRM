@@ -270,8 +270,12 @@ Navegador do atendente (JsSIP) ────────────────�
   (padrão 5060), `sip_transport` (`udp` | `tcp`), `sip_username`,
   `sip_password_encrypted` (pgcrypto, via `fn_encrypt_oauth`, como o token da Meta) e
   `sip_team_id` (time que recebe as ligações). `provider_ref_check`: `sip_trunk` exige
-  servidor e usuário. O número exibido é o `phone_number` de sempre, o que dá unicidade por
-  organização. E `(lower(sip_server), sip_username)` é único entre os ativos da instalação
+  servidor e usuário. O número exibido é o `phone_number` de sempre, único por organização
+  **entre os troncos ativos** (`channel_sessions_sip_phone_per_org_unique`, migration 0292).
+  A trava é por MEIO: o mesmo número pode ser telefone e canal de mensagem ao mesmo tempo —
+  o fixo da empresa que atende pelo WhatsApp oficial e é a linha de voz na operadora. Até a
+  0292 o tronco dividia a trava dos canais de mensagem, e a tela recusava esse caso como
+  número repetido. E `(lower(sip_server), sip_username)` é único entre os ativos da instalação
   inteira: duas linhas registrando a mesma conta disputariam as ligações recebidas.
 - `voice_calls`: ganha `provider` (`wacalls` | `sip_trunk`, padrão `wacalls`),
   `sip_call_ref` (id da ligação no Asterisk), `conversation_id`, `team_id` e

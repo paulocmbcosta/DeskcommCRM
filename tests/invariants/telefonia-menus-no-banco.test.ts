@@ -931,19 +931,38 @@ describe("o criarNumero de verdade e o número repetido (Postgres real)", () => 
          on conflict (name) do nothing;`);
   });
 
-  it("a unicidade de hoje é o índice PARCIAL da 0107 (não deferrable): o repetido é recusado no INSERT — numero_ja_existe, e nada gravado", async () => {
-    // Mede a régua, em vez de supor: a constraint DEFERRABLE do snapshot virou índice na 0107.
+  it("a unicidade de hoje é o índice PARCIAL da telefonia (0292, não deferrable): o repetido é recusado no INSERT — numero_ja_existe, e nada gravado", async () => {
+    // Mede a régua, em vez de supor: a constraint DEFERRABLE do snapshot virou índice
+    // na 0107, e a 0292 deu ao telefone a trava dele (o número é único por MEIO).
     const { rows: regua } = await pool.query<{ constraint: boolean; indice: string | null }>(
-      `select exists (select 1 from pg_constraint where conname = 'channel_sessions_phone_per_org_unique') as constraint,
+      `select exists (select 1 from pg_constraint where conname like 'channel_sessions%phone_per_org_unique') as constraint,
               (select pg_get_indexdef(i.indexrelid) from pg_index i
                  join pg_class c on c.oid = i.indexrelid
-                where c.relname = 'channel_sessions_phone_per_org_unique') as indice`,
+                where c.relname = 'channel_sessions_sip_phone_per_org_unique') as indice`,
     );
     expect(regua[0]!.constraint).toBe(false);
-    expect(regua[0]!.indice).toMatch(/UNIQUE INDEX .*\(organization_id, phone_number\) WHERE \(archived_at IS NULL\)/);
+    expect(regua[0]!.indice).toMatch(
+      /UNIQUE INDEX .*\(organization_id, phone_number\) WHERE \(\(archived_at IS NULL\) AND \(provider = 'sip_trunk'::text\)\)/,
+    );
 
     expect(await criarNumero(pool, ORG_A, novoNumeroA())).toEqual({ ok: false, motivo: "numero_ja_existe" });
     expect(await contarNumeros("+556130008801")).toBe(1);
+  });
+
+  it("o número que a organização já usa no WhatsApp oficial entra como telefone — não é `numero_ja_existe`", async () => {
+    // O relato de 2026-10-02: o fixo da empresa atende pelo WhatsApp oficial e é a
+    // linha de voz na operadora. São dois MEIOS do mesmo número, e não repetição.
+    sql(`insert into public.channel_sessions
+           (organization_id, provider, webhook_secret_encrypted, status, display_name, phone_number, meta_phone_number_id)
+         values ('${ORG_A}', 'meta_cloud', '\\x00', 'WORKING', 'Oficial', '+556140637232', 'menus-no-banco-oficial');`);
+    try {
+      const r = await criarNumero(pool, ORG_A, novoNumeroA({ nome: "Fixo", numero: "(61) 4063-7232" }));
+      expect(r).toMatchObject({ ok: true });
+      expect(await contarNumeros("+556140637232")).toBe(2);
+      expect((await numerosDaOrg(pool, ORG_A)).filter((n) => n.numero === "+556140637232")).toHaveLength(1);
+    } finally {
+      await pool.query("delete from channel_sessions where phone_number = $1 and organization_id = $2", ["+556140637232", ORG_A]);
+    }
   });
 
   it("recusa que só aparece no COMMIT (unicidade DEFERRABLE) também volta traduzida — não um 500", async () => {
