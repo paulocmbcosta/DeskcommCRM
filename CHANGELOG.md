@@ -8,6 +8,21 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.52.6] — 2026-10-05
+
+### Corrigido
+
+- **Chamar de novo um cliente abre um atendimento novo, com protocolo próprio** Quem já tinha sido atendido e teve o atendimento encerrado não podia ser chamado
+  de novo: o ícone da lista de contatos levava para a conversa antiga, e de lá só
+  dava para "Reabrir" ou mandar um modelo — os dois dentro do atendimento
+  encerrado, com o protocolo de dias atrás.
+
+  Agora, com o atendimento encerrado, a lista de contatos, a ficha do contato, a
+  ficha do negócio e a própria conversa no Inbox oferecem **Chamar no WhatsApp**:
+  nasce um atendimento novo, com protocolo próprio, no time escolhido e em nome de
+  quem chamou. O anterior continua no histórico. "Reabrir" segue existindo para
+  continuar o mesmo atendimento.
+
 ## [1.52.5] — 2026-10-05
 
 ### Corrigido
@@ -5958,7 +5973,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.5...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.6...HEAD
+[1.52.6]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.5...v1.52.6
 [1.52.5]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.4...v1.52.5
 [1.52.4]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.3...v1.52.4
 [1.52.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.2...v1.52.3
