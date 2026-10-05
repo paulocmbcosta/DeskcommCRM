@@ -282,6 +282,10 @@ step "Baixando a versão nova do app e reiniciando"
 # estado que a execução ANTERIOR deixou, e o dono nunca soube: o `update.sh`
 # antigo grava só `APP_IMAGE`, e o worker fica seguindo um canal móvel.
 PIN_FALTANDO_ANTES="$(pin_incompleto .env)"
+# Idem, e pelo mesmo motivo: o `dc up -d` logo abaixo recria o contêiner, e a
+# versão que rodava até aqui deixa de poder ser lida. É ela a reserva que a
+# limpeza do bloco 8 guarda no disco.
+VERSAO_QUE_RODAVA="$(versao_no_ar)" || VERSAO_QUE_RODAVA=""
 
 VERSAO_ALVO="${TARGET_TAG#v}"
 export APP_IMAGE="${IMG_APP}:${VERSAO_ALVO}"
@@ -423,3 +427,17 @@ fi
 step "Conferindo as automações"
 ensure_encryption_key .env
 setup_event_log_drain_cron
+
+# ── 8. Disco: as imagens das versões que ficaram para trás ───────────────────
+# Por último, e só neste ramo: o `else` do bloco 6 já saiu com 1. Até o app
+# novo responder saudável, a imagem que rodava é por onde o `agent.sh` volta —
+# apagar antes disso seria tirar a rede de proteção no único momento em que ela
+# é usada. A regra (o que fica, o que nunca é tocado) está em
+# `apagar_imagens_antigas`, em _common.sh.
+#
+# O `|| true` é a segunda tranca: a função já não falha (medido chamando-a
+# direto sob `set -e`, tests/shell/update-guard.test.sh, caso 15f), mas disco é
+# manutenção, e nenhuma versão futura dela pode transformar uma atualização que
+# deu certo em rollback. Quem vigia esta tranca é o caso 15h.
+step "Liberando espaço em disco"
+apagar_imagens_antigas "$VERSAO_ALVO" "$VERSAO_QUE_RODAVA" || true
