@@ -734,32 +734,50 @@ test.describe("telefonia — URA e falas pela tela", () => {
     // telefonia — a trava do número não distinguia mensagem de telefone.
     test.setTimeout(120_000);
     const DO_WHATSAPP = `+55613001${QUATRO_DIGITOS}`; // o canal de WhatsApp do beforeAll
-    await page.setViewportSize(JANELA);
-    await entrar(page, admin.email, admin.senha);
-    await page.goto("/app/connections?aba=telefone");
-    await page.getByRole("tab", { name: "Números", exact: true }).click();
-    await expect(page.locator("[data-telefonia-numero]").filter({ hasText: NUMERO.nome })).toBeVisible({ timeout: 20_000 });
 
-    await page.getByRole("button", { name: "Adicionar outro número" }).click();
-    const formulario = page.locator("[data-telefonia-formulario]");
-    await formulario.locator("#tel-nome").fill(FIXO.nome);
-    await formulario.locator("#tel-numero").fill(`(61) 3001-${QUATRO_DIGITOS}`);
-    await formulario.locator("#tel-servidor").fill("voip.e2e-ura.com.br");
-    await formulario.locator("#tel-usuario").fill(FIXO.usuario);
-    await formulario.locator("#tel-senha").fill(`Local-${randomUUID()}`);
-    await formulario.getByRole("button", { name: "Salvar e conectar" }).click();
-
-    // O formulário fecha e o número entra na lista; a recusa antiga não aparece.
-    await expect(page.locator("[data-telefonia-numero]").filter({ hasText: FIXO.nome })).toBeVisible({ timeout: 20_000 });
-    await expect(formulario).toHaveCount(0);
-    await expect(page.getByText("Esse número já está conectado nesta organização.")).toHaveCount(0);
-
-    const ativos = await sql<{ provider: string }>(
-      `select provider from public.channel_sessions
-        where organization_id = $1 and phone_number = $2 and archived_at is null order by provider`,
-      [orgId, DO_WHATSAPP],
+    // CADASTRAR um número cifra a senha SIP com a chave da instalação
+    // (`fn_encrypt_oauth`, lida de `private.app_secrets`). Toda VPS a tem — o kit a
+    // grava (`hostgator-setup-kit/_common.sh`) —, mas o banco do e2e nasce sem ela,
+    // e sem ela o salvar responde 500 ("NUVEMSHOP_OAUTH_ENCRYPTION_KEY ausente")
+    // antes de chegar à trava do número. Medido na primeira execução deste caso
+    // (run 37064804630): a tela mostrou "Não foi possível salvar o número", e não
+    // a recusa que ele vigia. O caso põe a chave e, SE foi ele quem pôs, tira no
+    // fim — as specs seguintes encontram o banco como estava.
+    const [chavePosta] = await sql<{ name: string }>(
+      `insert into private.app_secrets (name, value) values ('nuvemshop_oauth_key', $1)
+       on conflict (name) do nothing returning name`,
+      [`e2e-${randomUUID()}-${randomUUID()}`],
     );
-    expect(ativos.map((a) => a.provider)).toEqual([CHANNEL_PROVIDER_SIP_TRUNK, CHANNEL_PROVIDER_WAHA]);
-    await page.screenshot({ path: `${EVIDENCIA}/e2e-mesmo-numero-whatsapp-e-telefone.png`, fullPage: true });
+    try {
+      await page.setViewportSize(JANELA);
+      await entrar(page, admin.email, admin.senha);
+      await page.goto("/app/connections?aba=telefone");
+      await page.getByRole("tab", { name: "Números", exact: true }).click();
+      await expect(page.locator("[data-telefonia-numero]").filter({ hasText: NUMERO.nome })).toBeVisible({ timeout: 20_000 });
+
+      await page.getByRole("button", { name: "Adicionar outro número" }).click();
+      const formulario = page.locator("[data-telefonia-formulario]");
+      await formulario.locator("#tel-nome").fill(FIXO.nome);
+      await formulario.locator("#tel-numero").fill(`(61) 3001-${QUATRO_DIGITOS}`);
+      await formulario.locator("#tel-servidor").fill("voip.e2e-ura.com.br");
+      await formulario.locator("#tel-usuario").fill(FIXO.usuario);
+      await formulario.locator("#tel-senha").fill(`Local-${randomUUID()}`);
+      await formulario.getByRole("button", { name: "Salvar e conectar" }).click();
+
+      // O formulário fecha e o número entra na lista; a recusa antiga não aparece.
+      await expect(page.locator("[data-telefonia-numero]").filter({ hasText: FIXO.nome })).toBeVisible({ timeout: 20_000 });
+      await expect(formulario).toHaveCount(0);
+      await expect(page.getByText("Esse número já está conectado nesta organização.")).toHaveCount(0);
+
+      const ativos = await sql<{ provider: string }>(
+        `select provider from public.channel_sessions
+          where organization_id = $1 and phone_number = $2 and archived_at is null order by provider`,
+        [orgId, DO_WHATSAPP],
+      );
+      expect(ativos.map((a) => a.provider)).toEqual([CHANNEL_PROVIDER_SIP_TRUNK, CHANNEL_PROVIDER_WAHA]);
+      await page.screenshot({ path: `${EVIDENCIA}/e2e-mesmo-numero-whatsapp-e-telefone.png`, fullPage: true });
+    } finally {
+      if (chavePosta) await sql(`delete from private.app_secrets where name = 'nuvemshop_oauth_key'`);
+    }
   });
 });
