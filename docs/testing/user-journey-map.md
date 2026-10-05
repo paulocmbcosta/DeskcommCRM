@@ -3436,8 +3436,44 @@ Spec: `tests/e2e/encerrar-com-assunto-e-resumo.spec.ts`, em `SPECS_PARTE_3`.
 "No Postgres real" = `tests/invariants/encerramento-com-assunto-e-resumo.test.ts`, que roda no job
 `invariants` contra o `baseline.sql`.
 
+### Execução (2026-10-05): **PASS na jornada pela tela**
+
+`e2e` no CI por `Run workflow` na branch, Chromium real, Supabase local com o `baseline.sql`, app em
+produção (`next build` + `next start`). Três execuções, porque a entrega mudou duas vezes depois da
+primeira:
+
+| Execução | Commit | Esta spec | Parte 3 |
+|---|---|---|---|
+| 37352262599 | `b388043e` (antes da revisão) | verde, 24,3 s | 119 passaram, 2 falharam |
+| 37356123390 | `fdd13cad` (com as correções da revisão) | verde, 33,1 s | 119 passaram, 2 falharam |
+| 37362113350 | `26263afc` (versão final) | verde, 30,4 s | **120 passaram, 1 falhou** |
+
+A falha a mais das duas primeiras era **desta mudança**: `encerramento-atendimento.spec.ts` fecha a
+conversa uma terceira vez com a tela em espanhol (botão "Cerrar"), e esse clique dependia do
+handler de diálogo nativo que saiu junto com o `confirm()`. A troca que adaptou as specs antigas
+procurou só por "Fechar". Corrigida no `26263afc`, que também confere o título traduzido da janela.
+
+As falhas que sobram na versão final **não são desta mudança** — são as mesmas do último `e2e` da
+`main` (run 37306934272, `33b8595d`): `card-pelo-classificador.spec.ts:354` na parte 1 e
+`inbox-rotulo-de-origem.spec.ts:224` na parte 3. A parte 2 passou inteira (103).
+
+No job `invariants` (Postgres real, `baseline.sql` em modo install e update):
+`tests/invariants/encerramento-com-assunto-e-resumo.test.ts` verde — 29 casos na primeira execução,
+e os três acrescentados pela revisão (quebra de linha não conta como letra, resumo em branco apaga,
+contato anonimizado não ganha resumo) na seguinte.
+
+**O que a revisão independente achou e os testes não tinham pegado.** Um subagente leu o diff sem as
+conclusões de quem escreveu. Com typecheck, lint, 681 arquivos de unidade e os 29 invariantes verdes,
+ele apontou que a janela não fixava o atendimento em que foi aberta: o `confirm()` era síncrono, a
+janela fica aberta enquanto alguém escreve, e se nesse intervalo um colega encerrasse e o cliente
+voltasse, o clique gravaria o resumo do atendimento antigo no novo. Hoje a janela guarda o
+protocolo da abertura e não envia se o vigente mudou (`EncerrarAtendimentoDialog.test.tsx`, bloco
+"a janela fecha o atendimento em que foi aberta, ou nenhum").
+
 ### O que NÃO foi provado
 
+- A corrida "outro atendente encerra e o cliente volta com a janela aberta" está presa em teste de
+  componente, não em navegador com duas sessões.
 - Com uma pessoa logada na instalação de produção: pendente (depende de atualizar a VPS, cadastrar
   os assuntos e ligar os interruptores).
 - A troca de setor pelo seletor, em componente: o `Select` não abre de forma confiável no jsdom. Está
