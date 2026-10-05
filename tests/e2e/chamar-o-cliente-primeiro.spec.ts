@@ -27,7 +27,7 @@
  * botão responde ao que falta, e que a conversa nasce mesmo quando o envio não
  * completa — que é a regra de produto mais fácil de quebrar sem ninguém notar.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { lerCreds, loginComoAdmin } from "./helpers/login-admin";
 
@@ -372,6 +372,183 @@ test.describe("chamar o cliente exige o time da conversa (migration 0284)", () =
     const { data } = await conversa.json();
     expect(data.team_id).toBe(timeCriado);
     expect(data.assigned_to_user_id, "quem chamou não ficou como dono").toBeTruthy();
+  });
+});
+
+test.describe("chamar DE NOVO quem teve o atendimento encerrado (relato de 2026-10-05)", () => {
+  // A jornada que a atendente descreveu: chamou o cliente em 25/09, encerrou, e
+  // em 01/10 quis chamá-lo de novo. O ícone da lista levou para a conversa
+  // antiga — bastava o contato TER conversa para "Chamar no WhatsApp" sumir —,
+  // e dali os dois gestos oferecidos ("Reabrir" e o seletor de modelo) escrevem
+  // no atendimento encerrado. O contato de 01/10 saiu com o protocolo de 25/09.
+  //
+  // O servidor sempre soube abrir atendimento novo numa conversa encerrada
+  // (`tests/invariants/chamar-de-novo-abre-atendimento-novo.test.ts`). O que
+  // estes casos medem é a TELA chegar lá, pelos três lugares de onde se chama.
+
+  /** Um cliente que já foi chamado e teve o atendimento ENCERRADO. */
+  async function clienteComAtendimentoEncerrado(
+    page: Page,
+    nome: string,
+  ): Promise<{ id: string; conversa: string; protocolo: string } | null> {
+    const { id, telefone } = await criarContatoSemConversa(page, nome);
+    const { data: canais } = await (await page.request.get("/api/v1/channel-sessions")).json();
+    if (!canais?.length) return null;
+
+    const primeira = await page.request.post("/api/v1/conversations/iniciar", {
+      data: {
+        channel_session_id: canais[0].id,
+        contact_id: id,
+        phone_number: telefone,
+        name: nome,
+        team_id: await timeParaChamar(page),
+        mensagem: { type: "text", body: "Primeiro contato." },
+      },
+    });
+    expect(primeira.ok(), await primeira.text()).toBe(true);
+    const conversa = (await primeira.json()).data.conversation_id as string;
+
+    const antes = await (await page.request.get(`/api/v1/conversations/${conversa}`)).json();
+    const protocolo = antes.data.protocol as string;
+    expect(protocolo, "o primeiro atendimento nasceu sem protocolo").toBeTruthy();
+
+    const fechada = await page.request.post(`/api/v1/conversations/${conversa}/close`, { data: {} });
+    expect(fechada.ok(), await fechada.text()).toBe(true);
+
+    return { id, conversa, protocolo };
+  }
+
+  /** O estado que o servidor grava depois do gesto — é ele que diz se nasceu atendimento novo. */
+  async function estadoDaConversa(page: Page, conversa: string) {
+    const r = await page.request.get(`/api/v1/conversations/${conversa}`);
+    expect(r.ok(), await r.text()).toBe(true);
+    return (await r.json()).data as { status: string; protocol: string; assigned_to_user_id: string | null };
+  }
+
+  /** Preenche e envia. `false` = o canal só aceita modelo e o envio não foi exercitado. */
+  async function enviarPeloDialogo(dialogo: Locator): Promise<boolean> {
+    const campo = dialogo.getByLabel("Mensagem");
+    const soModelo = dialogo.getByText(/só permite falar primeiro com um modelo aprovado/i);
+    await expect(campo.or(soModelo).first()).toBeVisible();
+    if ((await campo.count()) === 0) {
+      test.info().annotations.push({
+        type: "nao-medido",
+        description: "canal só aceita modelo: o envio pelo diálogo não foi exercitado",
+      });
+      return false;
+    }
+    await escolherTimeSeHouver(dialogo);
+    await campo.fill("Olá de novo! Podemos falar?");
+    await dialogo.getByRole("button", { name: /Enviar e abrir conversa/i }).click();
+    return true;
+  }
+
+  test("na lista de contatos o ícone oferece CHAMAR — e nasce atendimento novo, com protocolo novo", async ({
+    page,
+  }) => {
+    const nome = `Cliente De Novo ${Date.now()}`;
+    const cliente = await clienteComAtendimentoEncerrado(page, nome);
+    test.skip(!cliente, "instalação sem canal conectado — nada a chamar");
+
+    await page.goto("/app/contacts");
+    const linha = page.getByRole("row", { name: new RegExp(nome) });
+    await expect(linha).toBeVisible();
+
+    // O defeito: aqui havia um link "Abrir conversa" para o atendimento encerrado.
+    await expect(linha.getByRole("link", { name: /Abrir conversa com/i })).toHaveCount(0);
+    await linha.getByRole("button", { name: /Chamar no WhatsApp/i }).click();
+
+    const dialogo = page.getByRole("dialog");
+    await expect(dialogo.getByTestId("aviso-novo-atendimento")).toContainText(
+      /abre um atendimento novo, com protocolo próprio/i,
+    );
+    await page.screenshot({ path: ".superpowers/evidence/chamar-de-novo-dialogo.png" });
+
+    if (!(await enviarPeloDialogo(dialogo))) return;
+    await page.waitForURL(new RegExp(`/app/inbox\\?id=${cliente!.conversa}`));
+
+    // A MESMA conversa, e um atendimento que não é o de antes.
+    await expect
+      .poll(async () => (await estadoDaConversa(page, cliente!.conversa)).status)
+      .not.toBe("closed");
+    const depois = await estadoDaConversa(page, cliente!.conversa);
+    expect(depois.protocol, "o atendimento novo saiu com o protocolo do encerrado").not.toBe(
+      cliente!.protocolo,
+    );
+    expect(depois.assigned_to_user_id, "quem chamou não ficou como dono").toBeTruthy();
+    await page.screenshot({ path: ".superpowers/evidence/chamar-de-novo-atendimento-novo.png" });
+  });
+
+  test("dentro da conversa encerrada, o pé oferece o atendimento novo — e a tela sai do encerrado", async ({
+    page,
+  }) => {
+    const nome = `Cliente Encerrado ${Date.now()}`;
+    const cliente = await clienteComAtendimentoEncerrado(page, nome);
+    test.skip(!cliente, "instalação sem canal conectado — nada a chamar");
+
+    await page.goto(`/app/inbox?id=${cliente!.conversa}`);
+    const aviso = page.getByTestId("aviso-atendimento-encerrado");
+    await expect(aviso).toContainText(/Este atendimento foi encerrado/i);
+    // "Reabrir" continua existindo: é o outro gesto, o que segue o mesmo protocolo.
+    await expect(page.getByRole("button", { name: "Reabrir" })).toBeVisible();
+    await page.screenshot({ path: ".superpowers/evidence/chamar-de-novo-conversa-encerrada.png" });
+
+    await aviso.getByRole("button", { name: "Chamar no WhatsApp" }).click();
+    const dialogo = page.getByRole("dialog");
+    await expect(dialogo.getByTestId("aviso-novo-atendimento")).toBeVisible();
+
+    if (!(await enviarPeloDialogo(dialogo))) return;
+
+    // Sem recarregar: quem acabou de chamar não pode continuar lendo "Fechada".
+    await expect(aviso).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reabrir" })).toHaveCount(0);
+    const depois = await estadoDaConversa(page, cliente!.conversa);
+    expect(depois.status).not.toBe("closed");
+    expect(depois.protocol).not.toBe(cliente!.protocolo);
+  });
+
+  test("a ficha do contato oferece começar de novo, e mantém o caminho para o histórico", async ({
+    page,
+  }) => {
+    const nome = `Cliente Ficha ${Date.now()}`;
+    const cliente = await clienteComAtendimentoEncerrado(page, nome);
+    test.skip(!cliente, "instalação sem canal conectado — nada a chamar");
+
+    await page.goto(`/app/contacts/${cliente!.id}`);
+    await expect(page.getByText(/O último atendimento foi encerrado — comece um novo/i)).toBeVisible();
+    await expect(page.getByRole("link", { name: /Ver a conversa no Inbox/i })).toHaveAttribute(
+      "href",
+      `/app/inbox?id=${cliente!.conversa}`,
+    );
+
+    await page.getByRole("button", { name: /Chamar no WhatsApp/i }).click();
+    await expect(page.getByRole("dialog").getByTestId("aviso-novo-atendimento")).toBeVisible();
+  });
+
+  test("com o atendimento EM ANDAMENTO a lista continua levando para a conversa", async ({ page }) => {
+    // O controle: sem ele, uma lista que oferecesse "Chamar" para todo mundo —
+    // e deixasse escrever por fora de quem está atendendo — passaria nos casos
+    // de cima tão bem quanto o comportamento certo.
+    const nome = `Cliente Em Atendimento ${Date.now()}`;
+    const { id, telefone } = await criarContatoSemConversa(page, nome);
+    const { data: canais } = await (await page.request.get("/api/v1/channel-sessions")).json();
+    test.skip(!canais?.length, "instalação sem canal conectado — nada a chamar");
+    const r = await page.request.post("/api/v1/conversations/iniciar", {
+      data: {
+        channel_session_id: canais[0].id,
+        contact_id: id,
+        phone_number: telefone,
+        name: nome,
+        team_id: await timeParaChamar(page),
+        mensagem: { type: "text", body: "Olá!" },
+      },
+    });
+    expect(r.ok(), await r.text()).toBe(true);
+
+    await page.goto("/app/contacts");
+    const linha = page.getByRole("row", { name: new RegExp(nome) });
+    await expect(linha.getByRole("link", { name: /Abrir conversa com/i })).toBeVisible();
+    await expect(linha.getByRole("button", { name: /Chamar no WhatsApp/i })).toHaveCount(0);
   });
 });
 

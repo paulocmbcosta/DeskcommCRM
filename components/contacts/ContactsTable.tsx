@@ -34,6 +34,7 @@ import { useActiveOrg } from "@/hooks/auth/AuthProvider";
 import { useDeleteContact } from "@/hooks/contacts/useDeleteContact";
 import type { ContactOrderBy } from "@/lib/schemas/contacts";
 import type { Contact } from "@/lib/types/contacts";
+import { portaDaConversa } from "@/lib/atendimento/conversa-do-contato";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
 
@@ -117,6 +118,11 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
    * onde a janela nasce fechada e só modelo sai. A restrição aparecia DEPOIS da
    * navegação, e a saída (preencher os parâmetros do modelo) não existia em
    * tela nenhuma. Agora a decisão inteira cabe num diálogo.
+   *
+   * E o mesmo diálogo serve a quem JÁ foi atendido e teve o atendimento
+   * encerrado: até 2026-10-05 bastava o contato ter conversa para o ícone levar
+   * para ela — encerrada desde a semana anterior —, e chamar de novo não abria
+   * atendimento novo. Quem decide a porta é `portaDaConversa`.
    */
   const [chamando, setChamando] = useState<Contact | null>(null);
 
@@ -220,7 +226,14 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
             </TableCell>
             <TableCell>
               <div className="flex items-center justify-end gap-0.5">
-                {c.conversa ? (
+                {/*
+                  Atendimento encerrado + telefone = chamar de novo. Sem telefone
+                  no cadastro (contato que só existe pelo identificador do
+                  WhatsApp, visitante do chat do site) o diálogo não tem para
+                  quem mostrar que vai ligar — fica o caminho para a conversa,
+                  e é de dentro dela que se começa o atendimento novo.
+                */}
+                {c.conversa && (portaDaConversa(c.conversa) === "abrir" || !c.phone_number) ? (
                   <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
                     <Link
                       href={`/app/inbox?id=${c.conversa.id}`}
@@ -273,6 +286,8 @@ export function ContactsTable({ contacts, orderBy, orderDir, onSort }: Props) {
         contactId={chamando.id}
         phoneNumber={chamando.phone_number}
         nome={displayName(chamando, t)}
+        conexaoInicial={chamando.conversa?.channel_session_id ?? null}
+        atendimentoAnteriorEncerrado={portaDaConversa(chamando.conversa) === "chamar_de_novo"}
       />
     )}
 

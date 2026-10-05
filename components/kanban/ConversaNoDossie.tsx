@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChamarNoWhatsAppDialog } from "@/components/contacts/ChamarNoWhatsAppDialog";
 import { useT } from "@/hooks/i18n/useT";
 import { ArrowRight, ChatCircle } from "@/lib/ui/icons";
+import { portaDaConversa } from "@/lib/atendimento/conversa-do-contato";
 import type { Contact } from "@/lib/types/contacts";
 
 /**
@@ -39,6 +40,15 @@ import type { Contact } from "@/lib/types/contacts";
  * Agora a ausência oferece o começo. Sem `contactId` (negócio criado à mão, sem
  * contato vinculado) não há a quem escrever, e aí o bloco continua sumindo — é
  * o único caso em que "não há nada a oferecer" é literal.
+ *
+ * ─── Conversa encerrada também é um começo ──────────────────────────────────
+ *
+ * Havia um terceiro estado, e ele caía no ramo errado: a conversa EXISTE, mas o
+ * atendimento foi encerrado. O bloco oferecia só "Abrir conversa no Inbox", e de
+ * lá os gestos disponíveis escreviam no atendimento que acabou (relato de
+ * 2026-10-05; ver `lib/atendimento/conversa-do-contato.ts`). Agora o encerrado
+ * oferece as duas coisas: chamar — atendimento novo, protocolo novo — e o
+ * caminho para o que já foi conversado, porque encerrado não é apagado.
  */
 export function ConversaNoDossie({
   conversa,
@@ -56,77 +66,87 @@ export function ConversaNoDossie({
 }) {
   const t = useT();
   const [chamando, setChamando] = useState(false);
+  const porta = portaDaConversa(conversa);
 
-  if (!conversa) {
-    if (!contactId) return null;
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => setChamando(true)}
-          className="group mt-3 flex w-full items-center gap-2.5 rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-muted"
-        >
-          <ChatCircle size={16} weight="regular" className="shrink-0 text-text-muted" aria-hidden />
-          <span className="min-w-0 flex-1">
-            <span className="block text-xs font-medium text-text">{t("Chamar no WhatsApp")}</span>
-            <span className="block truncate text-[11px] text-text-muted">
-              {t("Ainda não há conversa — comece você")}
-            </span>
+  /** O começo — de quem nunca foi chamado, ou de quem já teve o atendimento encerrado. */
+  const chamar = contactId ? (
+    <>
+      <button
+        type="button"
+        onClick={() => setChamando(true)}
+        className="group mt-3 flex w-full items-center gap-2.5 rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-muted"
+      >
+        <ChatCircle size={16} weight="regular" className="shrink-0 text-text-muted" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-medium text-text">{t("Chamar no WhatsApp")}</span>
+          <span className="block truncate text-[11px] text-text-muted">
+            {porta === "chamar_de_novo"
+              ? t("O último atendimento foi encerrado — comece um novo")
+              : t("Ainda não há conversa — comece você")}
           </span>
-          <ArrowRight
-            size={14}
-            weight="regular"
-            className="shrink-0 text-text-muted transition-transform group-hover:translate-x-0.5"
-            aria-hidden
-          />
-        </button>
+        </span>
+        <ArrowRight
+          size={14}
+          weight="regular"
+          className="shrink-0 text-text-muted transition-transform group-hover:translate-x-0.5"
+          aria-hidden
+        />
+      </button>
 
-        {chamando && (
-          <ChamarNoWhatsAppDialog
-            open
-            onOpenChange={setChamando}
-            contactId={contactId}
-            phoneNumber={telefone ?? undefined}
-            nome={nome?.trim() || t("este contato")}
-          />
-        )}
-      </>
-    );
-  }
+      {chamando && (
+        <ChamarNoWhatsAppDialog
+          open
+          onOpenChange={setChamando}
+          contactId={contactId}
+          phoneNumber={telefone ?? undefined}
+          nome={nome?.trim() || t("este contato")}
+          conexaoInicial={conversa?.channel_session_id ?? null}
+          atendimentoAnteriorEncerrado={porta === "chamar_de_novo"}
+        />
+      )}
+    </>
+  ) : null;
+
+  if (!conversa) return chamar;
 
   const preview = conversa.preview?.trim();
 
   return (
-    <Link
-      href={`/app/inbox?id=${conversa.id}`}
-      className="group mt-3 flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2 transition-colors hover:border-primary/40 hover:bg-muted"
-    >
-      <ChatCircle size={16} weight="regular" className="shrink-0 text-text-muted" aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="block text-xs font-medium text-text">{t("Abrir conversa no Inbox")}</span>
-        {preview && (
-          // A última mensagem responde "vale a pena entrar agora?" sem entrar —
-          // sem ela o botão é uma aposta, e o dossiê já existe para não obrigar
-          // a abrir outra tela para saber.
-          <span className="block truncate text-[11px] text-text-muted">{preview}</span>
-        )}
-      </span>
-      {conversa.unread > 0 && (
-        // O número, não um ponto: "3 sem ler" e "12 sem ler" pedem urgências
-        // diferentes, e um ponto colapsa as duas.
-        <span
-          className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground tabular-nums"
-          aria-label={`${conversa.unread} ${t("sem ler")}`}
-        >
-          {conversa.unread}
+    <>
+      {porta === "chamar_de_novo" && chamar}
+      <Link
+        href={`/app/inbox?id=${conversa.id}`}
+        className="group mt-3 flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2 transition-colors hover:border-primary/40 hover:bg-muted"
+      >
+        <ChatCircle size={16} weight="regular" className="shrink-0 text-text-muted" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-medium text-text">
+            {porta === "chamar_de_novo" ? t("Ver a conversa no Inbox") : t("Abrir conversa no Inbox")}
+          </span>
+          {preview && (
+            // A última mensagem responde "vale a pena entrar agora?" sem entrar —
+            // sem ela o botão é uma aposta, e o dossiê já existe para não obrigar
+            // a abrir outra tela para saber.
+            <span className="block truncate text-[11px] text-text-muted">{preview}</span>
+          )}
         </span>
-      )}
-      <ArrowRight
-        size={14}
-        weight="regular"
-        className="shrink-0 text-text-muted transition-transform group-hover:translate-x-0.5"
-        aria-hidden
-      />
-    </Link>
+        {conversa.unread > 0 && (
+          // O número, não um ponto: "3 sem ler" e "12 sem ler" pedem urgências
+          // diferentes, e um ponto colapsa as duas.
+          <span
+            className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground tabular-nums"
+            aria-label={`${conversa.unread} ${t("sem ler")}`}
+          >
+            {conversa.unread}
+          </span>
+        )}
+        <ArrowRight
+          size={14}
+          weight="regular"
+          className="shrink-0 text-text-muted transition-transform group-hover:translate-x-0.5"
+          aria-hidden
+        />
+      </Link>
+    </>
   );
 }

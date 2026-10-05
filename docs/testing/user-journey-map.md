@@ -556,7 +556,12 @@ oficial, e por texto livre na API não-oficial. Desenho e as cinco lacunas
 medidas: `docs/superpowers/specs/2026-09-19-chamar-o-cliente-design.md`. Sem
 migration: tudo compõe peças que já existiam.
 
-Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts` (8 casos, em `SPECS_PARTE_3`).
+Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts`, em `SPECS_PARTE_3`. Quantos casos ela tem
+hoje — este parágrafo dizia "8" e a spec já tinha 10 antes de ganhar os da J40:
+
+```bash
+grep -cE "^\s*test\(" tests/e2e/chamar-o-cliente-primeiro.spec.ts
+```
 
 ### Execução (2026-09-19): **PASS nos 8 casos**
 
@@ -3284,3 +3289,94 @@ com "Setor escolhido automaticamente" só foram conferidos no banco.
 | J39.6 A Central diz "Setor escolhido automaticamente: <time>" | `[P1]` | no Postgres real; pela tela, pendente |
 | J39.7 Suspeita de opt-out não escolhe setor | `[P1]` | no Postgres real |
 | J39.8 A chamada aparece em IA › Execuções (`llm_calls`, ponto `handoff_team_classify`) | `[P1]` | no Postgres real; pela tela, pendente |
+
+## J40 — Chamar de novo quem teve o atendimento encerrado `[P0]` (2026-10-05)
+
+Relato de uma atendente: chamou um cliente em 25/09, encerrou, e em 01/10 quis chamá-lo de novo.
+"Abriu no mesmo atendimento do dia 25/09 já finalizado. Não iniciou um novo atendimento."
+
+`[P0]` porque a operação é de telecom, onde **cada atendimento precisa do seu protocolo**: o contato
+de 01/10 ficou registrado com o protocolo de 25/09.
+
+### O que foi medido, em produção, só leitura (2026-10-05)
+
+A conversa do relato: **um** atendimento (`20260925000092`) cobrindo os dois dias. Em 01/10 saiu um
+modelo com a conversa **encerrada** (09:15), e três minutos depois veio um "Reabrir" — que, por
+desenho, continua o mesmo atendimento.
+
+A causa não era o banco. A tela decidia entre "Abrir conversa no Inbox" e "Chamar no WhatsApp" pela
+**existência** da conversa, e a conversa é permanente (uma por contato × número; o que abre e fecha
+é o atendimento, desde a 0266). Para quem já tinha sido atendido, o diálogo de chamar simplesmente
+não aparecia, e a conversa encerrada só oferecia gestos que escrevem no atendimento antigo.
+
+| Medida | Valor |
+|---|---|
+| Contatos com conversa cuja mais recente está encerrada (o ícone só levava para ela) | 692 de 741 |
+| Mensagens enviadas por pessoa com a conversa encerrada, desde 19/09 | 53, em 48 conversas |
+| …seguidas de "Reabrir" (mesmo protocolo de dias atrás) | 32 |
+| …que ficaram dentro do atendimento encerrado, com a conversa ainda "Fechada" | 13 |
+| …em que o cliente respondeu e a resposta abriu atendimento sem time e sem dono | 8 |
+
+**A primeira hipótese estava errada, e foi um teste que disse.** Lendo `fn_conversation_iniciar_no_time`
+parecia que o dono gravado na conversa encerrada (502 das 735 guardam) barraria quem chamasse de
+novo. O invariante escrito para reproduzir isso ficou **verde na primeira corrida**:
+`fn_service_stamp_status`, um gatilho BEFORE que a leitura não tinha alcançado, solta o dono ao sair
+do estado encerrado. O servidor sempre fez o certo — atendimento novo, protocolo novo, dono = quem
+chamou. Nenhuma migration; o conserto é levar a tela até lá.
+
+### O conserto
+
+`lib/atendimento/conversa-do-contato.ts` (`portaDaConversa`): a conversa anexada ao contato passa a
+levar o **estado**, e três telas leem a mesma régua —
+
+- **Contatos**: atendimento encerrado → o ícone abre "Chamar no WhatsApp";
+- **ficha do contato e do negócio**: oferece chamar **e** mantém o caminho para o histórico;
+- **Inbox, conversa encerrada**: no lugar do seletor de modelo, o pé oferece o atendimento novo
+  (`NovoAtendimentoAviso`). "Reabrir" segue existindo, e agora diz que mantém o protocolo.
+
+O diálogo ganhou três coisas: sai por padrão pelo **número da conversa anterior**, avisa que vai
+nascer um atendimento novo, e, de dentro do Inbox, devolve a conversa para a tela em vez de navegar.
+
+### Casos
+
+Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts` (bloco "chamar DE NOVO…"), em `SPECS_PARTE_3`.
+
+### Execução (2026-10-05): **PASS nos 4 casos de tela**
+
+`e2e` no CI por `Run workflow` na branch (run 37300989838), Chromium real, Supabase local com o
+`baseline.sql`, app em produção (`next build` + `next start`). Parte 3: **119 passed, 1 failed
+(30,0 min)**; os 14 casos desta spec, verdes.
+
+As duas falhas da execução **não são desta mudança** — são as mesmas da `main` no commit anterior
+(run 37298729122, 749af777): `card-pelo-classificador.spec.ts:354` na parte 1 e
+`inbox-rotulo-de-origem.spec.ts:224` na parte 3. A parte 3 tinha 115 verdes na `main`; aqui tem
+119, que são os 4 casos novos.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J40.1 Contato com atendimento encerrado: na lista, o ícone é **Chamar no WhatsApp** (não há link para a conversa antiga); o diálogo avisa do atendimento novo; enviado, a MESMA conversa sai do encerrado com **protocolo diferente** e dono = quem chamou | `[P0]` | **PASS** (34,1 s) |
+| J40.2 Dentro da conversa encerrada, o pé diz que o atendimento acabou e oferece chamar; enviado, a tela sai do "Fechada" **sem recarregar** e o protocolo muda | `[P0]` | **PASS** (30,7 s) |
+| J40.3 A ficha do contato oferece começar de novo e mantém "Ver a conversa no Inbox" | `[P1]` | **PASS** (27,2 s) |
+| J40.4 Controle: com o atendimento **em andamento**, a lista continua levando para a conversa e não oferece chamar | `[P0]` | **PASS** (29,8 s) |
+| J40.5 No banco: outra pessoa chama → atendimento novo, protocolo novo, ela fica dona, e o encerrado guarda quem o atendeu; a mesma pessoa chama → `claimed` com o automático calado; em andamento com outra pessoa → recusado; "Reabrir" → mesmo protocolo | `[P0]` | **PASS** no Postgres real (`tests/invariants/chamar-de-novo-abre-atendimento-novo.test.ts`, 4 casos) |
+
+**Os testes vigiam de verdade, provado por sabotagem.** No banco: fazer o gatilho deixar de soltar o
+dono, e fazer a saída do encerrado continuar o atendimento, reprovam cada um os 2 casos de
+"atendimento novo" e deixam os 2 controles verdes. Na tela: os casos de "encerrado" foram escritos
+antes do conserto e reprovaram contra o código antigo (5 vermelhos), com os controles de "em
+andamento" verdes.
+
+**Uma fraqueza da spec, declarada.** J40.1 e J40.2 só exercitam o envio pelo diálogo quando o canal
+aceita texto livre; num canal que só aceita modelo elas anotam `nao-medido` e terminam **verdes**, e
+o relator do CI não imprime a anotação. Que o envio rodou nesta execução é **inferência**, não
+observação: a rota lista as conexões por `created_at`, e a primeira do ambiente é a do seed do
+workflow, de texto livre. Trocar a anotação por `test.skip` faria a diferença aparecer no relatório.
+
+**Não medido.** Envio real pela plataforma oficial (a spec usa o canal de texto livre do ambiente);
+o caso de **dois números** pela tela — o número padrão do diálogo está preso só em unidade
+(`components/contacts/ChamarNoWhatsAppDialog.de-novo.test.tsx`); e o quadro (Kanban), cujo card
+continua levando para a conversa — o caminho de chamar ali é a ficha do negócio.
+
+**O que NÃO mudou, de propósito.** `POST /api/v1/messages` segue aceitando envio para conversa
+encerrada: é a porta de integrações por token, e recusar ali mudaria contrato de API. Quem deixou
+de oferecer esse envio foi a tela.

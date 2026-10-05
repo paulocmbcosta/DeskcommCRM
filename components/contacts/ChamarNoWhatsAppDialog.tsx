@@ -40,6 +40,15 @@
  * os que o servidor marca como `pode_iniciar` — e fica como dona da conversa.
  * Com um time só, ele já vem escolhido e aparece para ser lido. Sem time
  * cadastrado na empresa, não há o que escolher e o campo não aparece.
+ *
+ * ─── Chamar DE NOVO é o mesmo ato ───────────────────────────────────────────
+ *
+ * Quem já foi atendido e teve o atendimento encerrado é chamado por esta mesma
+ * janela. O servidor não precisa de aviso: `POST /conversations/iniciar` numa
+ * conversa encerrada abre um atendimento NOVO, com protocolo próprio, no time
+ * escolhido e em nome de quem chamou (vigiado por
+ * `tests/invariants/chamar-de-novo-abre-atendimento-novo.test.ts`). O que faltava
+ * era a tela chegar aqui — ver `lib/atendimento/conversa-do-contato.ts`.
  */
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -98,6 +107,19 @@ interface Props {
    */
   phoneNumber?: string;
   nome: string;
+  /**
+   * O número que vem escolhido. Ao chamar DE NOVO é o da conversa anterior: é o
+   * número que o cliente conhece, e é a mesma conversa ganhando um atendimento
+   * novo. Ignorado se não estiver entre as conexões que falam primeiro.
+   */
+  conexaoInicial?: string | null;
+  /** O contato já foi atendido e o atendimento acabou — a janela diz o que vai acontecer. */
+  atendimentoAnteriorEncerrado?: boolean;
+  /**
+   * Quem abriu a janela JÁ está no Inbox e cuida de mostrar a conversa. Sem
+   * isto, a janela navega para lá — que é o caso de todas as outras telas.
+   */
+  onIniciada?: (conversationId: string) => void;
 }
 
 const CLASSE_SELECT =
@@ -109,6 +131,9 @@ export function ChamarNoWhatsAppDialog({
   contactId,
   phoneNumber,
   nome,
+  conexaoInicial,
+  atendimentoAnteriorEncerrado = false,
+  onIniciada,
 }: Props) {
   const t = useT();
   const router = useRouter();
@@ -159,8 +184,11 @@ export function ChamarNoWhatsAppDialog({
   const conexaoId = useMemo(() => {
     if (conexaoEscolhida) return conexaoEscolhida;
     if (!conexoes?.length) return "";
+    // Chamar de novo sai pelo número da conversa anterior — desde que ele ainda
+    // esteja entre os que falam primeiro (pode ter sido arquivado desde então).
+    if (conexaoInicial && conexoes.some((c) => c.id === conexaoInicial)) return conexaoInicial;
     return (conexoes.find((c) => c.status === "WORKING") ?? conexoes[0]!).id;
-  }, [conexaoEscolhida, conexoes]);
+  }, [conexaoEscolhida, conexoes, conexaoInicial]);
 
   const {
     data: modelos,
@@ -281,7 +309,8 @@ export function ChamarNoWhatsAppDialog({
         toast.error(erro_envio ?? t("A conversa abriu, mas a mensagem não saiu."));
       }
       onOpenChange(false);
-      router.push(`/app/inbox?id=${conversation_id}`);
+      if (onIniciada) onIniciada(conversation_id);
+      else router.push(`/app/inbox?id=${conversation_id}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("Não consegui iniciar a conversa."));
     } finally {
@@ -301,6 +330,15 @@ export function ChamarNoWhatsAppDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {atendimentoAnteriorEncerrado && (
+            <p
+              data-testid="aviso-novo-atendimento"
+              className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-text-muted"
+            >
+              {t("O atendimento anterior foi encerrado. Esta mensagem abre um atendimento novo, com protocolo próprio — o anterior continua no histórico.")}
+            </p>
+          )}
+
           {precisaDeTime && (
             <div className="space-y-1">
               <Label htmlFor="chamar-time" className="text-xs">

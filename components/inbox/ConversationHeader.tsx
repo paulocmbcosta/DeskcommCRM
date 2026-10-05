@@ -413,6 +413,9 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
           </Button>
         )}
         {encerrada && <Button size="sm" variant="outline" disabled={reopen.isPending}
+          // "Reabrir" e "chamar de novo" são gestos diferentes, e a diferença
+          // é o protocolo: este CONTINUA o atendimento que estava encerrado.
+          title={t("Continua este mesmo atendimento, com o mesmo protocolo. Para começar um atendimento novo, use Chamar no WhatsApp.")}
           onClick={() => reopen.mutate({ conversation_id: conversation.id, expected_revision: conversation.service_revision })}>
           {t("Reabrir")}
         </Button>}

@@ -97,6 +97,10 @@ correspondentes localizados no repo):
   tela quando o canal exige. Até 2026-09-19 a última parte não existia: o backend aceitava
   `template_values` desde julho e nenhuma tela os coletava, então iniciar conversa pelo
   canal oficial era impossível pelo produto.
+  O mesmo gesto serve para **chamar de novo** quem já foi atendido e teve o atendimento
+  encerrado (2026-10-05): nasce um atendimento novo, com protocolo próprio. Até essa data
+  bastava o contato ter conversa para a tela levar ao atendimento encerrado, e o contato novo
+  saía com o protocolo antigo (J40 em `docs/testing/user-journey-map.md`).
 - **Chat do site** (2026-09-20, migration 0272) — o primeiro canal que não é WhatsApp: um
   widget que o dono cola no próprio site (`Conexões › Chat do site`: cor, textos, formulário
   inicial, prévia ao vivo, código de uma linha e o sinal "Instalado · exemplo.com"). Quem

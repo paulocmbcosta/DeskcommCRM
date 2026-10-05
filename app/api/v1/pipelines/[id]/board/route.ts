@@ -27,6 +27,11 @@ import type { LeadCandidate } from "@/lib/leads/active-lead";
 import { createClient } from "@/lib/supabase/server";
 import type { BoardData, Pipeline, Stage } from "@/lib/kanban/types";
 import type { Lead } from "@/lib/types/leads";
+import {
+  COLUNAS_DA_CONVERSA_DO_CONTATO,
+  conversaMaisRecentePorContato,
+  type LinhaDaConversaDoContato,
+} from "@/lib/atendimento/conversa-do-contato";
 
 export const dynamic = "force-dynamic";
 
@@ -255,29 +260,16 @@ async function withConversas(
 
   const { data, error } = await supabase
     .from("conversations")
-    .select("id, contact_id, last_message_preview, last_message_at, unread_count_for_assignee")
+    .select(COLUNAS_DA_CONVERSA_DO_CONTATO)
     .eq("organization_id", organizationId)
     .in("contact_id", contactIds)
     .order("last_message_at", { ascending: false, nullsFirst: false });
   if (error) return { leads, error: error.message };
 
-  const porContato = new Map<string, NonNullable<Lead["conversa"]>>();
-  for (const row of (data ?? []) as Array<{
-    id: string;
-    contact_id: string;
-    last_message_preview: string | null;
-    last_message_at: string | null;
-    unread_count_for_assignee: number | null;
-  }>) {
-    // Primeira vista vence: a consulta já veio ordenada por atividade.
-    if (porContato.has(row.contact_id)) continue;
-    porContato.set(row.contact_id, {
-      id: row.id,
-      preview: row.last_message_preview,
-      last_message_at: row.last_message_at,
-      unread: row.unread_count_for_assignee ?? 0,
-    });
-  }
+  // Primeira vista vence: a consulta já veio ordenada por atividade.
+  const porContato = conversaMaisRecentePorContato(
+    (data ?? []) as unknown as LinhaDaConversaDoContato[],
+  );
 
   return {
     leads: leads.map((lead) => {

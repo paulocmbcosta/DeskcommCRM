@@ -32,6 +32,10 @@ const conversa = {
   preview: "Gracias 🤝",
   last_message_at: "2026-08-10T15:56:00Z",
   unread: 3,
+  // Atendimento EM ANDAMENTO: é o estado que este arquivo mede. O encerrado
+  // oferece outra porta — ver `components/kanban/ConversaNoDossie.porta.test.tsx`.
+  status: "claimed",
+  channel_session_id: "sessao-1",
 };
 
 describe("a porta para a conversa", () => {

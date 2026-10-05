@@ -29,7 +29,7 @@
       "lane": "tela",
       "col": 1,
       "type": "frontend",
-      "label": "Contatos, dossiê do contato e dossiê do negócio — o botão `Chamar no WhatsApp` aparece só quando ainda NÃO há conversa"
+      "label": "Contatos, dossiê do contato e dossiê do negócio — o botão `Chamar no WhatsApp` aparece quando NÃO há atendimento em andamento: nunca houve conversa, ou a última foi ENCERRADA"
     },
     {
       "id": "dialogo",
@@ -37,6 +37,13 @@
       "col": 2,
       "type": "frontend",
       "label": "ChamarNoWhatsAppDialog — escolhe a conexão, mostra a restrição ANTES da escrita, e envia num ato"
+    },
+    {
+      "id": "encerrada",
+      "lane": "tela",
+      "col": 1,
+      "type": "frontend",
+      "label": "NovoAtendimentoAviso (inbox) — o pé da conversa ENCERRADA: no lugar do seletor de modelo, oferece o atendimento novo. `Reabrir` continua sendo o outro gesto (mesmo protocolo)"
     },
     {
       "id": "campos",
@@ -50,7 +57,14 @@
       "lane": "tela",
       "col": 2,
       "type": "frontend",
-      "label": "JanelaFechadaAviso (inbox) — mesma coleta de valores quando a janela de 24h já fechou"
+      "label": "JanelaFechadaAviso (inbox) — mesma coleta de valores quando a janela de 24h já fechou; só com a conversa EM ANDAMENTO"
+    },
+    {
+      "id": "porta",
+      "lane": "api",
+      "col": 1,
+      "type": "backend",
+      "label": "conversaMaisRecentePorContato + portaDaConversa (GET /contacts e o quadro) — a conversa do contato leva o ESTADO: em andamento = abrir; encerrada = chamar de novo"
     },
     {
       "id": "api-modelos",
@@ -127,7 +141,7 @@
       "lane": "banco",
       "col": 6,
       "type": "database",
-      "label": "fn_service_begin — abre o atendimento e escreve na linha do tempo; é o rastro que sobrevive ao envio falho"
+      "label": "fn_service_begin — abre o atendimento e escreve na linha do tempo; é o rastro que sobrevive ao envio falho. Conversa encerrada → atendimento NOVO, com protocolo novo, sem o dono do anterior"
     },
     {
       "id": "espelho",
@@ -159,7 +173,11 @@
     }
   ],
   "edges": [
-    { "from": "contatos", "to": "dialogo", "label": "sem conversa ainda" },
+    { "from": "contatos", "to": "dialogo", "label": "sem atendimento em andamento" },
+    { "from": "mensagens", "to": "porta", "label": "conversations.status da mais recente" },
+    { "from": "porta", "to": "contatos", "label": "abrir | chamar | chamar de novo" },
+    { "from": "encerrada", "to": "dialogo", "label": "chamar de novo, pelo número desta conversa" },
+    { "from": "dialogo", "to": "encerrada", "label": "onIniciada — o Inbox mostra o atendimento novo" },
     { "from": "dialogo", "to": "api-modelos", "label": "o que este canal permite?" },
     { "from": "api-modelos", "to": "modelos", "label": "channel_session_id" },
     { "from": "modelos", "to": "espelho", "label": "aprovados desta conexão" },
@@ -173,7 +191,7 @@
     { "from": "mcp", "to": "iniciar", "label": "a mesma composição" },
     { "from": "iniciar", "to": "abrir", "label": "contato + conexão" },
     { "from": "abrir", "to": "servico", "label": "beginServiceAtOrigin" },
-    { "from": "servico", "to": "mensagens", "label": "conversa 1:1 (reabre se fechada)" },
+    { "from": "servico", "to": "mensagens", "label": "conversa 1:1 (encerrada → atendimento novo, na mesma conversa)" },
     { "from": "iniciar", "to": "handler", "label": "conversation_id resolvido" },
     { "from": "handler", "to": "preflight", "label": "pré-voo do modelo" },
     { "from": "preflight", "to": "contrato", "label": "a MESMA derivação" },
