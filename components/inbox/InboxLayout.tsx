@@ -12,7 +12,8 @@ import { NovoAtendimentoAviso } from "@/components/inbox/NovoAtendimentoAviso";
 import { conversaEncerrada } from "@/lib/atendimento/conversa-do-contato";
 import { useQueryClient } from "@tanstack/react-query";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
-import { useCloseConversation } from "@/hooks/inbox/useCloseConversation";
+import { EncerrarAtendimentoDialog } from "./EncerrarAtendimentoDialog";
+import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { useMarkAsRead } from "@/hooks/inbox/useMarkAsRead";
 import {
   useConversationsRealtime,
@@ -351,7 +352,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   const atendimentoEmTela = atendimentoEscolhido ?? atendimentoVigente;
 
   const claim = useClaimConversation();
-  const close = useCloseConversation();
+  // A JANELA DE ENCERRAMENTO (migration 0293). Mora aqui porque duas portas a
+  // abrem — o botão "Fechar" do cabeçalho e o atalho `e` — e porque ela precisa
+  // do atendimento vigente, que este componente já carrega.
+  const [encerrarOpen, setEncerrarOpen] = useState(false);
 
   // A leitura da conversa aberta é do upstream e fica: sem ela o contador de
   // não-lidas nunca zera para quem abre a conversa.
@@ -422,8 +426,12 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   }, [claim, selectedConversation]);
   const handleClose = useCallback(() => {
     if (!selectedConversation) return;
-    close.mutate({ conversation_id: selectedConversation.id });
-  }, [close, selectedConversation]);
+    // Encerrada não se encerra de novo, e atendimento antigo na tela não é o
+    // de agora: nos dois casos o atalho `e` não abre nada (o botão nem aparece).
+    if (["closed", "resolved", "archived"].includes(selectedConversation.status)) return;
+    if (vendoAtendimentoAntigo) return;
+    setEncerrarOpen(true);
+  }, [selectedConversation, vendoAtendimentoAntigo]);
 
   // A janela vence SOZINHA com a aba aberta. Sem este relógio, quem deixa o
   // inbox aberto a tarde inteira seguiria com o composer liberado numa conversa
@@ -764,7 +772,11 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         )}
         {selectedConversation ? (
           <>
-            <ConversationHeader conversation={selectedConversation} somenteLeitura={vendoAtendimentoAntigo} />
+            <ConversationHeader
+              conversation={selectedConversation}
+              somenteLeitura={vendoAtendimentoAntigo}
+              onEncerrar={handleClose}
+            />
             {/* ATENDIMENTO ANTIGO NA TELA. O aviso diz três coisas que o
                 atendente precisa saber antes de qualquer outra: que aquilo não
                 é o presente, de quando é, e como voltar. */}
@@ -893,7 +905,24 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         onClaim={supportReadonly ? () => {} : handleClaim}
         onClose={supportReadonly ? () => {} : handleClose}
         onToggleHelp={() => setHelpOpen((v) => !v)}
+        // Com a janela aberta os atalhos param: `j`/`k` trocariam de conversa
+        // por baixo dela, e o registro iria para o atendimento errado.
+        enabled={!encerrarOpen}
       />
+      {selectedConversation && (
+        <EncerrarAtendimentoDialog
+          conversationId={selectedConversation.id}
+          expectedRevision={selectedConversation.service_revision}
+          contato={rotuloDoContato(selectedConversation.contacts ?? null, t)}
+          protocolo={atendimentoVigente?.protocol ?? selectedConversation.protocol ?? null}
+          // Só o atendimento ABERTO: é dele o registro que a janela mostra
+          // preenchido (caso do "Reabrir"). Um já fechado não é o que vai fechar.
+          atendimento={atendimentoVigente && !atendimentoVigente.closed_at ? atendimentoVigente : null}
+          grupo={Boolean(selectedConversation.is_group)}
+          open={encerrarOpen}
+          onOpenChange={setEncerrarOpen}
+        />
+      )}
       <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
     </OpenConversationProvider>
