@@ -50,7 +50,7 @@ Medido na instalação de produção em 2026-10-05 (14 dias, consulta agregada):
 | `created_at`, `updated_at` | `timestamptz` | |
 
 - `unique (organization_id, id)`; índice único `(team_id, lower(btrim(name)))`.
-- RLS ligada, policy `tenant_isolation_atendimento_assuntos_all`; GRANT só de `select`
+- RLS ligada, policy `tenant_isolation_atendimento_assuntos_select` (só leitura); GRANT só de `select`
   a `authenticated` e `service_role`. A escrita é só por RPC `security definer`, o
   mesmo desenho de `attendance_teams` (0263).
 

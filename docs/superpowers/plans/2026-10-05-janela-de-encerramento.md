@@ -53,7 +53,7 @@ Zod, React 19 + react-query, Vitest, Playwright.
 ## Tarefa 1 — Banco (migration 0293)
 
 - [ ] Escrever a migration, idempotente e portável (sem `BEGIN`, sem temp table):
-  - `atendimento_assuntos` conforme §4.1 da spec; RLS + policy `tenant_isolation_atendimento_assuntos_all`;
+  - `atendimento_assuntos` conforme §4.1 da spec; RLS + policy `tenant_isolation_atendimento_assuntos_select` (só leitura);
     `revoke all ... from public, anon, authenticated, service_role` e `grant select to authenticated, service_role`.
   - `alter table atendimentos add column if not exists assunto_id / closure_summary`; FK e CHECK em bloco `do $$ ... exception when duplicate_object`.
   - `create index if not exists atendimentos_org_fechamento on atendimentos(organization_id, closed_at) where closed_at is not null`.

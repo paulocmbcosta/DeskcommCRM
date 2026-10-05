@@ -30438,10 +30438,13 @@ alter table public.atendimento_assuntos enable row level security;
 revoke all on public.atendimento_assuntos from public, anon, authenticated, service_role;
 grant select on public.atendimento_assuntos to authenticated, service_role;
 
--- Policy `for all` (doutrina do CLAUDE.md), GRANT só de SELECT: o grant é o
--- portão mais estreito, e é ele que impede escrita pela REST.
+-- Policy só de SELECT, e GRANT só de SELECT: a tabela não tem escrita pela REST
+-- por nenhum dos dois portões. É o formato de `attendance_teams` depois da
+-- correção dela — uma policy `for all` só com tenancy é a dívida de RBAC que
+-- `tests/invariants/rbac-config-ia-canais.test.ts` não deixa crescer.
 drop policy if exists tenant_isolation_atendimento_assuntos_all on public.atendimento_assuntos;
-create policy tenant_isolation_atendimento_assuntos_all on public.atendimento_assuntos for all to authenticated
+drop policy if exists tenant_isolation_atendimento_assuntos_select on public.atendimento_assuntos;
+create policy tenant_isolation_atendimento_assuntos_select on public.atendimento_assuntos for select to authenticated
  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
 
 -- ---------------------------------------------------------------------------
