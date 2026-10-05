@@ -334,6 +334,49 @@ describe("fn_atendimento_encerrar: a porta única", () => {
     expect(out[0]).toBe("closed|NULO|1234567890|Ana Atendente");
   });
 
+  it("quebra de linha e tabulação não contam como letra: dez ENTERs não são um resumo", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const chamada = (texto: string) =>
+      `public.fn_atendimento_encerrar('${ORG_A}', '${conv}', null, '${ANA}', null, ${texto})`;
+    const out = linhas(
+      sql(`
+        begin;
+        ${interruptores(false, true)}
+        ${recusa("encerramento_resumo_obrigatorio", chamada("repeat(chr(10), 12)"))}
+        ${recusa("encerramento_resumo_obrigatorio", chamada("chr(9) || chr(10) || '123456789' || chr(13) || chr(10) || ' '"))}
+        select (${chamada("chr(10) || '1234567890' || chr(10)")}).id;
+        ${registro(conv)}
+        rollback;
+      `),
+    );
+    expect(out[0]).toBe("closed|NULO|1234567890|Ana Atendente");
+  });
+
+  it("resumo em BRANCO apaga o que havia; NULL preserva — e com a exigência ligada o branco é recusado", () => {
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const reabrir = `select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'open', null, '${BIA}', true)).id;`;
+    const out = linhas(
+      sql(`
+        begin;
+        select (${encerrar(conv, ANA, WIFI, "Texto que vai ser apagado.")}).id;
+        ${reabrir}
+        select (${encerrar(conv, BIA, null, "")}).id;
+        ${registro(conv)}
+        ${reabrir}
+        select (${encerrar(conv, BIA, null, "Texto novo, com dez letras.")}).id;
+        ${reabrir}
+        ${interruptores(false, true)}
+        ${recusa("encerramento_resumo_obrigatorio", encerrar(conv, BIA, null, "   "))}
+        select '@@' || (closed_at is null) || '|' || closure_summary from public.atendimentos where conversation_id = '${conv}';
+        rollback;
+      `),
+    );
+    // Apagou o resumo, e o ASSUNTO (que não foi informado) ficou.
+    expect(out[0]).toBe(`closed|${WIFI}|NULO|Bia Gestora`);
+    // A recusa não apagou nada: o atendimento segue aberto com o texto anterior.
+    expect(out[1]).toBe("true|Texto novo, com dez letras.");
+  });
+
   it("resumo com mais de 2000 letras é recusado mesmo com os interruptores desligados", () => {
     const conv = conversaDe(ORG_A, CONTATO_A);
     const erro = erroAoRodar(
@@ -486,6 +529,34 @@ describe("LGPD: anonimizar o contato", () => {
     expect(out[0]).toBe(`NULO|${WIFI}`);
     // O vizinho de carteira não é tocado: o gatilho é por contato.
     expect(out[1]).toBe("Outro cliente, outro resumo.");
+  });
+
+  it("contato JÁ anonimizado não ganha resumo novo, e a exigência do resumo não trava o encerramento", () => {
+    // O gatilho de redação só dispara na TRANSIÇÃO para anonimizado. Sem esta
+    // regra, o operador que anonimiza com a conversa aberta e depois a fecha
+    // escrevendo "Fulano pediu a exclusão dos dados" deixaria o nome gravado
+    // para sempre — a anonimização já passou, e nada mais apagaria o texto.
+    const conv = conversaDe(ORG_A, CONTATO_A);
+    const out = linhas(
+      sql(`
+        begin;
+        ${interruptores(false, true)}
+        select public.fn_lgpd_cascade_redact_contact('${ORG_A}', '${CONTATO_A}', gen_random_uuid());
+        -- Se a cascata tiver encerrado a conversa, reabre: o que se mede é o
+        -- encerramento por PESSOA depois da anonimização.
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'open', null, '${BIA}', true)).id;
+        select '@@' || (closed_at is null) from public.atendimentos where conversation_id = '${conv}' order by started_at desc limit 1;
+        select (${encerrar(conv, ANA, WIFI, "Maria Souza pediu a exclusão dos dados.")}).id;
+        ${registro(conv)}
+        select (public.fn_service_status_com_ator('${ORG_A}', '${conv}', 'open', null, '${BIA}', true)).id;
+        select (${encerrar(conv, ANA, null, null)}).id;
+        ${registro(conv)}
+        rollback;
+      `),
+    );
+    expect(out[0], "controle: havia atendimento aberto para encerrar").toBe("true");
+    expect(out[1]).toBe(`closed|${WIFI}|NULO|Ana Atendente`);
+    expect(out[2]).toBe(`closed|${WIFI}|NULO|Ana Atendente`);
   });
 });
 

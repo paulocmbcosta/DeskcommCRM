@@ -433,8 +433,11 @@ export async function patchConversationHandler(
     }
   }
 
+  let registrouEncerramento = false;
   if (input.status !== undefined) {
     const observed = await getConversationHandler(supabase, ctx, conversationId);
+    registrouEncerramento =
+      !observed.is_group && !["closed", "resolved", "archived"].includes(String(observed.status));
     // COM AUTOR, e `open` CONTINUA o atendimento (migration 0266).
     //
     // Esta porta usa o service role, então `auth.uid()` é nulo dentro do banco e
@@ -525,7 +528,9 @@ export async function patchConversationHandler(
         ...a.metadataActor,
         status: input.status,
         // Só a marca: o resumo é texto livre sobre o cliente e não entra em log append-only.
-        ...(action === "conversation.closed"
+        // E só quando houve o que registrar: fechar o que já estava encerrado,
+        // ou um grupo (sem atendimento), não grava registro nenhum.
+        ...(action === "conversation.closed" && registrouEncerramento
           ? { assunto_id: input.assunto_id ?? null, com_resumo: (input.resumo ?? "").trim().length > 0 }
           : {}),
       },

@@ -58,7 +58,10 @@ beforeEach(() => {
   };
   vi.mocked(createClient).mockResolvedValue({ from: () => consulta } as never);
   vi.mocked(createAdminClient).mockReturnValue({ rpc } as never);
-  maybeSingle.mockResolvedValue({ data: { id: conversa, organization_id: org, service_revision: 7 }, error: null });
+  maybeSingle.mockResolvedValue({
+    data: { id: conversa, organization_id: org, service_revision: 7, status: "open", is_group: false },
+    error: null,
+  });
   rpc.mockResolvedValue({ data: { id: conversa, organization_id: org, status: "closed" }, error: null });
 });
 
@@ -154,5 +157,17 @@ describe("POST /api/v1/conversations/[id]/close", () => {
       metadata: { assunto_id: assunto, com_resumo: true },
     });
     expect(JSON.stringify(entrada)).not.toContain("Maria");
+  });
+
+  it.each([
+    ["já encerrada", { status: "closed", is_group: false }],
+    ["de grupo", { status: "open", is_group: true }],
+  ])("conversa %s: a auditoria não afirma um registro que não foi gravado", async (_nome, estado) => {
+    maybeSingle.mockResolvedValue({
+      data: { id: conversa, organization_id: org, service_revision: 7, ...estado },
+      error: null,
+    });
+    await POST(req({ assunto_id: assunto, resumo: "Texto que o banco vai descartar." }), ctx);
+    expect(vi.mocked(audit).mock.calls[0]![0].metadata).toEqual({ sem_registro: true });
   });
 });

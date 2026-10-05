@@ -30558,11 +30558,20 @@ grant  execute on function public.fn_archive_atendimento_assunto(uuid,uuid,boole
 -- atendentes fechando ao mesmo tempo poderiam gravar o registro de um sobre o
 -- fechamento do outro. A trava é de transação e reentrante.
 --
--- Omitir assunto ou resumo NÃO apaga o que o atendimento já tinha: é o que faz
--- "Reabrir e fechar de novo" não perder o registro.
+-- Omitir assunto ou resumo (NULL) NÃO apaga o que o atendimento já tinha: é o
+-- que faz "Reabrir e fechar de novo" não perder o registro. Resumo EM BRANCO
+-- (texto vazio) é o gesto de apagar — e, com "exigir resumo" ligado, é recusado.
 --
 -- O RESUMO NÃO ENTRA no payload do evento: é texto livre sobre o cliente (mesma
--- regra do motivo da passagem, no trigger da 0266).
+-- regra do motivo da passagem, no trigger da 0266). E CONTATO ANONIMIZADO não
+-- ganha resumo novo: o gatilho de redação só dispara na transição para
+-- anonimizado, e texto escrito depois dela nunca seria apagado.
+--
+-- ⚠️ O QUE ESTA FUNÇÃO NÃO FECHA: `authenticated` tem UPDATE em `conversations`
+-- (snapshot) e a policy `conversations_agent_update` deixa um membro mudar o
+-- `status` falando direto com o PostgREST, sem passar por aqui — como já podia
+-- contornar `fn_service_status`. A regra vale para as portas da API; a REST
+-- direta é dívida anterior a esta migration, e não foi aberta por ela.
 -- ---------------------------------------------------------------------------
 create or replace function public.fn_atendimento_encerrar(
   p_org uuid, p_conversation uuid, p_expected bigint, p_actor uuid,
@@ -30578,14 +30587,21 @@ declare
   v_exigir_resumo  boolean;
   v_assunto_nome   text;
   v_time_nome      text;
+  v_pre_contato    uuid;
+  v_anonimizado    boolean;
 begin
   if p_status is null or p_status not in ('closed','resolved','archived') then
     raise exception 'invalid_status' using errcode='22023'; end if;
 
   select * into c from public.conversations where id = p_conversation and organization_id = p_org;
   if not found then raise exception 'service_not_found' using errcode='P0002'; end if;
+  v_pre_contato := c.contact_id;
   perform public.fn_service_lock(p_org, c.contact_id);
   select * into c from public.conversations where id = p_conversation and organization_id = p_org for no key update;
+  -- A mesma rechecagem de `fn_service_status`: se o contato mudou entre a
+  -- leitura e a trava (fusão de contatos), a trava tomada é a do contato ERRADO.
+  if c.contact_id is distinct from v_pre_contato then
+    raise exception 'service_contact_changed' using errcode='40001'; end if;
 
   -- Já encerrada (outro atendente fechou primeiro, ou é troca entre estados
   -- terminais): o registro de quem fechou fica como está.
@@ -30614,13 +30630,27 @@ begin
     end if;
     v_assunto := p_assunto;
   end if;
-  v_resumo := coalesce(nullif(btrim(coalesce(p_resumo, '')), ''), v_resumo);
+  -- NULL = não informado (preserva). Texto em branco = apagar.
+  -- `regexp_replace`, e não `btrim`: `btrim` só tira ESPAÇO, e dez quebras de
+  -- linha passariam por um resumo de dez letras.
+  if p_resumo is not null then
+    v_resumo := nullif(regexp_replace(p_resumo, '^\s+|\s+$', '', 'g'), '');
+  end if;
 
   select settings->'atendimento'->'encerramento' into v_cfg from public.organizations where id = p_org;
   -- Comparação de jsonb, e não cast: `settings` não é validado por escritor
   -- nenhum, e um valor torto ali não pode impedir uma conversa de fechar.
   v_exigir_assunto := coalesce(v_cfg->'exigir_assunto' = 'true'::jsonb, false);
   v_exigir_resumo  := coalesce(v_cfg->'exigir_resumo'  = 'true'::jsonb, false);
+
+  -- CONTATO ANONIMIZADO: nenhum texto livre novo sobre ele, e portanto nada a
+  -- exigir. O assunto (estatística) continua valendo.
+  select coalesce(ct.is_anonymized, false) into v_anonimizado
+    from public.contacts ct where ct.id = c.contact_id and ct.organization_id = p_org;
+  if coalesce(v_anonimizado, false) then
+    v_resumo := null;
+    v_exigir_resumo := false;
+  end if;
 
   if char_length(coalesce(v_resumo, '')) > 2000 then
     raise exception 'encerramento_resumo_longo' using errcode='22023'; end if;

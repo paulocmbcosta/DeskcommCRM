@@ -25,6 +25,9 @@ import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
 
+/** Estados em que a conversa já está encerrada: fechar de novo não grava registro. */
+const ENCERRADOS: ReadonlySet<string> = new Set(["closed", "resolved", "archived"]);
+
 interface RouteCtx {
   params: Promise<{ id: string }>;
 }
@@ -49,7 +52,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const user = authz.user;
 
   const { data: visible, error: readError } = await supabase.from("conversations")
-    .select("id, organization_id, service_revision").eq("id", id)
+    .select("id, organization_id, service_revision, status, is_group").eq("id", id)
     .eq("organization_id", authz.org.orgId).maybeSingle();
   if (readError) return fail("internal_error", readError.message, 500, { requestId });
   if (!visible) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
@@ -74,6 +77,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
       error.code === "40001" ? 409 : 500, { requestId });
   }
   const conv = data as unknown as Conversation;
+  const registrou = !visible.is_group && !ENCERRADOS.has(String(visible.status));
 
   await audit({
     action: "conversation.closed",
@@ -84,10 +88,17 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     requestId,
     // O resumo NÃO vai para a auditoria: é texto livre sobre o cliente, e o
     // audit log é append-only — não haveria como apagá-lo numa anonimização.
-    metadata: {
-      assunto_id: parsed.data.assunto_id ?? null,
-      com_resumo: (parsed.data.resumo ?? "").trim().length > 0,
-    },
+    //
+    // E a auditoria diz o que ACONTECEU, não o que foi pedido: fechar o que já
+    // estava encerrado, ou uma conversa de grupo (que não tem atendimento), não
+    // grava registro nenhum — afirmar `assunto_id` ali seria auditar um efeito
+    // que não houve.
+    metadata: registrou
+      ? {
+          assunto_id: parsed.data.assunto_id ?? null,
+          com_resumo: (parsed.data.resumo ?? "").trim().length > 0,
+        }
+      : { sem_registro: true },
   });
 
   return ok(conv, { requestId });

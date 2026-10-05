@@ -355,7 +355,23 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // A JANELA DE ENCERRAMENTO (migration 0293). Mora aqui porque duas portas a
   // abrem — o botão "Fechar" do cabeçalho e o atalho `e` — e porque ela precisa
   // do atendimento vigente, que este componente já carrega.
-  const [encerrarOpen, setEncerrarOpen] = useState(false);
+  //
+  // O estado é o ALVO, e não um booleano: a janela fecha o atendimento em que
+  // foi aberta. Um `open` solto continuaria verdadeiro quando a conversa sai da
+  // tela, e a janela reapareceria sozinha em cima da PRÓXIMA conversa clicada —
+  // com os atalhos mortos no intervalo. E o que ela mostra (de quem é, qual
+  // protocolo) é o que valia na abertura: a conversa pode sumir da lista por um
+  // instante enquanto recarrega, e isso não pode desmontar o que foi digitado.
+  const [encerrando, setEncerrando] = useState<{
+    conversationId: string;
+    contato: string;
+    protocolo: string | null;
+    revisao: number | undefined;
+    grupo: boolean;
+    anonimizado: boolean;
+  } | null>(null);
+  // Trocou de conversa: a janela da anterior não acompanha.
+  if (encerrando !== null && encerrando.conversationId !== selectedId) setEncerrando(null);
 
   // A leitura da conversa aberta é do upstream e fica: sem ela o contador de
   // não-lidas nunca zera para quem abre a conversa.
@@ -433,8 +449,20 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // Função simples, sem `useCallback`: nenhum dos dois consumidores (o cabeçalho
   // e os atalhos) depende da identidade dela.
   const handleClose = () => {
-    if (podeEncerrar) setEncerrarOpen(true);
+    if (!podeEncerrar || !selectedConversation) return;
+    setEncerrando({
+      conversationId: selectedConversation.id,
+      contato: rotuloDoContato(selectedConversation.contacts ?? null, t),
+      protocolo: atendimentoVigente?.protocol ?? selectedConversation.protocol ?? null,
+      revisao: selectedConversation.service_revision,
+      grupo: Boolean(selectedConversation.is_group),
+      anonimizado: Boolean(selectedConversation.contacts?.is_anonymized),
+    });
   };
+  // A conversa da janela, quando está na tela: é dela que vêm o protocolo e a
+  // revisão de AGORA. Fora da tela por um instante, valem os da abertura.
+  const conversaDaJanela =
+    encerrando !== null && selectedConversation?.id === encerrando.conversationId ? selectedConversation : null;
 
   // A janela vence SOZINHA com a aba aberta. Sem este relógio, quem deixa o
   // inbox aberto a tarde inteira seguiria com o composer liberado numa conversa
@@ -910,20 +938,34 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         onToggleHelp={() => setHelpOpen((v) => !v)}
         // Com a janela aberta os atalhos param: `j`/`k` trocariam de conversa
         // por baixo dela, e o registro iria para o atendimento errado.
-        enabled={!encerrarOpen}
+        enabled={encerrando === null}
       />
-      {selectedConversation && (
+      {encerrando !== null && (
         <EncerrarAtendimentoDialog
-          conversationId={selectedConversation.id}
-          expectedRevision={selectedConversation.service_revision}
-          contato={rotuloDoContato(selectedConversation.contacts ?? null, t)}
-          protocolo={atendimentoVigente?.protocol ?? selectedConversation.protocol ?? null}
-          // Só o atendimento ABERTO: é dele o registro que a janela mostra
-          // preenchido (caso do "Reabrir"). Um já fechado não é o que vai fechar.
-          atendimento={atendimentoVigente && !atendimentoVigente.closed_at ? atendimentoVigente : null}
-          grupo={Boolean(selectedConversation.is_group)}
-          open={encerrarOpen}
-          onOpenChange={setEncerrarOpen}
+          conversationId={encerrando.conversationId}
+          expectedRevision={conversaDaJanela?.service_revision ?? encerrando.revisao}
+          contato={encerrando.contato}
+          protocolo={encerrando.protocolo}
+          protocoloAtual={conversaDaJanela ? (conversaDaJanela.protocol ?? null) : encerrando.protocolo}
+          jaEncerrada={
+            conversaDaJanela !== null && ["closed", "resolved", "archived"].includes(conversaDaJanela.status)
+          }
+          // Só o atendimento ABERTO, e só o da abertura: é dele o registro que a
+          // janela mostra preenchido (caso do "Reabrir").
+          atendimento={
+            conversaDaJanela !== null &&
+            atendimentoVigente &&
+            !atendimentoVigente.closed_at &&
+            atendimentoVigente.protocol === encerrando.protocolo
+              ? atendimentoVigente
+              : null
+          }
+          grupo={encerrando.grupo}
+          anonimizado={encerrando.anonimizado}
+          open
+          onOpenChange={(v) => {
+            if (!v) setEncerrando(null);
+          }}
         />
       )}
       <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />

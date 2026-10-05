@@ -20,17 +20,21 @@ import { EncerrarAtendimentoDialog, setorInicial, type AtendimentoAEncerrar } fr
 vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (texto: string) => texto }));
 
 const mutate = vi.fn();
+let enviando = false;
 vi.mock("@/hooks/inbox/useCloseConversation", () => ({
-  useCloseConversation: () => ({ mutate, isPending: false }),
+  useCloseConversation: () => ({ mutate, isPending: enviando }),
   recusaDoServidor: (err: unknown) => (err as { recusa?: unknown } | null)?.recusa ?? null,
 }));
 
-let opcoes: OpcoesDeEncerramento;
+let opcoes: OpcoesDeEncerramento | undefined;
+/** O estado da consulta de assuntos, como o react-query o entrega. */
+let consulta = { isLoading: false, isError: false, errorUpdateCount: 0 };
 const pediuOpcoes = vi.fn();
+const recarregar = vi.fn();
 vi.mock("@/hooks/inbox/useOpcoesDeEncerramento", () => ({
   useOpcoesDeEncerramento: (enabled: boolean) => {
     pediuOpcoes(enabled);
-    return { data: opcoes, isLoading: false, isError: false, refetch: vi.fn() };
+    return { data: opcoes, ...consulta, refetch: recarregar };
   },
 }));
 
@@ -46,10 +50,12 @@ const TIMES: OpcoesDeEncerramento["times"] = [
   },
 ];
 
+const PROTOCOLO = "20261005000061";
+
 function abrir(
   atendimento: AtendimentoAEncerrar | null,
   regra: Partial<OpcoesDeEncerramento> = {},
-  extra: { grupo?: boolean } = {},
+  extra: { grupo?: boolean; anonimizado?: boolean; protocoloAtual?: string | null; jaEncerrada?: boolean } = {},
 ) {
   opcoes = { exigir_assunto: false, exigir_resumo: false, times: TIMES, ...regra };
   const onOpenChange = vi.fn();
@@ -58,9 +64,12 @@ function abrir(
       conversationId="conv-1"
       expectedRevision={7}
       contato="Maria Souza"
-      protocolo="20261005000061"
+      protocolo={PROTOCOLO}
+      protocoloAtual={extra.protocoloAtual === undefined ? PROTOCOLO : extra.protocoloAtual}
+      jaEncerrada={extra.jaEncerrada ?? false}
       atendimento={atendimento}
       grupo={extra.grupo ?? false}
+      anonimizado={extra.anonimizado ?? false}
       open
       onOpenChange={onOpenChange}
     />,
@@ -75,6 +84,9 @@ afterEach(() => {
   cleanup();
   mutate.mockReset();
   pediuOpcoes.mockReset();
+  recarregar.mockReset();
+  enviando = false;
+  consulta = { isLoading: false, isError: false, errorUpdateCount: 0 };
 });
 
 describe("setorInicial", () => {
@@ -234,9 +246,12 @@ describe("o atendimento chega DEPOIS de a janela abrir (Reabrir e logo Fechar)",
       conversationId="conv-1"
       expectedRevision={7}
       contato="Maria Souza"
-      protocolo="20261005000061"
+      protocolo={PROTOCOLO}
+      protocoloAtual={PROTOCOLO}
+      jaEncerrada={false}
       atendimento={atendimento}
       grupo={false}
+      anonimizado={false}
       open
       onOpenChange={() => {}}
     />
@@ -257,6 +272,123 @@ describe("o atendimento chega DEPOIS de a janela abrir (Reabrir e logo Fechar)",
     await userEvent.type(screen.getByTestId("encerramento-resumo"), "Texto novo");
     rerender(janela(registrado));
     expect((screen.getByTestId("encerramento-resumo") as HTMLTextAreaElement).value).toBe("Texto novo");
+  });
+});
+
+describe("a janela fecha o atendimento em que foi aberta, ou nenhum", () => {
+  it("outra pessoa encerrou e o cliente voltou (protocolo novo): nada é enviado, e o texto fica na tela", async () => {
+    abrir(semRegistro("t-sup"), {}, { protocoloAtual: "20261005000099" });
+    expect(screen.getByTestId("encerramento-mudou").textContent).toContain("há um atendimento novo em andamento");
+    expect(screen.getByTestId("encerramento-confirmar").hasAttribute("disabled")).toBe(true);
+    // O resumo continua lá, para a pessoa copiar se precisar.
+    expect(screen.getByTestId("encerramento-resumo")).toBeTruthy();
+    await confirmar();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("outra pessoa encerrou com a janela aberta: a janela diz, e não envia", async () => {
+    abrir(semRegistro("t-sup"), {}, { jaEncerrada: true });
+    expect(screen.getByTestId("encerramento-mudou").textContent).toContain("já foi encerrado por outra pessoa");
+    await confirmar();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("CONTROLE: com o mesmo protocolo e a conversa aberta, não há aviso", () => {
+    abrir(semRegistro("t-sup"));
+    expect(screen.queryByTestId("encerramento-mudou")).toBeNull();
+    expect(screen.getByTestId("encerramento-confirmar").hasAttribute("disabled")).toBe(false);
+  });
+});
+
+describe("o texto digitado não se perde por acidente", () => {
+  it("'Tentar de novo' na lista de assuntos não troca o formulário pelo esqueleto", () => {
+    // Depois de um erro, o refetch devolve a consulta a "carregando" — sem dados.
+    consulta = { isLoading: true, isError: false, errorUpdateCount: 1 };
+    opcoes = undefined;
+    render(
+      <EncerrarAtendimentoDialog
+        conversationId="conv-1"
+        contato="Maria Souza"
+        protocolo={PROTOCOLO}
+        protocoloAtual={PROTOCOLO}
+        jaEncerrada={false}
+        atendimento={null}
+        grupo={false}
+        anonimizado={false}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("encerramento-carregando")).toBeNull();
+    expect(screen.getByTestId("encerramento-resumo")).toBeTruthy();
+  });
+
+  it("CONTROLE: na PRIMEIRA carga, sem erro anterior, aparece o esqueleto", () => {
+    consulta = { isLoading: true, isError: false, errorUpdateCount: 0 };
+    opcoes = undefined;
+    render(
+      <EncerrarAtendimentoDialog
+        conversationId="conv-1"
+        contato="Maria Souza"
+        protocolo={PROTOCOLO}
+        protocoloAtual={PROTOCOLO}
+        jaEncerrada={false}
+        atendimento={null}
+        grupo={false}
+        anonimizado={false}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("encerramento-carregando")).toBeTruthy();
+  });
+
+  it("durante o envio, Cancelar fica travado: a recusa que ainda vem precisa de onde aparecer", () => {
+    enviando = true;
+    abrir(semRegistro("t-sup"));
+    expect(screen.getByRole("button", { name: "Cancelar" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("recusa de ASSUNTO do servidor aparece mesmo sem lista de assuntos, e a lista é recarregada", async () => {
+    abrir(semRegistro(null), { times: [] });
+    mutate.mockImplementation((_args, callbacks: { onError?: (err: unknown) => void }) =>
+      callbacks.onError?.({ recusa: { campo: "assunto", motivo: "obrigatorio" } }),
+    );
+    await confirmar();
+    expect(screen.getByTestId("encerramento-erro-assunto").textContent).toBe("Escolha o assunto do atendimento.");
+    expect(recarregar).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("apagar o resumo", () => {
+  const comResumo: AtendimentoAEncerrar = { team_id: "t-sup", assunto: null, closure_summary: "Texto antigo." };
+
+  it("limpar um resumo que existia manda texto VAZIO — o gesto de apagar", async () => {
+    abrir(comResumo);
+    await userEvent.clear(screen.getByTestId("encerramento-resumo"));
+    await confirmar();
+    expect(mutate.mock.calls[0]![0]).toMatchObject({ resumo: "" });
+  });
+
+  it("campo vazio em que ninguém mexeu manda NULO: nunca apaga nada", async () => {
+    abrir(semRegistro("t-sup"));
+    await confirmar();
+    expect(mutate.mock.calls[0]![0]).toMatchObject({ resumo: null });
+  });
+});
+
+describe("contato anonimizado", () => {
+  it("não há campo de resumo, a exigência não trava, e o resumo vai nulo", async () => {
+    abrir(
+      { team_id: "t-sup", assunto: null, closure_summary: null },
+      { exigir_resumo: true },
+      { anonimizado: true },
+    );
+    expect(screen.queryByTestId("encerramento-resumo")).toBeNull();
+    expect(screen.getByTestId("encerramento-sem-resumo")).toBeTruthy();
+    await confirmar();
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0]![0]).toMatchObject({ resumo: null });
   });
 });
 

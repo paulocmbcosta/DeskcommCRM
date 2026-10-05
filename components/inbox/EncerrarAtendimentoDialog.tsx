@@ -5,7 +5,7 @@
  * Substitui o `confirm()` do navegador, que fechava o atendimento sem dizer do
  * que ele tratou. Pede três coisas: o SETOR do assunto, o ASSUNTO e o RESUMO.
  *
- * ═══ Três decisões que não são óbvias ═══
+ * ═══ Cinco decisões que não são óbvias ═══
  *
  * 1. O SETOR É DO ASSUNTO, NÃO DO ATENDIMENTO. Ele vem preenchido com o time do
  *    atendimento, mas escolher outro aqui NÃO transfere a conversa: o cliente
@@ -22,8 +22,22 @@
  *    mesmo atendimento, e fechá-lo de novo não pode pedir para reescrever o que
  *    já estava escrito.
  *
+ * 4. ELA FECHA O ATENDIMENTO EM QUE FOI ABERTA, OU NENHUM. O `confirm()` era
+ *    síncrono; esta janela fica aberta enquanto alguém escreve. Se nesse meio
+ *    tempo outra pessoa encerra e o cliente volta, a conversa é a mesma mas o
+ *    atendimento é OUTRO — e o clique gravaria o resumo do antigo no novo. Por
+ *    isso ela guarda o protocolo da abertura e se recusa a enviar quando o
+ *    protocolo vigente já não é aquele.
+ *
+ * 5. O QUE FOI DIGITADO NÃO SE PERDE POR ACIDENTE. Clicar fora não fecha;
+ *    recarregar a lista de assuntos não desmonta o formulário; e enquanto o
+ *    envio está em curso a janela não fecha — uma recusa que chegasse depois
+ *    não teria onde aparecer.
+ *
  * Conversa de grupo não tem atendimento (o trigger da 0266 a pula): a janela
- * vira só a confirmação.
+ * vira só a confirmação. Contato ANONIMIZADO não recebe resumo — o banco o
+ * descartaria, porque texto livre novo sobre quem pediu o apagamento não teria
+ * mais quem o apagasse.
  */
 import { useMemo, useState } from "react";
 
@@ -70,12 +84,18 @@ export interface AtendimentoAEncerrar {
 interface Props {
   conversationId: string;
   expectedRevision?: number;
-  /** Para o cabeçalho: de quem é e qual é o protocolo. */
+  /** Para o cabeçalho: de quem é e qual é o protocolo — os da ABERTURA da janela. */
   contato: string;
   protocolo: string | null;
+  /** O protocolo vigente da conversa AGORA. Diferente do da abertura = o atendimento é outro. */
+  protocoloAtual: string | null;
+  /** A conversa já está encerrada agora (outra pessoa fechou com a janela aberta). */
+  jaEncerrada: boolean;
   /** O atendimento vigente. `null` enquanto o histórico não chegou. */
   atendimento: AtendimentoAEncerrar | null;
   grupo: boolean;
+  /** Contato anonimizado: não se escreve resumo sobre ele. */
+  anonimizado: boolean;
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }
@@ -95,13 +115,38 @@ export function setorInicial(
   return times.length === 1 ? times[0]!.id : "";
 }
 
+const SEM_OPCOES: OpcoesDeEncerramento = { exigir_assunto: false, exigir_resumo: false, times: [] };
+
+type Envio = ReturnType<typeof useCloseConversation>;
+
 export function EncerrarAtendimentoDialog(props: Props) {
   const t = useT();
   const opcoes = useOpcoesDeEncerramento(props.open && !props.grupo);
+  // A mutação mora AQUI, e não no formulário: é ela que diz à janela que não
+  // pode fechar enquanto o envio está em curso.
+  const envio = useCloseConversation();
+
+  // O esqueleto só aparece na PRIMEIRA carga. Um "Tentar de novo" devolve a
+  // consulta ao estado de carregando — e trocar o formulário pelo esqueleto ali
+  // apagaria o resumo que a pessoa já tinha escrito.
+  const primeiraCarga = opcoes.isLoading && opcoes.errorUpdateCount === 0;
+  const opcoesIndisponiveis = !props.grupo && (opcoes.isError || (opcoes.isLoading && !primeiraCarga));
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="sm:max-w-lg" data-testid="janela-de-encerramento">
+    <Dialog
+      open={props.open}
+      onOpenChange={(v) => {
+        if (!v && envio.isPending) return;
+        props.onOpenChange(v);
+      }}
+    >
+      <DialogContent
+        className="sm:max-w-lg"
+        data-testid="janela-de-encerramento"
+        // Clicar fora não fecha: é um formulário, e um clique perdido não pode
+        // custar o resumo digitado. Esc e "Cancelar" continuam fechando.
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{props.grupo ? t("Encerrar conversa") : t("Encerrar atendimento")}</DialogTitle>
           <DialogDescription>
@@ -115,9 +160,7 @@ export function EncerrarAtendimentoDialog(props: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        {props.grupo ? (
-          <Formulario {...props} opcoes={SEM_OPCOES} />
-        ) : opcoes.isLoading ? (
+        {!props.grupo && primeiraCarga ? (
           <div className="space-y-3" data-testid="encerramento-carregando">
             <Skeleton className="h-9 w-full" />
             <Skeleton className="h-24 w-full" />
@@ -128,9 +171,10 @@ export function EncerrarAtendimentoDialog(props: Props) {
           <Formulario
             key={props.conversationId}
             {...props}
-            opcoes={opcoes.data ?? SEM_OPCOES}
-            opcoesIndisponiveis={opcoes.isError}
-            onTentarDeNovo={() => void opcoes.refetch()}
+            envio={envio}
+            opcoes={props.grupo ? SEM_OPCOES : (opcoes.data ?? SEM_OPCOES)}
+            opcoesIndisponiveis={opcoesIndisponiveis}
+            onRecarregarOpcoes={() => void opcoes.refetch()}
           />
         )}
       </DialogContent>
@@ -138,50 +182,70 @@ export function EncerrarAtendimentoDialog(props: Props) {
   );
 }
 
-const SEM_OPCOES: OpcoesDeEncerramento = { exigir_assunto: false, exigir_resumo: false, times: [] };
-
 function Formulario({
   conversationId,
   expectedRevision,
+  protocolo,
+  protocoloAtual,
+  jaEncerrada,
   atendimento,
   grupo,
+  anonimizado,
   onOpenChange,
+  envio,
   opcoes,
-  opcoesIndisponiveis = false,
-  onTentarDeNovo,
-}: Props & { opcoes: OpcoesDeEncerramento; opcoesIndisponiveis?: boolean; onTentarDeNovo?: () => void }) {
+  opcoesIndisponiveis,
+  onRecarregarOpcoes,
+}: Props & {
+  envio: Envio;
+  opcoes: OpcoesDeEncerramento;
+  opcoesIndisponiveis: boolean;
+  onRecarregarOpcoes: () => void;
+}) {
   const t = useT();
-  const close = useCloseConversation();
 
   const assuntoRegistrado = atendimento?.assunto ?? null;
   const registradoEstaNaLista = opcoes.times.some((time) => time.assuntos.some((a) => a.id === assuntoRegistrado?.id));
+  const resumoRegistrado = atendimento?.closure_summary ?? "";
 
   const [setor, setSetor] = useState(() => setorInicial(opcoes.times, atendimento));
   const [assuntoId, setAssuntoId] = useState<string | null>(() =>
     registradoEstaNaLista ? (assuntoRegistrado?.id ?? null) : null,
   );
-  const [resumo, setResumo] = useState(atendimento?.closure_summary ?? "");
+  const [resumo, setResumo] = useState(resumoRegistrado);
   const [recusas, setRecusas] = useState<RecusaDoEncerramento[]>([]);
 
-  // O ATENDIMENTO PODE CHEGAR DEPOIS DA JANELA. Quem clica em "Reabrir" e logo
-  // em "Fechar" abre a janela antes de o histórico recarregar — e ela abriria
-  // em branco sobre um atendimento que TEM registro. Quando o dado chega, a
-  // janela se preenche; mas só se a pessoa ainda não mexeu em nada: o que ela
-  // digitou vale mais que o que estava guardado.
+  // O ATENDIMENTO E A LISTA DE ASSUNTOS PODEM CHEGAR DEPOIS DA JANELA. Quem
+  // clica em "Reabrir" e logo em "Fechar" abre a janela antes de o histórico
+  // recarregar — e ela abriria em branco sobre um atendimento que TEM registro.
+  // Quando o dado chega, a janela se preenche; mas só no que a pessoa ainda não
+  // mexeu: o que ela escolheu ou digitou vale mais que o que estava guardado.
   //
   // Ajuste de estado DURANTE o render, e não num efeito: é o padrão do React
   // para "o dado de fora mudou", e não pinta um quadro com o valor antigo.
-  const [mexeu, setMexeu] = useState(false);
-  const assinatura = `${atendimento?.team_id ?? ""}|${assuntoRegistrado?.id ?? ""}|${atendimento?.closure_summary ?? ""}`;
+  const [mexeuNoAssunto, setMexeuNoAssunto] = useState(false);
+  const [mexeuNoResumo, setMexeuNoResumo] = useState(false);
+  const assinatura = [
+    atendimento?.team_id ?? "",
+    assuntoRegistrado?.id ?? "",
+    resumoRegistrado,
+    opcoes.times.map((time) => `${time.id}:${time.assuntos.length}`).join(","),
+  ].join("|");
   const [assinaturaVista, setAssinaturaVista] = useState(assinatura);
   if (assinatura !== assinaturaVista) {
     setAssinaturaVista(assinatura);
-    if (!mexeu) {
+    if (!mexeuNoAssunto) {
       setSetor(setorInicial(opcoes.times, atendimento));
       setAssuntoId(registradoEstaNaLista ? (assuntoRegistrado?.id ?? null) : null);
-      setResumo(atendimento?.closure_summary ?? "");
     }
+    if (!mexeuNoResumo) setResumo(resumoRegistrado);
   }
+
+  // O ATENDIMENTO JÁ NÃO É O DA ABERTURA: outra pessoa encerrou, ou encerrou e o
+  // cliente voltou (protocolo novo). Nada é enviado — o texto continua na tela,
+  // para a pessoa copiar se precisar.
+  const outroAtendimento = !grupo && protocolo !== null && protocoloAtual !== null && protocoloAtual !== protocolo;
+  const naoEMaisEste = !grupo && (jaEncerrada || outroAtendimento);
 
   const haAssuntos = opcoes.times.length > 0;
   const assuntosDoSetor = useMemo(
@@ -195,29 +259,43 @@ function Formulario({
     setRecusas((atuais) => atuais.filter((r) => r.campo !== campo));
 
   function encerrar() {
-    if (close.isPending) return;
+    if (envio.isPending || naoEMaisEste) return;
+    const texto = resumo.trim();
     // O assunto que o atendimento JÁ tem conta: o banco o preserva quando nada
     // é enviado, e cobrar de novo o que já está registrado seria atrito à toa.
     const assuntoEfetivo = assuntoId ?? assuntoRegistrado?.id ?? null;
     const faltas = grupo
       ? []
-      : conferirRegistro({ assunto_id: assuntoEfetivo, resumo }, opcoes);
+      : conferirRegistro(
+          { assunto_id: assuntoEfetivo, resumo: anonimizado ? null : texto },
+          { ...opcoes, exigir_resumo: opcoes.exigir_resumo && !anonimizado },
+        );
     if (faltas.length > 0) {
       setRecusas(faltas);
       return;
     }
-    close.mutate(
+    // NULO = "não informado", e o banco preserva o que havia. Texto VAZIO é o
+    // gesto de apagar — só enviado quando havia um resumo e a pessoa o limpou
+    // de propósito. Um campo vazio em que ninguém mexeu nunca apaga nada.
+    const resumoEnviado =
+      grupo || anonimizado ? null : texto !== "" ? texto : resumoRegistrado !== "" && mexeuNoResumo ? "" : null;
+    envio.mutate(
       {
         conversation_id: conversationId,
         expected_revision: expectedRevision,
         assunto_id: grupo ? null : assuntoId,
-        resumo: grupo ? null : resumo.trim() || null,
+        resumo: resumoEnviado,
       },
       {
         onSuccess: () => onOpenChange(false),
         onError: (err) => {
           const recusa = recusaDoServidor(err);
-          if (recusa) setRecusas([recusa]);
+          if (!recusa) return;
+          setRecusas([recusa]);
+          // O servidor cobrou (ou recusou) um assunto: a lista desta tela está
+          // defasada em relação ao cadastro. Recarrega, para a pessoa ter o que
+          // escolher.
+          if (recusa.campo === "assunto") onRecarregarOpcoes();
         },
       },
     );
@@ -237,6 +315,14 @@ function Formulario({
         }
       }}
     >
+      {naoEMaisEste && (
+        <p role="alert" className="rounded-md bg-warning-bg px-3 py-2 text-sm text-warning-fg" data-testid="encerramento-mudou">
+          {outroAtendimento
+            ? t("Este atendimento já foi encerrado, e o cliente voltou: há um atendimento novo em andamento. Feche esta janela e confira a conversa antes de encerrar.")
+            : t("Este atendimento já foi encerrado por outra pessoa. Feche esta janela.")}
+        </p>
+      )}
+
       {grupo ? (
         <p className="text-sm text-muted-foreground">{t("A conversa sai da lista de abertas. Dá para reabrir depois.")}</p>
       ) : (
@@ -244,7 +330,7 @@ function Formulario({
           {opcoesIndisponiveis && (
             <div className="flex items-center justify-between gap-3 rounded-md bg-surface-elevated px-3 py-2">
               <p className="text-xs text-text-muted">{t("Não consegui carregar os assuntos.")}</p>
-              <Button type="button" size="sm" variant="outline" onClick={onTentarDeNovo}>
+              <Button type="button" size="sm" variant="outline" onClick={onRecarregarOpcoes}>
                 {t("Tentar de novo")}
               </Button>
             </div>
@@ -257,7 +343,7 @@ function Formulario({
                 <Select
                   value={setor}
                   onValueChange={(v) => {
-                    setMexeu(true);
+                    setMexeuNoAssunto(true);
                     setSetor(v);
                     // Assunto é do setor: trocar de setor com o assunto antigo
                     // marcado gravaria um par que a tela não está mostrando.
@@ -306,11 +392,11 @@ function Formulario({
                           data-testid="encerramento-assunto"
                           data-assunto-id={a.id}
                           onClick={() => {
+                            setMexeuNoAssunto(true);
                             // Desmarcar só existe enquanto o atendimento não tem
                             // assunto: depois disso o banco preserva o registrado
                             // quando nada é enviado, e a tela mostraria "nenhum"
                             // sobre um atendimento que continua com assunto.
-                            setMexeu(true);
                             setAssuntoId(marcado && !assuntoRegistrado ? null : a.id);
                             limpar("assunto");
                           }}
@@ -335,56 +421,69 @@ function Formulario({
                     {t("Registrado antes")}: {rotuloDoAssunto(assuntoRegistrado)}
                   </p>
                 )}
-                {erroDoAssunto && (
-                  <p role="alert" className="text-xs text-error-fg" data-testid="encerramento-erro-assunto">
-                    {t(fraseDaRecusa(erroDoAssunto))}
-                  </p>
-                )}
               </div>
             </>
           )}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="encerramento-resumo">
-              {t("Resumo do atendimento")}
-              {opcoes.exigir_resumo && <Obrigatorio />}
-            </Label>
-            <Textarea
-              id="encerramento-resumo"
-              data-testid="encerramento-resumo"
-              rows={4}
-              value={resumo}
-              maxLength={RESUMO_MAXIMO}
-              aria-invalid={erroDoResumo ? true : undefined}
-              placeholder={t("O que o cliente precisava e o que foi feito.")}
-              onChange={(e) => {
-                setMexeu(true);
-                setResumo(e.target.value);
-                limpar("resumo");
-              }}
-            />
-            <div className="flex items-start justify-between gap-3">
-              {erroDoResumo ? (
-                <p role="alert" className="text-xs text-error-fg" data-testid="encerramento-erro-resumo">
-                  {t(fraseDaRecusa(erroDoResumo))}
-                </p>
-              ) : (
-                <span />
-              )}
-              <span className="shrink-0 text-[11px] tabular-nums text-text-muted">
-                {resumo.length} / {RESUMO_MAXIMO}
-              </span>
+          {/* FORA do bloco dos assuntos de propósito: o servidor pode cobrar o
+              assunto quando esta tela ainda não tem lista (falhou ao carregar,
+              ou o cadastro mudou há um minuto). Sem isto o botão pareceria não
+              fazer nada — o toast é suprimido para a recusa do registro. */}
+          {erroDoAssunto && (
+            <p role="alert" className="text-xs text-error-fg" data-testid="encerramento-erro-assunto">
+              {t(fraseDaRecusa(erroDoAssunto))}
+            </p>
+          )}
+
+          {anonimizado ? (
+            <p className="rounded-md bg-surface-elevated px-3 py-2 text-xs text-text-muted" data-testid="encerramento-sem-resumo">
+              {t("Este contato foi anonimizado: o resumo não é guardado.")}
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="encerramento-resumo">
+                {t("Resumo do atendimento")}
+                {opcoes.exigir_resumo && <Obrigatorio />}
+              </Label>
+              <Textarea
+                id="encerramento-resumo"
+                data-testid="encerramento-resumo"
+                rows={4}
+                value={resumo}
+                maxLength={RESUMO_MAXIMO}
+                aria-invalid={erroDoResumo ? true : undefined}
+                placeholder={t("O que o cliente precisava e o que foi feito.")}
+                onChange={(e) => {
+                  setMexeuNoResumo(true);
+                  setResumo(e.target.value);
+                  limpar("resumo");
+                }}
+              />
+              <div className="flex items-start justify-between gap-3">
+                {erroDoResumo ? (
+                  <p role="alert" className="text-xs text-error-fg" data-testid="encerramento-erro-resumo">
+                    {t(fraseDaRecusa(erroDoResumo))}
+                  </p>
+                ) : (
+                  <span />
+                )}
+                <span className="shrink-0 text-[11px] tabular-nums text-text-muted">
+                  {resumo.length} / {RESUMO_MAXIMO}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
       <DialogFooter>
-        <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-          {t("Cancelar")}
+        {/* Travado durante o envio: fechar agora esconderia uma recusa que ainda
+            está a caminho. */}
+        <Button type="button" variant="ghost" disabled={envio.isPending} onClick={() => onOpenChange(false)}>
+          {naoEMaisEste ? t("Fechar janela") : t("Cancelar")}
         </Button>
-        <Button type="submit" disabled={close.isPending} data-testid="encerramento-confirmar">
-          {close.isPending ? t("Encerrando…") : grupo ? t("Encerrar conversa") : t("Encerrar atendimento")}
+        <Button type="submit" disabled={envio.isPending || naoEMaisEste} data-testid="encerramento-confirmar">
+          {envio.isPending ? t("Encerrando…") : grupo ? t("Encerrar conversa") : t("Encerrar atendimento")}
         </Button>
       </DialogFooter>
     </form>

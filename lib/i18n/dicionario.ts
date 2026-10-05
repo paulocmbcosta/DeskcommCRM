@@ -10157,6 +10157,10 @@ export const DICIONARIO: Traducoes = {
   "O início do período precisa ser antes do fim.": { es: "El inicio del período debe ser anterior al fin." },
   "Escolha um período de até 92 dias.": { es: "Elige un período de hasta 92 días." },
   "Os números por assunto precisam da chave de serviço configurada.": { es: "Los números por asunto necesitan la clave de servicio configurada." },
+  "Este atendimento já foi encerrado, e o cliente voltou: há um atendimento novo em andamento. Feche esta janela e confira a conversa antes de encerrar.": { es: "Esta atención ya fue cerrada y el cliente volvió: hay una atención nueva en curso. Cierra esta ventana y revisa la conversación antes de cerrar." },
+  "Este atendimento já foi encerrado por outra pessoa. Feche esta janela.": { es: "Esta atención ya fue cerrada por otra persona. Cierra esta ventana." },
+  "Este contato foi anonimizado: o resumo não é guardado.": { es: "Este contacto fue anonimizado: el resumen no se guarda." },
+  "Fechar janela": { es: "Cerrar ventana" },
 };
 
 /**
