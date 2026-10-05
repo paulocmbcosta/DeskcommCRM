@@ -19,6 +19,46 @@ O `dc up -d` dele não nomeia serviço: sobe **todos** os que mudaram — `app`,
 `scheduler` e, com a telefonia ligada, o `asterisk` —, cria volume novo sozinho e usa os
 arquivos de compose que a instalação tem (`dc_files`, em `hostgator-setup-kit/_common.sh`).
 
+### O passo de banco roda com o sistema no ar — e por isso tem prazo
+
+Antes de trocar o app, o `update.sh` reaplica o `supabase/baseline.sql`. Isso é DDL em toda
+tabela quente, com o app e o worker atendendo. Cada comando espera **3 s** por uma trava e
+desiste; comando que desiste é comando pulado, então o arquivo inteiro é reaplicado até uma
+passada sair limpa. O que você vê no terminal, em ordem de gravidade:
+
+| Mensagem | O que está acontecendo | O que fazer |
+|---|---|---|
+| `N comando(s) do banco não conseguiram a vez … Tento de novo` | uma tabela estava em uso; nova passada com tudo no ar | nada |
+| `Vou PAUSAR A IA para terminar o banco` | três passadas não bastaram: o worker é parado até o `up -d` do fim. O sistema segue no ar, **a IA não responde e o telefone não atende** | nada — ela volta sozinha |
+| `Atualização interrompida ANTES de trocar o sistema` (sai com código 4) | nem com a IA parada o banco deu a vez. O app **não** foi trocado, a IA foi religada, e a lista logo acima mostra as sessões com transação aberta e parada | rodar de novo mais tarde, fora do horário de atendimento; se repetir, a lista diz quem segura o banco |
+
+Os números (prazo, quantas passadas com tudo no ar, quantas com a IA parada) não estão aqui
+de propósito — leia-os onde valem:
+
+```bash
+grep -nE "^PRAZO_DA_TRAVA_DO_SCHEMA=|PASSADAS_COM_[A-Z_]+=" hostgator-setup-kit/_common.sh hostgator-setup-kit/update.sh
+```
+
+Durante o passo, a sessão do kit aparece em `pg_stat_activity` com
+`application_name = 'deskcomm-update'`. Para ver quem ela espera:
+
+```sql
+select a.pid, a.wait_event_type, a.wait_event, pg_blocking_pids(a.pid) as esperando_por,
+       left(regexp_replace(a.query, '\s+', ' ', 'g'), 80) as comando
+  from pg_stat_activity a
+ where a.application_name = 'deskcomm-update';
+```
+
+Isto existe por causa de um incidente medido (2026-10-05, 16 minutos fora do ar): um `alter
+table` do baseline esperou sem prazo uma transação do worker que esperava um insert preso
+atrás do próprio `alter` — ciclo que o Postgres não detecta, porque um dos elos mora no
+cliente. A causa foi consertada no worker (`lib/agent-engine/guardrails/before-send.ts`); o
+prazo no kit é o que impede a próxima causa parecida de virar a mesma queda.
+
+**A primeira atualização para a versão que traz este conserto ainda é feita pelo `update.sh`
+antigo**, sem prazo: faça-a fora do horário de atendimento, ou pare o worker antes
+(`docker compose … stop worker`; o `update.sh` o sobe de volta no fim).
+
 À mão, só o `app`, quando a versão não mexeu em mais nada:
 
 ```bash
