@@ -38,6 +38,29 @@ import { assertMeetingDeliveryPg, type MeetingDeliveryContext } from '@/lib/agen
  * ponytail: o lock fica retido durante o POST ao CRM (bounded por CRM_MCP_TIMEOUT_MS)
  * — aceitável no volume do MVP (throttle já espaça o número); se um número virar
  * gargalo, o upgrade é reservar o slot antes do POST e reconciliar no watchdog.
+ *
+ * ⚠️ A TRANSAÇÃO CARREGA SÓ O ADVISORY LOCK E AS DUAS ESCRITAS DO FIM. As leituras
+ * de estado vão pelo POOL (`leitura`, em `runBeforeSend`), cada uma no seu próprio
+ * statement — nunca pelo client da transação. Não é estilo: o Postgres segura a
+ * trava de TABELA de toda relação tocada até o fim da transação, e esta só fecha
+ * depois do envio (atraso humano de até 7,5 s, bolhas, POST). Enquanto as leituras
+ * eram do client, cada envio em curso segurava `AccessShareLock` em
+ * `channel_sessions`, `contacts`, `conversations` e mais uma dúzia de tabelas — e
+ * qualquer DDL que chegasse nesse intervalo esperava a transação, com o resto do
+ * sistema enfileirado atrás dele.
+ *
+ * Pior: fechava um ciclo que o Postgres não enxerga. O `persistTrace` abaixo é um
+ * insert por OUTRA conexão, e a FK de `before_send_traces` pede trava em
+ * `channel_sessions`/`contacts` — então ele entrava na fila atrás do DDL, que
+ * esperava a transação, que esperava o `persistTrace` voltar. Um dos três elos
+ * mora no cliente; o detector de deadlock não vê nada. Medido em produção em
+ * 2026-10-05: o `update.sh` reaplicando o baseline deixou a instalação 16 minutos
+ * sem responder, e só parar o worker destravou.
+ *
+ * A serialização não muda: quem serializa é o advisory lock, e uma leitura feita
+ * DEPOIS dele vê o que o dono anterior commitou seja qual for a conexão — a
+ * transação é READ COMMITTED, cada statement já tirava a própria foto.
+ * Quem vigia: `tests/invariants/envio-nao-segura-trava-de-tabela.test.ts`.
  */
 import type pg from 'pg';
 import type { ChannelSendResult } from '../channel-adapter';
@@ -951,15 +974,20 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
  */
 export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSendResult> {
   const gates = args.gates ?? BEFORE_SEND_GATES;
+  // Toda LEITURA de estado passa por aqui, e nunca pelo `client` da transação —
+  // ver o ⚠️ do cabeçalho. O nome existe para a troca ser impossível de fazer sem
+  // perceber: `client` neste corpo é só begin, advisory lock, as duas escritas do
+  // fim e o commit/rollback.
+  const leitura: Queryable = args.pool;
   const client = await args.pool.connect();
   try {
     await client.query('begin');
     // Serialização por número: dois workers no MESMO channel_session esperam a vez.
     await client.query('select pg_advisory_xact_lock(hashtext($1))', [args.channelSessionId]);
 
-    // Estado confiável carregado SOB o lock (os contadores de cap/janela de copies
-    // são racy — precisam ver o que o worker anterior já efetivou).
-    const provider = await loadChannelProvider(client, args.tenantId, args.channelSessionId);
+    // Estado confiável carregado DEPOIS do lock (os contadores de cap/janela de
+    // copies são racy — precisam ver o que o worker anterior já efetivou).
+    const provider = await loadChannelProvider(leitura, args.tenantId, args.channelSessionId);
     if (
       args.meetingDelivery &&
       (args.meetingDelivery.organizationId !== args.tenantId ||
@@ -967,7 +995,7 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
     )
       throw new Error('meet_scope_mismatch');
     const meetingPolicy = args.meetingDelivery
-      ? await assertMeetingDeliveryPg(client, args.meetingDelivery)
+      ? await assertMeetingDeliveryPg(leitura, args.meetingDelivery)
       : null;
     if (
       meetingPolicy &&
@@ -975,9 +1003,9 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
         meetingPolicy.channelSessionId !== args.channelSessionId)
     )
       throw new Error('meet_scope_mismatch');
-    if (args.agentOperation) await assertAgentOperationPg(client, args.agentOperation);
+    if (args.agentOperation) await assertAgentOperationPg(leitura, args.agentOperation);
     const replyPolicy = args.approvedReply
-      ? await assertApprovedReplyPg(client, args.approvedReply)
+      ? await assertApprovedReplyPg(leitura, args.approvedReply)
       : null;
     if (
       args.approvedReply &&
@@ -991,36 +1019,36 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
     const optedOut =
       args.optedOutThisTurn ||
       (await readStopFlags(
-        client,
+        leitura,
         args.tenantId,
         args.leadId,
         meetingPolicy?.humanCommand === true || replyPolicy !== null,
       ));
     const pacingCfg = await loadChannelKnobs(
-      client,
+      leitura,
       args.tenantId,
       args.channelSessionId,
       args.log,
     );
-    const pacingState = await loadPacingState(client, args.tenantId, args.channelSessionId, {
+    const pacingState = await loadPacingState(leitura, args.tenantId, args.channelSessionId, {
       now: args.now,
       timezone: pacingCfg.knobs.timezone,
       numberActivatedAt: pacingCfg.numberActivatedAt,
     });
     const spinningKnobs = await loadSpinningKnobs(
-      client,
+      leitura,
       args.tenantId,
       args.channelSessionId,
       args.log,
     );
     const window = await loadRecentCopies(
-      client,
+      leitura,
       args.tenantId,
       args.channelSessionId,
       spinningKnobs.windowSize,
     );
     // org de fonte confiável (RunBeforeSendArgs.tenantId = organization_id do row do job) — regra dura nº 1.
-    const promise = await loadPromiseTable(client, args.tenantId);
+    const promise = await loadPromiseTable(leitura, args.tenantId);
     // Camada semântica (F4-02): a chamada de modelo (async) roda AQUI, sob o lock, e o
     // veredito entra no ctx para o `semanticPromiseGate` (sync) ler. Ausente = camada off.
     const semanticPromise =
@@ -1029,16 +1057,16 @@ export async function runBeforeSend(args: RunBeforeSendArgs): Promise<BeforeSend
         : null;
     // Disclosure (F4-05): template por ponteiro da org + detecção de 1º outbound via
     // send_ledger (só conta se há template — sem template o gate é no-op de qualquer forma).
-    const disclosure = await loadDisclosureTemplate(client, args.tenantId);
+    const disclosure = await loadDisclosureTemplate(leitura, args.tenantId);
     // "1º outbound" (send_ledger accepted == 0): sinal compartilhado pelo disclosure (F4-05) e
     // pelo gate LGPD (F4-09). Só consulta o ledger se ALGUM dos dois precisa (senão no-op).
     const isFirstOutbound =
       disclosure !== null || args.lgpd !== undefined
-        ? (await countPriorAcceptedSends(client, args.tenantId, args.leadId)) === 0
+        ? (await countPriorAcceptedSends(leitura, args.tenantId, args.leadId)) === 0
         : false;
 
     const lastInboundAt = await readLastInboundAt(
-      client,
+      leitura,
       args.tenantId,
       args.leadId,
       args.channelSessionId,
