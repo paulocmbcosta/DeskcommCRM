@@ -384,6 +384,31 @@ export async function rescheduleJob(
 }
 
 /**
+ * Devolve a 'pending' TODOS os jobs que este worker ainda segura — o que a parada
+ * faz quando o prazo acaba com trabalho em curso (ver `parada.ts`). Sem isso eles
+ * ficam `running` com o `locked_by` de um processo morto até o reaper abaixo, 10
+ * minutos depois.
+ *
+ * SEM consumir attempts, como `rescheduleJob`: ser interrompido por um
+ * `docker stop` não é falha do job. Quem pune job que nunca termina continua
+ * sendo o reaper — um job que trava sozinho ainda morre lá, por tentativas.
+ *
+ * `locked_by = $1` é a cerca: nunca toca no job de outro worker, nem no que este
+ * mesmo worker já concluiu (o `status = 'running'` relido depois de esperar a
+ * linha deixa de casar).
+ */
+export async function devolverJobsDoWorker(db: Queryable, workerId: string): Promise<number> {
+  const { rowCount } = await db.query(
+    `update job_queue
+     set status = 'pending', locked_by = null, locked_at = null,
+         attempts = greatest(attempts - 1, 0)
+     where status = 'running' and locked_by = $1`,
+    [workerId],
+  );
+  return rowCount ?? 0;
+}
+
+/**
  * Reaper do visibility timeout: job 'running' com locked_at mais velho que o timeout
  * é de um worker morto — volta a 'pending' (re-claim) ou, se já esgotou max_attempts,
  * vira 'dead' + agent_inbox_items. Timeout é knob (QUEUE_VISIBILITY_TIMEOUT_MS, env.ts).
