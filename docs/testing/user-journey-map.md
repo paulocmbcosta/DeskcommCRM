@@ -3341,12 +3341,23 @@ nascer um atendimento novo, e, de dentro do Inbox, devolve a conversa para a tel
 
 Spec: `tests/e2e/chamar-o-cliente-primeiro.spec.ts` (bloco "chamar DE NOVO…"), em `SPECS_PARTE_3`.
 
+### Execução (2026-10-05): **PASS nos 4 casos de tela**
+
+`e2e` no CI por `Run workflow` na branch (run 37300989838), Chromium real, Supabase local com o
+`baseline.sql`, app em produção (`next build` + `next start`). Parte 3: **119 passed, 1 failed
+(30,0 min)**; os 14 casos desta spec, verdes.
+
+As duas falhas da execução **não são desta mudança** — são as mesmas da `main` no commit anterior
+(run 37298729122, 749af777): `card-pelo-classificador.spec.ts:354` na parte 1 e
+`inbox-rotulo-de-origem.spec.ts:224` na parte 3. A parte 3 tinha 115 verdes na `main`; aqui tem
+119, que são os 4 casos novos.
+
 | Caso | Prioridade | Resultado |
 |---|---|---|
-| J40.1 Contato com atendimento encerrado: na lista, o ícone é **Chamar no WhatsApp** (não há link para a conversa antiga); o diálogo avisa do atendimento novo; enviado, a MESMA conversa sai do encerrado com **protocolo diferente** e dono = quem chamou | `[P0]` | spec escrita; execução no CI pendente — ver abaixo |
-| J40.2 Dentro da conversa encerrada, o pé diz que o atendimento acabou e oferece chamar; enviado, a tela sai do "Fechada" **sem recarregar** e o protocolo muda | `[P0]` | idem |
-| J40.3 A ficha do contato oferece começar de novo e mantém "Ver a conversa no Inbox" | `[P1]` | idem |
-| J40.4 Controle: com o atendimento **em andamento**, a lista continua levando para a conversa e não oferece chamar | `[P0]` | idem |
+| J40.1 Contato com atendimento encerrado: na lista, o ícone é **Chamar no WhatsApp** (não há link para a conversa antiga); o diálogo avisa do atendimento novo; enviado, a MESMA conversa sai do encerrado com **protocolo diferente** e dono = quem chamou | `[P0]` | **PASS** (34,1 s) |
+| J40.2 Dentro da conversa encerrada, o pé diz que o atendimento acabou e oferece chamar; enviado, a tela sai do "Fechada" **sem recarregar** e o protocolo muda | `[P0]` | **PASS** (30,7 s) |
+| J40.3 A ficha do contato oferece começar de novo e mantém "Ver a conversa no Inbox" | `[P1]` | **PASS** (27,2 s) |
+| J40.4 Controle: com o atendimento **em andamento**, a lista continua levando para a conversa e não oferece chamar | `[P0]` | **PASS** (29,8 s) |
 | J40.5 No banco: outra pessoa chama → atendimento novo, protocolo novo, ela fica dona, e o encerrado guarda quem o atendeu; a mesma pessoa chama → `claimed` com o automático calado; em andamento com outra pessoa → recusado; "Reabrir" → mesmo protocolo | `[P0]` | **PASS** no Postgres real (`tests/invariants/chamar-de-novo-abre-atendimento-novo.test.ts`, 4 casos) |
 
 **Os testes vigiam de verdade, provado por sabotagem.** No banco: fazer o gatilho deixar de soltar o
@@ -3354,6 +3365,12 @@ dono, e fazer a saída do encerrado continuar o atendimento, reprovam cada um os
 "atendimento novo" e deixam os 2 controles verdes. Na tela: os casos de "encerrado" foram escritos
 antes do conserto e reprovaram contra o código antigo (5 vermelhos), com os controles de "em
 andamento" verdes.
+
+**Uma fraqueza da spec, declarada.** J40.1 e J40.2 só exercitam o envio pelo diálogo quando o canal
+aceita texto livre; num canal que só aceita modelo elas anotam `nao-medido` e terminam **verdes**, e
+o relator do CI não imprime a anotação. Que o envio rodou nesta execução é **inferência**, não
+observação: a rota lista as conexões por `created_at`, e a primeira do ambiente é a do seed do
+workflow, de texto livre. Trocar a anotação por `test.skip` faria a diferença aparecer no relatório.
 
 **Não medido.** Envio real pela plataforma oficial (a spec usa o canal de texto livre do ambiente);
 o caso de **dois números** pela tela — o número padrão do diálogo está preso só em unidade
