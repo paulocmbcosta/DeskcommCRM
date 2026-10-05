@@ -43,6 +43,43 @@
 #        sem a prudência da stack parada ...... 14e×2 14h×1
 #        sem a guarda do docker inspect ....... 14h×1
 #        "segue DESLIGADA" com ela ligada ..... 14a×1
+#   9. Atualização que deu certo apaga as imagens das versões antigas (caso 15).
+#      Fica a instalada e UMA de reserva — a que rodava antes; sem dar para
+#      saber, a maior das outras. Só os quatro repositórios de `IMG_*`, só tag
+#      X.Y.Z; `docker rmi` sem `-f`, nunca `prune`; nunca antes de o app responder
+#      saudável; e a limpeza não falha a atualização. O dublê de `docker` responde
+#      lista VAZIA por padrão, então toda prova de "não apagou" vem ao lado de um
+#      "apagou" na mesma rodada. Vinte e quatro sabotagens, uma por linha da
+#      regra, medidas em 2026-10-05:
+#        sem a chamada no update.sh ............... 15a×6 15d×3 15e×1 15i×2
+#        limpeza ANTES da conferência de saúde .... 15a×2 15b×1 15d×1
+#        sem a guarda "o alvo está no disco" ...... 15g×4
+#        ordem de texto em vez de numérica ........ 15g×1
+#        sem a reserva (fica só o alvo) ........... 15a×3 15d×2 15f×1 15g×12 15i×1
+#        sem o filtro de repositório .............. 15a×4 15d×2 15f×1 15g×2
+#        repositório por PREFIXO .................. 15a×2 15d×2 15f×1 15g×1
+#        sem o filtro de tag numerada ............. 15a×4 15d×2 15f×1 15g×3
+#        rmi com -f ............................... 15a×3 15d×2 15i×2
+#        prune no lugar do rmi .................... 15a×5 15d×3 15f×1 15i×2
+#        docker images sem guarda de erro ......... 15e×1 15f×1
+#        docker rmi sem guarda de erro ............ 15d×2 15f×1
+#        conta como apagada a que o Docker recusou  15d×2
+#        sem a guarda do alvo não numerado ........ 15f×2
+#        aceita a reserva de uma conta que falhou . 15g×1
+#        sem a guarda "sem reserva, não sai nada" . 15g×1
+#        sem o `|| true` de quem chama ............ 15h×1
+#        reserva sempre a maior (ignora a que rodava) 15g×1 15i×2
+#        aceita a que rodava mesmo FORA do disco .. 15g×1
+#        aceita a que rodava mesmo sendo o ALVO ... 15g×1
+#        update.sh não passa a que rodava ......... 15i×2
+#        lê a versão no ar DEPOIS do up -d ........ 15i×2
+#        versao_no_ar sem guarda de erro .......... 15f×1
+#        versao_no_ar devolve o que não é versão .. 15f×2
+#      O dublê não é o Docker: a recusa de imagem presa a contêiner PARADO, a
+#      ordem numérica e o formato de `docker images` foram conferidos contra um
+#      daemon de verdade (29.5.3), com imagens de mentira num namespace de teste;
+#      e o rótulo de versão que `versao_no_ar` lê, nos contêineres da VPS de
+#      produção (29.8.0).
 set -uo pipefail
 
 # O namespace das imagens publicadas, lido da FONTE (hostgator-setup-kit/_common.sh)
@@ -99,7 +136,30 @@ case " $* " in
   # '"status":"ok"' no JSON cru que o kit dava por saudável um app com o BANCO
   # FORA, desde que qualquer outro check estivesse de pé.
   # São duas linhas porque o probe imprime o status geral e depois o corpo.
-  *" exec "*)   printf 'healthy\n{"data":{"status":"healthy","version":"0.1.0","checks":{"supabase":{"status":"ok","latency_ms":268},"redis":{"status":"ok","latency_ms":4},"waha":{"status":"ok","latency_ms":6}}}}\n' ;;
+  *" exec "*)
+    # O app que NÃO volta (caso 15b): o status geral que a rota devolve com um
+    # check DOWN. É o desfecho em que o agent.sh precisa da imagem anterior.
+    [ -n "${DUBLE_APP_DOENTE:-}" ] && { printf 'unhealthy\n{"data":{"status":"unhealthy"}}\n'; exit 0; }
+    printf 'healthy\n{"data":{"status":"healthy","version":"0.1.0","checks":{"supabase":{"status":"ok","latency_ms":268},"redis":{"status":"ok","latency_ms":4},"waha":{"status":"ok","latency_ms":6}}}}\n' ;;
+  # `docker images --format '{{.Repository}}:{{.Tag}}'`: o que há NO DISCO da
+  # VPS, uma referência por linha. ANTES do ramo genérico de `images` logo
+  # abaixo, que casaria com este comando também. Calado por padrão — é o disco
+  # que os casos 1 a 14 sempre viram, e é por isso que o caso 15 só afirma "não
+  # apagou X" ao lado de um "apagou Y" na MESMA rodada: com a lista vazia a
+  # limpeza não faz nada, e toda prova de preservação passaria por vacuidade.
+  *" images --format "*)
+    [ -n "${DUBLE_IMAGES_QUEBRADO:-}" ] && exit 1
+    for duble_ref in ${DUBLE_NO_DISCO:-}; do printf '%s\n' "$duble_ref"; done ;;
+  # `docker rmi <referência>` SEM `-f`: o Docker recusa a referência única de uma
+  # imagem que algum contêiner usa, de pé ou parado. A mensagem é a que o daemon
+  # devolve de verdade; o que importa é o status != 0.
+  *" rmi "*)
+    for duble_ref in ${DUBLE_EM_USO:-}; do
+      if [ "$duble_ref" = "$2" ]; then
+        echo "Error response from daemon: conflict: unable to remove repository reference \"$2\" (must force) - container 0f3a9c1d5e7b is using its referenced image" >&2
+        exit 1
+      fi
+    done ;;
   # Imagem em execução, que o agent.sh guarda para poder voltar. Precisa
   # devolver algo: com PREV_IMAGE vazio o rollback nem seria tentado, e o teste
   # do agente passaria mesmo com o defeito de volta.
@@ -132,6 +192,18 @@ case " $* " in
   # precisam divergir. O `svc` sai do nome do contêiner (`<projeto>-<svc>-1`)
   # para que o dublê responda por serviço sem precisar saber o nome do projeto,
   # que o teste não fixa.
+  # `docker inspect <contêiner> --format '{{index .Config.Labels "org.opencontainers.image.version"}}'`:
+  # a versão que o contêiner do app RODA — o rótulo que o CI grava na imagem.
+  # Calado por padrão, como o ramo de baixo. O contêiner muda no `up -d`: depois
+  # dele quem responde é o novo, e é assim que o caso 15i prova que o update.sh
+  # leu a versão ANTES de recriá-lo (lida depois, ela seria sempre o alvo).
+  *"image.version"*)
+    [ -n "${DUBLE_INSPECT_QUEBRADO:-}" ] && exit 1
+    if grep -q '^UP env ' "$DOCKER_LOG" 2>/dev/null; then
+      printf '%s\n' "${DUBLE_VERSAO_DEPOIS:-}"
+    else
+      printf '%s\n' "${DUBLE_VERSAO_NO_AR:-}"
+    fi ;;
   *"Config.Image"*)
     # Docker fora do ar / sem permissão no socket: o comando SAI != 0. É um
     # estado real numa VPS, e o update.sh roda sob `set -euo pipefail`.
@@ -872,6 +944,238 @@ ligada_caso "chave ausente → desligada" 'X=1\n' nao
 rm -f .env.perfis
 
 unset DUBLE_EM_EXECUCAO
+
+echo "── 15. Atualização que deu certo apaga as imagens das versões antigas"
+# Medido na VPS de produção: cada release deixa ~3,2 GB no disco (app, worker,
+# scheduler, Asterisk) e nenhum script as apagava. Em 2026-09-24 havia 21 versões
+# e o disco estava em 73%; limpo à mão. Em 2026-10-05, onze dias depois, eram 26
+# versões e 88% — e a VPS se atualiza sozinha pelo cron do agent.sh, então isso
+# enche sem ninguém entrar por SSH.
+#
+# A regra: fica a versão instalada agora e mais UMA de reserva — a que rodava
+# antes desta atualização; sem dar para saber, a maior das outras. Só referência
+# NOSSA (os quatro repositórios de `IMG_*`) com tag de versão numerada;
+# `docker rmi` SEM `-f`, uma referência por vez; nunca `prune`.
+no_disco() { export DUBLE_NO_DISCO="$*"; }
+das_quatro() {  # das_quatro <versão> → as quatro referências nossas nessa versão, separadas por espaço
+  printf '%s ' "${NS}/deskcommcrm:$1" "${NS}/deskcomm-worker:$1" "${NS}/deskcomm-scheduler:$1" "${NS}/deskcomm-asterisk:$1"
+}
+# O que mais mora no disco de uma VPS real e NÃO é da limpeza: imagens de
+# terceiros, o psql do kit, o mesmo nome de repositório em OUTRO namespace, os
+# canais móveis, um prerelease, uma imagem sem tag e um repositório cujo nome só
+# COMEÇA como o nosso.
+ALHEIAS="ghcr.io/openclaw/openclaw:2026.2.12 postgres:17-alpine devlikeapro/waha:latest-2026.7.2 ghcr.io/outro-dono/deskcommcrm:1.0.0 ${NS}/deskcommcrm:stable ${NS}/deskcommcrm:latest ${NS}/deskcomm-worker:1.1.1-jmpo.1 ${NS}/deskcommcrm:<none> ${NS}/deskcommcrm-extra:1.0.0"
+QUATRO_VERSOES="$(das_quatro 1.0.0)$(das_quatro 1.0.5)$(das_quatro 1.1.0)$(das_quatro 1.2.0)"
+rmis() { grep -c '^rmi ' "$DOCKER_LOG" || true; }
+apagou() { grep -qxF "rmi $1" "$DOCKER_LOG"; }                                  # apagou <referência>
+apagou_as_quatro() { local r; for r in $(das_quatro "$1"); do apagou "$r" || return 1; done; }
+nenhum_rmi_da() { ! grep -qE "^rmi .*:${1//./\\.}\$" "$DOCKER_LOG"; }           # nenhum_rmi_da <versão>
+nenhum_rmi_alheio() {
+  local r; for r in $ALHEIAS; do if apagou "$r"; then return 1; fi; done; return 0
+}
+linha_do_ultimo() { grep -nE "$1" "$DOCKER_LOG" | tail -1 | cut -d: -f1; }
+linha_do_primeiro() { grep -nE "$1" "$DOCKER_LOG" | head -1 | cut -d: -f1; }
+command -v apagar_imagens_antigas >/dev/null \
+  || { echo "  ✗ apagar_imagens_antigas não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+command -v imagens_de_versoes_antigas >/dev/null \
+  || { echo "  ✗ imagens_de_versoes_antigas não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+command -v versao_no_ar >/dev/null \
+  || { echo "  ✗ versao_no_ar não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+export DUBLE_DIGESTS=iguais
+
+echo "   15a. atualização 1.1.0 → 1.2.0 com quatro versões no disco: saem as duas mais velhas"
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+no_disco "${QUATRO_VERSOES}${ALHEIAS}"
+: > "$DOCKER_LOG"
+run_update
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "apagou as quatro imagens da 1.0.0" apagou_as_quatro 1.0.0
+check "apagou as quatro imagens da 1.0.5" apagou_as_quatro 1.0.5
+check "NÃO tocou na versão instalada agora (1.2.0)" nenhum_rmi_da 1.2.0
+check "NÃO tocou na de reserva (1.1.0: sem saber a que rodava, é a maior das outras)" nenhum_rmi_da 1.1.0
+check "NÃO tocou em nada que não é nosso (terceiros, outro namespace, canal, prerelease, sem tag, nome parecido)" \
+  nenhum_rmi_alheio
+check "foram exatamente 8 remoções, nem uma a mais" test "$(rmis)" -eq 8
+check "nunca com -f / --force" test -z "$(grep -E '^rmi .*(-f|--force)' "$DOCKER_LOG" || true)"
+check "nunca prune (de imagem, de sistema, de nada)" test -z "$(grep -E '(^| )prune( |$)' "$DOCKER_LOG" || true)"
+check "só DEPOIS de o app responder saudável" \
+  test "$(linha_do_primeiro '^rmi ')" -gt "$(linha_do_ultimo ' exec -T app ')"
+check "conta ao dono o que fez" grep -q "apaguei as imagens de 2 versões antigas" "$OUTFILE"
+check "  e que a versão no ar ficou" grep -q "ficam a 1.2.0, que está no ar, e mais uma de reserva" "$OUTFILE"
+
+echo "   15b. o app NÃO voltou saudável → nenhuma imagem é apagada (o agent.sh precisa da anterior para voltar)"
+# O MESMO disco do 15a, que ali perdeu 8 referências: o silêncio daqui é da
+# ordem, não de uma lista vazia. O `sleep` é dublado SÓ neste caso — a espera
+# do update.sh pelo app são 19 × 3 s.
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+mkdir -p "$WORK/sem-espera"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/sem-espera/sleep"; chmod +x "$WORK/sem-espera/sleep"
+PATH_COM_ESPERA="$PATH"; export PATH="$WORK/sem-espera:$PATH"
+export DUBLE_APP_DOENTE=1
+: > "$DOCKER_LOG"
+run_update
+unset DUBLE_APP_DOENTE; export PATH="$PATH_COM_ESPERA"
+check "o update sai != 0 (é o sinal que o agent.sh usa para voltar)" test "$RC" -ne 0
+check "fixture: chegou a subir a versão nova" test -n "$(linha_do_ultimo ' up -d$')"
+check "nenhum rmi" test "$(rmis)" -eq 0
+
+echo "   15c. 'Nada a atualizar' não mexe em imagem: a limpeza é o último passo de uma atualização"
+env_das_tres "${NS}/deskcommcrm:1.2.0" "${NS}/deskcomm-worker:1.2.0" "${NS}/deskcomm-scheduler:1.2.0"
+: > "$DOCKER_LOG"
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "nenhum rmi" test "$(rmis)" -eq 0
+
+echo "   15d. imagem antiga presa a um contêiner: o Docker recusa, o update segue e não mente"
+# As quatro da 1.0.0 em uso (uma segunda instalação na mesma VPS, um contêiner
+# parado que alguém esqueceu). Sem `-f`, quem decide é o Docker.
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+export DUBLE_EM_USO="$(das_quatro 1.0.0)"
+: > "$DOCKER_LOG"
+run_update
+unset DUBLE_EM_USO
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "  e diz que concluiu" grep -q "Atualização concluída" "$OUTFILE"
+check "tentou as oito (a recusa de uma não interrompe as outras)" test "$(rmis)" -eq 8
+check "só conta a versão que saiu de verdade" grep -q "apaguei as imagens da versão 1.0.5" "$OUTFILE"
+check "  e não afirma ter apagado a 1.0.0" test -z "$(grep 'apaguei' "$OUTFILE" | grep -F '1.0.0' || true)"
+check "diz que quatro ficaram, e por quê" grep -q "4 imagens antigas ficaram" "$OUTFILE"
+
+echo "   15e. Docker que não lista as imagens → nada é apagado, e a atualização não falha por isso"
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+export DUBLE_IMAGES_QUEBRADO=1
+: > "$DOCKER_LOG"
+run_update
+unset DUBLE_IMAGES_QUEBRADO
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "nenhum rmi" test "$(rmis)" -eq 0
+check "avisa que não apagou nada" grep -q "não consegui listar as imagens" "$OUTFILE"
+
+echo "   15f. as guardas de erro, medidas na FUNÇÃO"
+# Chamada DIRETA, num subshell com o `set -euo pipefail` do kit, FORA de `if` e
+# de `$( )` — nas duas formas o errexit não vale e a prova passaria com a guarda
+# arrancada (a mesma armadilha do caso 14h).
+( set -euo pipefail
+  export DUBLE_IMAGES_QUEBRADO=1
+  apagar_imagens_antigas 1.2.0 ) >/dev/null 2>&1
+check "docker images que sai != 0 não mata a função" test "$?" -eq 0
+( set -euo pipefail
+  export DUBLE_EM_USO="$(das_quatro 1.0.0)$(das_quatro 1.0.5)"
+  apagar_imagens_antigas 1.2.0 ) >/dev/null 2>&1
+check "docker rmi recusando TODAS não mata a função" test "$?" -eq 0
+( set -euo pipefail
+  export DUBLE_NO_DISCO=""
+  apagar_imagens_antigas 1.2.0 ) >/dev/null 2>&1
+check "disco sem imagem nenhuma não mata a função" test "$?" -eq 0
+# Controle: a MESMA chamada, com o docker respondendo, apaga — senão os três
+# zeros acima podiam ser de uma função que não faz nada.
+: > "$DOCKER_LOG"
+( set -euo pipefail; apagar_imagens_antigas 1.2.0 ) >/dev/null 2>&1
+check "controle: com o docker respondendo, a mesma chamada apaga as 8" test "$(rmis)" -eq 8
+# A versão no ar: o `docker inspect` de um contêiner que não existe sai != 0.
+( set -euo pipefail
+  export DUBLE_INSPECT_QUEBRADO=1
+  versao_no_ar ) >/dev/null 2>&1
+check "docker inspect que sai != 0 não mata versao_no_ar" test "$?" -eq 0
+: > "$DOCKER_LOG"   # sem `up -d` no log: quem responde é o contêiner de ANTES
+check "controle: com o docker respondendo, ela devolve a versão" \
+  test "$(DUBLE_VERSAO_NO_AR=1.0.5 versao_no_ar)" = "1.0.5"
+check "rótulo ausente (imagem construída à mão) → vazio, não '<no value>'" \
+  test -z "$(DUBLE_VERSAO_NO_AR='<no value>' versao_no_ar)"
+check "rótulo que é canal (latest) → vazio: canal não é versão" \
+  test -z "$(DUBLE_VERSAO_NO_AR=latest versao_no_ar)"
+# Alvo que não é versão numerada (instalação que segue um canal): não há régua,
+# então a função nem pergunta ao Docker — e não imprime um "nenhuma versão
+# antiga" que seria afirmação sobre um disco que ela não olhou.
+: > "$DOCKER_LOG"
+DISSE="$(apagar_imagens_antigas latest 2>&1)"
+check "alvo em canal móvel: não consulta o Docker" test ! -s "$DOCKER_LOG"
+check "  e não afirma nada" test -z "$DISSE"
+
+echo "   15g. a regra, isolada do Docker (texto entra, texto sai)"
+antigas_caso() {  # antigas_caso <descrição> <alvo> <esperado, separado por espaço> <no disco, separado por espaço> [versão que rodava]
+  local r
+  r="$(printf '%s\n' $4 | imagens_de_versoes_antigas "$2" "${5:-}" | tr '\n' ' ' || true)"
+  check "$1" test "${r% }" = "$3"
+}
+A="${NS}/deskcommcrm"
+antigas_caso "só a instalada e a de reserva no disco → nada a apagar" 1.2.0 "" "$A:1.1.0 $A:1.2.0"
+antigas_caso "três versões → sai a mais velha" 1.2.0 "$A:1.0.0" "$A:1.0.0 $A:1.1.0 $A:1.2.0"
+antigas_caso "a ordem é NUMÉRICA: a reserva da 1.11.0 é a 1.10.0, não a 1.9.0" 1.11.0 "$A:1.9.0" \
+  "$A:1.9.0 $A:1.10.0 $A:1.11.0"
+antigas_caso "  e 2.0.0 é maior que 1.99.99" 2.0.1 "$A:1.99.99" "$A:1.99.99 $A:2.0.0 $A:2.0.1"
+# `--to <antiga> --force`: a que rodava até agora é MAIOR que o alvo, e é ela a
+# reserva — é para ela que o dono volta se o retrocesso não servir.
+antigas_caso "retrocesso de propósito: fica o alvo e a que rodava (a maior das outras)" 1.1.0 "$A:1.0.0" \
+  "$A:1.0.0 $A:1.1.0 $A:1.2.0"
+antigas_caso "o alvo NÃO está no disco → não apaga nada (a régua não está medindo esta instalação)" 9.9.9 "" \
+  "$A:1.0.0 $A:1.1.0 $A:1.2.0"
+antigas_caso "alvo em canal móvel (latest) → não apaga nada" latest "" "$A:1.0.0 $A:1.1.0 $A:latest"
+antigas_caso "alvo vazio → não apaga nada" "" "" "$A:1.0.0 $A:1.1.0 $A:1.2.0"
+antigas_caso "prerelease como alvo → não apaga nada" 1.2.0-rc1 "" "$A:1.0.0 $A:1.1.0 $A:1.2.0-rc1"
+antigas_caso "outro namespace, canal, prerelease, sem tag e nome parecido não entram na conta" 1.2.0 "$A:1.0.0" \
+  "$A:1.0.0 $A:1.1.0 $A:1.2.0 $ALHEIAS"
+antigas_caso "registro com PORTA no nome não confunde o corte do dois-pontos" 1.2.0 "" \
+  "localhost:5000/x/deskcommcrm:1.0.0 $A:1.1.0 $A:1.2.0"
+# A versão é da INSTALAÇÃO, não de cada repositório: o Asterisk só existe a
+# partir de certa versão, e a reserva dele é a mesma das outras três.
+antigas_caso "os quatro repositórios andam pela mesma régua de versão" 1.2.0 \
+  "$A:1.0.0 ${NS}/deskcomm-worker:1.0.0" \
+  "$A:1.0.0 ${NS}/deskcomm-worker:1.0.0 $A:1.1.0 ${NS}/deskcomm-asterisk:1.1.0 $A:1.2.0 ${NS}/deskcomm-asterisk:1.2.0"
+# A reserva é a que RODAVA. O caso que derruba "a maior das outras": a
+# atualização para a 1.2.0 falhou e o agent.sh voltou para a 1.1.0; dias depois
+# a 1.3.0 sobe. A maior das outras é a 1.2.0 — a que quebrou.
+QUATRO_NO_DISCO="$A:1.0.0 $A:1.1.0 $A:1.2.0 $A:1.3.0"
+antigas_caso "a reserva é a que RODAVA (1.1.0), não a maior das outras (1.2.0, a que quebrou)" 1.3.0 \
+  "$A:1.0.0 $A:1.2.0" "$QUATRO_NO_DISCO" 1.1.0
+antigas_caso "a que rodava NÃO está no disco → a maior das outras" 1.3.0 \
+  "$A:1.0.0 $A:1.1.0" "$QUATRO_NO_DISCO" 0.9.0
+antigas_caso "a que rodava É o alvo (--force na mesma versão) → a maior das outras" 1.3.0 \
+  "$A:1.0.0 $A:1.1.0" "$QUATRO_NO_DISCO" 1.3.0
+antigas_caso "não se sabe a que rodava → a maior das outras" 1.3.0 \
+  "$A:1.0.0 $A:1.1.0" "$QUATRO_NO_DISCO" ""
+# Um `sort` que ecoa uma versão ERRADA e sai != 0. Aceitar o que ele ecoou
+# guardaria a 1.0.0 e apagaria a 1.1.0, que é a reserva de verdade; tratar a
+# falha como "não há reserva" apagaria as duas. Nenhuma das duas serve.
+mkdir -p "$WORK/sort-quebrado"
+printf '#!/usr/bin/env bash\ncat >/dev/null\necho 1.0.0\nexit 1\n' > "$WORK/sort-quebrado/sort"
+chmod +x "$WORK/sort-quebrado/sort"
+R="$(printf '%s\n' "$A:1.0.0" "$A:1.1.0" "$A:1.2.0" \
+      | PATH="$WORK/sort-quebrado:$PATH" imagens_de_versoes_antigas 1.2.0 | tr '\n' ' ' || true)"
+check "sem conseguir decidir a reserva → não apaga nada (erra para o lado de onde se volta)" test -z "$R"
+
+echo "   15h. mesmo se a limpeza FALHAR, a atualização que deu certo sai com 0"
+# A função não falha (15f). Mas quem garante isso para a versão dela de daqui a
+# um ano é quem CHAMA: o update.sh roda sob `set -euo pipefail`, e uma limpeza
+# que saísse != 0 faria o agent.sh desfazer uma atualização que deu certo. Aqui
+# a função é trocada, no kit da fixture, por uma que só falha.
+cp hostgator-setup-kit/_common.sh "$WORK/_common.sh.inteiro"
+printf '\napagar_imagens_antigas() { return 1; }\n' >> hostgator-setup-kit/_common.sh
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+: > "$DOCKER_LOG"
+run_update
+cp "$WORK/_common.sh.inteiro" hostgator-setup-kit/_common.sh
+check "fixture: o update chegou ao passo da limpeza" grep -q "Liberando espaço em disco" "$OUTFILE"
+check "fixture: quem rodou foi a função que só falha" test "$(rmis)" -eq 0
+check "a atualização sai com 0" test "$RC" -eq 0
+
+echo "   15i. a reserva é a versão que estava NO AR, lida antes de o contêiner ser recriado"
+# O `.env` não diz o que roda — depois de um rollback do agent.sh ele guarda um
+# ID local. Quem diz é o contêiner, e só até o `up -d`: depois dele o contêiner
+# já é o novo e responderia o alvo. Aqui o que rodava era a 1.0.5, e a 1.1.0
+# (a maior das outras) está no disco sem nunca ter ficado no ar.
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+export DUBLE_VERSAO_NO_AR=1.0.5 DUBLE_VERSAO_DEPOIS=1.2.0
+: > "$DOCKER_LOG"
+run_update
+unset DUBLE_VERSAO_NO_AR DUBLE_VERSAO_DEPOIS
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "ficou a 1.0.5, a que rodava" nenhum_rmi_da 1.0.5
+check "saiu a 1.1.0, que nunca esteve no ar" apagou_as_quatro 1.1.0
+check "saiu a 1.0.0" apagou_as_quatro 1.0.0
+check "a instalada (1.2.0) segue intocada" nenhum_rmi_da 1.2.0
+
+unset DUBLE_NO_DISCO
 unset DUBLE_DIGESTS
 
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi
