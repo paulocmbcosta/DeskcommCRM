@@ -424,14 +424,17 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       expected_assignee: selectedConversation.assigned_to_user_id,
     });
   }, [claim, selectedConversation]);
-  const handleClose = useCallback(() => {
-    if (!selectedConversation) return;
-    // Encerrada não se encerra de novo, e atendimento antigo na tela não é o
-    // de agora: nos dois casos o atalho `e` não abre nada (o botão nem aparece).
-    if (["closed", "resolved", "archived"].includes(selectedConversation.status)) return;
-    if (vendoAtendimentoAntigo) return;
-    setEncerrarOpen(true);
-  }, [selectedConversation, vendoAtendimentoAntigo]);
+  // Encerrada não se encerra de novo, e atendimento antigo na tela não é o de
+  // agora: nos dois casos o atalho `e` não abre nada (o botão nem aparece).
+  const podeEncerrar =
+    selectedConversation != null &&
+    !["closed", "resolved", "archived"].includes(selectedConversation.status) &&
+    !vendoAtendimentoAntigo;
+  // Função simples, sem `useCallback`: nenhum dos dois consumidores (o cabeçalho
+  // e os atalhos) depende da identidade dela.
+  const handleClose = () => {
+    if (podeEncerrar) setEncerrarOpen(true);
+  };
 
   // A janela vence SOZINHA com a aba aberta. Sem este relógio, quem deixa o
   // inbox aberto a tarde inteira seguiria com o composer liberado numa conversa

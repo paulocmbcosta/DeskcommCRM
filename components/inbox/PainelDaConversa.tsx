@@ -34,6 +34,7 @@ import {
   PlugsConnected,
   Pulse,
 } from "@/lib/ui/icons";
+import { rotuloDoAssunto } from "@/lib/atendimento/encerramento";
 import { rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -409,6 +410,16 @@ export function PainelDaConversa({
                 <Campo rotulo={t("Criada em")}>
                   {dataLegivel(atendimentoEmTela?.started_at ?? conversation.created_at, "dd/MM/yyyy HH:mm", locale)}
                 </Campo>
+                {/* O ASSUNTO do encerramento (migration 0293). Aparece também num
+                    atendimento reaberto: é o registro que a janela vai trazer
+                    preenchido quando ele for fechado de novo. */}
+                {atendimentoEmTela?.assunto && (
+                  <Campo rotulo={t("Assunto")}>
+                    <span className="truncate" data-testid="assunto-do-atendimento">
+                      {rotuloDoAssunto(atendimentoEmTela.assunto)}
+                    </span>
+                  </Campo>
+                )}
                 {atendimentoEmTela?.closed_at ? (
                   <Campo rotulo={t("Encerrada em")}>
                     {dataLegivel(atendimentoEmTela.closed_at, "dd/MM/yyyy HH:mm", locale)}
@@ -421,6 +432,16 @@ export function PainelDaConversa({
                   )
                 )}
               </dl>
+              {/* O RESUMO fora do `<dl>`: é texto corrido, e numa linha de
+                  rótulo + valor sairia cortado na primeira frase. */}
+              {atendimentoEmTela?.closure_summary && (
+                <div className="mt-2 space-y-0.5" data-testid="resumo-do-atendimento">
+                  <p className="text-[11px] font-medium text-text-muted">{t("Resumo do atendimento")}</p>
+                  <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-text">
+                    {atendimentoEmTela.closure_summary}
+                  </p>
+                </div>
+              )}
             </div>
 
             <CRMSidePanel conversation={conversation} embutido />
@@ -483,6 +504,18 @@ export function PainelDaConversa({
                         {(a.assigned_to_user_name || naTela) && (
                           <span className="truncate text-[11px] text-text-subtle">
                             {naTela ? t("Você está vendo este atendimento") : `${t("Atendido por")} ${a.assigned_to_user_name}`}
+                          </span>
+                        )}
+                        {/* DO QUE TRATOU (migration 0293): é o que transforma uma
+                            lista de protocolos no histórico do cliente. */}
+                        {a.assunto && (
+                          <span className="truncate text-[11px] font-medium text-text" data-testid="assunto-no-historico">
+                            {rotuloDoAssunto(a.assunto)}
+                          </span>
+                        )}
+                        {a.closure_summary && (
+                          <span className="line-clamp-2 break-words text-[11px] text-text-subtle" data-testid="resumo-no-historico">
+                            {a.closure_summary}
                           </span>
                         )}
                       </button>
