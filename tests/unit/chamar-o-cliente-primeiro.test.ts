@@ -308,7 +308,10 @@ describe("os elos de tela que somem sem barulho", () => {
     // todos — o cliente que a gente ainda não chamou — virando o único sem saída.
     const fonte = readFileSync("components/kanban/ConversaNoDossie.tsx", "utf8");
     expect(fonte).toMatch(/ChamarNoWhatsAppDialog/);
-    // Sem contato não há a quem escrever, e aí o bloco continua sumindo.
-    expect(fonte).toMatch(/if \(!contactId\) return null;/);
+    // Sem contato não há a quem escrever, e aí o bloco continua sumindo. Quem
+    // mede isso de verdade — pintando o componente nos três estados da conversa
+    // — é `components/kanban/ConversaNoDossie.porta.test.tsx`; aqui fica só a
+    // âncora de que o começo depende do contato.
+    expect(fonte).toMatch(/const chamar = contactId \?/);
   });
 });

@@ -1,3 +1,4 @@
+import type { ConversaDoContato } from "@/lib/atendimento/conversa-do-contato";
 import type { ScoreBand } from "@/lib/kanban/score-band";
 
 /**
@@ -73,13 +74,7 @@ export interface Lead {
    * entre "não há conversa" e "ainda não carregou" — por isso `undefined` e não
    * um objeto vazio.
    */
-  conversa?: {
-    id: string;
-    /** O que a lista do inbox mostra: última mensagem, já truncada na origem. */
-    preview: string | null;
-    last_message_at: string | null;
-    unread: number;
-  } | null;
+  conversa?: ConversaDoContato | null;
   score?: {
     probability: number;
     reason: string;

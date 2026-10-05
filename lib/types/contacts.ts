@@ -2,6 +2,8 @@
  * Domain types for Contacts (EPIC-05).
  * Mirror the verified `contacts` schema (see CLAUDE.md / Spec 05).
  */
+import type { ConversaDoContato } from "@/lib/atendimento/conversa-do-contato";
+
 export interface Contact {
   id: string;
   organization_id: string;
@@ -48,13 +50,11 @@ export interface Contact {
   /**
    * Derivado (não é coluna): a conversa mais recente deste contato — atalho para o inbox.
    * Ausente é normal: contato criado à mão pode nunca ter conversado.
+   *
+   * Leva o `status`: ter conversa não é estar em atendimento, e é ele que decide
+   * se a tela abre a conversa ou oferece chamar de novo (`portaDaConversa`).
    */
-  conversa?: {
-    id: string;
-    preview: string | null;
-    last_message_at: string | null;
-    unread: number;
-  };
+  conversa?: ConversaDoContato;
 }
 
 /**

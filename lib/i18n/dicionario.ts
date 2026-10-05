@@ -7254,6 +7254,12 @@ export const DICIONARIO: Traducoes = {
   "A conversa abriu, mas a mensagem não saiu.": { es: "La conversación se abrió, pero el mensaje no salió." },
   "Não consegui iniciar a conversa.": { es: "No pude iniciar la conversación." },
   "Ainda não há conversa — comece você": { es: "Todavía no hay conversación — empiece usted" },
+  // Chamar DE NOVO quem já teve o atendimento encerrado (2026-10-05).
+  "O último atendimento foi encerrado — comece um novo": { es: "La última atención fue cerrada — empiece una nueva" },
+  "Ver a conversa no Inbox": { es: "Ver la conversación en el Inbox" },
+  "O atendimento anterior foi encerrado. Esta mensagem abre um atendimento novo, com protocolo próprio — o anterior continua no histórico.": { es: "La atención anterior fue cerrada. Este mensaje abre una atención nueva, con protocolo propio — la anterior sigue en el historial." },
+  "Este atendimento foi encerrado. Para falar com o cliente de novo, comece um atendimento novo — ele ganha um protocolo próprio.": { es: "Esta atención fue cerrada. Para hablar con el cliente de nuevo, empiece una atención nueva — recibe un protocolo propio." },
+  "Continua este mesmo atendimento, com o mesmo protocolo. Para começar um atendimento novo, use Chamar no WhatsApp.": { es: "Continúa esta misma atención, con el mismo protocolo. Para empezar una atención nueva, use Llamar por WhatsApp." },
   "este contato": { es: "este contacto" },
   "https://… (link público do arquivo)": { es: "https://… (enlace público del archivo)" },
   "Valor que entra aqui": { es: "Valor que va aquí" },

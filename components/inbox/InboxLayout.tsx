@@ -4,10 +4,13 @@ import { useT } from "@/hooks/i18n/useT";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { format } from "date-fns";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useAuth } from "@/hooks/auth/AuthProvider";
+import { useAuth, usePermission } from "@/hooks/auth/AuthProvider";
 import { estadoDaJanela, formatarDecorrido } from "@/lib/channels/janela";
-import { canalReage } from "@/lib/channels/capabilities";
+import { canalFalaPrimeiro, canalReage } from "@/lib/channels/capabilities";
 import { JanelaFechadaAviso } from "@/components/inbox/JanelaFechadaAviso";
+import { NovoAtendimentoAviso } from "@/components/inbox/NovoAtendimentoAviso";
+import { conversaEncerrada } from "@/lib/atendimento/conversa-do-contato";
+import { useQueryClient } from "@tanstack/react-query";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
 import { useCloseConversation } from "@/hooks/inbox/useCloseConversation";
 import { useMarkAsRead } from "@/hooks/inbox/useMarkAsRead";
@@ -135,6 +138,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   const localeDaData = useLocaleDeData();
   const { activeOrg, user } = useAuth();
   const supportReadonly = user.support?.access_mode === "support_readonly";
+  const podeResponder = usePermission("inbox.reply");
   const orgId = activeOrg?.orgId ?? null;
 
   const router = useRouter();
@@ -383,6 +387,30 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
     setFiltrosAbertos(false);
     setRespondendo(null);
   }, []);
+  /**
+   * Um atendimento NOVO começou por "Chamar no WhatsApp", de dentro do Inbox.
+   *
+   * A conversa acabou de mudar de estado, de protocolo e de dono. O tempo real
+   * traria isso sozinho, mas "sozinho" é daqui a pouco — e nesse intervalo a
+   * tela seguiria dizendo "Fechada" para quem acabou de chamar o cliente, que é
+   * exatamente a dúvida que este caminho existe para acabar. Por isso pede-se
+   * de novo, na hora, o que a tela mostra.
+   *
+   * `handleSelect` e não só a invalidação: se a pessoa escolheu OUTRO número
+   * no diálogo, o atendimento nasceu em outra conversa, e é ela que se abre.
+   */
+  const qc = useQueryClient();
+  const aoIniciarAtendimento = useCallback(
+    (conversationId: string) => {
+      void qc.invalidateQueries({ queryKey: ["conversations"] });
+      void qc.invalidateQueries({ queryKey: ["conversation", conversationId] });
+      void qc.invalidateQueries({ queryKey: ["conversation-counts"] });
+      void qc.invalidateQueries({ queryKey: ["atendimentos"] });
+      void qc.invalidateQueries({ queryKey: ["messages", conversationId] });
+      handleSelect(conversationId);
+    },
+    [qc, handleSelect],
+  );
   const handleVisibleChange = useCallback((ids: string[]) => setVisibleIds(ids), []);
   const handleFocusReply = useCallback(() => composerRef.current?.focus(), []);
   const handleClaim = useCallback(() => {
@@ -436,6 +464,32 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
     : selectedConversation?.contacts?.is_anonymized
       ? t("Contato anonimizado — não é possível enviar mensagens.")
       : null;
+
+  // CONVERSA ENCERRADA: o que sai dela não é resposta, é um atendimento novo.
+  //
+  // O seletor de modelo pergunta pela janela de 24h, não pelo estado da
+  // conversa — então ele seguia de pé com ela encerrada, e o que saía por ele
+  // era gravado no atendimento que já tinha acabado (medição e desfechos em
+  // `NovoAtendimentoAviso`). Encerrada, a porta é outra: "Chamar no WhatsApp",
+  // que abre atendimento novo com protocolo, time e dono.
+  //
+  // Fica de fora quem não tem como ser chamado por aqui: conversa de telefone,
+  // contato bloqueado ou anonimizado, quem só lê (suporte em modo leitura e o
+  // papel que não responde), e o contato sem DESTINO — o visitante do chat do
+  // site que não deixou telefone: o canal dele não fala primeiro, e chamar
+  // abriria uma conversa de WhatsApp vazia, para ninguém.
+  const conversaJaEncerrada = conversaEncerrada(selectedConversation?.status);
+  const temDestino =
+    Boolean(selectedConversation?.contacts?.phone_number) ||
+    canalFalaPrimeiro(selectedConversation?.channel_sessions?.provider ?? null);
+  const podeChamarDeNovo =
+    conversaJaEncerrada &&
+    !porTelefone &&
+    !blockedReason &&
+    !supportReadonly &&
+    podeResponder &&
+    temDestino &&
+    Boolean(selectedConversation?.contact_id);
 
   // Reagir com emoji (DYD-16): o canal precisa reagir, a janela de 24h estar
   // aberta (para a plataforma, reação é mensagem livre) e o contato não pode
@@ -766,11 +820,24 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 )}
               </div>
             )}
-            {motivoDaJanela && (
+            {motivoDaJanela && !conversaJaEncerrada && (
               <JanelaFechadaAviso
                 conversationId={selectedConversation.id}
                 channelSessionId={selectedConversation.channel_session_id ?? null}
                 motivo={motivoDaJanela}
+              />
+            )}
+            {podeChamarDeNovo && (
+              <NovoAtendimentoAviso
+                // Remonta por conversa: o diálogo guarda modelo e valores em
+                // estado próprio, e levá-los para o próximo cliente mandaria o
+                // nome de um dentro do modelo do outro.
+                key={selectedConversation.id}
+                contactId={selectedConversation.contact_id}
+                nome={selectedConversation.contacts?.name?.trim() || t("este contato")}
+                telefone={selectedConversation.contacts?.phone_number ?? null}
+                conexaoId={selectedConversation.channel_session_id ?? null}
+                onIniciada={aoIniciarAtendimento}
               />
             )}
             <Composer

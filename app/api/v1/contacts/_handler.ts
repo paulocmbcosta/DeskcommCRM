@@ -20,6 +20,11 @@ import { canonicalPhoneBR, phoneLookupVariants } from "@/lib/channels/phone-vari
 import { encontrarContatoPorTelefone } from "@/lib/channels/contato-por-telefone";
 import { hashCpf, encryptCpfSql } from "@/lib/contacts/cpf";
 import type { Contact } from "@/lib/types/contacts";
+import {
+  COLUNAS_DA_CONVERSA_DO_CONTATO,
+  conversaMaisRecentePorContato,
+  type LinhaDaConversaDoContato,
+} from "@/lib/atendimento/conversa-do-contato";
 import { ensureConversation, sessaoProntaParaEnvio } from "@/lib/automation/start-conversation";
 import type {
   ContactCreate,
@@ -228,28 +233,15 @@ async function withConversas(
 
   const { data, error } = await supabase
     .from("conversations")
-    .select("id, contact_id, last_message_preview, last_message_at, unread_count_for_assignee")
+    .select(COLUNAS_DA_CONVERSA_DO_CONTATO)
     .eq("organization_id", organizationId)
     .in("contact_id", contactIds)
     .order("last_message_at", { ascending: false, nullsFirst: false });
   if (error) return { contacts, error: error.message };
 
-  const porContato = new Map<string, NonNullable<Contact["conversa"]>>();
-  for (const row of (data ?? []) as Array<{
-    id: string;
-    contact_id: string;
-    last_message_preview: string | null;
-    last_message_at: string | null;
-    unread_count_for_assignee: number | null;
-  }>) {
-    if (porContato.has(row.contact_id)) continue;
-    porContato.set(row.contact_id, {
-      id: row.id,
-      preview: row.last_message_preview,
-      last_message_at: row.last_message_at,
-      unread: row.unread_count_for_assignee ?? 0,
-    });
-  }
+  const porContato = conversaMaisRecentePorContato(
+    (data ?? []) as unknown as LinhaDaConversaDoContato[],
+  );
 
   return {
     contacts: contacts.map((contact) => {

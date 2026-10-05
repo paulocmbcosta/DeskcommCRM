@@ -185,7 +185,14 @@ describe("os elos que somem sem barulho", () => {
     const fonte = readFileSync("components/inbox/InboxLayout.tsx", "utf8");
     // A GUARDA junto com a tag: `{false && (` deixava a tag na linha seguinte e
     // o caso passava verde com a saída removida da tela.
-    expect(fonte).toMatch(/\{motivoDaJanela && \(\s*\n\s*<JanelaFechadaAviso/);
+    //
+    // Desde 2026-10-05 a guarda tem uma segunda metade: com a conversa
+    // ENCERRADA a saída não é o seletor de modelo (o que saía por ele era
+    // gravado dentro do atendimento que acabou), é o atendimento novo. As duas
+    // portas, montadas de verdade em cada estado, estão em
+    // `components/inbox/InboxLayout.encerrada.test.tsx`.
+    expect(fonte).toMatch(/\{motivoDaJanela && !conversaJaEncerrada && \(\s*\n\s*<JanelaFechadaAviso/);
+    expect(fonte).toMatch(/\{podeChamarDeNovo && \(\s*\n\s*<NovoAtendimentoAviso/);
     const aviso = readFileSync("components/inbox/JanelaFechadaAviso.tsx", "utf8");
     expect(aviso).toMatch(/type: "template"/);
     expect(aviso).toMatch(/template_name/);
