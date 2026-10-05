@@ -7,6 +7,7 @@
  */
 import { z } from "zod";
 import { COMANDOS_DO_BANCO, type ComandoDoBanco } from "@/lib/inbox/comando-da-conversa";
+import { RESUMO_MAXIMO } from "@/lib/atendimento/encerramento";
 import { PISO_DA_BUSCA, buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 
 /**
@@ -211,11 +212,33 @@ export const conversationTagsSchema = z
 export type ConversationTags = z.infer<typeof conversationTagsSchema>;
 
 /** G3-05: PATCH /conversations/[id] aceita status e/ou tags (ao menos um). */
+/**
+ * O REGISTRO do encerramento (migration 0293): assunto e resumo.
+ *
+ * Os dois são opcionais AQUI de propósito. Quem decide se são obrigatórios é a
+ * organização (`settings.atendimento.encerramento`), e quem aplica é o banco
+ * (`fn_atendimento_encerrar`) — um schema que exigisse por conta própria
+ * divergiria da regra na primeira instalação que a desligasse.
+ */
+const registroDoEncerramento = {
+  assunto_id: z.string().uuid().nullish(),
+  resumo: z.string().max(RESUMO_MAXIMO).nullish(),
+};
+
+/** POST /conversations/[id]/close. */
+export const closeConversationSchema = z.object({
+  expected_revision: z.number().int().positive().optional(),
+  ...registroDoEncerramento,
+});
+export type CloseConversationInput = z.infer<typeof closeConversationSchema>;
+
 export const patchConversationSchema = z
   .object({
     status: conversationStatusSchema.optional(),
     expected_revision: z.number().int().positive().optional(),
     tags: conversationTagsSchema.optional(),
+    // Só têm efeito quando `status` leva a conversa a um estado terminal.
+    ...registroDoEncerramento,
   })
   .refine((d) => d.status !== undefined || d.tags !== undefined, {
     message: "Informe status ou tags.",

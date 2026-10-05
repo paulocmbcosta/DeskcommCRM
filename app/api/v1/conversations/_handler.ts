@@ -9,6 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/api/types";
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import { fraseDaRecusa, motivoDaRecusa } from "@/lib/atendimento/encerramento";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { CONVERSATION_TERMINAL_STATUSES } from "@/lib/schemas";
 
@@ -443,14 +444,37 @@ export async function patchConversationHandler(
     // — alguém decidiu continuar aquele atendimento, e o protocolo não muda.
     // Quando quem tira a conversa do estado terminal é o cliente escrevendo de
     // novo (`fn_service_inbound`), nasce atendimento novo com protocolo novo.
-    const { error: statusError } = await createAdminClient().rpc("fn_service_status_com_ator", {
-      p_org: ctx.organization_id, p_conversation: conversationId, p_status: input.status,
-      p_expected: input.expected_revision ?? observed.service_revision ?? null,
-      p_actor: ctx.actor.type === "user" ? ctx.actor.id : null,
-      p_retomar: input.status === "open",
-    });
-    if (statusError) throw new ApiError(statusError.code === "40001" ? 409 : statusError.code === "P0002" ? 404 : 500,
-      statusError.code === "40001" ? "conflict" : statusError.code === "P0002" ? "not_found" : "internal_error", undefined, ctx.requestId, statusError.message);
+    //
+    // ESTADO TERMINAL passa por `fn_atendimento_encerrar` (migration 0293), a
+    // mesma porta do `POST /close`: é ela que aplica "exigir assunto / exigir
+    // resumo". Se este caminho fechasse por `fn_service_status_com_ator`, a
+    // regra da organização valeria para a tela e não para quem encerra por
+    // token — duas portas, duas regras.
+    const terminal = (CONVERSATION_TERMINAL_STATUSES as readonly string[]).includes(input.status);
+    const admin = createAdminClient();
+    const p_expected = input.expected_revision ?? observed.service_revision ?? null;
+    const p_actor = ctx.actor.type === "user" ? ctx.actor.id : null;
+    const { error: statusError } = terminal
+      ? await admin.rpc("fn_atendimento_encerrar", {
+          p_org: ctx.organization_id, p_conversation: conversationId, p_expected, p_actor,
+          p_assunto: input.assunto_id ?? null,
+          p_resumo: input.resumo ?? null,
+          p_status: input.status,
+        })
+      : await admin.rpc("fn_service_status_com_ator", {
+          p_org: ctx.organization_id, p_conversation: conversationId, p_status: input.status,
+          p_expected, p_actor,
+          p_retomar: input.status === "open",
+        });
+    if (statusError) {
+      const recusa = terminal && statusError.code === "22023" ? motivoDaRecusa(statusError.message) : null;
+      if (recusa) {
+        throw new ApiError(422, "validation_failed", { ...recusa }, ctx.requestId,
+          traduzir(fraseDaRecusa(recusa), ctx.idioma ?? "pt-BR"));
+      }
+      throw new ApiError(statusError.code === "40001" ? 409 : statusError.code === "P0002" ? 404 : 500,
+        statusError.code === "40001" ? "conflict" : statusError.code === "P0002" ? "not_found" : "internal_error", undefined, ctx.requestId, statusError.message);
+    }
   }
   if (input.tags !== undefined) {
     update.tags = input.tags;
@@ -497,7 +521,14 @@ export async function patchConversationHandler(
       resourceType: "conversation",
       resourceId: conv.id,
       requestId: ctx.requestId,
-      metadata: { ...a.metadataActor, status: input.status },
+      metadata: {
+        ...a.metadataActor,
+        status: input.status,
+        // Só a marca: o resumo é texto livre sobre o cliente e não entra em log append-only.
+        ...(action === "conversation.closed"
+          ? { assunto_id: input.assunto_id ?? null, com_resumo: (input.resumo ?? "").trim().length > 0 }
+          : {}),
+      },
     });
   }
   if (input.tags !== undefined) {
