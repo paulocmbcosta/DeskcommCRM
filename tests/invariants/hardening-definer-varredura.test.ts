@@ -201,6 +201,20 @@ const AUTHENTICATED_PERMITIDO: readonly Excecao[] = [
       "Mesmo invariante de isolamento.",
   },
   {
+    fn: "fn_save_atendimento_assunto(uuid,uuid,uuid,text)",
+    razao:
+      "POST app/api/v1/settings/teams/[id]/assuntos/route.ts e PATCH .../assuntos/[assuntoId]/route.ts " +
+      "usam createClient da sessão; mesmos portões de fn_save_attendance_team (manager, suporte, MFA), " +
+      "time e assunto vêm do PATH e a org da sessão. A tabela só tem GRANT de SELECT — esta é a porta de escrita " +
+      "(migration 0293). Isolamento em tests/invariants/encerramento-com-assunto-e-resumo.test.ts.",
+  },
+  {
+    fn: "fn_archive_atendimento_assunto(uuid,uuid,boolean)",
+    razao:
+      "PATCH app/api/v1/settings/teams/[id]/assuntos/[assuntoId]/route.ts usa createClient da sessão; " +
+      "mesmos portões da irmã. Só alterna archived_at — não apaga, porque atendimento encerrado aponta para o assunto.",
+  },
+  {
     fn: "fn_attendant_set_status(uuid,text,text,text,uuid)",
     razao:
       "POST app/api/v1/attendants/me/status/route.ts usa createClient da sessão (com o admin " +
