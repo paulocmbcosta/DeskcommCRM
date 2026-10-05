@@ -8,6 +8,28 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.52.3] — 2026-10-05
+
+### Corrigido
+
+- **Quem pede um atendente passa a entrar na fila do setor certo** Quando o cliente escrevia "quero falar com um atendente", a conversa era passada para uma pessoa
+  na hora — mas sem setor. Em organização com times cadastrados, o rodízio a entregava a qualquer
+  atendente disponível, de qualquer time: um interessado em contratar caía no Suporte, e alguém
+  precisava transferir à mão. Era o que acontecia com todo lead que chega por texto pronto contendo
+  essa frase (sites de comparação de planos, por exemplo).
+
+  Agora, antes de passar a conversa, o sistema lê o que o cliente escreveu e o "Quando usar" de
+  cada time e escolhe a fila. O cliente continua sendo avisado e a IA silenciada sem esperar a
+  resposta dela. O aviso da Central diz "Setor escolhido automaticamente", e quem recebeu a conversa
+  errada usa Transferir. Quando o cliente só pede um atendente e não dá pista do assunto, ou quando a
+  escolha falha, a conversa vai para a fila geral — o comportamento anterior.
+
+  Quem escolhe é o Jev, quando há uma chave da OpenRouter cadastrada (a mesma do "Só conversas
+  comerciais" e do clima do atendimento); sem ela, o modelo do agente. O ponto aparece em IA ›
+  Provedores como "Escolher o setor de quem pede um atendente". Organização sem times não faz chamada
+  nenhuma. Vale escrever bem o "Quando usar" de cada time em Configurações › Times de atendimento: é
+  ele que decide. Nada a fazer na atualização.
+
 ## [1.52.2] — 2026-10-02
 
 ### Corrigido
@@ -5896,7 +5918,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.2...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.3...HEAD
+[1.52.3]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.2...v1.52.3
 [1.52.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.1...v1.52.2
 [1.52.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.0...v1.52.1
 [1.52.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.51.2...v1.52.0
