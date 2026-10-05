@@ -31,8 +31,10 @@ espera na fila do time); **Quem atende por este time** (só quem já está na Eq
 O agente descobre os times sozinho, no atendimento — **o prompt não nomeia time**: renomear um time
 não pode quebrar prompt nenhum. O prompt diz *quando* passar e pede para escolher o setor; o
 "quando usar" diz *qual*. Para o agente enxergar os setores, ligue o pacote **Passar para um
-humano** nas capacidades (§7). A transferência pelas **palavras de passagem** (§7) roda antes do
-modelo e **não escolhe setor**: cai na fila geral.
+humano** nas capacidades (§7). A transferência pelas **palavras de passagem** (§7) e o pedido
+explícito de atendente passam a conversa sem esperar a resposta da IA, e o setor é escolhido na
+hora pelo mesmo "quando usar" — mais um motivo para escrevê-lo bem. Só cai na fila geral quem
+pede um atendente sem dar pista do assunto (ou a organização que não tem times).
 
 ## 1c. Configurações › Conectores — o sistema que a empresa já usa (ex.: IXC)
 

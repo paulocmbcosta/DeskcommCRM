@@ -37,6 +37,7 @@ import { currentExecutionBoundary, guardServiceEffect } from '@/lib/atendimento/
 import type pg from 'pg';
 import { z } from 'zod';
 import { auxModelArgs, type AuxModelArgs } from './aux-model-args';
+import { escolherSetorDoPedido } from './setor-do-pedido';
 import type { ChannelAdapter, ChannelSendInput, ChannelSendResult } from '../channel-adapter';
 
 import { withFields, type Logger } from '../obs/logger';
@@ -2292,8 +2293,20 @@ async function executarTurnoDoAgente(
 
   // F4-06 (acceptance 1): detecção DETERMINÍSTICA (regex PT-BR, sem LLM) de pedido explícito
   // de atendimento humano na última mensagem do lead. Handoff é cidadão de 1ª classe (exigência
-  // Meta fiscalizada, blueprint 5.5) — dispara ANTES do modelo: o bot não gasta LLM.
-  // A ação (CRM force_human + cache + cancela crons + inbox) é idempotente.
+  // Meta fiscalizada, blueprint 5.5) — dispara ANTES do modelo do agente: o bot não gasta um
+  // turno. A ação (CRM force_human + cache + cancela crons + inbox) é idempotente.
+  //
+  // O SETOR é o único ponto deste desvio que usa IA (`escolherSetorDoPedido`: o Jev, ou um
+  // modelo auxiliar de reserva). Sem ele a conversa saía sem time e o rodízio a entregava a
+  // qualquer atendente da organização: medido em produção em 2026-10-02, lead comercial no
+  // Suporte, 16 trocas manuais de time em 20 passagens por aqui. Quem escolhia setor era só a
+  // ferramenta `request_human_handoff`, que este desvio — por rodar antes do modelo — nunca
+  // alcança. Organização sem times não faz chamada nenhuma.
+  //
+  // ⚠️ O SETOR VEM PRIMEIRO, antes do aviso e da trava. Escolhê-lo depois de calar a IA
+  // deixaria a conversa fora dela e sem time pelo tempo de uma chamada — e o cron de rodízio,
+  // que roda uma vez por minuto e só espera a IA sair, a distribuiria para a organização
+  // inteira nessa janela. A espera tem teto e a função nunca lança: sem resposta, fila geral.
   //
   // ⚠️ ORDEM: AVISA e SÓ ENTÃO silencia. Não é preferência de redação — é a única
   // ordem que funciona. `performHumanHandoff` grava `contacts.force_human = true`,
@@ -2320,6 +2333,20 @@ async function executarTurnoDoAgente(
         (agentConfig !== null && matchesHandoffKeyword(texto, agentConfig.handoffKeywords)),
     )
   ) {
+    const setor = await escolherSetorDoPedido(
+      pool,
+      deps.llmCfg,
+      {
+        tenantId,
+        leadId: leadId || null,
+        jobId: liveJob().id,
+        falas: openingContext.context.messages,
+        // Para a reserva, sem knob de env: o modelo é o do agente publicado, com o provider
+        // e a credencial DELE — ou o que o painel de provedores escolher para o ponto.
+        ...argsAux(undefined),
+      },
+      { ...(deps.registry !== undefined ? { registry: deps.registry } : {}), log: runLog },
+    );
     const aviso = await avisarLeadDaEscalacao(pool, avisoDaEscalacao().ids, {
       ...avisoDaEscalacao().base,
       motivo: 'pediu_humano',
@@ -2331,11 +2358,13 @@ async function executarTurnoDoAgente(
         reason: 'requested_human',
         conversationSummary: buildHandoffSummary(previous),
         avisoAoLead: aviso,
+        timeAutomatico: setor,
         log: runLog,
       },
     );
     runLog.info('handoff humano acionado por pedido explícito do lead (detecção determinística)', {
       kind: liveJob().kind,
+      setor_escolhido: setor !== null,
       lead_avisado: aviso.avisado,
     });
     return; // bot silencia: o aviso já saiu, e nada mais sai neste turno

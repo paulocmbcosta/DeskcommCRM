@@ -79,6 +79,7 @@ const PONTOS_AUXILIARES = [
   "checkpoint",
   "draft_suggestion",
   "automation_ai_message",
+  "handoff_team_classify",
 ] as const;
 
 describe("o ponto auxiliar não cruza provider de um com modelo de outro", () => {

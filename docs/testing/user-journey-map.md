@@ -3251,3 +3251,35 @@ O roteiro da prova é `docs/runbooks/telefonia-transferencia-e-ramais.md`.
 | J38.12 Admin troca o ramal em Conexões › Telefone › Ramais; número de outra pessoa → "Esse ramal já é de outra pessoa." | `[P1]` | no Postgres real; pela tela, pendente |
 | J38.13 Menu com "O cliente pode digitar o ramal": digitar 202 toca direto em B; B não atende → a fila do time padrão; ramal inexistente → tecla inválida | `[P0]` | em unidade; na VPS, pendente (só o …9197 manda tecla) |
 
+
+## J39 — Quem pede um atendente entra na fila do setor certo `[P0]` (2026-10-02)
+
+Achado em produção (protocolo 20261002000072): um lead chegou do site de comparação de planos com
+o texto pronto "…quero falar com um atendente…", plano e endereço já escolhidos, e foi entregue a
+um atendente do Suporte. O desvio determinístico de pedido de humano passava a conversa **sem
+time**, e o rodízio a entregava a qualquer atendente disponível. Medido em 7 dias: 20 passagens
+por esse desvio, 16 com troca manual de time (contra 29 em 116 quando quem passa é a IA). Desenho
+em `docs/superpowers/specs/2026-10-02-pedido-de-humano-escolhe-o-setor-design.md`; peça
+`setorDoPedido` em `docs/architecture/escalacao-ciclo-humano.architecture.json`.
+
+`[P0]` porque é a primeira mensagem de um interessado em contratar: cair no setor errado é esperar
+uma transferência antes de ser atendido.
+
+**Como é provado.** As duas vias do classificador (o Jev e o modelo de reserva) em
+`lib/agent-engine/agent/setor-do-pedido.test.ts`; a passagem em
+`lib/agent-engine/agent/human-handoff.test.ts`; o turno inteiro no Postgres real em
+`tests/invariants/pedido-de-humano-escolhe-o-setor.test.ts`. A qualidade da escolha foi medida com
+conversas **sintéticas**: o Jev na VPS de produção e três modelos de reserva (tabela na spec).
+**Não passou pela tela nem por uma conversa real**: o chip do time na conversa e o aviso da Central
+com "Setor escolhido automaticamente" só foram conferidos no banco.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J39.1 Texto pronto com plano e endereço + "quero falar com um atendente" → conversa na fila do Comercial | `[P0]` | no Postgres real (Jev e modelo de mentira); 8/8 no Jev real e em cada modelo de reserva; pela tela, pendente |
+| J39.2 O setor é escolhido ANTES de a passagem começar — nenhuma chamada de IA com a conversa fora da IA e sem time | `[P0]` | no Postgres real |
+| J39.3 Jev fora do ar → o modelo de reserva escolhe; os dois fora do ar → a passagem acontece inteira, na fila geral | `[P0]` | no Postgres real e em unidade |
+| J39.4 "Quero falar com um atendente" sem pista do assunto → fila geral | `[P1]` | no Jev real e nos modelos reais (sintético) |
+| J39.5 Organização sem times → nenhuma chamada, nem ao Jev | `[P1]` | no Postgres real |
+| J39.6 A Central diz "Setor escolhido automaticamente: <time>" | `[P1]` | no Postgres real; pela tela, pendente |
+| J39.7 Suspeita de opt-out não escolhe setor | `[P1]` | no Postgres real |
+| J39.8 A chamada aparece em IA › Execuções (`llm_calls`, ponto `handoff_team_classify`) | `[P1]` | no Postgres real; pela tela, pendente |
