@@ -31,6 +31,14 @@ import { SincronizadorDeTroncos } from "./sincronizacao";
 const RECONCILIAR_MS = 60_000;
 const LER_ESTADOS_MS = 15_000;
 const BACKOFF_MAX_MS = 30_000;
+/**
+ * Quanto uma abertura pode demorar. Na rede do Docker o aperto de mão leva
+ * milissegundos; passou disso, o Asterisk está subindo ou travado, e a conexão
+ * é largada para a tentativa seguinte. Sem este prazo, um Asterisk que aceita o
+ * TCP e não responde seguraria CADA tentativa por 5 min (medido na imagem do
+ * worker: o primeiro sinal do WebSocket é um `error` aos 302 s).
+ */
+const PRAZO_DE_ABERTURA_MS = 10_000;
 
 function portaAri(ari: ClienteAri): PortaAri {
   return {
@@ -313,9 +321,38 @@ export async function runTelefoniaLoop(opts: {
           resolve(`abrir: ${String(e)}`);
           return;
         }
-        const aoAbortar = () => ws.close();
+        // A ÚNICA saída desta conexão. Esperar o `close` prendia o laço para
+        // sempre — e o desligamento do worker junto: o WebSocket do Node 22
+        // (undici 6) não o dispara quando a ABERTURA falha (vem só `error`), e não
+        // dispara nada se o Asterisk aceita o TCP e não responde.
+        //
+        // O socket é largado ANTES de o laço seguir: sem tratadores, um `open` ou
+        // evento tardio não chega a ninguém; e `close()` cancela a abertura em
+        // curso — a tentativa seguinte nunca convive com esta. Na ARI só um
+        // WebSocket assina o app, e o mais novo toma o lugar do anterior: uma
+        // abertura largada que vingasse depois calaria a conexão que vale.
+        let aberta = false;
+        const encerrar = (motivo: string) => {
+          clearTimeout(prazo);
+          opts.signal.removeEventListener("abort", aoAbortar);
+          // Os tratadores saem ANTES do `close()`, e a ordem não é estética: num
+          // socket que não abriu, `close()` dispara `error` DENTRO da chamada — com
+          // o tratador ainda posto, ele voltaria aqui sem fim (medido no Node 22:
+          // `RangeError` de pilha, que derruba o worker inteiro).
+          ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+          estado.conectada = false;
+          ws.close();
+          resolve(motivo);
+        };
+        const aoAbortar = () => encerrar("desligando");
+        const prazo = setTimeout(
+          () => encerrar(`não abriu em ${PRAZO_DE_ABERTURA_MS / 1_000} s`),
+          PRAZO_DE_ABERTURA_MS,
+        );
         opts.signal.addEventListener("abort", aoAbortar, { once: true });
         ws.onopen = () => {
+          aberta = true;
+          clearTimeout(prazo);
           espera = 1_000;
           estado.conectada = true;
           opts.log.info("telefonia: conectada ao Asterisk");
@@ -333,12 +370,8 @@ export async function runTelefoniaLoop(opts: {
           }
           void enfileirar(() => ctl.tratar(ev));
         };
-        ws.onerror = () => undefined;
-        ws.onclose = (c) => {
-          opts.signal.removeEventListener("abort", aoAbortar);
-          estado.conectada = false;
-          resolve(`fechou (${c.code})`);
-        };
+        ws.onerror = () => encerrar(aberta ? "erro na conexão" : "a abertura falhou");
+        ws.onclose = (c) => encerrar(`fechou (${c.code})`);
       });
       if (opts.signal.aborted) break;
       opts.log.warn("telefonia: conexão com o Asterisk caiu — reconectando", { motivo: fechou, em_ms: espera });

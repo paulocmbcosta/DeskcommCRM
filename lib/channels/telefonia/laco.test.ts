@@ -14,7 +14,10 @@
  *     (workers/agent-worker/main.ts);
  *  4. a fiação de `runTelefoniaLoop`: com a telefonia desligada nada roda (o
  *     worker não escreve no volume); ligada, a passada roda ao subir e a cada
- *     60 s mesmo com o Asterisk fora, e o controlador recebe o disco das falas.
+ *     60 s mesmo com o Asterisk fora, e o controlador recebe o disco das falas;
+ *  5. a reconexão: a abertura que falha sem `close`, ou que não dá sinal nenhum,
+ *     não prende o laço — nem o desligamento do worker — e o socket largado não
+ *     vira uma segunda conexão ao Asterisk.
  *
  * A ARI, o controlador e o sincronizador são falsos: aqui só se mede a fiação.
  * O disco das falas e o armazém de reserva são medidos em falas-no-disco.test.ts.
@@ -30,6 +33,8 @@ const h = vi.hoisted(() => {
   const controladores: unknown[][] = [];
   /** O argumento de cada `sync.sincronizar`: `true` ao conectar, `false` na reconciliação de 60 s. */
   const reconciliacoes: boolean[] = [];
+  /** Cada evento que chegou ao controlador, na ordem. */
+  const eventos: unknown[] = [];
   class ControladorFalso {
     ativas = 0;
     constructor(...args: unknown[]) {
@@ -37,7 +42,9 @@ const h = vi.hoisted(() => {
     }
     usarFila() {}
     async recuperar() {}
-    async tratar() {}
+    async tratar(ev: unknown) {
+      eventos.push(ev);
+    }
   }
   class SincronizadorFalso {
     async sincronizar(completa = false) {
@@ -46,29 +53,82 @@ const h = vi.hoisted(() => {
     async atualizarEstados() {}
   }
   /**
-   * O Asterisk: fora (`conecta: false`, o laço fica reconectando) ou de pé — um
-   * WebSocket mínimo que abre logo depois de criado e fecha quando o laço aborta.
+   * O WebSocket falso, que se comporta como o do Node 22 (undici 6) — MEDIDO na
+   * imagem do worker (`node:22-alpine`, Node 22.23.3, undici 6.28.1):
+   *  - `abre`: a abertura dá certo, vem `open`;
+   *  - `falha`: porta fechada, nome que não resolve, resposta que não é 101 — vem
+   *    SÓ `error`. `close` nunca vem, e o socket fica "abrindo" para sempre;
+   *  - `muda`: o servidor aceita o TCP e não responde — não vem evento nenhum;
+   *  - `close()` num socket que não abriu: `error` DENTRO da chamada — antes de o
+   *    socket se dar por encerrado, então o tratador que chama `close()` de novo
+   *    não volta nunca (no Node 22, `RangeError` de pilha) —, outro logo depois, e
+   *    de novo nenhum `close`;
+   *  - `close()` com a conexão aberta: `close` só vem quando o servidor responde à
+   *    despedida. Com ele travado (`despede = false`) não vem nada — medido por
+   *    20 s, no Node 22 e no 24.
    */
-  const ari = { conecta: false };
+  type Abertura = "abre" | "falha" | "muda";
+  class SoqueteFalso {
+    onopen: null | (() => void) = null;
+    onmessage: null | ((m: { data: string }) => void) = null;
+    onerror: null | (() => void) = null;
+    onclose: null | ((c: { code: number }) => void) = null;
+    estado: "abrindo" | "aberto" | "encerrado" = "abrindo";
+    /** O servidor responde à despedida do `close()`. */
+    despede = true;
+    constructor(abertura: Abertura) {
+      if (abertura === "abre") {
+        void Promise.resolve().then(() => {
+          if (this.estado !== "abrindo") return;
+          this.estado = "aberto";
+          this.onopen?.();
+        });
+      }
+      if (abertura === "falha") void Promise.resolve().then(() => this.onerror?.());
+    }
+    close() {
+      if (this.estado === "encerrado") return;
+      if (this.estado === "aberto") {
+        if (!this.despede) return;
+        this.estado = "encerrado";
+        this.onclose?.({ code: 1000 });
+        return;
+      }
+      this.onerror?.();
+      this.estado = "encerrado";
+      void Promise.resolve().then(() => this.onerror?.());
+    }
+    /** O Asterisk some com a conexão aberta: `close` 1006, sem despedida. */
+    cair() {
+      this.estado = "encerrado";
+      this.onclose?.({ code: 1006 });
+    }
+  }
+  /**
+   * O Asterisk: fora (`conecta: false`, `abrirEventos` lança e o laço fica
+   * reconectando) ou de pé. `roteiro` diz como abre cada socket criado, em ordem;
+   * esgotado, todos abrem. `vivosAoAbrir` guarda, a cada abertura, quantos sockets
+   * anteriores ainda não estavam encerrados — o que tem de ser sempre zero.
+   */
+  const ari = {
+    conecta: false,
+    roteiro: [] as Abertura[],
+    soquetes: [] as SoqueteFalso[],
+    vivosAoAbrir: [] as number[],
+  };
   class ClienteAriFalso {
     abrirEventos() {
       if (!ari.conecta) throw new Error("sem Asterisk no teste");
-      const ws = {
-        onopen: null as null | (() => void),
-        onmessage: null,
-        onerror: null,
-        onclose: null as null | ((c: { code: number }) => void),
-        close() {
-          ws.onclose?.({ code: 1000 });
-        },
-      };
-      void Promise.resolve().then(() => ws.onopen?.());
+      ari.vivosAoAbrir.push(ari.soquetes.filter((s) => s.estado !== "encerrado").length);
+      const ws = new SoqueteFalso(ari.roteiro.shift() ?? "abre");
+      ari.soquetes.push(ws);
       return ws;
     }
   }
   return {
     controladores,
     reconciliacoes,
+    eventos,
     ari,
     ControladorFalso,
     SincronizadorFalso,
@@ -139,7 +199,11 @@ afterEach(() => {
   vi.clearAllMocks();
   h.controladores.length = 0;
   h.reconciliacoes.length = 0;
+  h.eventos.length = 0;
   h.ari.conecta = false;
+  h.ari.roteiro.length = 0;
+  h.ari.soquetes.length = 0;
+  h.ari.vivosAoAbrir.length = 0;
   h.config.valor = null;
 });
 
@@ -467,5 +531,189 @@ describe("runTelefoniaLoop — a passada no laço", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     await laco;
+  });
+});
+
+// ─── 5. a reconexão ──────────────────────────────────────────────────────────
+//
+// Medido em produção em 30/09/2026: recriado só o contêiner do Asterisk, o worker
+// registrou UMA vez "conexão com o Asterisk caiu" e nunca mais nada — a telefonia
+// ficou muda até alguém reiniciar o worker. A tentativa de 1 s depois pegou o
+// Asterisk ainda subindo, e a abertura que falha não dispara `close` no Node 22.
+
+describe("runTelefoniaLoop — a abertura que não fecha", () => {
+  const CAIU = "telefonia: conexão com o Asterisk caiu — reconectando";
+  const CONECTOU = "telefonia: conectada ao Asterisk";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(desligarAvisosVencidos).mockResolvedValue([]);
+    vi.mocked(falasDoWorker).mockReturnValue(falasFalsas() as unknown as FalasNoDisco);
+    h.config.valor = { baseUrl: "http://asterisk:8088", senha: "senha-de-teste" };
+    h.ari.conecta = true;
+  });
+
+  function subirOLaco() {
+    const abortar = new AbortController();
+    const log = registro();
+    const estado = { conectada: false, ligacoesAtivas: 0 };
+    let encerrou = false;
+    const laco = runTelefoniaLoop({ pool, signal: abortar.signal, log, estado }).then(() => {
+      encerrou = true;
+    });
+    const linhas = (mensagem: string, fn: typeof log.warn) => fn.mock.calls.filter(([m]) => m === mensagem);
+    return {
+      abortar,
+      log,
+      estado,
+      laco,
+      encerrou: () => encerrou,
+      quedas: () => linhas(CAIU, log.warn).map(([, campos]) => campos),
+      conexoes: () => linhas(CONECTOU, log.info).length,
+    };
+  }
+
+  it("a abertura que falha só com `error` (sem `close`): o laço tenta de novo e reconecta", async () => {
+    h.ari.roteiro.push("abre", "falha", "abre");
+    const t = subirOLaco();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.estado.conectada).toBe(true);
+
+    // O contêiner do Asterisk é recriado: a conexão aberta cai.
+    h.ari.soquetes[0]!.cair();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.estado.conectada).toBe(false);
+    expect(t.quedas()).toEqual([{ motivo: "fechou (1006)", em_ms: 1_000 }]);
+
+    // 1 s depois o Asterisk ainda está subindo: `error`, e mais nada.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.ari.soquetes).toHaveLength(2);
+    expect(t.quedas()).toEqual([
+      { motivo: "fechou (1006)", em_ms: 1_000 },
+      { motivo: "a abertura falhou", em_ms: 2_000 },
+    ]);
+
+    // Era aqui que o laço parava para sempre. A tentativa seguinte abre.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.ari.soquetes).toHaveLength(3);
+    expect(t.estado.conectada).toBe(true);
+    expect(t.conexoes()).toBe(2);
+    // Reconectou de verdade: os troncos são sincronizados por inteiro de novo.
+    expect(h.reconciliacoes).toEqual([true, true]);
+    expect(h.ari.vivosAoAbrir).toEqual([0, 0, 0]);
+
+    t.abortar.abort();
+    await t.laco;
+  });
+
+  it("a abertura que não dá sinal nenhum: em 10 s o laço a larga, fecha o socket e tenta de novo", async () => {
+    h.ari.roteiro.push("muda", "abre");
+    const t = subirOLaco();
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(h.ari.soquetes).toHaveLength(1);
+    expect(t.quedas()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t.quedas()).toEqual([{ motivo: "não abriu em 10 s", em_ms: 1_000 }]);
+    // Fechado ANTES de a seguinte abrir: nunca duas conexões ao mesmo tempo.
+    expect(h.ari.soquetes[0]!.estado).toBe("encerrado");
+    expect(h.ari.soquetes).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.ari.soquetes).toHaveLength(2);
+    expect(t.estado.conectada).toBe(true);
+    expect(t.conexoes()).toBe(1);
+    expect(h.ari.vivosAoAbrir).toEqual([0, 0]);
+
+    t.abortar.abort();
+    await t.laco;
+  });
+
+  it("a conexão que abriu não tem prazo: passados os 10 s, ela segue de pé", async () => {
+    const t = subirOLaco();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.estado.conectada).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.ari.soquetes).toHaveLength(1);
+    expect(h.ari.soquetes[0]!.estado).toBe("aberto");
+    expect(t.estado.conectada).toBe(true);
+    expect(t.quedas()).toEqual([]);
+
+    t.abortar.abort();
+    await t.laco;
+  });
+
+  it("o socket largado não fala mais: `open`, evento e `close` tardios dele não chegam ao controlador nem derrubam a conexão nova", async () => {
+    h.ari.roteiro.push("muda", "abre");
+    const t = subirOLaco();
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(t.estado.conectada).toBe(true);
+    const [largado, vivo] = h.ari.soquetes as [(typeof h.ari.soquetes)[number], (typeof h.ari.soquetes)[number]];
+
+    // O servidor mudo acorda tarde demais.
+    largado.onopen?.();
+    largado.onmessage?.({ data: JSON.stringify({ type: "StasisStart", de: "largado" }) });
+    largado.onerror?.();
+    largado.onclose?.({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.eventos).toEqual([]);
+    expect(t.conexoes()).toBe(1);
+    expect(h.reconciliacoes).toEqual([true]);
+    // O `close` tardio não marca a conexão VIVA como caída nem abre outra.
+    expect(t.estado.conectada).toBe(true);
+    expect(t.quedas()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.ari.soquetes).toHaveLength(2);
+
+    // E a conexão viva segue entregando.
+    vivo.onmessage?.({ data: JSON.stringify({ type: "StasisStart", de: "vivo" }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.eventos).toEqual([{ type: "StasisStart", de: "vivo" }]);
+
+    t.abortar.abort();
+    await t.laco;
+  });
+
+  it.each(["muda", "falha"] as const)("o desligamento do worker não fica preso numa abertura %s", async (abertura) => {
+    // Depois de uma abertura que falha o laço dorme o intervalo de reconexão; a
+    // segunda, muda, é a que o desligamento encontra em curso.
+    h.ari.roteiro.push(abertura, "muda");
+    const t = subirOLaco();
+    await vi.advanceTimersByTimeAsync(3_000);
+    const emCurso = h.ari.soquetes.at(-1)!;
+    expect(emCurso.estado).toBe("abrindo");
+
+    t.abortar.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(t.encerrou()).toBe(true);
+    expect(emCurso.estado).toBe("encerrado");
+    // O prazo de abertura morreu com o laço: nada dispara depois.
+    const quedas = t.quedas().length;
+    const abertos = h.ari.soquetes.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.quedas()).toHaveLength(quedas);
+    expect(h.ari.soquetes).toHaveLength(abertos);
+  });
+
+  it("nem numa conexão aberta com o Asterisk travado: o desligamento não espera a despedida", async () => {
+    const t = subirOLaco();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.estado.conectada).toBe(true);
+    const aberta = h.ari.soquetes[0]!;
+    aberta.despede = false;
+
+    t.abortar.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(t.encerrou()).toBe(true);
+    expect(t.estado.conectada).toBe(false);
+    // O worker encerra o pool em seguida: evento que chega depois não entra na fila.
+    aberta.onmessage?.({ data: JSON.stringify({ type: "StasisStart" }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.eventos).toEqual([]);
   });
 });
