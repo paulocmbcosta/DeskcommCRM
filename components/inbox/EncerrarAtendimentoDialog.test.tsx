@@ -223,6 +223,43 @@ describe("reabrir e fechar de novo", () => {
   });
 });
 
+describe("o atendimento chega DEPOIS de a janela abrir (Reabrir e logo Fechar)", () => {
+  const registrado: AtendimentoAEncerrar = {
+    team_id: "t-sup",
+    assunto: { id: "a-wifi", nome: "Wi-Fi", time: "Suporte" },
+    closure_summary: "Trocou a senha do Wi-Fi.",
+  };
+  const janela = (atendimento: AtendimentoAEncerrar | null) => (
+    <EncerrarAtendimentoDialog
+      conversationId="conv-1"
+      expectedRevision={7}
+      contato="Maria Souza"
+      protocolo="20261005000061"
+      atendimento={atendimento}
+      grupo={false}
+      open
+      onOpenChange={() => {}}
+    />
+  );
+
+  it("a janela se preenche quando o registro chega, se a pessoa ainda não mexeu", () => {
+    opcoes = { exigir_assunto: true, exigir_resumo: true, times: TIMES };
+    const { rerender } = render(janela(null));
+    expect((screen.getByTestId("encerramento-resumo") as HTMLTextAreaElement).value).toBe("");
+    rerender(janela(registrado));
+    expect((screen.getByTestId("encerramento-resumo") as HTMLTextAreaElement).value).toBe("Trocou a senha do Wi-Fi.");
+    expect(screen.getByRole("radio", { name: "Wi-Fi" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("o que a pessoa já digitou NÃO é trocado pelo que estava guardado", async () => {
+    opcoes = { exigir_assunto: false, exigir_resumo: false, times: TIMES };
+    const { rerender } = render(janela(null));
+    await userEvent.type(screen.getByTestId("encerramento-resumo"), "Texto novo");
+    rerender(janela(registrado));
+    expect((screen.getByTestId("encerramento-resumo") as HTMLTextAreaElement).value).toBe("Texto novo");
+  });
+});
+
 describe("conversa de grupo", () => {
   it("não busca assuntos, não mostra campos e fecha sem registro", async () => {
     abrir(null, { exigir_assunto: true, exigir_resumo: true }, { grupo: true });

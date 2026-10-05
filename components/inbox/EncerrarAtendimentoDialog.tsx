@@ -163,6 +163,26 @@ function Formulario({
   const [resumo, setResumo] = useState(atendimento?.closure_summary ?? "");
   const [recusas, setRecusas] = useState<RecusaDoEncerramento[]>([]);
 
+  // O ATENDIMENTO PODE CHEGAR DEPOIS DA JANELA. Quem clica em "Reabrir" e logo
+  // em "Fechar" abre a janela antes de o histórico recarregar — e ela abriria
+  // em branco sobre um atendimento que TEM registro. Quando o dado chega, a
+  // janela se preenche; mas só se a pessoa ainda não mexeu em nada: o que ela
+  // digitou vale mais que o que estava guardado.
+  //
+  // Ajuste de estado DURANTE o render, e não num efeito: é o padrão do React
+  // para "o dado de fora mudou", e não pinta um quadro com o valor antigo.
+  const [mexeu, setMexeu] = useState(false);
+  const assinatura = `${atendimento?.team_id ?? ""}|${assuntoRegistrado?.id ?? ""}|${atendimento?.closure_summary ?? ""}`;
+  const [assinaturaVista, setAssinaturaVista] = useState(assinatura);
+  if (assinatura !== assinaturaVista) {
+    setAssinaturaVista(assinatura);
+    if (!mexeu) {
+      setSetor(setorInicial(opcoes.times, atendimento));
+      setAssuntoId(registradoEstaNaLista ? (assuntoRegistrado?.id ?? null) : null);
+      setResumo(atendimento?.closure_summary ?? "");
+    }
+  }
+
   const haAssuntos = opcoes.times.length > 0;
   const assuntosDoSetor = useMemo(
     () => opcoes.times.find((time) => time.id === setor)?.assuntos ?? [],
@@ -237,6 +257,7 @@ function Formulario({
                 <Select
                   value={setor}
                   onValueChange={(v) => {
+                    setMexeu(true);
                     setSetor(v);
                     // Assunto é do setor: trocar de setor com o assunto antigo
                     // marcado gravaria um par que a tela não está mostrando.
@@ -289,6 +310,7 @@ function Formulario({
                             // assunto: depois disso o banco preserva o registrado
                             // quando nada é enviado, e a tela mostraria "nenhum"
                             // sobre um atendimento que continua com assunto.
+                            setMexeu(true);
                             setAssuntoId(marcado && !assuntoRegistrado ? null : a.id);
                             limpar("assunto");
                           }}
@@ -336,6 +358,7 @@ function Formulario({
               aria-invalid={erroDoResumo ? true : undefined}
               placeholder={t("O que o cliente precisava e o que foi feito.")}
               onChange={(e) => {
+                setMexeu(true);
                 setResumo(e.target.value);
                 limpar("resumo");
               }}

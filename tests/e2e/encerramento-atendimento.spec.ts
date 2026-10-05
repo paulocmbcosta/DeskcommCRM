@@ -169,8 +169,9 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     const panel = page.getByTestId("inbox-demandas");
     await expect(panel.getByText("Demanda vigente neste canal")).toBeVisible();
     await expect(page.getByTestId("inbox-memoria")).toContainText("Preferência de horário");
-    page.on("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    // A janela de encerramento (migration 0293) substituiu o confirm() do navegador.
+    await page.getByTestId("encerramento-confirmar").click();
     await expect
       .poll(
         async () =>
@@ -226,6 +227,8 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     expect(box?.width).toBeGreaterThan(150);
     await page.screenshot({ path: `${evidence}/task4-reaberto-respondido.png`, fullPage: true });
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    // A janela de encerramento (migration 0293) substituiu o confirm() do navegador.
+    await page.getByTestId("encerramento-confirmar").click();
     await expect
       .poll(
         async () =>

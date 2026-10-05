@@ -670,6 +670,7 @@ jobs:
         desbloquear-contato.spec.ts
         inbox-quem-manda.spec.ts
         inbox-protocolo-e-historico.spec.ts
+        encerrar-com-assunto-e-resumo.spec.ts
         inbox-fila-e-termometro.spec.ts
         aviso-de-mensagem-diz-de-quem-e.spec.ts
         pausa-do-atendente.spec.ts
