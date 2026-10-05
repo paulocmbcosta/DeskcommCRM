@@ -806,6 +806,168 @@ gravar_imagens() {
   set_env_var "$envfile" ASTERISK_PULL_POLICY  "$politica"
 }
 
+# ── As imagens das versões que ficaram para trás ─────────────────────────────
+#
+# Cada atualização puxa as imagens da versão nova e as da anterior continuam no
+# disco — para sempre, porque nada as apagava. Medido na VPS de produção: ~3,2 GB
+# por release (app, worker, scheduler, Asterisk). Em 2026-09-24 eram 21 versões e
+# o disco estava em 73%; limpo à mão. Em 2026-10-05, onze dias depois, 26 versões
+# e 88%. E a instalação se atualiza sozinha pelo cron do `agent.sh`: o disco
+# enche sem ninguém ter entrado por SSH, e disco cheio derruba o CRM inteiro.
+#
+# A REGRA mora em `imagens_de_versoes_antigas`, que é só texto: recebe no stdin
+# o que há no disco (`repo:tag`, uma por linha) e ecoa o que pode sair. Ficam:
+#   - a versão ALVO, que é a que acabou de subir;
+#   - UMA de reserva: a que RODAVA antes desta atualização — a última que este
+#     servidor viu funcionar. Quem informa é o `update.sh`, lendo o contêiner
+#     antes de recriá-lo (`versao_no_ar`). Quando não dá para saber (stack
+#     parada, imagem sem o rótulo), ou quando ela é o próprio alvo (`--force` na
+#     mesma versão), a reserva é a MAIOR das outras.
+#
+# "A maior das outras" sozinha não serve de regra, e o caso que a derruba é o
+# que mais importa: a atualização para a N falha, o `agent.sh` volta para a N-1,
+# e dias depois a N+1 sobe. No disco, a maior das outras é a N — a que quebrou —
+# e a N-1, que é para onde o dono voltaria, seria apagada.
+#
+# O que ela NÃO toca, e cada linha é uma decisão:
+#   - nada fora dos quatro repositórios de `IMG_*`, comparados pelo nome INTEIRO.
+#     A VPS do cliente tem imagem que não é nossa (medido: um `openclaw` de 7 GB
+#     com contêiner próprio), e o mesmo nome em OUTRO namespace é outro produto
+#     (docs/runbooks/repositorio-proprio.md §5);
+#   - nada que não seja tag de versão numerada (`X.Y.Z`): canal móvel é escolha
+#     de quem opera, e prerelease ninguém instalou por este caminho;
+#   - nada, se o ALVO não estiver no disco. Depois de uma atualização que deu
+#     certo ele está; se não está, quem chamou passou a versão errada, e uma
+#     régua que não mede esta instalação não apaga nada dela. É também esta
+#     guarda que cala a função para alvo em canal móvel, vazio ou prerelease:
+#     nenhum deles é tag numerada, então nunca está entre as nossas.
+#
+# A versão é da INSTALAÇÃO, não de cada repositório: os quatro sobem juntos na
+# mesma versão (`gravar_imagens`), então a reserva de um é a reserva de todos.
+versao_numerada() { [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
+# A versão que o contêiner do app está RODANDO agora, ou vazio se não dá para
+# saber. Lê o rótulo `org.opencontainers.image.version`, que o CI grava na imagem
+# e o contêiner herda — e não a referência com que ele foi criado: depois de um
+# rollback do `agent.sh` essa referência é um ID local, sem tag, e é justamente
+# aí que saber a versão importa. Medido na VPS de produção (Docker 29.8.0): os
+# quatro contêineres nossos respondem `1.52.2`; um contêiner sem o rótulo
+# responde vazio; um que não existe sai != 0.
+versao_no_ar() {
+  local ver
+  command -v docker >/dev/null 2>&1 || return 0
+  ver="$(docker inspect "$(nome_do_projeto_atual)-app-1" \
+          --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null)" || ver=""
+  if versao_numerada "$ver"; then printf '%s' "$ver"; fi
+  return 0
+}
+
+imagens_de_versoes_antigas() {  # imagens_de_versoes_antigas <versão alvo, sem o "v"> [versão que rodava]   ← stdin: `repo:tag` por linha
+  local alvo="${1:-}" rodava="${2:-}" ref nossas="" tem_alvo="" tem_a_que_rodava="" reserva=""
+
+  while IFS= read -r ref; do
+    # `##*:` e `%:*` cortam no ÚLTIMO dois-pontos: o repositório pode ter outro
+    # (registro com porta), e a tag nunca tem.
+    versao_numerada "${ref##*:}" || continue
+    case "${ref%:*}" in
+      "$IMG_APP"|"$IMG_WORKER"|"$IMG_SCHEDULER"|"$IMG_ASTERISK") ;;
+      *) continue ;;
+    esac
+    nossas="${nossas}${ref}"$'\n'
+    if [ "${ref##*:}" = "$alvo" ]; then tem_alvo=1; fi
+    if [ "${ref##*:}" = "$rodava" ]; then tem_a_que_rodava=1; fi
+  done
+  [ -n "$tem_alvo" ] || return 0
+
+  # A que rodava só vale como reserva se ESTÁ no disco (guardar um número que
+  # não corresponde a imagem nenhuma é não guardar reserva) e se não é o alvo
+  # (aí a reserva seria o próprio alvo, e todas as outras sairiam).
+  if [ -n "$tem_a_que_rodava" ] && [ "$rodava" != "$alvo" ]; then
+    reserva="$rodava"
+  else
+    # Ordem NUMÉRICA, campo a campo: na ordem de texto a 1.9.0 vem depois da
+    # 1.10.0, e a reserva escolhida seria a errada.
+    #
+    # Uma conta que saiu != 0 tem o resultado DESCARTADO, mesmo que tenha ecoado
+    # algo com cara de versão.
+    reserva="$(printf '%s' "$nossas" | sed 's/.*://' | { grep -vxF "$alvo" || true; } \
+              | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" || reserva=""
+  fi
+  # Sem reserva decidida, não sai nada. Vazio é o caso normal de "só há o alvo";
+  # mas é também o que sobra se a conta acima falhar, e aí a alternativa seria
+  # apagar tudo menos o alvo — errar para o lado de onde não se volta.
+  [ -n "$reserva" ] || return 0
+
+  printf '%s' "$nossas" | while IFS= read -r ref; do
+    case "${ref##*:}" in
+      "$alvo"|"$reserva") ;;
+      *) printf '%s\n' "$ref" ;;
+    esac
+  done
+  return 0
+}
+
+# O EFEITO: lista o disco, aplica a regra acima e apaga.
+#
+# Três escolhas que não são detalhe:
+#   - `docker rmi` SEM `-f`, uma referência por vez. Imagem que algum contêiner
+#     usa — de pé ou parado, desta instalação ou de outra na mesma VPS — o Docker
+#     recusa, e a recusa é a resposta certa: quem sabe o que está em uso é ele.
+#   - nunca `docker image prune` nem `system prune`: eles decidem pelo disco
+#     INTEIRO, e o que é "sem uso" na VPS de outra pessoa não é pergunta nossa.
+#   - NUNCA falha. Disco é manutenção: uma atualização que subiu, respondeu
+#     saudável e sai != 0 porque não deu para apagar imagem velha faria o
+#     `agent.sh` voltar a versão — desfazendo o que deu certo.
+#
+# Quem chama é o `update.sh`, e só DEPOIS de o app novo responder saudável. Antes
+# disso a imagem que rodava é a rede de proteção do `agent.sh`
+# (`PREV_IMAGE`), e nada aqui pode encostar nela. O 2º argumento é a versão que
+# rodava (`versao_no_ar`, lida antes do `up -d`); vazio = não se sabe.
+#
+# O que se perde é só tempo de download: as versões são públicas e o
+# `pull_policy` da tag fixada é `missing` — um `up -d` que precise de uma versão
+# apagada a puxa de novo.
+apagar_imagens_antigas() {  # apagar_imagens_antigas <versão alvo, sem o "v"> [versão que rodava]
+  local alvo="${1:-}" rodava="${2:-}" lista antigas ref versoes="" n=0 presas=0
+  versao_numerada "$alvo" || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+
+  if ! lista="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)"; then
+    c_ylw "⚠ não consegui listar as imagens do Docker — não apaguei nenhuma versão antiga."
+    c_ylw "  A atualização não depende disso; na próxima eu tento de novo."
+    return 0
+  fi
+  antigas="$(printf '%s\n' "$lista" | imagens_de_versoes_antigas "$alvo" "$rodava")" || antigas=""
+  if [ -z "$antigas" ]; then
+    c_grn "✓ nenhuma versão antiga ocupando o disco."
+    return 0
+  fi
+
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    if docker rmi "$ref" >/dev/null 2>&1; then
+      case " $versoes " in
+        *" ${ref##*:} "*) ;;
+        *) versoes="$versoes ${ref##*:}"; n=$((n + 1)) ;;
+      esac
+    else
+      presas=$((presas + 1))
+    fi
+  done <<<"$antigas"
+
+  if [ "$n" -eq 1 ]; then
+    c_grn "✓ apaguei as imagens da versão${versoes}, que só ocupavam disco (ficam a ${alvo}, que está no ar, e mais uma de reserva)."
+  elif [ "$n" -gt 1 ]; then
+    c_grn "✓ apaguei as imagens de ${n} versões antigas, que só ocupavam disco (ficam a ${alvo}, que está no ar, e mais uma de reserva)."
+  fi
+  if [ "$presas" -eq 1 ]; then
+    c_dim "  (1 imagem antiga ficou: o Docker não apaga o que algum contêiner ainda usa.)"
+  elif [ "$presas" -gt 1 ]; then
+    c_dim "  (${presas} imagens antigas ficaram: o Docker não apaga o que algum contêiner ainda usa.)"
+  fi
+  return 0
+}
+
 # ── Os segredos da chamada de voz, no .env de quem já tinha instalado ────────
 #
 # A doutrina de packaging é literal: "bump de versão não pode exigir que o
