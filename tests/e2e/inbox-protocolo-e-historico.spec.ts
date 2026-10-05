@@ -275,8 +275,9 @@ test("protocolo por atendimento: fechar, o cliente voltar, histórico e busca pe
     await page.getByRole("button", { name: "Assumir", exact: true }).click();
     await expect(page.getByTestId("comando-da-conversa")).toContainText("Juliana Teste");
     await escreverNotaInterna(page, NOTA_DO_PRIMEIRO);
-    page.once("dialog", (d) => void d.accept());
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    // A janela de encerramento (migration 0293) substituiu o confirm() do navegador.
+    await page.getByTestId("encerramento-confirmar").click();
     await expect(page.getByRole("button", { name: "Reabrir" })).toBeVisible();
 
     await page.getByTestId("painel-aba-linha").click();

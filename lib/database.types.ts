@@ -1923,6 +1923,51 @@ export type Database = {
           },
         ]
       }
+      atendimento_assuntos: {
+        Row: {
+          archived_at: string | null
+          created_at: string
+          id: string
+          name: string
+          organization_id: string
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          organization_id: string
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          organization_id?: string
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "atendimento_assuntos_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "atendimento_assuntos_organization_id_team_id_fkey"
+            columns: ["organization_id", "team_id"]
+            isOneToOne: false
+            referencedRelation: "attendance_teams"
+            referencedColumns: ["organization_id", "id"]
+          },
+        ]
+      }
       atendimento_protocol_counters: {
         Row: {
           dia: string
@@ -1953,10 +1998,12 @@ export type Database = {
         Row: {
           assigned_to_user_id: string | null
           assigned_to_user_name: string | null
+          assunto_id: string | null
           closed_at: string | null
           closed_by_name: string | null
           closed_by_user_id: string | null
           closed_status: string | null
+          closure_summary: string | null
           conversation_id: string
           created_at: string
           id: string
@@ -1968,10 +2015,12 @@ export type Database = {
         Insert: {
           assigned_to_user_id?: string | null
           assigned_to_user_name?: string | null
+          assunto_id?: string | null
           closed_at?: string | null
           closed_by_name?: string | null
           closed_by_user_id?: string | null
           closed_status?: string | null
+          closure_summary?: string | null
           conversation_id: string
           created_at?: string
           id?: string
@@ -1983,10 +2032,12 @@ export type Database = {
         Update: {
           assigned_to_user_id?: string | null
           assigned_to_user_name?: string | null
+          assunto_id?: string | null
           closed_at?: string | null
           closed_by_name?: string | null
           closed_by_user_id?: string | null
           closed_status?: string | null
+          closure_summary?: string | null
           conversation_id?: string
           created_at?: string
           id?: string
@@ -1996,6 +2047,13 @@ export type Database = {
           team_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "atendimentos_assunto_id_fkey"
+            columns: ["assunto_id"]
+            isOneToOne: false
+            referencedRelation: "atendimento_assuntos"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "atendimentos_conversation_id_fkey"
             columns: ["conversation_id"]
@@ -8185,6 +8243,38 @@ export type Database = {
       fn_archive_attendance_team: {
         Args: { p_arquivar: boolean; p_org: string; p_team: string }
         Returns: Json
+      }
+      fn_save_atendimento_assunto: {
+        Args: { p_assunto: string | null; p_name: string; p_org: string; p_team: string }
+        Returns: Json
+      }
+      fn_archive_atendimento_assunto: {
+        Args: { p_arquivar: boolean; p_assunto: string; p_org: string }
+        Returns: Json
+      }
+      fn_atendimento_encerrar: {
+        Args: {
+          p_actor: string | null
+          p_assunto: string | null
+          p_conversation: string
+          p_expected: number | null
+          p_org: string
+          p_resumo: string | null
+          p_status?: string
+        }
+        Returns: Database["public"]["Tables"]["conversations"]["Row"]
+      }
+      fn_metricas_de_assuntos: {
+        Args: { p_from: string; p_org: string; p_to: string }
+        Returns: {
+          assunto_id: string | null
+          assunto_nome: string | null
+          assunto_team_id: string | null
+          assunto_team_nome: string | null
+          atendimento_team_id: string | null
+          atendimento_team_nome: string | null
+          total: number
+        }[]
       }
       fn_conversation_set_team: {
         Args: { p_conversation: string; p_org: string; p_team: string }

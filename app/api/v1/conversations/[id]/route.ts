@@ -108,7 +108,11 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     return ok(conv, { requestId });
   } catch (err) {
     if (err instanceof ApiError) {
-      return fail(err.code, err.message, err.status, { requestId });
+      // `details` leva o campo recusado no encerramento (migration 0293).
+      return fail(err.code, err.message, err.status, {
+        details: err.details as Record<string, unknown> | undefined,
+        requestId,
+      });
     }
     throw err;
   }

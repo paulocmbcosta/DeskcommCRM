@@ -1,6 +1,5 @@
 "use client";
 import { useHotkeys } from "react-hotkeys-hook";
-import { useT } from "@/hooks/i18n/useT";
 
 interface Props {
   /** Currently visible conversation ids in the list (for j/k nav). */
@@ -24,7 +23,6 @@ export function InboxKeyboardShortcuts({
   onToggleHelp,
   enabled = true,
 }: Props) {
-  const t = useT();
   function step(delta: number) {
     if (visibleIds.length === 0) return;
     const idx = selectedId ? visibleIds.indexOf(selectedId) : -1;
@@ -46,13 +44,9 @@ export function InboxKeyboardShortcuts({
   ]);
   useHotkeys("r", () => onFocusReply(), { enabled, preventDefault: true });
   useHotkeys("a", () => onClaim(), { enabled, preventDefault: true });
-  useHotkeys(
-    "e",
-    () => {
-      if (confirm(t("Fechar conversa?"))) onClose();
-    },
-    { enabled, preventDefault: true },
-  );
+  // `e` ABRE a janela de encerramento (migration 0293) — a mesma do botão
+  // "Fechar". Era um `confirm()` do navegador que fechava na hora.
+  useHotkeys("e", () => onClose(), { enabled, preventDefault: true });
   useHotkeys("shift+/", () => onToggleHelp(), { enabled, preventDefault: true });
 
   return null;

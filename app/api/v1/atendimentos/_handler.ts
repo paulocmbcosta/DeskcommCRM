@@ -29,6 +29,7 @@ import {
   type ConsultaFiltravel,
 } from "@/app/api/v1/conversations/_filtro-de-time";
 import { termoSeguroParaOr } from "@/app/api/v1/conversations/_handler";
+import { carregarAssuntos } from "@/lib/atendimento/assuntos-server";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import type { AtendimentoResumo } from "@/lib/inbox/eventos-da-conversa";
 import { rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
@@ -66,7 +67,7 @@ export interface AtendimentoFechado extends AtendimentoResumo {
 
 export const COLUNAS_DO_FECHADO = `
   id, conversation_id, protocol, started_at, closed_at, closed_status, closed_by_name,
-  assigned_to_user_name, team_id,
+  assigned_to_user_name, team_id, assunto_id, closure_summary,
   conversations!inner (
     id, status, contact_id, channel_session_id, tags, unread_count_for_assignee,
     channel_sessions:channel_session_id (phone_number, display_name),
@@ -88,6 +89,8 @@ interface Linha {
   closed_by_name: string | null;
   assigned_to_user_name: string | null;
   team_id: string | null;
+  assunto_id: string | null;
+  closure_summary: string | null;
   conversations: {
     status: string;
     contact_id: string | null;
@@ -226,6 +229,7 @@ export async function listarAtendimentosFechados(
   const temMais = linhas.length > q.limit;
   const pagina = temMais ? linhas.slice(0, q.limit) : linhas;
   const ultima = pagina[pagina.length - 1];
+  const assuntos = await carregarAssuntos(db, ctx.organizationId, pagina.map((a) => a.assunto_id));
 
   return {
     ok: true,
@@ -243,6 +247,8 @@ export async function listarAtendimentosFechados(
         closed_by_name: a.closed_by_name,
         assigned_to_user_name: a.assigned_to_user_name,
         team_id: a.team_id,
+        assunto: a.assunto_id ? (assuntos.get(a.assunto_id) ?? null) : null,
+        closure_summary: a.closure_summary,
         canal: rotuloDoCanal(a.conversations?.channel_sessions ?? null),
         contact_id: contato?.id ?? a.conversations?.contact_id ?? null,
         contato: rotuloDoContato(contato, ctx.t),

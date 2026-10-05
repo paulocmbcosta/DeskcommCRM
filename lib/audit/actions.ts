@@ -590,6 +590,13 @@ export const AUDIT_ACTIONS = [
   // Régua do termômetro do Inbox (minutos até amarelo/laranja/vermelho).
   // metadata leva a régua antes e depois.
   "inbox.regua_de_espera_alterada",
+  // Encerramento do atendimento (migration 0293). O cadastro de assuntos é o
+  // vocabulário dos números de Métricas: quem criou, renomeou ou arquivou muda o
+  // que os relatórios contam. A terceira é o par de interruptores "exigir
+  // assunto / exigir resumo" — metadata leva antes e depois.
+  "atendimento.assunto_salvo",
+  "atendimento.assunto_arquivado",
+  "atendimento.encerramento_configurado",
   // Conectores de sistema externo (migration 0271 — o primeiro é o IXC). A
   // conexão guarda um token de ERP de terceiro: quem ligou, trocou ou desligou é
   // a primeira pergunta depois de um incidente. O vínculo diz QUAL cadastro do

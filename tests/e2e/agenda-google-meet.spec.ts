@@ -482,8 +482,9 @@ test("marca Meet, copia link, autoriza em atendimento humano e entrega novamente
     expect(oldJob).toHaveLength(1);
     expect(oldJob[0]).toMatchObject({ id: firstJob, organization_id: f.org, contact_id: f.contact, kind: "transactional_delivery", status: "done" });
     await page.goto(`/app/inbox/${f.conversation}`);
-    page.on("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    // A janela de encerramento (migration 0293) substituiu o confirm() do navegador.
+    await page.getByTestId("encerramento-confirmar").click();
     await expect
       .poll(
         async () =>

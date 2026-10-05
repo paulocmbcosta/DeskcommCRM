@@ -156,6 +156,27 @@ describe("o que cada linha diz", () => {
     expect(d.detalhe).toBe("Encerrada automaticamente.");
   });
 
+  it("encerrar com assunto diz o setor e o assunto, depois do autor (migration 0293)", () => {
+    const d = descreverEventoDaConversa(
+      evento({
+        type: "closed",
+        actor_kind: "user",
+        actor_name: "Juliana",
+        payload: { status: "closed", assunto: "Wi-Fi", assunto_time: "Suporte" },
+      }),
+      t,
+    );
+    expect(d.detalhe).toBe("Por Juliana. Assunto: Suporte › Wi-Fi.");
+  });
+
+  it("assunto cujo time sumiu do catálogo aparece sem setor, e não com 'null'", () => {
+    const d = descreverEventoDaConversa(
+      evento({ type: "closed", actor_kind: "user", actor_name: "Juliana", payload: { status: "closed", assunto: "Wi-Fi", assunto_time: null } }),
+      t,
+    );
+    expect(d.detalhe).toBe("Por Juliana. Assunto: Wi-Fi.");
+  });
+
   it("reabrir avisa que o protocolo é o mesmo", () => {
     expect(descreverEventoDaConversa(evento({ type: "reopened" }), t).detalhe).toContain(
       "O protocolo continua o mesmo.",

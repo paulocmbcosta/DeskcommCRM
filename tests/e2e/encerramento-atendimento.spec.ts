@@ -169,8 +169,9 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     const panel = page.getByTestId("inbox-demandas");
     await expect(panel.getByText("Demanda vigente neste canal")).toBeVisible();
     await expect(page.getByTestId("inbox-memoria")).toContainText("Preferência de horário");
-    page.on("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    // A janela de encerramento (migration 0293) substituiu o confirm() do navegador.
+    await page.getByTestId("encerramento-confirmar").click();
     await expect
       .poll(
         async () =>
@@ -226,6 +227,8 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     expect(box?.width).toBeGreaterThan(150);
     await page.screenshot({ path: `${evidence}/task4-reaberto-respondido.png`, fullPage: true });
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    // A janela de encerramento (migration 0293) substituiu o confirm() do navegador.
+    await page.getByTestId("encerramento-confirmar").click();
     await expect
       .poll(
         async () =>
@@ -258,6 +261,10 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     await page.getByRole("button", { name: "Reabrir", exact: true }).click();
     await expect.poll(async () => (await db.from("conversations").select("status").eq("organization_id",org).eq("id",conversation).single()).data?.status).toBe("open");
     await page.getByRole("button", { name: "Cerrar", exact: true }).click();
+    // Em espanhol o botão é "Cerrar", e a janela de encerramento (migration 0293)
+    // é a mesma: a confirmação é pelo testid, que não depende do idioma.
+    await expect(page.getByTestId("janela-de-encerramento")).toContainText("Cerrar atención");
+    await page.getByTestId("encerramento-confirmar").click();
     await expect.poll(async () => (await db.from("conversations").select("status").eq("organization_id",org).eq("id",conversation).single()).data?.status).toBe("closed");
     expect(hits.filter((url) => url.includes("sendText"))).toHaveLength(1);
 

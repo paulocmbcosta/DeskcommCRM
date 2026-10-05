@@ -9,6 +9,7 @@
 import { useState } from "react";
 
 import { AvisoDeInstabilidadeDoTime } from "@/components/telefonia/AvisoDeInstabilidadeDoTime";
+import { AssuntosDoTime } from "@/components/times/AssuntosDoTime";
 import { EditorDeTime } from "@/components/times/EditorDeTime";
 import { useTimes } from "@/components/times/useTimes";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,9 @@ export function PainelDeTimes() {
       {ativos.map((x) => (
         <div key={x.id} className="space-y-2">
           <EditorDeTime time={x} membros={membros} />
+          {/* Os assuntos de encerramento são do TIME (migration 0293): cartão
+              próprio, fora do formulário, para salvar um não depender do outro. */}
+          <AssuntosDoTime timeId={x.id} timeNome={x.name} timeSlug={x.slug} />
           {/* O aviso de instabilidade do telefone é do TIME (desenho da fase 2, D7). */}
           <AvisoDeInstabilidadeDoTime teamId={x.id} />
         </div>

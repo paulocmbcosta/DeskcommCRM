@@ -402,3 +402,34 @@ export function reguaDeEspera(settings: unknown): ReguaDeEspera {
     ? { amarelo_min: lida.data.amarelo_min, laranja_min: lida.data.laranja_min, vermelho_min: lida.data.vermelho_min }
     : { ...REGUA_DE_ESPERA_PADRAO };
 }
+
+/**
+ * `organizations.settings.atendimento.encerramento` — o que a janela de
+ * encerramento EXIGE (migration 0293).
+ *
+ * Os dois nascem desligados: quem atualiza ganha a janela e nenhum bloqueio
+ * novo. Quem aplica a regra é o banco (`fn_atendimento_encerrar`), que lê
+ * estas mesmas duas chaves — a tela só as mostra.
+ *
+ * Lixo no jsonb lê como "não exige": uma chave torta não pode impedir uma
+ * conversa de fechar, e é assim também que a função do banco a lê.
+ */
+export const ENCERRAMENTO_PADRAO = { exigir_assunto: false, exigir_resumo: false } as const;
+
+/** Escrita: estrita (chave desconhecida é recusa, não silêncio). */
+export const encerramentoWriteSchema = z.strictObject({
+  exigir_assunto: z.boolean(),
+  exigir_resumo: z.boolean(),
+});
+export type EncerramentoDoAtendimento = z.infer<typeof encerramentoWriteSchema>;
+
+/** O que está em vigor. Nunca lança; devolve objeto novo a cada chamada. */
+export function encerramentoDoAtendimento(settings: unknown): EncerramentoDoAtendimento {
+  const objeto = (v: unknown): Record<string, unknown> | undefined =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  const lido = objeto(objeto(objeto(settings)?.atendimento)?.encerramento);
+  return {
+    exigir_assunto: lido?.exigir_assunto === true,
+    exigir_resumo: lido?.exigir_resumo === true,
+  };
+}

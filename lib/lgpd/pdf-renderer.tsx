@@ -261,6 +261,24 @@ export function LgpdExportPdf({ data, unsignedWarning }: Props): React.ReactElem
           ))}
         </View>
 
+        {/* Atendimentos: protocolo, assunto e o resumo escrito por quem atendeu (migration 0293) */}
+        {(data.atendimentos ?? []).length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Atendimentos e Registros de Encerramento</Text>
+            <Text style={styles.small}>Total de atendimentos: {(data.atendimentos ?? []).length}</Text>
+            {(data.atendimentos ?? []).slice(0, 25).map((a) => (
+              <View key={a.id} style={styles.itemBlock}>
+                <Text>
+                  Protocolo {a.protocol} · Início {fmtDate(a.started_at)}
+                  {a.closed_at ? ` · Encerrado ${fmtDate(a.closed_at)}` : " · Em andamento"}
+                </Text>
+                {a.assunto ? <Text style={styles.small}>Assunto: {a.assunto}</Text> : null}
+                {a.closure_summary ? <Text style={styles.small}>Resumo: {a.closure_summary}</Text> : null}
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         {/* Recent messages preview */}
         {data.messages_recent.length > 0 ? (
           <View style={styles.section}>
