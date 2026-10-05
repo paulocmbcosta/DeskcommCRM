@@ -136,9 +136,10 @@ export const PONTOS_DO_AGENTE_PUBLICADO: ReadonlySet<string> = new Set([
  * a anunciar herança em ponto que não herda — a mesma mentira de antes, virada
  * do avesso.
  *
- * Fonte: os quatro `argsAux(...)` de `inbound-turn.ts` mais o `checkpoint`, que
- * passa o mesmo par direto. Ponto que entrar ou sair daquele conjunto entra ou
- * sai daqui no mesmo commit.
+ * Fonte: os `argsAux(...)` de `inbound-turn.ts` mais o `checkpoint`, que passa o
+ * mesmo par direto. Ponto que entrar ou sair daquele conjunto entra ou sai daqui
+ * no mesmo commit — quem cobra é
+ * `tests/unit/heranca-de-provider-nos-pontos-auxiliares.test.ts`.
  */
 export const PONTOS_QUE_HERDAM_DO_AGENTE: ReadonlySet<string> = new Set([
   "stage_classifier",
@@ -149,6 +150,7 @@ export const PONTOS_QUE_HERDAM_DO_AGENTE: ReadonlySet<string> = new Set([
   "checkpoint",
   "draft_suggestion",
   "automation_ai_message",
+  "handoff_team_classify",
 ]);
 
 export function decidirBinding(entrada: EntradaDaDecisao): DecisaoDeBinding {
