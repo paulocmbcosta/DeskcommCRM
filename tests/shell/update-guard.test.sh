@@ -80,6 +80,33 @@
 #      daemon de verdade (29.5.3), com imagens de mentira num namespace de teste;
 #      e o rótulo de versão que `versao_no_ar` lê, nos contêineres da VPS de
 #      produção (29.8.0).
+#  10. O passo de banco não trava o sistema (caso 16). Cada comando do baseline
+#      espera 3 s por uma trava e desiste; a passada se repete até sair limpa —
+#      três vezes com tudo no ar, duas com a IA parada — e, se nem assim, o
+#      update.sh interrompe ANTES de trocar o app e religa a IA. Medido em
+#      produção em 2026-10-05: sem prazo, 16 minutos fora do ar. Controles: banco
+#      sem disputa (16a), erro benigno (16e), IA já parada pelo operador (16h).
+#      Catorze sabotagens, medidas em 2026-10-05:
+#        sem nova passada (para na 1ª) ............ 16b×2 16c×1 16d×1 16f×9 16g×10 16h×3 16i×2 16j×4
+#        sem parar a IA na escalada ............... 16f×4 16g×1 16i×1
+#        não interrompe: segue e troca o app ...... 16g×7 16h×1 16j×3
+#        interrompe sem religar a IA .............. 16g×2
+#        sem o trap de saída ...................... 16i×1
+#        conta só a frase em inglês ............... 16c×1 16d×1
+#        a linha do dump chega ao psql ............ 16a×2 16k×3
+#        sem o prazo na 1ª linha .................. 16a×2 16k×3
+#        para a IA já na 1ª passada suja .......... 16b×2 16f×1
+#        interrompido sai com 1 ................... 16g×1 16h×1 16j×2
+#        agent.sh não conhece o interrompido ...... 16j×2
+#        não esquece a IA depois do up -d pleno ... 16f×1
+#        para a IA mesmo já parada ................ 16f×1 16h×3
+#        psql sem VERBOSITY=verbose ............... 16a×1
+#      O dublê não é o psql: `aplicar_baseline`, `comandos_sem_vez` e
+#      `sessoes_paradas_em_transacao` foram rodadas com docker e psql de verdade
+#      contra um pg15 com o baseline — sem disputa, 0 desistências em 2 s; com
+#      uma transação parada segurando `channel_sessions`, 33 desistências em 102 s
+#      e a sessão listada pelo nome. O `dc stop worker`/`dc ps` contra um compose
+#      de verdade NÃO foi exercitado.
 set -uo pipefail
 
 # O namespace das imagens publicadas, lido da FONTE (hostgator-setup-kit/_common.sh)
@@ -127,6 +154,46 @@ cat > "$WORK/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 case " $* " in
+  # UMA passada do baseline (`aplicar_baseline`, em _common.sh), reconhecida pelo
+  # nome que o kit dá à própria sessão. O que o psql "responde" sai do roteiro
+  # `DUBLE_PASSADAS` — uma palavra por passada, a última vale para as seguintes.
+  # Calado por padrão ("ok"): é o banco sem disputa que os casos 1 a 15 sempre
+  # viram, e por isso o caso 16 só afirma "não repetiu" ao lado de um "repetiu".
+  #
+  # A linha de `trava` é a que o psql 17 emite com `VERBOSITY=verbose` — copiada
+  # de uma passada de verdade (`aplicar_baseline` contra um pg15 com uma transação
+  # parada segurando `channel_sessions`: 33 comandos desistiram, todos nesta
+  # forma). As de deadlock e de servidor em português NÃO foram medidas: seguem o
+  # mesmo formato com o SQLSTATE trocado, que é o que o contador lê. O stdin é
+  # GUARDADO: é por ele que o caso 16a prova o que de fato chegou ao banco.
+  *" PGAPPNAME=deskcomm-update "*)
+    duble_n=$(( $(cat "${DUBLE_PASSADAS_FEITAS:-/dev/null}" 2>/dev/null || echo 0) + 1 ))
+    [ -n "${DUBLE_PASSADAS_FEITAS:-}" ] && echo "$duble_n" > "$DUBLE_PASSADAS_FEITAS"
+    cat > "${DUBLE_BASELINE_RECEBIDO:-/dev/null}${DUBLE_BASELINE_RECEBIDO:+.$duble_n}"
+    # shellcheck disable=SC2086  # o roteiro é uma lista de palavras, de propósito
+    set -- ${DUBLE_PASSADAS:-ok}
+    [ "$duble_n" -lt "$#" ] && shift $((duble_n - 1)) || shift $(($# - 1))
+    case "$1" in
+      trava)    printf 'psql:<stdin>:9390: ERROR:  55P03: canceling statement due to lock timeout\nLOCATION:  ProcessInterrupts, postgres.c:3312\n' ;;
+      # O MESMO erro num servidor com lc_messages em português: só o SQLSTATE
+      # se mantém. É o que separa contar pelo código de contar pela frase.
+      trava_pt) printf 'psql:<stdin>:9390: ERRO:  55P03: cancelando comando por causa do tempo de espera (timeout) do bloqueio\n' ;;
+      deadlock) printf 'psql:<stdin>:13290: ERROR:  40P01: deadlock detected\nDETAIL:  Process 1 waits for AccessExclusiveLock on relation 2.\n' ;;
+      # O `create` que vem depois de um `drop` que desistiu — o erro que o filtro
+      # de benignos do update.sh esconde. Sozinho, não é disputa de trava.
+      benigno)  printf 'psql:<stdin>:21789: ERROR:  42710: trigger "t" for relation "x" already exists\n' ;;
+    esac ;;
+  # `sessoes_paradas_em_transacao`: quem o update.sh mostra quando desiste.
+  *" PGAPPNAME=deskcomm-update-diagnostico "*)
+    cat > /dev/null
+    [ -n "${DUBLE_SESSOES_PARADAS:-}" ] && printf '%s\n' "$DUBLE_SESSOES_PARADAS" ;;
+  # `worker_no_ar`: devolve um id enquanto o worker "roda". Deixa de rodar
+  # depois de um `stop worker` (o log é a memória do dublê) e volta com o
+  # `up -d worker`; `DUBLE_WORKER_JA_PARADO` é o operador que o parou à mão.
+  *" ps -q --status running worker "*)
+    [ -n "${DUBLE_WORKER_JA_PARADO:-}" ] && exit 0
+    duble_ult="$(grep -E ' (stop worker|up -d worker)$' "$DOCKER_LOG" | tail -1)"
+    case "$duble_ult" in *" stop worker") ;; *) printf '0f3a9c1d5e7b\n' ;; esac ;;
   # Healthcheck do update.sh: "docker compose ... exec -T app node -e ...".
   # O dublê responde o que o app RESPONDE DE VERDADE — capturado da instalação
   # em produção. Antes aqui vinha {"status":"ok"}, um formato que /api/v1/health
@@ -218,6 +285,9 @@ case " $* " in
   # (medido no docker compose v5.1.4), e o `.env` em disco. É assim que o caso 14
   # prova a ORDEM: imagem e senha gravadas antes de subir, e não depois.
   *" up -d ")
+    # O `up -d` que MORRE (caso 16i): o update.sh roda sob `set -e`, então sai
+    # aqui — com a IA parada, se ninguém a religar.
+    [ -n "${DUBLE_UP_QUEBRADO:-}" ] && exit 1
     {
       printf 'UP env ASTERISK_IMAGE=%s\n' "${ASTERISK_IMAGE:-}"
       printf 'UP env COMPOSE_PROFILES=%s\n' "${COMPOSE_PROFILES:-}"
@@ -275,6 +345,9 @@ exec "$REAL_GIT" "\$@"
 STUB
 chmod +x "$WORK/bin/docker" "$WORK/bin/crontab" "$WORK/bin/flock" "$WORK/bin/curl" "$WORK/bin/git"
 export DOCKER_LOG="$WORK/docker.log" CURL_LOG="$WORK/curl.log"
+# Memória do dublê para o passo de banco: quantas passadas do baseline já
+# aconteceram e o que cada uma recebeu pelo stdin (ver o ramo PGAPPNAME).
+export DUBLE_PASSADAS_FEITAS="$WORK/passadas-feitas" DUBLE_BASELINE_RECEBIDO="$WORK/baseline-recebido"
 export FAKE_CRONTAB="$WORK/crontab.txt"
 export PATH="$WORK/bin:$PATH"
 
@@ -1176,6 +1249,172 @@ check "saiu a 1.0.0" apagou_as_quatro 1.0.0
 check "a instalada (1.2.0) segue intocada" nenhum_rmi_da 1.2.0
 
 unset DUBLE_NO_DISCO
+
+echo "── 16. O passo de banco não trava o sistema: prazo de trava, nova passada, IA parada só em último caso"
+# Medido em produção em 2026-10-05: o baseline reaplicado com o sistema em uso
+# ficou 13 minutos esperando uma trava, com todo o resto enfileirado atrás — 16
+# minutos sem responder. Agora cada comando desiste em 3 s (`aplicar_baseline`),
+# e como comando que desiste é comando PULADO, a passada se repete até sair limpa:
+# três vezes com tudo no ar, mais duas com a IA parada, e depois o update.sh
+# interrompe ANTES de trocar o app.
+#
+# O dublê responde "ok" por padrão, então toda prova de "não repetiu"/"não parou
+# a IA" daqui vem ao lado de um "repetiu"/"parou" no MESMO arquivo.
+command -v baseline_com_prazo >/dev/null \
+  || { echo "  ✗ baseline_com_prazo não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+command -v comandos_sem_vez >/dev/null \
+  || { echo "  ✗ comandos_sem_vez não carregou — teste inconclusivo"; FAILS=$((FAILS+1)); }
+# O cabeçalho que o pg_dump põe em todo baseline — a linha `SET lock_timeout = 0;`
+# é a que desfaz o prazo se chegar ao psql.
+printf 'SET statement_timeout = 0;\nSET lock_timeout = 0;\nSET idle_in_transaction_session_timeout = 0;\nselect 1;\n' \
+  > supabase/baseline.sql
+export DESKCOMM_PAUSA_ENTRE_PASSADAS=0
+roteiro() {  # roteiro <uma palavra por passada...> — zera a memória do dublê e parte de 1.1.0 → 1.2.0
+  export DUBLE_PASSADAS="$*"
+  rm -f "$DUBLE_PASSADAS_FEITAS" "$DUBLE_BASELINE_RECEBIDO".*
+  env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+  : > "$DOCKER_LOG"
+}
+passadas() { cat "$DUBLE_PASSADAS_FEITAS" 2>/dev/null || echo 0; }
+parou_a_ia() { grep -qE ' stop worker$' "$DOCKER_LOG"; }
+nao_parou_a_ia() { ! parou_a_ia; }
+religou_a_ia() { grep -qE ' up -d worker$' "$DOCKER_LOG"; }
+nao_religou_a_ia() { ! religou_a_ia; }
+trocou_o_app() { grep -q '^UP env ' "$DOCKER_LOG"; }      # o `up -d` PLENO, anotado pelo dublê
+nao_trocou_o_app() { ! trocou_o_app && ! grep -qE ' pull( |$)' "$DOCKER_LOG"; }
+linha_da_passada() { grep -n 'PGAPPNAME=deskcomm-update ' "$DOCKER_LOG" | sed -n "${1}p" | cut -d: -f1; }
+
+echo "   16a. banco sem disputa: UMA passada — e o que chega ao psql leva o prazo, não o zero do dump"
+roteiro ok
+run_update
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "uma passada só" test "$(passadas)" -eq 1
+check "não parou a IA" nao_parou_a_ia
+check "fixture: o arquivo no disco TEM a linha do dump que zera o prazo" \
+  grep -qx 'SET lock_timeout = 0;' supabase/baseline.sql
+check "a 1ª linha que o psql recebeu é o prazo de 3 s" \
+  test "$(head -1 "$DUBLE_BASELINE_RECEBIDO.1")" = "SET lock_timeout = '3s';"
+check "a linha do dump NÃO chegou (ela devolveria o prazo a zero)" \
+  test -z "$(grep -x 'SET lock_timeout = 0;' "$DUBLE_BASELINE_RECEBIDO.1" || true)"
+check "o resto do arquivo chegou inteiro, na ordem" \
+  test "$(sed '1d' "$DUBLE_BASELINE_RECEBIDO.1")" = "$(grep -vx 'SET lock_timeout = 0;' supabase/baseline.sql)"
+check "o psql roda com o SQLSTATE à mostra (é por ele que a disputa é contada)" \
+  grep -q 'PGAPPNAME=deskcomm-update .* -v VERBOSITY=verbose ' "$DOCKER_LOG"
+
+echo "   16b. um comando não conseguiu a vez: passa de novo, com tudo no ar"
+roteiro trava ok
+run_update
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "duas passadas" test "$(passadas)" -eq 2
+check "não parou a IA (a escalada é só depois da 3ª)" nao_parou_a_ia
+check "trocou o app" trocou_o_app
+check "conta ao dono que vai tentar de novo" grep -q "não conseguiram a vez" "$OUTFILE"
+
+echo "   16c. vítima de deadlock também é comando pulado: passa de novo"
+roteiro deadlock ok
+run_update
+check "duas passadas" test "$(passadas)" -eq 2
+
+echo "   16d. servidor com mensagens em português: quem conta é o SQLSTATE"
+roteiro trava_pt ok
+run_update
+check "duas passadas" test "$(passadas)" -eq 2
+
+echo "   16e. CONTROLE: erro benigno ('already exists') não é disputa de trava — não repete"
+roteiro benigno
+run_update
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "uma passada só" test "$(passadas)" -eq 1
+
+echo "   16f. três passadas sem vez: PARA A IA, termina o banco e ela volta no up -d"
+roteiro trava trava trava ok
+run_update
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "quatro passadas" test "$(passadas)" -eq 4
+check "parou a IA" parou_a_ia
+check "  só DEPOIS da 3ª passada" test "$(linha_do_primeiro ' stop worker$')" -gt "$(linha_da_passada 3)"
+check "  e ANTES da 4ª" test "$(linha_do_primeiro ' stop worker$')" -lt "$(linha_da_passada 4)"
+check "  e só parou o que estava rodando (perguntou antes)" \
+  test "$(linha_do_primeiro ' ps -q --status running worker$')" -lt "$(linha_do_primeiro ' stop worker$')"
+check "trocou o app depois" test "$(linha_do_primeiro '^UP env ')" -gt "$(linha_da_passada 4)"
+check "quem religa é o up -d pleno — nenhum 'up -d worker' a mais" nao_religou_a_ia
+check "avisa NA HORA que a IA vai parar, e o que isso custa" \
+  grep -q "PAUSAR A IA" "$OUTFILE"
+check "  (a IA não responde e o telefone não atende)" grep -q "o telefone não atende" "$OUTFILE"
+check "e diz NO FIM que a pausa existiu e acabou" grep -q "precisei pausar a IA durante a atualização — ela já voltou" "$OUTFILE"
+
+echo "   16g. o banco não dá a vez nem com a IA parada: interrompe ANTES de trocar o app"
+roteiro trava
+export DUBLE_SESSOES_PARADAS="sessão 4242 | usuário postgres | programa Supavisor | parada há 00:07:31"
+run_update
+unset DUBLE_SESSOES_PARADAS
+check "sai com o código de 'interrompido antes de trocar o app' (4)" test "$RC" -eq 4
+check "cinco passadas: três com tudo no ar, duas com a IA parada" test "$(passadas)" -eq 5
+check "parou a IA" parou_a_ia
+check "e a RELIGOU antes de sair" religou_a_ia
+check "  depois da última passada" test "$(linha_do_primeiro ' up -d worker$')" -gt "$(linha_da_passada 5)"
+check "NÃO trocou o app: nem pull, nem up -d pleno" nao_trocou_o_app
+check "o .env segue na versão que está no ar" tres_em 1.1.0
+check "diz que parou ANTES de trocar, e que o sistema segue no ar" \
+  grep -q "interrompida ANTES de trocar o sistema" "$OUTFILE"
+check "diz que é seguro repetir" grep -q "Ela é segura de repetir" "$OUTFILE"
+check "mostra QUEM está segurando o banco" grep -q "sessão 4242 | usuário postgres | programa Supavisor" "$OUTFILE"
+
+echo "   16h. a IA JÁ estava parada (o operador parou à mão): não para de novo, e não religa o que não parou"
+roteiro trava
+export DUBLE_WORKER_JA_PARADO=1
+run_update
+unset DUBLE_WORKER_JA_PARADO
+check "interrompe do mesmo jeito" test "$RC" -eq 4
+check "as mesmas cinco passadas" test "$(passadas)" -eq 5
+check "não mandou parar" nao_parou_a_ia
+check "não religou" nao_religou_a_ia
+check "diz que quem segura as tabelas não é a IA" grep -q "a IA já estava parada" "$OUTFILE"
+
+echo "   16i. o script MORRE entre parar a IA e subir a versão nova: a IA é religada assim mesmo"
+# `dc up -d` falhando sob `set -e` é a saída que não passa por linha nenhuma do
+# passo de banco. Sem o trap, a instalação ficava atendendo sem a IA.
+roteiro trava trava trava ok
+export DUBLE_UP_QUEBRADO=1
+run_update
+unset DUBLE_UP_QUEBRADO
+check "fixture: a atualização morreu (o up -d pleno falhou)" test "$RC" -ne 0
+check "fixture: a IA tinha sido parada" parou_a_ia
+check "a IA foi religada na saída" religou_a_ia
+
+echo "   16j. pela TELA: interrompido antes de trocar o app não é rollback — o agente não reinicia nada"
+# Com exit 1 o agent.sh "voltava" as imagens: recriava app, worker e scheduler
+# pelo ID local e regravava o `.env` — um reinício para chegar onde já estava.
+# Com o código de recusa (3) a tela diria "não consegui voltar, pode estar fora
+# do ar". O desfecho certo é o de "está na versão anterior", sem tocar em nada.
+roteiro trava
+: > "$CURL_LOG"
+bash hostgator-setup-kit/agent.sh > "$WORK/agente-interrompido.out" 2>&1
+check "fixture: o agente rodou o update e o banco não deu a vez" test "$(passadas)" -eq 5
+check "reportou 'failed_rolled_back' (a versão anterior é a que está no ar)" \
+  test -n "$(grep -F '"status":"failed_rolled_back"' "$CURL_LOG" || true)"
+check "NÃO recriou o app" test -z "$(grep -E ' up -d app( |$)' "$DOCKER_LOG" || true)"
+check "NÃO regravou a imagem do .env com um ID local" tres_em 1.1.0
+check "o motivo em português chegou no log que a tela mostra" \
+  grep -q 'interrompida ANTES de trocar o sistema' "$CURL_LOG"
+
+echo "   16k. no baseline DE VERDADE, a linha do dump é a única que mexe no prazo da sessão"
+# O filtro tira a linha EXATA do pg_dump. Se um dump novo mudar o formato dela, ou
+# se um apêndice ganhar um `SET lock_timeout` de sessão, o prazo do kit deixa de
+# valer dali em diante — em silêncio, e a passada volta a poder pendurar.
+BASELINE_REAL="$REPO_ROOT/supabase/baseline.sql"
+check "o baseline tem exatamente UM 'SET lock_timeout' de sessão, e é o do dump" \
+  test "$(grep -ciE '^[[:space:]]*set[[:space:]]+(session[[:space:]]+)?lock_timeout' "$BASELINE_REAL")" -eq 1
+check "  …na forma exata que o filtro conhece" grep -qx 'SET lock_timeout = 0;' "$BASELINE_REAL"
+baseline_com_prazo "$BASELINE_REAL" > "$WORK/baseline-filtrado.sql"
+check "filtrado, sobra só o prazo do kit — na 1ª linha" \
+  test "$(grep -niE '^[[:space:]]*set[[:space:]]+(session[[:space:]]+)?lock_timeout' "$WORK/baseline-filtrado.sql")" = "1:SET lock_timeout = '3s';"
+check "o número de linhas não muda (os erros do psql continuam apontando para o arquivo)" \
+  test "$(wc -l < "$WORK/baseline-filtrado.sql")" -eq "$(wc -l < "$BASELINE_REAL")"
+check "e nada além dessa linha foi tocado" \
+  test "$(sed '1d' "$WORK/baseline-filtrado.sql" | cksum)" = "$(grep -vx 'SET lock_timeout = 0;' "$BASELINE_REAL" | cksum)"
+
+unset DUBLE_PASSADAS DESKCOMM_PAUSA_ENTRE_PASSADAS
 unset DUBLE_DIGESTS
 
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi

@@ -307,6 +307,21 @@ wait_app_healthy() {
 REFUSED_RC=3
 refuse() { c_red "✖ $*"; exit "$REFUSED_RC"; }
 
+# Terceiro desfecho, entre "recusei sem tocar em nada" (acima) e "falhei, volte a
+# imagem" (qualquer outro != 0): o update.sh PAROU DEPOIS de trocar o código e de
+# mexer no banco, mas ANTES de trocar o app. Os contêineres e o `.env` estão como
+# estavam — a versão de antes segue no ar.
+#
+# Precisa de código próprio por causa do que o agent.sh faz com cada um:
+#   - com 1, ele "volta" as imagens: recria app, worker e scheduler pelo ID local
+#     e regrava o `.env` com esses IDs. Aqui isso seria reiniciar o app para
+#     chegar exatamente onde ele já estava;
+#   - com REFUSED_RC, ele reporta `failed` — e a tela diz "não consegui voltar, o
+#     sistema pode estar fora do ar", que é falso e é alarme na cara do dono.
+# Com este, ele reporta "está na versão anterior" sem tocar em contêiner nenhum.
+INTERROMPIDO_RC=4
+interromper() { c_red "✖ $*"; exit "$INTERROMPIDO_RC"; }
+
 # Instalar <ref> seria voltar no tempo? 0 = sim (já está contido no HEAD),
 # 1 = não, 2 = NÃO SEI. "Não sei" nunca vira "pode".
 #
@@ -438,6 +453,90 @@ url_do_schema() {
 # os chamadores mexem em `auth.mfa_factors` e `private.app_secrets`, fora do
 # alcance de uma role de app com grants só em `public`.
 psql_run() { docker run --rm -i postgres:17-alpine psql "$(url_do_schema)" -v ON_ERROR_STOP=1 "$@"; }
+
+# ── Reaplicar o baseline com o sistema NO AR: prazo para esperar trava ────────
+# Reaplicar o `baseline.sql` é DDL em toda tabela quente: `alter table ... add
+# column if not exists` pede `AccessExclusiveLock` ANTES de olhar se a coluna
+# existe, e o mesmo vale para `drop trigger`, `create policy` e os `ALTER TABLE
+# ... OWNER TO` do corpo do dump. Sem prazo (o padrão do Postgres é esperar para
+# sempre), um comando desses fica na fila atrás de QUALQUER transação aberta que
+# tenha lido a tabela — e atrás DELE enfileira todo o resto do sistema: o app, o
+# worker e o cache de esquema do PostgREST.
+#
+# Medido em produção em 2026-10-05: um `alter table public.channel_sessions`
+# esperou 13 minutos por uma transação do worker que, por sua vez, esperava um
+# insert preso atrás do próprio ALTER. O Postgres não vê esse ciclo (um dos elos
+# mora no cliente), e a instalação ficou 16 minutos sem responder.
+#
+# Com prazo, o comando DESISTE em vez de segurar a fila — e é a desistência que
+# desfaz o ciclo (medido: o insert passa no instante seguinte). O preço é que,
+# sem ON_ERROR_STOP, o comando que desistiu é PULADO; por isso quem chama conta
+# as desistências (`comandos_sem_vez`) e reaplica o arquivo inteiro, que é
+# idempotente. Passada limpa = nada ficou para trás.
+#
+# 3 s e não mais: `authenticator` desiste de esperar trava em 4 s (migration
+# 0243), então uma requisição do app que entrou na fila atrás do DDL ainda é
+# atendida quando ele sai.
+PRAZO_DA_TRAVA_DO_SCHEMA='3s'
+# Com este nome a sessão do update aparece em `pg_stat_activity.application_name`
+# — quem estiver diagnosticando sabe qual backend é o kit, sem casar SQL.
+APP_DO_SCHEMA='deskcomm-update'
+
+# O baseline com o prazo no lugar do `SET lock_timeout = 0;` que o pg_dump põe no
+# cabeçalho. Tem de ser NO ARQUIVO: `PGOPTIONS` sozinho não adianta, porque essa
+# linha roda depois e devolve o prazo a zero (medido — a passada pendura igual).
+# Só a linha EXATA do dump sai; `lock_timeout` de função ou de bloco é de quem o
+# escreveu. Entra uma linha e sai outra, então o número de linha dos erros do
+# psql continua batendo com o do arquivo (da linha 6 em diante).
+# Quem vigia que a linha do dump continua sendo a única: tests/shell/update-guard.test.sh.
+baseline_com_prazo() {  # baseline_com_prazo <arquivo>  → stdout
+  printf "SET lock_timeout = '%s';\n" "$PRAZO_DA_TRAVA_DO_SCHEMA"
+  sed '/^SET lock_timeout = 0;$/d' "$1"
+}
+
+# UMA passada. Devolve a saída do psql; nunca falha (o desfecho se lê na saída).
+# `VERBOSITY=verbose` põe o SQLSTATE em cada erro — é por ele que
+# `comandos_sem_vez` conta, porque a frase muda com o idioma do servidor.
+aplicar_baseline() {  # aplicar_baseline <arquivo>  → stdout
+  baseline_com_prazo "$1" \
+    | docker run --rm -i -e PGAPPNAME="$APP_DO_SCHEMA" postgres:17-alpine \
+        psql "$(url_do_schema)" -v VERBOSITY=verbose -f - 2>&1 || true
+}
+
+# Quantos comandos da passada NÃO RODARAM por disputa de trava: desistiram no
+# prazo (55P03) ou foram a vítima de um deadlock que o Postgres detectou (40P01).
+# Os dois são PULADOS em silêncio pelo psql sem ON_ERROR_STOP, e os dois se
+# resolvem do mesmo jeito: passar de novo.
+#
+# Não dá para contar pelo filtro de "erros inesperados" do update.sh: o `drop
+# trigger` que desistiu faz o `create trigger` seguinte cair em "already exists",
+# que aquele filtro trata como benigno — o comando pulado some da tela.
+comandos_sem_vez() {  # stdin: saída do psql  → stdout: a contagem
+  grep -cE '(ERROR|ERRO|FATAL):[[:space:]]+(55P03|40P01):|canceling statement due to lock timeout|deadlock detected' || true
+}
+
+# O worker está de pé? É ele quem o update.sh para quando o banco não dá a vez —
+# e só faz sentido parar (e depois religar) o que estava rodando.
+worker_no_ar() { [ -n "$(dc ps -q --status running worker 2>/dev/null || true)" ]; }
+
+# Quem está com transação aberta e parada — o que o dono precisa ver quando o
+# banco não dá a vez nem com a IA parada. SEM o texto da consulta: a saída do
+# update.sh vai para o log que a tela de atualização mostra, e consulta pode
+# carregar dado de cliente.
+sessoes_paradas_em_transacao() {
+  docker run --rm -i -e PGAPPNAME="${APP_DO_SCHEMA}-diagnostico" postgres:17-alpine \
+    psql "$(url_do_schema)" -At -F ' | ' -f - 2>/dev/null <<'SQL' || true
+select 'sessão ' || pid,
+       'usuário ' || usename,
+       'programa ' || coalesce(nullif(application_name, ''), '(sem nome)'),
+       'parada há ' || date_trunc('second', now() - state_change)::text
+  from pg_stat_activity
+ where pid <> pg_backend_pid()
+   and state like 'idle in transaction%'
+ order by state_change
+ limit 8;
+SQL
+}
 
 # ── As três imagens que NÓS publicamos ───────────────────────────────────────
 # O namespace é constante e literal de propósito: ele está gravado no .env de

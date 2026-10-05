@@ -292,6 +292,14 @@ if [ $RC -eq "$REFUSED_RC" ]; then
   # "voltei para a versão anterior" seria a mentira que esta feature passou uma
   # onda inteira consertando. O motivo em português já está no log.
   STATUS="failed"
+elif [ $RC -eq "$INTERROMPIDO_RC" ]; then
+  # O update.sh parou DEPOIS do código e do banco, mas ANTES de trocar o app
+  # (ver INTERROMPIDO_RC em _common.sh): os contêineres e o `.env` estão como
+  # estavam. A versão anterior É a que está no ar — que é exatamente o que
+  # `failed_rolled_back` diz na tela —, só que sem nada a voltar. Rodar o
+  # rollback aqui recriaria app, worker e scheduler pelo ID local e regravaria o
+  # `.env` com esses IDs: um reinício para chegar onde o sistema já está.
+  STATUS="failed_rolled_back"
 elif [ $RC -ne 0 ]; then
   STATUS="failed"
   if [ -n "$PREV_IMAGE" ]; then
