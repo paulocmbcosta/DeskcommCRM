@@ -24,6 +24,12 @@
  * ou a rede. Sem isso, deixar chamar até o fim e dar um toque e desligar eram a
  * mesma linha vermelha. O tempo só aparece quando o registro o traz
  * (`comoAcabouASaidaSemResposta`): a ligação de antes da 0294 diz só quem encerrou.
+ *
+ * Em andamento (fila visível, entrega 1): o worker cria o registro quando a
+ * recebida é ATENDIDA, com `em_andamento: true`, e o completa no fim. Enquanto
+ * a marca está lá, o cartão diz com quem a ligação está e desde quando — e o
+ * atendente tem a conversa aberta para anotar. O `desfecho` desse registro já
+ * é "atendida": a aba que não recarregou mostra "Ligação recebida", nunca "perdida".
  */
 import { format } from "date-fns";
 import { useState } from "react";
@@ -49,6 +55,8 @@ export interface MetadadoDaLigacao {
   direcao: "inbound" | "outbound";
   desfecho: "atendida" | "perdida" | "sem_resposta" | "recusada_pela_rede";
   duracao_ms: number | null;
+  /** A ligação ainda está acontecendo: o registro foi criado ao atender e será completado no fim. */
+  em_andamento?: boolean;
   atendente_nome?: string | null;
   /** Por que terminou (`voice_calls.end_reason`): `after_hours` muda o título; na feita não atendida, diz quem encerrou. */
   motivo?: string | null;
@@ -73,6 +81,7 @@ export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
   // pode contar uma história que o registro não sustenta.
   return {
     ...(v as MetadadoDaLigacao),
+    em_andamento: v.em_andamento === true,
     motivo: typeof v.motivo === "string" ? v.motivo : null,
     toque_ms: typeof v.toque_ms === "number" ? v.toque_ms : null,
     tentativa_ms: typeof v.tentativa_ms === "number" ? v.tentativa_ms : null,
@@ -294,22 +303,25 @@ export function CartaoDaLigacao({
   const localeDaData = useLocaleDeData();
   const recebida = ligacao.direcao === "inbound";
   const atendida = ligacao.desfecho === "atendida";
+  const emAndamento = ligacao.em_andamento === true;
   const foraDoHorario = recebida && !atendida && ligacao.motivo === MOTIVO_FORA_DO_HORARIO;
-  const titulo = recebida
-    ? atendida
-      ? t("Ligação recebida")
-      : foraDoHorario
-        ? t("Ligação fora do horário")
-        : t("Ligação perdida")
-    : atendida
-      ? t("Ligação feita")
-      : ligacao.desfecho === "recusada_pela_rede"
-        ? t("Ligação não completada")
-        : t("Ligação sem resposta");
-  const Icone = !atendida ? PhoneX : recebida ? PhoneIncoming : PhoneOutgoing;
+  const titulo = emAndamento
+    ? t("Ligação em andamento")
+    : recebida
+      ? atendida
+        ? t("Ligação recebida")
+        : foraDoHorario
+          ? t("Ligação fora do horário")
+          : t("Ligação perdida")
+      : atendida
+        ? t("Ligação feita")
+        : ligacao.desfecho === "recusada_pela_rede"
+          ? t("Ligação não completada")
+          : t("Ligação sem resposta");
+  const Icone = emAndamento ? PhoneIncoming : !atendida ? PhoneX : recebida ? PhoneIncoming : PhoneOutgoing;
   // A mesma régua da hora de cada balão (MessageBubble): 24 h, no idioma do app.
   const hora = format(new Date(em), "HH:mm", { locale: localeDaData });
-  const tempo = duracao(ligacao.duracao_ms);
+  const tempo = emAndamento ? null : duracao(ligacao.duracao_ms);
   const ura = ligacao.menu ? oQueAUraFez(ligacao.menu, t) : null;
   // Só a FEITA que ninguém atendeu: a não completada já diz o que houve no título.
   const fim =
@@ -319,10 +331,14 @@ export function CartaoDaLigacao({
   const fraseDoFim = fim ? comoAcabou(fim, t) : "";
 
   return (
-    <div className="flex flex-col items-center gap-0.5 py-1" data-ligacao={ligacao.desfecho}>
+    <div className="flex flex-col items-center gap-0.5 py-1" data-ligacao={emAndamento ? "em_andamento" : ligacao.desfecho}>
       <div
         className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${
-          atendida ? "border-border bg-muted/50 text-foreground" : "border-destructive/30 bg-destructive/5 text-destructive"
+          emAndamento
+            ? "border-primary/30 bg-primary/5 text-foreground"
+            : atendida
+              ? "border-border bg-muted/50 text-foreground"
+              : "border-destructive/30 bg-destructive/5 text-destructive"
         }`}
       >
         <Icone size={14} weight="bold" aria-hidden />
@@ -330,13 +346,21 @@ export function CartaoDaLigacao({
           {titulo}
         </span>
         {/* Na recebida, só quem ATENDEU; na feita, quem ligou — também na que ninguém atendeu. */}
-        {ligacao.atendente_nome && (atendida || !recebida) ? (
+        {emAndamento ? (
+          ligacao.atendente_nome ? (
+            <span className="text-muted-foreground">
+              · {t("com")} {ligacao.atendente_nome}
+            </span>
+          ) : null
+        ) : ligacao.atendente_nome && (atendida || !recebida) ? (
           <span className="text-muted-foreground">
             · {recebida ? t("atendida por") : t("por")} {ligacao.atendente_nome}
           </span>
         ) : null}
         {tempo ? <span className="tabular-nums text-muted-foreground">· {tempo}</span> : null}
-        <span className="tabular-nums text-muted-foreground">· {hora}</span>
+        <span className="tabular-nums text-muted-foreground">
+          · {emAndamento ? `${t("desde")} ${hora}` : hora}
+        </span>
       </div>
       {fim && fraseDoFim ? (
         <p className="max-w-full px-4 text-center text-xs leading-snug text-muted-foreground" data-ligacao-fim={fim.fim}>

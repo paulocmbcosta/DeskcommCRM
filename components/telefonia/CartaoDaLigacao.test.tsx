@@ -502,3 +502,35 @@ describe("a corrente de transferências (v2)", () => {
     ]);
   });
 });
+
+describe("a ligação em andamento (fila visível, entrega 1)", () => {
+  const vivo = { id: "0a0a0a0a-0000-4000-8000-000000000001", direcao: "inbound", desfecho: "atendida", em_andamento: true, duracao_ms: null, atendente_nome: "Ana" };
+
+  it("diz que está em andamento, com quem e desde quando — sem duração e sem cor de perdida", () => {
+    const ligacao = ligacaoDaMensagem({ voice_call: vivo })!;
+    const { container } = render(<CartaoDaLigacao ligacao={ligacao} em="2026-10-06T17:32:00Z" />);
+    const raiz = container.querySelector("[data-ligacao]")!;
+    expect(raiz.getAttribute("data-ligacao")).toBe("em_andamento");
+    expect(raiz.querySelector("[data-ligacao-titulo]")!.textContent).toBe("Ligação em andamento");
+    expect(raiz.textContent).toContain("com Ana");
+    expect(raiz.textContent).toContain("desde");
+    expect(raiz.textContent).not.toContain("atendida por");
+    expect(raiz.innerHTML).not.toContain("text-destructive");
+  });
+
+  it("só `true` de verdade conta: a marca como texto não é andamento", () => {
+    expect(ligacaoDaMensagem({ voice_call: { ...vivo, em_andamento: "true" } })!.em_andamento).toBe(false);
+    expect(ligacaoDaMensagem({ voice_call: { ...vivo, em_andamento: undefined } })!.em_andamento).toBe(false);
+  });
+
+  it("depois do fim o MESMO registro é a ligação recebida de sempre, com a duração", () => {
+    const { em_andamento: _fora, ...fechado } = { ...vivo, duracao_ms: 65_000 };
+    const ligacao = ligacaoDaMensagem({ voice_call: fechado })!;
+    const { container } = render(<CartaoDaLigacao ligacao={ligacao} em="2026-10-06T17:32:00Z" />);
+    const raiz = container.querySelector("[data-ligacao]")!;
+    expect(raiz.getAttribute("data-ligacao")).toBe("atendida");
+    expect(raiz.querySelector("[data-ligacao-titulo]")!.textContent).toBe("Ligação recebida");
+    expect(raiz.textContent).toContain("atendida por Ana");
+    expect(raiz.textContent).toContain("1:05");
+  });
+});
