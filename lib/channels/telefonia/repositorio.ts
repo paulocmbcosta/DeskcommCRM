@@ -1290,8 +1290,10 @@ export async function abrirCartaoDaLigacao(db: Queryable, organizationId: string
       [organizationId, externalId, texto, JSON.stringify({ atendente_id: l.owner_user_id, atendente_nome: quem })],
     );
     await db.query(
-      "update conversations set last_message_preview = left($3, 200), updated_at = now() where id = $1 and organization_id = $2",
-      [l.conversation_id, organizationId, texto],
+      // Só enquanto a prévia ainda é a do cartão: uma mensagem mais nova na conversa não é pisada.
+      `update conversations set last_message_preview = left($3, 200), updated_at = now()
+        where id = $1 and organization_id = $2 and last_message_preview like $4`,
+      [l.conversation_id, organizationId, texto, `${textoDoCartaoEmAndamento(null)}%`],
     );
     return true;
   }
@@ -1574,17 +1576,31 @@ export async function ligacoesComCartaoOrfao(db: Queryable, limite = 20): Promis
   return rows;
 }
 
-/** Fecha os cartões órfãos pelo caminho de sempre (`registrarNaConversa`). Devolve quantos achou. */
+/**
+ * Fecha os cartões órfãos pelo caminho de sempre (`registrarNaConversa`).
+ * Devolve quantos FECHOU. O que falha fica para a próxima passada e não segura
+ * os outros: uma ligação que não fecha nunca não pode deixar as demais dizendo
+ * "em andamento".
+ */
 export async function consertarCartoesOrfaos(db: Queryable): Promise<number> {
   const orfas = await ligacoesComCartaoOrfao(db);
+  let fechados = 0;
   for (const l of orfas) {
     const duracao =
       l.answered_at && l.ended_at
         ? Math.max(0, Math.round(new Date(l.ended_at).getTime() - new Date(l.answered_at).getTime()))
         : null;
-    await registrarNaConversa(db, l, "atendida", duracao);
+    try {
+      await registrarNaConversa(db, l, "atendida", duracao);
+      fechados++;
+    } catch (e) {
+      logger.warn("telefonia: cartão em andamento de ligação encerrada não fechado — a próxima passada tenta de novo", {
+        voice_call: l.id,
+        erro: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+      });
+    }
   }
-  return orfas.length;
+  return fechados;
 }
 
 // ─── ramais e ligação interna (fase 2, versão 3; migration 0291) ──────────
