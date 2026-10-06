@@ -214,6 +214,20 @@ Navegador do atendente (JsSIP) ────────────────�
    ainda tocando (parado pela ARI, o mesmo tom termina `done`) — era o que acontecia na recusa
    em 0,2 s. O controlador para o tom antes de derrubar os canais. **Não medido:** o chamar
    num ramal de navegador de verdade (WebRTC, Opus, DTLS) — o local usou canal `Local`.
+6. **Quanto o telefone do cliente chamou** (migration 0294). A feita que ninguém atendia virava
+   o mesmo registro "Ligação sem resposta" para quem deixou chamar até a rede desistir e para
+   quem deu um toque e desligou, e o toque servia de "tentei ligar". O controlador guarda o
+   instante do PRIMEIRO `Dial` RINGING (180) ou PROGRESS (183) — o repetido não zera — e, no
+   fim, entrega "há quanto tempo foi" a `encerrarLigacao`, que grava
+   `voice_calls.peer_ringing_at` como o `now()` do banco menos esse tempo, na mesma escrita que
+   fecha a ligação: `ended_at - peer_ringing_at` é o que o worker mediu, sem depender de o
+   relógio da VPS bater com o do banco. `registrarNaConversa` projeta o tempo no registro
+   (`toque_ms`) só da feita NÃO atendida, e o `end_reason` já diz quem encerrou:
+   `atendente_desligou` (quem ligou desistiu) ou `sem_resposta_<causa>` (a rede desistiu — a
+   operadora, ou o nosso prazo de 60 s). Sem o primeiro toque, a coluna fica nula e o registro
+   sai sem tempo: o cartão nunca mostra um tempo que ninguém mediu. A ligação que cai na caixa
+   postal do cliente é ATENDIDA para a rede (`ANSWER`) e segue como "Ligação feita", com
+   gravação — o sistema não separa pessoa de caixa postal.
 
 ### 4.3 Rede e empacotamento
 
@@ -287,7 +301,10 @@ Navegador do atendente (JsSIP) ────────────────�
   `direction=outbound`, `status=sent`, `external_id = ligacao:<voice_call_id>` (entra uma
   vez só), com `metadata.voice_call` (`id`, `direcao`, `desfecho`, `duracao_ms`,
   `atendente_id`, `atendente_nome` e, desde a fase 2, `motivo` — o `end_reason`, que com
-  `after_hours` muda o cartão —, `menu` e `ouviu_aviso`). `menu` é nulo quando a ligação não
+  `after_hours` muda o cartão —, `menu` e `ouviu_aviso`; desde a 0294, `toque_ms` na feita
+  não atendida — por quanto tempo o telefone do cliente chamou, lido por
+  `comoAcabouASaidaSemResposta`, em `lib/telefonia/fim-da-saida.ts`, e ausente quando ele não
+  chamou). `menu` é nulo quando a ligação não
   passou por menu; senão segue o schema `MenuDaLigacao` de `lib/telefonia/vocabulario.ts`:
   `nome` do menu e `time_nome` DAQUELA hora (renomear ou arquivar depois não reescreve a
   história), `desfecho` (`chosen` / `default_no_input` / `default_invalid`, nulo quando a
@@ -356,6 +373,11 @@ Navegador do atendente (JsSIP) ────────────────�
   onde o atendente registra o que foi falado), faixa "Para falar com o cliente, ligue" com o
   Botão Ligar, e o cartão da ligação (sentido, quem atendeu, duração, desfecho). Uma resposta
   de texto que escape do compositor é recusada pela API com 422 antes de gravar.
+- **A feita que ninguém atendeu** (0294): o selo "Ligação sem resposta" diz quem ligou ("por
+  Ana"), e a linha de baixo, quanto o telefone chamou e quem encerrou — "Chamou 4 s · desligada
+  por quem ligou", "Chamou 38 s · ninguém atendeu" ou "O número estava ocupado". O registro de
+  antes da 0294 não tem o tempo: diz só "Desligada por quem ligou", quando foi o caso. A linha
+  é da feita SEM RESPOSTA; a não completada, a atendida e a recebida ficam como eram.
 - **Fase 2, versão 1** (nenhuma rota de tela nova; §6 do desenho): em Conexões › Telefone, as
   sub-abas **Menus** e **Voz e falas** (`?aba=telefone&sub=menus|falas`) e, em Números,
   "Quando ligarem": tocar no time ou tocar o menu; em Credenciais de IA, o cartão
@@ -396,6 +418,11 @@ Navegador do atendente (JsSIP) ────────────────�
   script, com `docker` dublado; que o `up -d` cria o Asterisk com o profile ligado é o
   comportamento do docker compose, medido só com `docker compose config --services`.
 - Comportamento com mais de um registro da mesma conta ao mesmo tempo (dev + produção).
+- **O tempo de toque (0294) numa ligação real.** O controlador e o SQL estão provados
+  (`controle.test.ts`, `tests/invariants/telefonia-primeiro-toque-da-saida.test.ts`), mas o
+  instante em que a operadora da Totus manda o primeiro 180/183 em relação ao telefone do
+  cliente tocar de fato não foi medido. Um 183 com anúncio da operadora ("fora da área de
+  cobertura") conta como "chamou": para o worker, é a rede dizendo que a ligação progrediu.
 - **Fase 2, versão 1** (a prova na VPS é a Task 29 do plano; casos na J36 do mapa de
   jornadas): a URA numa ligação real (tecla, repetição, time padrão, desligar no menu); as
   falas tocadas pelo Asterisk de produção a partir do volume; o fim da fala quando o cliente

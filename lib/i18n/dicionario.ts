@@ -156,6 +156,11 @@ export const DICIONARIO: Traducoes = {
   "Ligação perdida": { es: "Llamada perdida" },
   "Ligação recebida": { es: "Llamada recibida" },
   "Ligação sem resposta": { es: "Llamada sin respuesta" },
+  // Como acabou a ligação feita que ninguém atendeu (0294): quanto chamou e quem encerrou
+  "Chamou {tempo} · desligada por quem ligou": { es: "Sonó {tempo} · colgó quien llamó" },
+  "Chamou {tempo} · ninguém atendeu": { es: "Sonó {tempo} · nadie contestó" },
+  "Desligada por quem ligou": { es: "Colgó quien llamó" },
+  "O número estava ocupado": { es: "El número estaba ocupado" },
   "Ligações pelo telefone": { es: "Llamadas por teléfono" },
   // Selo do canal no card do Inbox
   "Fone": { es: "Tel." },

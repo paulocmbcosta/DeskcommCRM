@@ -50,6 +50,13 @@ export const FIM_DA_SAIDA = {
   semResposta: "sem_resposta",
 } as const;
 
+/**
+ * O `end_reason` da ligação que o PRÓPRIO atendente encerrou. Na feita que
+ * ninguém atendeu, é o que separa "quem ligou desistiu" de "a rede desistiu"
+ * (`sem_resposta_<causa>`): o controlador o grava, e o cartão da conversa o lê.
+ */
+export const ATENDENTE_DESLIGOU = "atendente_desligou";
+
 /** Recusas do próprio worker antes de discar que o atendente precisa saber. */
 export const RECUSA_DA_SAIDA = {
   troncoIndisponivel: "tronco_indisponivel",
@@ -75,6 +82,52 @@ export function fimDaSaidaNaoAtendida(p: { causa: number; tocou: boolean }): {
     return { desfecho: "recusada_pela_rede", motivo: `${FIM_DA_SAIDA.naoCompletada}_${p.causa}` };
   }
   return { desfecho: "sem_resposta", motivo: `${FIM_DA_SAIDA.semResposta}_${p.causa}` };
+}
+
+/**
+ * COMO ACABOU a ligação feita que ninguém atendeu — o que o cartão da conversa
+ * conta embaixo do selo "Ligação sem resposta" (migration 0294).
+ *
+ * O selo, sozinho, não separava quem deixou o telefone do cliente chamar até a
+ * rede desistir de quem deu um toque e desligou: as duas viravam a mesma linha
+ * vermelha, e a segunda servia de "tentei ligar". O registro agora diz quem
+ * encerrou e por quanto tempo o telefone chamou.
+ *
+ * `toqueMs` é `null` quando o registro não traz o tempo: a ligação de antes da
+ * 0294, ou a que acabou antes de o telefone do cliente começar a chamar. O
+ * cartão então diz só quem encerrou — nunca um tempo que ninguém mediu.
+ */
+export type FimDaSaidaSemResposta =
+  | { fim: "atendente_desligou"; toqueMs: number | null }
+  | { fim: "ninguem_atendeu"; toqueMs: number | null }
+  | { fim: "ocupado" };
+
+/**
+ * Lê o motivo e o tempo de toque do registro (`metadata.voice_call`) e NUNCA
+ * lança. `null` = motivo que não diz como acabou (o worker reiniciou, o pedido
+ * venceu, um vocabulário mais novo): o cartão cala em vez de adivinhar.
+ */
+export function comoAcabouASaidaSemResposta(l: {
+  motivo: string | null | undefined;
+  toque_ms: number | null | undefined;
+}): FimDaSaidaSemResposta | null {
+  const motivo = l.motivo ?? "";
+  const toqueMs = typeof l.toque_ms === "number" && Number.isFinite(l.toque_ms) && l.toque_ms > 0 ? l.toque_ms : null;
+  if (motivo === ATENDENTE_DESLIGOU) return { fim: "atendente_desligou", toqueMs };
+  if (motivo.startsWith(`${FIM_DA_SAIDA.semResposta}_`)) return { fim: "ninguem_atendeu", toqueMs };
+  if (motivo.startsWith(`${FIM_DA_SAIDA.ocupado}_`)) return { fim: "ocupado" };
+  return null;
+}
+
+/**
+ * O tempo que o telefone chamou, como a pessoa lê: `4 s`, `38 s`, `1 min 05 s`.
+ * Sem tradução de propósito — `s` e `min` são os mesmos símbolos em português e
+ * em espanhol. Menos de 1 s chamando ainda é "chamou": arredonda para 1.
+ */
+export function tempoDeToque(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m} min ${String(s % 60).padStart(2, "0")} s` : `${s} s`;
 }
 
 /**

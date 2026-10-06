@@ -8,7 +8,13 @@ import { describe, expect, it } from "vitest";
 
 import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 
-import { desligouNoMenu, situacaoDaLinhaDoTime, textoDoAvisoDePerdida, textoDoRegistro } from "./repositorio";
+import {
+  desligouNoMenu,
+  situacaoDaLinhaDoTime,
+  textoDoAvisoDePerdida,
+  textoDoRegistro,
+  toqueDaSaidaSemResposta,
+} from "./repositorio";
 
 /** Segunda-feira, 10h em Brasília. */
 const AGORA = new Date("2026-09-28T13:00:00Z");
@@ -93,6 +99,45 @@ describe("o 'Ligar de volta' (textoDoAvisoDePerdida)", () => {
     expect(textoDoAvisoDePerdida({ ...es, desligouNoMenu: true }).corpo).toBe(
       "El cliente colgó en el menú del teléfono. Devuelve la llamada desde la conversación.",
     );
+  });
+});
+
+/**
+ * O tempo de toque que vai para o registro da conversa (0294) — só a FEITA que
+ * ninguém atendeu, e só quando a linha traz o instante do primeiro toque.
+ */
+describe("toqueDaSaidaSemResposta", () => {
+  const feita = {
+    direction: "outbound" as const,
+    answered_at: null,
+    peer_ringing_at: "2026-10-06T22:47:10.000Z",
+    ended_at: "2026-10-06T22:47:14.200Z",
+  };
+
+  it("feita e não atendida: do primeiro toque ao fim", () => {
+    expect(toqueDaSaidaSemResposta(feita)).toBe(4_200);
+    // O `pg` entrega `timestamptz` como Date.
+    expect(
+      toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: new Date(feita.peer_ringing_at), ended_at: new Date(feita.ended_at) }),
+    ).toBe(4_200);
+  });
+
+  it("sem o instante do toque (não chamou, ou ligação de antes da 0294), ou sem o fim: nulo", () => {
+    expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: null })).toBeNull();
+    expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: undefined })).toBeNull();
+    expect(toqueDaSaidaSemResposta({ ...feita, ended_at: null })).toBeNull();
+  });
+
+  it("atendida, recebida e interna não têm tempo de toque no registro", () => {
+    expect(toqueDaSaidaSemResposta({ ...feita, answered_at: "2026-10-06T22:47:12.000Z" })).toBeNull();
+    expect(toqueDaSaidaSemResposta({ ...feita, direction: "inbound" })).toBeNull();
+    expect(toqueDaSaidaSemResposta({ ...feita, direction: "internal" })).toBeNull();
+  });
+
+  it("instante que não é data, ou toque depois do fim: nulo, nunca um tempo torto", () => {
+    expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: "ontem" })).toBeNull();
+    expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: feita.ended_at })).toBeNull();
+    expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: "2026-10-06T22:48:00.000Z" })).toBeNull();
   });
 });
 

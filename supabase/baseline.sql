@@ -30747,6 +30747,49 @@ end $do$;
 
 notify pgrst, 'reload schema';
 
+-- ---- telefonia: o instante do primeiro toque na ligação feita (migration 0294) ----
+-- Racional no cabeçalho de
+-- supabase/migrations/20261006230000_0294_telefonia_primeiro_toque_da_saida.sql.
+-- Quem escreve é `encerrarLigacao` e quem lê é `registrarNaConversa`
+-- (lib/channels/telefonia/repositorio.ts); o cartão da ligação mostra o tempo
+-- embaixo do selo "Ligação sem resposta". Cobrado em
+-- tests/invariants/telefonia-primeiro-toque-da-saida.test.ts.
+--
+-- O CHECK só quando falta, curado antes, e a validação só do que ainda está
+-- NOT VALID: `voice_calls` cresce com o histórico, e a reaplicação do update.sh
+-- não varre a tabela de novo.
+alter table public.voice_calls
+  add column if not exists peer_ringing_at timestamptz;
+
+do $toque_0294$
+begin
+  -- O toque é da ligação do TELEFONE: a linha do WaCalls a REST escreve com o JWT
+  -- do agent, e ninguém forja por ela um toque (a mesma regra da URA, 0288).
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass
+                    and conname = 'voice_calls_peer_ringing_so_no_telefone_check') then
+    update public.voice_calls set peer_ringing_at = null
+     where provider <> 'sip_trunk' and peer_ringing_at is not null;
+    alter table public.voice_calls add constraint voice_calls_peer_ringing_so_no_telefone_check
+      check (provider = 'sip_trunk' or peer_ringing_at is null) not valid;
+  end if;
+
+  if exists (select 1 from pg_constraint k
+              where k.conrelid = 'public.voice_calls'::regclass and k.contype = 'c' and not k.convalidated
+                and k.conname = 'voice_calls_peer_ringing_so_no_telefone_check') then
+    begin
+      alter table public.voice_calls validate constraint voice_calls_peer_ringing_so_no_telefone_check;
+    exception when check_violation then
+      raise warning '0294: voice_calls tem linha que viola voice_calls_peer_ringing_so_no_telefone_check — o CHECK vale para toda linha nova (NOT VALID); corrija a linha e o próximo update.sh o valida';
+    end;
+  end if;
+end $toque_0294$;
+
+comment on column public.voice_calls.peer_ringing_at is
+  'Ligação FEITA: quando o telefone do cliente começou a chamar (o primeiro 180/183 da operadora). Gravado pelo worker na escrita que fecha a ligação, no relógio do banco: ended_at - peer_ringing_at é o tempo que o telefone chamou. NULL = não chamou, ou ligação anterior à 0294. Só sip_trunk. A projeção para a tela fica em messages.metadata.voice_call.toque_ms (só a feita não atendida).';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

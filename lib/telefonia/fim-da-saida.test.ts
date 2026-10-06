@@ -7,7 +7,13 @@ import { describe, expect, it } from "vitest";
 
 import { DICIONARIO } from "@/lib/i18n/dicionario";
 
-import { avisoDoFimDaSaida, fimDaSaidaNaoAtendida } from "./fim-da-saida";
+import {
+  ATENDENTE_DESLIGOU,
+  avisoDoFimDaSaida,
+  comoAcabouASaidaSemResposta,
+  fimDaSaidaNaoAtendida,
+  tempoDeToque,
+} from "./fim-da-saida";
 
 describe("fimDaSaidaNaoAtendida", () => {
   it.each([
@@ -58,6 +64,60 @@ describe("avisoDoFimDaSaida", () => {
     ] as const) {
       expect(sem(fimDaSaidaNaoAtendida({ causa, tocou }).motivo)).not.toBeNull();
     }
+  });
+});
+
+/**
+ * O que o cartão conta embaixo do selo "Ligação sem resposta" (0294): quem
+ * encerrou, e por quanto tempo o telefone do cliente chamou. É a diferença entre
+ * "deixou chamar até a rede desistir" e "deu um toque e desligou".
+ */
+describe("comoAcabouASaidaSemResposta", () => {
+  it("o atendente desistiu: diz isso, com o tempo que o telefone chamou", () => {
+    expect(comoAcabouASaidaSemResposta({ motivo: ATENDENTE_DESLIGOU, toque_ms: 4_200 })).toEqual({
+      fim: "atendente_desligou",
+      toqueMs: 4_200,
+    });
+  });
+
+  it("a rede desistiu (ninguém atendeu): o motivo que o worker grava é o que o cartão lê", () => {
+    const { motivo } = fimDaSaidaNaoAtendida({ causa: 19, tocou: true });
+    expect(comoAcabouASaidaSemResposta({ motivo, toque_ms: 38_000 })).toEqual({ fim: "ninguem_atendeu", toqueMs: 38_000 });
+  });
+
+  it("ocupado não tem tempo: o telefone não chamou", () => {
+    const { motivo } = fimDaSaidaNaoAtendida({ causa: 17, tocou: false });
+    expect(comoAcabouASaidaSemResposta({ motivo, toque_ms: 9_000 })).toEqual({ fim: "ocupado" });
+  });
+
+  // O registro de antes da 0294 não traz o tempo, e o da ligação que acabou antes
+  // de o telefone chamar também não: o cartão diz quem encerrou, sem inventar tempo.
+  it.each([undefined, null, 0, -5, Number.NaN, "4000"])("tempo ausente ou estranho (%s) vira 'sem tempo', nunca um número", (toque) => {
+    expect(comoAcabouASaidaSemResposta({ motivo: ATENDENTE_DESLIGOU, toque_ms: toque as number })).toEqual({
+      fim: "atendente_desligou",
+      toqueMs: null,
+    });
+  });
+
+  it.each([null, undefined, "", "encerrada_apos_reinicio", "interrompida_no_reinicio", "pedido_expirado", "nao_completada_16", "cliente_desligou"])(
+    "motivo que não diz como acabou (%s): nulo, e o cartão cala",
+    (motivo) => {
+      expect(comoAcabouASaidaSemResposta({ motivo, toque_ms: 4_000 })).toBeNull();
+    },
+  );
+});
+
+describe("tempoDeToque", () => {
+  it.each([
+    [400, "1 s"], // chamou, por pouco que seja: nunca "0 s"
+    [1_499, "1 s"],
+    [4_200, "4 s"],
+    [38_000, "38 s"],
+    [59_400, "59 s"],
+    [59_600, "1 min 00 s"],
+    [65_000, "1 min 05 s"],
+  ])("%i ms → %s", (ms, texto) => {
+    expect(tempoDeToque(ms)).toBe(texto);
   });
 });
 

@@ -7,7 +7,7 @@ import {
   REPETIR_AGUARDE_MS,
 } from "./controle";
 import { ANA, AriFalso, BIA, BancoFalso, FalasFalsas, ORG, TIME, TRONCO, canal, falaDe, tronco } from "./dubles-de-teste";
-import type { FalaDoBanco, LigacaoDoBanco, MenuDoBanco } from "./repositorio";
+import { toqueDaSaidaSemResposta, type FalaDoBanco, type LigacaoDoBanco, type MenuDoBanco } from "./repositorio";
 
 const log = { info: () => undefined, warn: vi.fn(), error: vi.fn() };
 
@@ -453,6 +453,77 @@ describe("feita — a operadora recusa antes de tocar (sequência medida no Aste
     await ctl.tratar({ type: "StasisEnd", channel: canal("ramal-r", `PJSIP/ramal-${ANA}-0000000d`) });
     expect(banco.tem("encerrada")).toEqual([["encerrada", id, "atendente_desligou"]]);
     expect(banco.tem("registro")).toEqual([["registro", id, "sem_resposta"]]);
+  });
+
+  /**
+   * POR QUANTO TEMPO O TELEFONE DO CLIENTE CHAMOU (0294). O instante do primeiro
+   * toque fica na memória do controlador e entra no banco na escrita que fecha a
+   * ligação; `toqueDaSaidaSemResposta` é o que o registro da conversa lê dessa
+   * linha. O relógio é o de mentira do `beforeEach`: cada medida é exata.
+   */
+  describe("o tempo que o telefone do cliente chamou", () => {
+    const ramalDesliga = () => ctl.tratar({ type: "StasisEnd", channel: canal("ramal-r", `PJSIP/ramal-${ANA}-0000000d`) });
+    const linhaFechada = () => banco.devolvidasAoEncerrar[0]!;
+
+    it("deu um toque e desligou: 4 s chamando, e foi o atendente quem encerrou", async () => {
+      const { id, canalDaPerna } = await pedirEDiscar();
+      await vi.advanceTimersByTimeAsync(2_000); // a rede ainda completando: não conta
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "RINGING" });
+      await vi.advanceTimersByTimeAsync(4_000);
+      await ramalDesliga();
+      expect(banco.tem("encerrada")).toEqual([["encerrada", id, "atendente_desligou"]]);
+      expect(toqueDaSaidaSemResposta(linhaFechada())).toBe(4_000);
+    });
+
+    it("deixou chamar até a rede desistir: 38 s chamando, e ninguém atendeu", async () => {
+      const { id, canalDaPerna } = await pedirEDiscar();
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "RINGING" });
+      await vi.advanceTimersByTimeAsync(38_000);
+      await ctl.tratar({ type: "ChannelHangupRequest", channel: canalDaPerna, cause: 19 });
+      await ctl.tratar({ type: "StasisEnd", channel: canalDaPerna });
+      expect(banco.tem("encerrada")).toEqual([["encerrada", id, "sem_resposta_19"]]);
+      expect(toqueDaSaidaSemResposta(linhaFechada())).toBe(38_000);
+    });
+
+    it("conta do PRIMEIRO toque: o 180 repetido e o 183 que vem depois não zeram o tempo", async () => {
+      const { canalDaPerna } = await pedirEDiscar();
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "RINGING" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "RINGING" });
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "PROGRESS" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await ramalDesliga();
+      expect(toqueDaSaidaSemResposta(linhaFechada())).toBe(15_000);
+    });
+
+    it("o 183 sozinho (áudio da operadora) também é o telefone chamando", async () => {
+      const { canalDaPerna } = await pedirEDiscar();
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "PROGRESS" });
+      await vi.advanceTimersByTimeAsync(7_000);
+      await ramalDesliga();
+      expect(toqueDaSaidaSemResposta(linhaFechada())).toBe(7_000);
+    });
+
+    it("desligou antes de o telefone chamar: nenhum instante de toque, e o registro sai sem tempo", async () => {
+      await pedirEDiscar();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await ramalDesliga();
+      expect(linhaFechada().peer_ringing_at ?? null).toBeNull();
+      expect(toqueDaSaidaSemResposta(linhaFechada())).toBeNull();
+    });
+
+    it("atendida: o instante do primeiro toque fica guardado, mas o registro da conversa não ganha tempo de toque", async () => {
+      const { canalDaPerna } = await pedirEDiscar();
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "RINGING" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await ctl.tratar({ type: "Dial", peer: canalDaPerna, dialstatus: "ANSWER" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await ramalDesliga();
+      const l = linhaFechada();
+      // Chamou 20 s até atender — o instante do toque, não o do fim.
+      expect(new Date(l.answered_at!).getTime() - new Date(l.peer_ringing_at!).getTime()).toBe(20_000);
+      expect(toqueDaSaidaSemResposta(l)).toBeNull();
+    });
   });
 });
 

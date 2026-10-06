@@ -183,6 +183,97 @@ describe("a ligação sem URA continua exatamente igual", () => {
   });
 });
 
+/**
+ * A FEITA QUE NINGUÉM ATENDEU (0294). O selo vermelho era o mesmo para quem
+ * deixou o telefone do cliente chamar até a rede desistir e para quem deu um
+ * toque e desligou — e servia de "tentei ligar" nos dois casos. Agora o selo diz
+ * quem ligou, e a linha de baixo, por quanto tempo chamou e quem encerrou.
+ */
+describe("a feita que ninguém atendeu: quem ligou, quanto chamou e quem encerrou", () => {
+  const feita = (extra: Record<string, unknown> = {}) => ({
+    voice_call: { id: "vc-9", direcao: "outbound", desfecho: "sem_resposta", duracao_ms: null, atendente_nome: "Onetiana", ...extra },
+  });
+  const fimDe = (c: { raiz: Element }) => c.raiz.querySelector("[data-ligacao-fim]");
+  const selo = (c: { raiz: Element }) => c.raiz.firstElementChild?.textContent;
+
+  it("deu um toque e desligou: o selo diz quem ligou, e a linha, que chamou 4 s e quem ligou desligou", () => {
+    const c = cartao(feita({ motivo: "atendente_desligou", toque_ms: 4_200 }));
+    expect(selo(c)).toBe(`Ligação sem resposta· por Onetiana· ${HORA}`);
+    expect(fimDe(c)?.textContent).toBe("Chamou 4 s · desligada por quem ligou");
+    expect(fimDe(c)?.getAttribute("data-ligacao-fim")).toBe("atendente_desligou");
+  });
+
+  it("deixou chamar até a rede desistir: chamou 38 s e ninguém atendeu", () => {
+    const c = cartao(feita({ motivo: "sem_resposta_19", toque_ms: 38_000 }));
+    expect(fimDe(c)?.textContent).toBe("Chamou 38 s · ninguém atendeu");
+    expect(fimDe(c)?.getAttribute("data-ligacao-fim")).toBe("ninguem_atendeu");
+  });
+
+  it("número ocupado: diz isso, sem tempo", () => {
+    const c = cartao(feita({ motivo: "ocupado_17", toque_ms: 2_000 }));
+    expect(fimDe(c)?.textContent).toBe("O número estava ocupado");
+  });
+
+  // O registro de antes da 0294 tem o motivo e o nome, mas não o tempo: o cartão
+  // diz quem encerrou e não inventa quanto chamou.
+  it("registro antigo, sem o tempo: quem ligou desligou — e 'ninguém atendeu' não repete o título", () => {
+    const desistiu = cartao(feita({ motivo: "atendente_desligou" }));
+    expect(selo(desistiu)).toBe(`Ligação sem resposta· por Onetiana· ${HORA}`);
+    expect(fimDe(desistiu)?.textContent).toBe("Desligada por quem ligou");
+    cleanup();
+    const aRedeDesistiu = cartao(feita({ motivo: "sem_resposta_19" }));
+    expect(fimDe(aRedeDesistiu)).toBeNull();
+    expect(aRedeDesistiu.raiz.children).toHaveLength(1);
+  });
+
+  it.each([
+    ["tempo que não é número", { motivo: "atendente_desligou", toque_ms: "4000" }, "Desligada por quem ligou"],
+    ["tempo negativo", { motivo: "atendente_desligou", toque_ms: -3 }, "Desligada por quem ligou"],
+    ["tempo zero", { motivo: "sem_resposta_19", toque_ms: 0 }, null],
+  ])("metadado estranho (%s): nunca um tempo que ninguém mediu", (_, extra, esperado) => {
+    const c = cartao(feita(extra));
+    expect(fimDe(c)?.textContent ?? null).toBe(esperado);
+  });
+
+  it.each([
+    ["sem motivo", {}],
+    ["o serviço reiniciou no meio", { motivo: "encerrada_apos_reinicio", toque_ms: 9_000 }],
+    ["motivo de um worker mais novo", { motivo: "caixa_postal", toque_ms: 9_000 }],
+  ])("motivo que não diz como acabou (%s): o cartão cala", (_, extra) => {
+    const c = cartao(feita(extra));
+    expect(fimDe(c)).toBeNull();
+    expect(selo(c)).toBe(`Ligação sem resposta· por Onetiana· ${HORA}`);
+  });
+
+  it("só a feita SEM RESPOSTA ganha a linha: a não completada, a atendida e a recebida ficam como eram", () => {
+    const naoCompletada = cartao(feita({ desfecho: "recusada_pela_rede", motivo: "nao_completada_16", toque_ms: 5_000 }));
+    expect(fimDe(naoCompletada)).toBeNull();
+    expect(selo(naoCompletada)).toBe(`Ligação não completada· por Onetiana· ${HORA}`);
+    cleanup();
+    const atendida = cartao(feita({ desfecho: "atendida", duracao_ms: 5_000, motivo: "atendente_desligou", toque_ms: 5_000 }));
+    expect(fimDe(atendida)).toBeNull();
+    expect(selo(atendida)).toBe(`Ligação feita· por Onetiana· 0:05· ${HORA}`);
+    cleanup();
+    // Na recebida perdida, o nome não aparece (ninguém atendeu) e o motivo não vira frase.
+    const perdida = cartao(registro({ motivo: "atendente_desligou", atendente_nome: "Onetiana", toque_ms: 5_000 }));
+    expect(fimDe(perdida)).toBeNull();
+    expect(perdida.raiz.textContent).toBe(`Ligação perdida· ${HORA}`);
+  });
+
+  it("em espanhol", () => {
+    const es = (el: ReactElement) => <IdiomaProvider locale="es">{el}</IdiomaProvider>;
+    expect(fimDe(cartao(feita({ motivo: "atendente_desligou", toque_ms: 65_000 }), es))?.textContent).toBe(
+      "Sonó 1 min 05 s · colgó quien llamó",
+    );
+    cleanup();
+    expect(fimDe(cartao(feita({ motivo: "sem_resposta_19", toque_ms: 38_000 }), es))?.textContent).toBe("Sonó 38 s · nadie contestó");
+    cleanup();
+    expect(fimDe(cartao(feita({ motivo: "atendente_desligou" }), es))?.textContent).toBe("Colgó quien llamó");
+    cleanup();
+    expect(fimDe(cartao(feita({ motivo: "ocupado_17" }), es))?.textContent).toBe("El número estaba ocupado");
+  });
+});
+
 describe("o metadado estranho não derruba o cartão nem conta história errada", () => {
   it("desfecho fora do vocabulário (worker mais novo): o cartão cala sobre o menu", () => {
     const c = cartao(registro({ menu: menu({ desfecho: "transferred" }) }));
