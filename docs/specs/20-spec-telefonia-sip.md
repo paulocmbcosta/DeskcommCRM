@@ -138,7 +138,8 @@ Navegador do atendente (JsSIP) ────────────────�
    atendente atende, entra numa ponte com a perna da operadora. Se não atende, recusa ou cai,
    passa para o próximo. São 2 voltas.
 5. Ninguém disponível: `answer` + música em espera, reavaliando a cada 5 s, até 2 min.
-6. Fim: `ended`, duração, registro na conversa, atividade no lead. Perdida vira
+6. Fim: `ended`, duração, registro na conversa (na recebida ATENDIDA o registro já nasceu ao
+   atender, "em andamento", e o fim o completa — §5), atividade no lead. Perdida vira
    `agent_inbox_items` `voice_call_missed`, cujo texto nomeia o time que ficou com a ligação
    ("Ninguém do time X atendeu. Ligue de volta pela conversa."), no idioma da organização —
    desde a fase 2, para TODA perdida, e não só a que passou por menu.
@@ -329,6 +330,24 @@ Navegador do atendente (JsSIP) ────────────────�
   uma história errada — nunca pelo path cru. Os campos da fase 1 não mudaram. Não é `inbound`
   de propósito: `inbound` emite `message.received`, que acorda o agente de IA e o termômetro
   de espera.
+- **O cartão em andamento (fila visível, entrega 1; sem migration).** Na recebida, o registro
+  não espera o fim: `abrirCartaoDaLigacao` o cria quando o atendente atende — depois de
+  `atribuirConversa`, que reabre a conversa encerrada e abre o atendimento novo —, com
+  `metadata.voice_call.em_andamento = true` e `desfecho = "atendida"` (não um desfecho novo: a
+  aba que não recarregou leria "não atendida" e mostraria "Ligação perdida" durante a ligação),
+  o texto "Ligação em andamento com <nome>" e o `last_message_at` da conversa, a coluna pela
+  qual o Inbox ordena — é o que a leva ao topo de Minhas, com um atendimento aberto onde o
+  atendente já pode escrever nota interna. A função é idempotente: na criação ela também leva a
+  conversa ao time da ligação (a de quem já ligou antes guardava o do atendimento anterior), e
+  chamada de novo — a transferência passa a ligação a outra pessoa — só troca o nome de quem
+  está com ela. No fim, `registrarNaConversa` COMPLETA a mesma mensagem (mescla
+  `metadata.voice_call` no banco e tira `em_andamento`), e o cartão já fechado não é reescrito.
+  A passada de 60 s do telefone fecha o cartão que ficou "em andamento" com a ligação já
+  encerrada (`consertarCartoesOrfaos`: recebida atendida, encerrada há mais de 1 minuto e há
+  menos de 24 h). A perdida não muda — nunca teve cartão aberto, e o registro entra no fim,
+  como sempre —, e a feita não ganha cartão em andamento. Desenho:
+  `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md` (§4.1); plano:
+  `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-1.md`.
 - **Fase 2, versão 1 (migration 0288):** `phone_prompts` e `phone_settings` (as falas e a
   voz), `phone_menus` e `phone_menu_options`, `channel_sessions.sip_menu_id`,
   `attendance_teams.phone_emergency_*`, `voice_calls.menu_id` / `menu_digit` / `menu_outcome`
@@ -386,7 +405,8 @@ Navegador do atendente (JsSIP) ────────────────�
   ficha do contato. **Discador** para número avulso.
 - **Conversa `phone`** no inbox: ícone de telefone, compositor só em nota interna (a nota é
   onde o atendente registra o que foi falado), faixa "Para falar com o cliente, ligue" com o
-  Botão Ligar, e o cartão da ligação (sentido, quem atendeu, duração, desfecho). Uma resposta
+  Botão Ligar, e o cartão da ligação (sentido, quem atendeu, duração, desfecho — e, enquanto a
+  recebida atendida acontece, "Ligação em andamento · com Ana · desde 14:32"). Uma resposta
   de texto que escape do compositor é recusada pela API com 422 antes de gravar.
 - **A feita que ninguém atendeu** (0294): o selo "Ligação sem resposta" diz quem ligou ("por
   Ana"), e a linha de baixo, quanto o telefone chamou e quem encerrou — "Chamou 4 s · desligada
@@ -417,6 +437,7 @@ Navegador do atendente (JsSIP) ────────────────�
 | F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada. Desenho (com as decisões D1–D8, tomadas na ausência do dono): `docs/superpowers/specs/2026-09-29-telefonia-gravacao-das-ligacoes-design.md`; plano: `docs/superpowers/plans/2026-09-29-telefonia-gravacao-das-ligacoes.md`; migration 0289; DYD-53 | implementada — publicada? `grep -n 'Gravação das ligações do telefone' CHANGELOG.md`; prova com ligação real depende de o dono ligar a gravação (J37 do mapa de jornadas) |
 | F4 | Transcrição em português dentro da conversa | a fazer |
 | F5 | Relatórios por time | a fazer |
+| Fila visível, entrega 1 | Conversa viva ao atender: o cartão "Ligação em andamento" entra na conversa quando a recebida é atendida e é completado no fim; a passada de 60 s fecha o órfão. As entregas 2 (aba Telefone, ordem de chegada e teto por time) e 3 (atender e mover pela fila) do mesmo desenho não foram feitas. Desenho: `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md`; plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-1.md`; sem migration | implementada, sem prova com ligação real (J43 do mapa de jornadas) — publicada? `grep -n 'a conversa aparece enquanto a ligação acontece' CHANGELOG.md` |
 
 ## 9. O que não foi medido
 
@@ -446,6 +467,12 @@ Navegador do atendente (JsSIP) ────────────────�
   atendida mesmo que o cliente tenha atendido depois (o `ANSWER` da recuperada é ignorado —
   defeito anterior à 0294). O cartão dela sai "Ligação sem resposta · por <quem ligou>", sem a
   linha de como acabou.
+- **O cartão "Ligação em andamento" numa ligação real** (fila visível, entrega 1). O SQL está
+  provado no Postgres real (`tests/invariants/telefonia-cartao-em-andamento.test.ts`) e o
+  controlador com dublês (`controle.test.ts`), mas nenhuma ligação real pelo tronco da operadora
+  passou por ele: que o cartão entre na conversa no instante em que o atendente atende, que a
+  conversa suba para o topo de Minhas na tela de quem atendeu e que o fim complete o mesmo
+  cartão não foi visto assim.
 - **Fase 2, versão 1** (a prova na VPS é a Task 29 do plano; casos na J36 do mapa de
   jornadas): a URA numa ligação real (tecla, repetição, time padrão, desligar no menu); as
   falas tocadas pelo Asterisk de produção a partir do volume; o fim da fala quando o cliente

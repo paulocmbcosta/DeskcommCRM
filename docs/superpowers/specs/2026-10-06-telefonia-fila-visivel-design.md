@@ -65,7 +65,7 @@ e do termômetro do Inbox (`2026-09-24-inbox-times-fila-e-termometro-design.md`)
 |---|---|---|---|
 | D1 | Quanto o cliente espera sem ninguém livre? | **Por time**, em `attendance_teams.phone_queue_max_wait_seconds`. Nulo = 120 s (o de hoje). A tela oferece 2, 5, 10, 15, 20 e 30 minutos. | Escolha do dono. O padrão não muda nada para quem atualiza. |
 | D2 | De onde a tela lê a fila? | **Do banco** (`voice_calls`), por uma rota. | O worker já grava cada mudança de estado; a leitura sobrevive a um reinício dele; organização e permissão ficam num lugar só. O Asterisk não sabe o que é time, e perguntar à memória do worker abriria uma porta nova entre o app e ele. |
-| D3 | Quando o cartão da ligação entra na conversa? | **Ao atender** (só a recebida). No fim ele é **atualizado**, não inserido. | É o momento em que a conversa tem dono. A feita já parte de dentro da conversa. |
+| D3 | Quando o cartão da ligação entra na conversa? | **Ao atender** (só a recebida), por **uma função só e idempotente** (`abrirCartaoDaLigacao`): a primeira chamada cria o cartão e a seguinte só troca o nome de quem está com a ligação. A marca é `metadata.voice_call.em_andamento: true`, com `desfecho: "atendida"`. No fim ele é **atualizado**, não inserido. | É o momento em que a conversa tem dono. A feita já parte de dentro da conversa. O desfecho fica `atendida` porque um valor novo (`"em_andamento"`) seria lido como "não atendida" pela aba que não recarregou depois da atualização, e ela mostraria "Ligação perdida" em vermelho durante a ligação; com a marca à parte, a tela antiga mostra "Ligação recebida · atendida por Ana", que é verdade. Uma função só porque a transferência (outra pessoa pega a ligação) repete o mesmo gesto, e quem chama não precisa saber se o cartão já existe. |
 | D4 | Quem vê a aba? | Todo membro que entra no Inbox (`viewer`+), **todos os times**, só com nome, número, time e espera. Abrir a conversa segue a visibilidade que já vale (RLS). | Sem ver a fila do outro setor, ninguém consegue ajudar no pico. A linha não mostra conteúdo de conversa. |
 | D5 | Quem age? | **Atender:** `agent`+. **Mover para outro time:** `manager`+. | Atender é pegar trabalho; mover é decidir por um setor. A transferência de ligação em andamento já usa a mesma divisão (dono da ligação ou gerente). |
 | D6 | A tela abre a conversa sozinha ao atender? | **Não.** A conversa sobe ao topo e o link "Abrir a conversa" do painel continua. | Trocar de conversa sozinho descartaria o que o atendente estava digitando em outra. |
@@ -85,23 +85,34 @@ de nada; a 3 depende da aba da 2. Nenhuma mexe na imagem do Asterisk nem no dial
 
 **Worker** (`controle.ts` + `repositorio.ts`):
 
-- Ao entrar na fila do time, a conversa passa para o time da fila. Hoje só o caminho
+- **Ao atender, na criação do cartão**, a conversa passa para o time da ligação (e
+  não "ao entrar na fila", como este desenho dizia antes do plano). Hoje só o caminho
   do menu faz isso (`registrarEscolhaDoMenu`); o número que aponta direto para um
   time só grava o time na criação da conversa, e quem já ligou antes fica com o time
-  do atendimento anterior.
+  do atendimento anterior. Entrar na fila não resolvia: a conversa encerrada de quem
+  já ligou guarda o dono antigo, e a regra do menu não mexe em conversa com dono. Ao
+  atender o dono é quem atendeu, e o atendimento novo pertence ao time que recebeu a
+  ligação. Só na criação: na troca de atendente por transferência o time não é
+  tocado, para que o setor mudado pela tela no meio da ligação fique como foi
+  escolhido.
 - Em `ramalAtendeu`, depois de `marcarAtendida` e `atribuirConversa`, uma função nova
   `abrirCartaoDaLigacao` insere a mensagem `ligacao:<voice_call_id>` (mesmo
-  `external_id` de hoje) com `metadata.voice_call.desfecho = "em_andamento"`,
-  atendente, menu e `ouviu_aviso`, e grava `last_message_at` e a prévia
-  "Ligação em andamento". A ordem importa: a atribuição reabre a conversa encerrada e
-  o gatilho da 0266 abre o atendimento novo; o cartão vem depois, dentro da janela
-  desse atendimento.
+  `external_id` de hoje) com `metadata.voice_call.em_andamento = true` e
+  `desfecho = "atendida"` — e não `desfecho = "em_andamento"`, como este desenho dizia
+  antes do plano (motivo em D3) —, atendente, menu e `ouviu_aviso`, e grava
+  `last_message_at` e a prévia "Ligação em andamento". A ordem importa: a atribuição
+  reabre a conversa encerrada e o gatilho da 0266 abre o atendimento novo; o cartão
+  vem depois, dentro da janela desse atendimento.
 - `registrarNaConversa` (o fim): se a mensagem já existe, **atualiza** corpo e
   `metadata.voice_call` — sempre mesclando no banco (`||`), nunca sobrescrevendo, que
-  é a regra de `messages.metadata` desde a 1.41.0 — e grava `last_message_at` de
-  novo. Se não existe (ligação perdida, ou o cartão não entrou), insere como hoje.
-- Transferência concluída (`passarLigacao`): o cartão em andamento troca o nome de
-  quem está com a ligação.
+  é a regra de `messages.metadata` desde a 1.41.0 — tira a marca `em_andamento` e
+  grava `last_message_at` de novo. Se não existe (ligação perdida, ou o cartão não
+  entrou), insere como hoje.
+- Transferência concluída: quem pega a ligação a recebe pela MESMA
+  `abrirCartaoDaLigacao`, chamada de novo — a função é idempotente, e nessa segunda
+  chamada só troca o nome de quem está com a ligação. Uma função só, e não uma
+  segunda para a transferência, porque o gesto é o mesmo e quem chama não precisa
+  saber se o cartão já existe.
 - Falha ao abrir o cartão nunca derruba a ligação: registra aviso e segue.
 
 **Tela:**

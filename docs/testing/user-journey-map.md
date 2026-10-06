@@ -3539,3 +3539,71 @@ de toque da rede, quem esperou 40 s ficava igual a quem desligou em 1 s; (4) qua
 plantava um cartão de ligação com uma mensagem comum pela REST (brecha anterior, que passou a
 importar); (5) uma linha do WaCalls criada pela REST servia de pedido de saída, e o CHECK novo
 quebraria o fechamento dela. Os cinco foram corrigidos antes do merge (casos J42.4 e J42.10–13).
+
+## J43 — A conversa aparece enquanto a ligação acontece `[P0]` (2026-10-06)
+
+Pedido do dono, na mesma conversa em que descreveu a fila do telefone: quando o atendente atende
+uma ligação recebida, a conversa do cliente só ganhava o registro da ligação depois de desligar.
+Durante a chamada ela não subia na lista (o desenho leu no código que a de cliente novo ficava no
+fim; não foi medido na tela) e não havia onde escrever uma nota interna.
+
+`[P0]` porque atender é o gesto central do telefone: o cartão que não entra, ou que entra duas
+vezes, ou que fica "em andamento" para sempre, aparece na tela de todo atendente em toda ligação.
+
+Quando o atendente atende, a conversa ganha o cartão "Ligação em andamento · com Ana · desde
+14:32", sobe para o topo de Minhas e abre um atendimento onde cabe nota interna. Quando a ligação
+acaba, o MESMO cartão vira "Ligação recebida", com a duração. Sem migration (`desfecho` e
+`em_andamento` são texto dentro de `messages.metadata`). Desenho:
+`docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md` (§4.1, com as emendas do
+plano); plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-1.md`; spec 20 §5;
+mapa em `docs/architecture/telefonia.architecture.json` (arestas `controle → repositorio` e
+`repositorio → t_messages`).
+
+**Como é provado, e com que alcance.** São quatro camadas, e cada caso abaixo diz em quais está:
+
+- **unit (dublês):** o controlador com o banco de mentira em `lib/channels/telefonia/controle.test.ts`
+  (bloco "o cartão 'Ligação em andamento'") e `transferencia.test.ts`; a passada de 60 s em
+  `laco.test.ts`; o texto em `lib/channels/telefonia/repositorio.test.ts`; a tela em
+  `components/telefonia/CartaoDaLigacao.test.tsx`. Provam a ORDEM das chamadas e o texto, nunca o SQL.
+- **invariante contra Postgres real:** `tests/invariants/telefonia-cartao-em-andamento.test.ts`
+  (`pnpm test:db`, roda no job `invariants`), sempre com duas organizações e com os gatilhos de
+  verdade da conversa e do atendimento. É onde está provado o SQL.
+- **e2e semeado:** um caso novo em `tests/e2e/telefonia-gravacao.spec.ts`. A ligação e o cartão são
+  semeados por SQL, como o worker os deixaria — o e2e prova a TELA (cartão, nota, troca no fim sem
+  recarregar), não que o worker o escreva. Roda só no GitHub Actions (`Run workflow` na branch) e
+  **ainda não foi executado**.
+- **ligação real pelo tronco:** **NÃO PROVADO** em nenhum caso.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J43.1 O atendente atende a recebida: a conversa ganha o cartão "Ligação em andamento · com Ana · desde 14:32", com a prévia "Ligação em andamento com Ana" e a posição que a lista usa | `[P0]` | unit (dublês): o cartão entra DEPOIS da atribuição e com quem atendeu; o texto e o desenho do cartão, sem cor de perdida e sem duração. Invariante contra Postgres real: a mensagem, `last_message_at` e a prévia. e2e semeado (ainda não executado). **O topo de Minhas não é assertado por teste nenhum** — é a ordenação por `last_message_at`, que já existia. **NÃO PROVADO: ligação real pelo tronco** |
+| J43.2 Durante a ligação o atendente escreve uma nota interna e ela aparece na conversa, abaixo do cartão | `[P0]` | e2e semeado (ainda não executado). Invariante contra Postgres real: no caso de quem já ligou antes, o cartão nasce depois do início do atendimento novo (`service_started_at`). **NÃO PROVADO: ligação real pelo tronco** |
+| J43.3 A ligação acaba: o MESMO cartão (uma mensagem só) vira "Ligação recebida · atendida por Ana", com a duração, sem recarregar a página | `[P0]` | Invariante contra Postgres real: uma mensagem só, sem `em_andamento`, duração gravada, o que outro escritor pôs no metadado continua, o fim reenviado não reescreve. unit (dublês): o mesmo registro desenhado como "Ligação recebida" com `1:05`. e2e semeado (a troca sem recarregar, pelo Realtime; ainda não executado). **NÃO PROVADO: ligação real pelo tronco** |
+| J43.4 Quem já ligou antes e teve a conversa encerrada: ao atender, a conversa reabre com atendimento e protocolo novos, o dono é quem atendeu, e a conversa que estava em outro time passa para o time da ligação | `[P0]` | Invariante contra Postgres real (a atribuição e a abertura do cartão chamadas na ordem do controlador). unit (dublês): a ordem das duas chamadas. **NÃO PROVADO: ligação real pelo tronco** |
+| J43.5 A ligação que ninguém atende continua como era: nenhum cartão em andamento, o registro "não atendida" entra no fim | `[P0]` | unit (dublês): sem cartão enquanto ninguém atende, e só o registro de perdida. Invariante contra Postgres real: a perdida é INSERIDA no fim. O aviso "Ligar de volta" na Central não foi tocado e não ganhou caso novo |
+| J43.6 O cartão que ficou "em andamento" com a ligação já encerrada (o banco falhou entre fechar a ligação e completar o cartão) é fechado pela passada de 60 s | `[P1]` | Invariante contra Postgres real: fecha o de mais de um minuto em cada organização, deixa o recém-encerrado para o fim normal, e a segunda passada não acha nada. unit (dublês): a etapa roda e diz quantos; a que lança não derruba as outras |
+| J43.7 Transferência: quem pega a ligação entra no cartão — o nome de quem está com ela troca, sem duplicar o cartão, e o setor que alguém mudou pela tela no meio da ligação fica | `[P1]` | unit (dublês): `transferencia.test.ts`. Invariante contra Postgres real: chamar de novo troca o nome, mantém uma mensagem e não mexe no time. **NÃO PROVADO: transferência real pelo tronco** |
+| J43.8 Falhar ao abrir o cartão não derruba a ligação: a ponte se forma, a ligação segue e o fim registra como sempre | `[P0]` | unit (dublês) |
+| J43.9 Número oculto (sem conversa) e ligação feita: atendem normalmente e não ganham cartão em andamento | `[P1]` | unit (dublês): o número oculto. Invariante contra Postgres real: o número oculto e a feita |
+| J43.10 O cartão e o conserto respeitam a organização: pedir o cartão de outra organização não escreve nada em nenhuma | `[P0]` | Invariante contra Postgres real, com duas organizações |
+| J43.11 A aba que não recarregou depois da atualização, com a ligação em curso, mostra "Ligação recebida" e nunca "Ligação perdida" em vermelho | `[P1]` | por construção (o `desfecho` do cartão em andamento já é `atendida`); **nenhum teste roda a tela de antes** |
+| J43.12 Ligação real pelo tronco da operadora, com a conversa aberta na tela do atendente | `[P0]` | **NÃO PROVADO** — pendente, prova na VPS |
+
+### O que NÃO foi provado
+
+- **Ligação real pelo tronco.** Que o cartão entre no instante em que o atendente atende, que a
+  conversa suba na lista de quem atendeu e que o fim complete o mesmo cartão não foi visto numa
+  chamada de verdade, com contas `agent` (nunca só a do dono). Esta entrega ainda não está na `main`
+nem foi publicada.
+- **O e2e.** O caso novo de `telefonia-gravacao.spec.ts` ainda não foi executado; e, mesmo verde,
+  ele semeia o cartão por SQL: prova a tela, não o worker.
+- **A imagem da tela.** Nenhuma captura foi vista; o que se mediu foi texto, atributo e classe.
+- **O topo de Minhas.** Nenhum teste olha a posição da conversa na lista com uma ligação em curso.
+- **Ligação gravada.** O fim completa o cartão pelo mesmo `registrarNaConversa` que põe a projeção
+  da gravação (J37), mas nenhum caso desta entrega cobre a combinação; os invariantes de gravação
+  são a regressão do SQL do registro, a rodar no job `invariants`.
+- **Dois consertos sem teste próprio.** O conserto do cartão órfão que não para no primeiro erro
+  (uma ligação que não fecha não segura as outras) e a troca de atendente que não pisa uma prévia
+  mais nova na conversa (só reescreve a prévia enquanto ela ainda é a do cartão) estão no código
+  (`consertarCartoesOrfaos` e `abrirCartaoDaLigacao`, em `lib/channels/telefonia/repositorio.ts`),
+  mas nenhum caso os exercita.
