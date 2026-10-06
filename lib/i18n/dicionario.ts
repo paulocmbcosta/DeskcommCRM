@@ -10099,6 +10099,8 @@ export const DICIONARIO: Traducoes = {
   "Abrindo a gravação…": { es: "Abriendo la grabación…" },
   "Ouvir a gravação": { es: "Escuchar la grabación" },
   "Não foi possível abrir a gravação. Tente de novo.": { es: "No se pudo abrir la grabación. Inténtalo de nuevo." },
+  // Telefonia — a fila visível (0295): a rota da fila e a espera máxima do time em Configurações › Times.
+  "Não foi possível ler a fila do telefone.": { es: "No se pudo leer la cola del teléfono." },
   // Janela de encerramento: assunto por time e resumo do atendimento (migration 0293).
   "Encerra o atendimento e registra o assunto e o resumo.": { es: "Cierra la atención y registra el asunto y el resumen." },
   "Encerrar conversa": { es: "Cerrar conversación" },
