@@ -68,7 +68,15 @@ export class AriFalso implements PortaAri {
     this.chamadas.push([nome, ...args]);
     return Promise.resolve(undefined);
   }
-  atender = (c: string) => this.reg("atender", c);
+  /** Quantas vezes o `atender` ainda lança (a ARI recusou ou não respondeu, com o canal vivo). */
+  falharAtender = 0;
+  atender = async (c: string) => {
+    await this.reg("atender", c);
+    if (this.falharAtender > 0) {
+      this.falharAtender--;
+      throw new ErroAri(500, "Internal Server Error", `/channels/${c}/answer`);
+    }
+  };
   indicarChamando = (c: string) => this.reg("indicarChamando", c);
   desligar = (c: string, m?: string) => this.reg("desligar", c, m);
   originar = async (p: { endpoint: string; appArgs: string }) => {
@@ -158,7 +166,10 @@ export class BancoFalso implements PortaBanco {
   troncoPorId = async (id: string) => (id === TRONCO ? this.troncoAtual : null);
   /** Quantas leituras de `disponiveisNoTime` ainda falham (banco fora do ar). */
   falharDisponiveis = 0;
+  /** Quantas vezes os disponíveis foram lidos — cada avaliação da fila de uma ligação lê uma vez. */
+  leiturasDeDisponiveis = 0;
   disponiveisNoTime = async () => {
+    this.leiturasDeDisponiveis++;
     if (this.falharDisponiveis > 0) {
       this.falharDisponiveis--;
       throw new Error("banco fora do ar");

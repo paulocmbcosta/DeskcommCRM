@@ -4,6 +4,7 @@ import { ErroAri } from "./ari";
 import {
   ControladorDeChamadas,
   FOLGA_DO_FIM_DA_FALA_MS,
+  REAVALIAR_APOS_O_FIM_MS,
   REPETIR_AGUARDE_MS,
 } from "./controle";
 import { ANA, AriFalso, BIA, BancoFalso, FalasFalsas, ORG, TIME, TRONCO, canal, falaDe, tronco } from "./dubles-de-teste";
@@ -2461,6 +2462,14 @@ describe("a fila visível (0295): ordem de chegada, teto por time e prazo", () =
   /** Os canais que o controlador mandou desligar, na ordem. */
   const desligados = () => ari.chamadas.filter((c) => c[0] === "desligar").map((c) => c[1]);
   const musicas = (canalId: string) => ari.chamadas.filter((c) => c[0] === "musicaDeEspera" && c[1] === canalId);
+  /** A n-ésima ligação a chegar (`cli-<n>`); o banco de mentira lhe dá `vc-<ordem de chegada>`. */
+  const chega = (n: number) =>
+    ctl.tratar({
+      type: "StasisStart",
+      channel: canal(`cli-${n}`, `PJSIP/tronco-${TRONCO}-0000000${n}`, { caller: { name: "", number: `6197000000${n}` } }),
+      args: ["entrada"],
+    });
+  const atendimentosDoCliente = () => ari.chamadas.filter((c) => c[0] === "atender");
 
   it("a ordem de chegada é gravada uma vez, quando os toques começam", async () => {
     await entrar();
@@ -2559,24 +2568,111 @@ describe("a fila visível (0295): ordem de chegada, teto por time e prazo", () =
     expect(ofertas()).toEqual([[`PJSIP/ramal-${ANA}`, "oferta,vc-2"]]);
   });
 
-  it("quando uma ligação acaba, quem espera é reavaliado NA HORA — sem esperar os 5 s", async () => {
+  it("o fim de uma ligação reavalia quem espera 2 s depois — antes do relógio de 5 s dela, e não no mesmo instante", async () => {
     banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
     ari.online.add(ANA);
     await entrar();
     await ramalAtende(ari.ultimoOriginado()); // ANA atende a primeira
     banco.disponiveis = []; // ANA está em ligação
-    await entrar2(); // a segunda espera
-    await vi.advanceTimersByTimeAsync(1_000);
+    await entrar2(); // t=0: a segunda espera, e reavalia sozinha em t=5, t=10…
+    await vi.advanceTimersByTimeAsync(6_000); // t=6: o relógio dela acabou de rearmar — só volta em t=10
     banco.disponiveis = [{ userId: ANA, atendidasHoje: 1, ultimaAtendidaEm: new Date() }];
     await destruir("cli-1"); // a primeira acaba: ANA está livre
+
+    // No mesmo instante, NÃO: o navegador de quem acabou de desligar ainda fecha a sessão anterior.
+    expect(ofertas().at(-1)).toEqual([`PJSIP/ramal-${ANA}`, "oferta,vc-1"]);
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS - 100); // t=7,9
+    expect(ofertas().at(-1)).toEqual([`PJSIP/ramal-${ANA}`, "oferta,vc-1"]);
+    await vi.advanceTimersByTimeAsync(200); // t=8,1 — o relógio próprio dela só dispararia em t=10
     expect(ofertas().at(-1)).toEqual([`PJSIP/ramal-${ANA}`, "oferta,vc-2"]);
+  });
+
+  it("três ligações acabam dentro de 1 s: UMA passada de reavaliação, não três", async () => {
+    for (const n of [1, 2, 3, 4]) await chega(n); // t=0: quatro esperando, ninguém livre
+    await vi.advanceTimersByTimeAsync(6_000); // t=6: todas reavaliaram em t=5 e só voltam em t=10
+    banco.leiturasDeDisponiveis = 0;
+
+    await destruir("cli-1"); // t=6
+    await vi.advanceTimersByTimeAsync(300);
+    await destruir("cli-2"); // t=6,3
+    await vi.advanceTimersByTimeAsync(300);
+    await destruir("cli-3"); // t=6,6
+    // Nada foi reavaliado no fim de cada uma, e há UMA passada agendada (mais o relógio da que ficou).
+    expect(banco.leiturasDeDisponiveis).toBe(0);
+    expect(vi.getTimerCount()).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(2_900); // t=9,5: a passada rodou em t=8 — a 2 s do PRIMEIRO fim
+    expect(banco.leiturasDeDisponiveis).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(ctl.ativas).toBe(1);
+  });
+
+  it("sem ninguém esperando, o fim de uma ligação não deixa relógio nenhum para trás", async () => {
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+    await entrar();
+    await ramalAtende(ari.ultimoOriginado());
+    await destruir("cli-1");
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("5 esperando no mesmo time e ninguém livre: a passada lê os disponíveis UMA vez — e os relógios das outras seguem", async () => {
+    for (const n of [1, 2, 3, 4, 5, 6]) await chega(n); // t=0
+    await vi.advanceTimersByTimeAsync(6_000); // t=6
+    banco.leiturasDeDisponiveis = 0;
+    await destruir("cli-6"); // sobram cinco esperando; a passada roda em t=8
+
+    await vi.advanceTimersByTimeAsync(2_500); // t=8,5
+    // A mais antiga foi avaliada e continuou esperando: as outras quatro leriam a MESMA lista vazia.
+    expect(banco.leiturasDeDisponiveis).toBe(1);
+    expect(ctl.ativas).toBe(5);
+
+    await vi.advanceTimersByTimeAsync(2_000); // t=10,5: as quatro puladas reavaliaram no relógio delas, em t=10
+    expect(banco.leiturasDeDisponiveis).toBe(5);
+  });
+
+  it("5 esperando e UM livre: a passada toca a mais antiga, avalia a segunda (que espera) e para aí", async () => {
+    for (const n of [1, 2, 3, 4, 5, 6]) await chega(n); // t=0
+    await vi.advanceTimersByTimeAsync(6_000); // t=6
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+    // O banco de verdade tira da lista quem passou a tocar; o de mentira não sabe — depois da 1ª leitura, ninguém.
+    const ler = banco.disponiveisNoTime;
+    banco.disponiveisNoTime = async () => {
+      const lista = await ler();
+      banco.disponiveis = [];
+      return lista;
+    };
+    banco.leiturasDeDisponiveis = 0;
+    await destruir("cli-6"); // a passada roda em t=8
+
+    await vi.advanceTimersByTimeAsync(2_500); // t=8,5
+    expect(ofertas()).toEqual([[`PJSIP/ramal-${ANA}`, "oferta,vc-1"]]);
+    expect(banco.leiturasDeDisponiveis).toBe(2);
+  });
+
+  it("a passada corta por TIME: a fila de um time sem ninguém livre não tira a vez de avaliar a de outro", async () => {
+    await chega(1);
+    await chega(2); // duas na fila do TIME
+    banco.troncoAtual = { ...tronco, teamId: OUTRO_TIME };
+    await chega(3);
+    await chega(4); // duas na fila de outro time
+    await chega(5); // e a que vai acabar
+    await vi.advanceTimersByTimeAsync(6_000); // t=6
+    banco.leiturasDeDisponiveis = 0;
+    await destruir("cli-5");
+
+    await vi.advanceTimersByTimeAsync(2_500); // t=8,5: uma leitura por time
+    expect(banco.leiturasDeDisponiveis).toBe(2);
+    expect(banco.consultas.filter((c) => c[0] === "timeParaAFila").map((c) => c[2])).toEqual([TIME, TIME, OUTRO_TIME, OUTRO_TIME, OUTRO_TIME]);
   });
 
   it("duas esperando, a primeira esgota o teto e encerra: a segunda segue esperando — música, relógio armado — e cai no teto DELA", async () => {
     await entrar(); // t=0: esgota em t=120
     await vi.advanceTimersByTimeAsync(62_000);
     await entrar2(); // t=62: esgota em t=182
-    await vi.advanceTimersByTimeAsync(59_000); // t=121: a primeira esgotou, e o fim dela reavaliou a segunda
+    await vi.advanceTimersByTimeAsync(59_000); // t=121: a primeira esgotou em t=120, e a reavaliação está agendada para t=122
 
     expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
     expect(ctl.ativas).toBe(1);
@@ -2585,14 +2681,20 @@ describe("a fila visível (0295): ordem de chegada, teto por time e prazo", () =
     expect(ari.chamadas).not.toContainEqual(["pararMusica", "cli-2"]);
     expect(desligados()).toEqual(["cli-1"]);
     expect(ofertas()).toEqual([]);
-    // O relógio de reavaliar dela está armado — um só.
-    expect(vi.getTimerCount()).toBe(1);
+    // O relógio de reavaliar dela e a passada agendada pelo fim da primeira.
+    expect(vi.getTimerCount()).toBe(2);
     expect(banco.tem("prazo_da_fila")).toEqual([
       ["prazo_da_fila", "vc-1", 120_000],
       ["prazo_da_fila", "vc-2", 120_000],
     ]);
 
-    await vi.advanceTimersByTimeAsync(60_000); // t=181: antes do teto dela
+    await vi.advanceTimersByTimeAsync(2_000); // t=123: a passada rodou — e ela continua como estava
+    expect(banco.tem("encerrada")).toHaveLength(1);
+    expect(musicas("cli-2")).toHaveLength(1);
+    expect(desligados()).toEqual(["cli-1"]);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(58_000); // t=181: antes do teto dela
     expect(banco.tem("encerrada")).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(7_000); // t=188: passou do teto dela
     expect(banco.tem("encerrada")).toEqual([
@@ -2603,20 +2705,20 @@ describe("a fila visível (0295): ordem de chegada, teto por time e prazo", () =
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("a que esgota leva junto, na reavaliação, a que também já tinha esgotado: cada uma encerra UMA vez, e a terceira segue na fila", async () => {
+  it("a passada encerra a que já tinha esgotado — UMA vez — e a terceira segue na fila; o fim dela agenda outra passada, não reentra", async () => {
     await entrar(); // t=0, teto de 120 s: esgota no relógio dela, em t=120
-    await vi.advanceTimersByTimeAsync(2_000);
-    banco.esperaMaximaS = 117; // t=2: esgota em t=119 — entre o relógio dela de t=117 e o de t=122
+    await vi.advanceTimersByTimeAsync(4_000);
+    banco.esperaMaximaS = 117; // t=4: esgota em t=121 — entre o relógio dela de t=119 e o de t=124
     await entrar2();
-    await vi.advanceTimersByTimeAsync(1_000);
-    banco.esperaMaximaS = 300; // t=3: espera até t=303
+    await vi.advanceTimersByTimeAsync(2_000);
+    banco.esperaMaximaS = 300; // t=6: espera até t=306
     await entrar3();
 
-    await vi.advanceTimersByTimeAsync(116_500); // t=119,5: ninguém caiu ainda
-    expect(banco.tem("encerrada")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(115_500); // t=121,5: a primeira caiu em t=120; a segunda já passou do teto, e ninguém a avaliou ainda
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
 
-    // t=120: a primeira esgota; o fim dela reavalia a segunda, que já passou do teto e encerra
-    // DENTRO dessa reavaliação — e o fim da segunda reavalia a terceira, que segue.
+    // t=122: a passada agendada pelo fim da primeira avalia a segunda, que encerra DENTRO dela,
+    // e segue para a terceira, que fica. O fim da segunda agenda a passada seguinte (t=124).
     await vi.advanceTimersByTimeAsync(1_000);
     expect(banco.tem("encerrada")).toEqual([
       ["encerrada", "vc-1", "fila_esgotada"],
@@ -2628,16 +2730,20 @@ describe("a fila visível (0295): ordem de chegada, teto por time e prazo", () =
     ]);
     expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"], ["perdida", "vc-2"]]);
     expect(desligados()).toEqual(["cli-1", "cli-2"]);
-    // A terceira: viva, com a música de sempre (uma só), um relógio só, e o prazo gravado uma vez.
+    // A terceira: viva, com a música de sempre (uma só) e o prazo gravado uma vez.
     expect(ctl.ativas).toBe(1);
     expect(musicas("cli-3")).toHaveLength(1);
     expect(ari.chamadas).not.toContainEqual(["pararMusica", "cli-3"]);
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(2); // o relógio dela + a passada que o fim da segunda agendou
     expect(banco.tem("prazo_da_fila")).toEqual([
       ["prazo_da_fila", "vc-1", 120_000],
       ["prazo_da_fila", "vc-2", 117_000],
       ["prazo_da_fila", "vc-3", 300_000],
     ]);
+
+    await vi.advanceTimersByTimeAsync(2_000); // t=124,5: a segunda passada rodou; ninguém mais acabou, nada mais agendado
+    expect(banco.tem("encerrada")).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
 
     // E ela ainda é atendida quando alguém fica livre.
     banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
@@ -2646,6 +2752,104 @@ describe("a fila visível (0295): ordem de chegada, teto por time e prazo", () =
     expect(ofertas()).toEqual([[`PJSIP/ramal-${ANA}`, "oferta,vc-3"]]);
     await ramalAtende(ari.ultimoOriginado(), "vc-3");
     expect(banco.tem("atendida")).toEqual([["atendida", "vc-3", ANA]]);
+  });
+
+  it("o Asterisk não atende o cliente na hora de segurá-lo na linha: a fila segue com relógio, toca quem fica livre e o cliente é atendido", async () => {
+    ari.falharAtender = 1;
+    await entrar();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("não consegui segurar o cliente na linha"), expect.anything());
+    expect(ctl.ativas).toBe(1);
+    expect(vi.getTimerCount()).toBe(1); // o relógio de reavaliar: a ligação não ficou parada
+    expect(banco.tem("prazo_da_fila")).toHaveLength(1);
+
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ofertas()).toEqual([[`PJSIP/ramal-${ANA}`, "oferta,vc-1"]]);
+
+    await ramalAtende(ari.ultimoOriginado());
+    // A tentativa que falhou não ficou valendo como atendida: agora o cliente é atendido DE VERDADE, antes da ponte.
+    expect(atendimentosDoCliente()).toEqual([["atender", "cli-1"], ["atender", "cli-1"]]);
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "cli-1"]);
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("o Asterisk não atende na hora de segurar na linha e ninguém fica livre: a ligação esgota no teto, em vez de ficar parada para sempre", async () => {
+    ari.falharAtender = 1;
+    await entrar();
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("o Asterisk não atende na hora de pôr o som de chamando: o ramal toca mesmo assim, e quem atende é atendido", async () => {
+    banco.disponiveis = [
+      { userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null },
+      { userId: BIA, atendidasHoje: 1, ultimaAtendidaEm: null },
+    ];
+    ari.online.add(ANA).add(BIA);
+    await entrar(); // 1ª volta: ANA toca, e o chamar é o da operadora (a ligação ainda não foi atendida)
+    await destruir("ramal-canal-1", 19); // BIA toca
+    ari.falharAtender = 1;
+    await destruir("ramal-canal-2", 19); // 2ª volta: atende para chamar em banda — e o atender falha
+
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("o ramal toca mesmo assim"), expect.anything());
+    expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`, `PJSIP/ramal-${BIA}`, `PJSIP/ramal-${ANA}`]);
+    expect(vi.getTimerCount()).toBe(1); // a rede de segurança do toque
+
+    await ramalAtende(ari.ultimoOriginado());
+    expect(atendimentosDoCliente()).toEqual([["atender", "cli-1"], ["atender", "cli-1"]]);
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("quem voltou do ramal digitado no menu e ainda ouve o aviso de instabilidade não conta como 'na frente': a mais nova toca o livre", async () => {
+    const MENU = "66666666-6666-6666-6666-666666666666";
+    const menu: MenuDoBanco = {
+      id: MENU,
+      nome: "Atendimento",
+      defaultTeamId: TIME,
+      timePadraoAtivo: true,
+      fala: falaDe("menu", 4_000),
+      falaInvalida: null,
+      opcoes: [{ digito: "1", teamId: TIME }],
+      aceitaRamal: true,
+    };
+    banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
+    banco.menus.set(MENU, menu);
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(BIA);
+
+    await entrar(); // o menu
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    expect(ofertas()).toEqual([[`PJSIP/ramal-${ANA}`, "oferta,vc-1"]]); // o ramal digitado toca sozinho
+
+    banco.aviso = falaDe("aviso", 10_000);
+    await destruir("ramal-canal-1", 19); // não atendeu: a fila do time padrão — e o aviso de instabilidade toca INTEIRO
+    expect(ari.falas().at(-1)).toBe("sound:/falas/aviso");
+
+    // Enquanto a primeira ouve o aviso, chega outra (por um número do time, já sem aviso) e há UM livre.
+    banco.troncoAtual = tronco;
+    banco.aviso = null;
+    banco.disponiveis = [{ userId: BIA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    await entrar2();
+    expect(ofertas().at(-1)).toEqual([`PJSIP/ramal-${BIA}`, "oferta,vc-2"]);
+    expect(ctl.ativas).toBe(2);
+  });
+
+  it("quem ouve o 'aguarde' está esperando de verdade — e segue contando como 'na frente'", async () => {
+    banco.gerais = { aguarde: falaDe("aguarde", 60_000), ninguem: null, foraDoHorario: null };
+    await entrar(); // t=0: ouve o "aguarde" (60 s) e reavalia em t=5, t=10
+    await vi.advanceTimersByTimeAsync(2_000);
+    await entrar2(); // t=2: idem, reavalia em t=7
+    expect(ari.falas()).toEqual(["sound:/falas/aguarde", "sound:/falas/aguarde"]);
+    await vi.advanceTimersByTimeAsync(4_500); // t=6,5
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+    await vi.advanceTimersByTimeAsync(1_000); // t=7,5: o relógio da SEGUNDA dispara — a primeira, ouvindo o "aguarde", está na frente
+    expect(ofertas()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(3_000); // t=10,5: o da PRIMEIRA dispara, e o livre é dela
+    expect(ofertas()).toEqual([[`PJSIP/ramal-${ANA}`, "oferta,vc-1"]]);
   });
 
   it("o banco cai ao gravar a fila ou o prazo: a ligação segue e é atendida mesmo assim", async () => {
