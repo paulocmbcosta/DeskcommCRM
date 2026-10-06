@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Telefonia SIP — o número da operadora como canal, a ligação como conversa",
-    "subtitle": "O Asterisk só carrega o áudio; o CRM é a fonte da verdade dos números e decide quem atende. Números cadastrados pela tela (senha cifrada, nunca devolvida), empurrados para a MEMÓRIA do Asterisk pela ARI. O worker é a aplicação Stasis `crm`: na recebida toca um ramal por vez (menos RECEBIDAS atendidas hoje primeiro, 20 s, 2 voltas, fila de 2 min); na feita só disca com um pedido criado pela API para aquele atendente há menos de 60 s. Provider `sip_trunk` (transporte, só em lib/channels) × meio `phone` (conversas.channel). Migration 0286. Spec 20. Fase 2, versão 1 (migration 0288): URA por tecla, falas gravadas (a ElevenLabs só na PRÉVIA da tela, nunca numa ligação — D15), levadas do Storage ao volume `telefonia-falas` que o Asterisk lê, e aviso de instabilidade por time com faixa em todo o CRM. Desenho: docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md.",
+    "subtitle": "O Asterisk só carrega o áudio; o CRM é a fonte da verdade dos números e decide quem atende. Números cadastrados pela tela (senha cifrada, nunca devolvida), empurrados para a MEMÓRIA do Asterisk pela ARI. O worker é a aplicação Stasis `crm`: na recebida toca um ramal por vez (menos RECEBIDAS atendidas hoje primeiro, 20 s, 2 voltas, fila de até 2 min por padrão — a espera máxima é de cada time, e a fila segue a ordem de chegada); na feita só disca com um pedido criado pela API para aquele atendente há menos de 60 s. Provider `sip_trunk` (transporte, só em lib/channels) × meio `phone` (conversas.channel). Migration 0286. Spec 20. Fase 2, versão 1 (migration 0288): URA por tecla, falas gravadas (a ElevenLabs só na PRÉVIA da tela, nunca numa ligação — D15), levadas do Storage ao volume `telefonia-falas` que o Asterisk lê, e aviso de instabilidade por time com faixa em todo o CRM. Desenho: docs/superpowers/specs/2026-09-28-telefonia-fase2-ura-transferencia-ramais-design.md.",
     "output": "telefonia.html",
     "quality_profile": "standard"
   },
@@ -112,21 +112,21 @@
       "lane": "worker",
       "col": 3,
       "type": "backend",
-      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: se o número toca um MENU, a URA (fase 2); depois a FILA DO TIME: fora do horário com a fala pronta → a fala e desliga (`after_hours`, sem Central); aviso de instabilidade vigente → tocado INTEIRO; toca UM ramal por vez e faz a ponte — enquanto toca, o SOM DE CHAMANDO (o da operadora, ou o tom `ring` da zona `br` em banda na ligação já atendida; DYD-52); sem ninguém livre, e só então, \"aguarde\" e música, o aguarde de novo a cada ~40 s; esgotou → \"ninguém atendeu\"; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s), monta o destino com o prefixo DO TRONCO (`enderecoDeSaida`) e disca; a perna que acaba sem atender vira motivo pela regra de `fim-da-saida.ts`, e o chamar local para antes de o ramal cair; `recuperar()` após reinício do worker"
+      "label": "`controle.ts` (`ControladorDeChamadas`) — recebida: se o número toca um MENU, a URA (fase 2); depois a FILA DO TIME: fora do horário com a fala pronta → a fala e desliga (`after_hours`, sem Central); aviso de instabilidade vigente → tocado INTEIRO; toca UM ramal por vez e faz a ponte — enquanto toca, o SOM DE CHAMANDO (o da operadora, ou o tom `ring` da zona `br` em banda na ligação já atendida; DYD-52); sem ninguém livre, e só então, \"aguarde\" e música, o aguarde de novo a cada ~40 s; esgotou o teto do time → \"ninguém atendeu\"; ordem de chegada (0295): a vez é por time e, ao fim de uma ligação, quem espera é reavaliado 2 s depois, numa passada por organização; feita: confere o pedido (outbound, `starting`, do MESMO atendente, < 60 s), monta o destino com o prefixo DO TRONCO (`enderecoDeSaida`) e disca; a perna que acaba sem atender vira motivo pela regra de `fim-da-saida.ts`, e o chamar local para antes de o ramal cair; `recuperar()` após reinício do worker"
     },
     {
       "id": "distribuicao",
       "lane": "worker",
       "col": 4,
       "type": "backend",
-      "label": "`lib/telefonia/distribuicao.ts` — função pura: menos RECEBIDAS atendidas hoje primeiro, empate = há mais tempo sem atender; 20 s por atendente, 2 voltas; ninguém disponível = fila de 2 min reavaliada a cada 5 s"
+      "label": "`lib/telefonia/distribuicao.ts` — função pura: menos RECEBIDAS atendidas hoje primeiro, empate = há mais tempo sem atender; 20 s por atendente, 2 voltas; ninguém disponível = fila reavaliada a cada 5 s, até a espera máxima do time (2 min por padrão; `esperaMaximaMs`, 0295); a vez (`eAVezDela`): com n livres só as n ligações mais antigas do time tocam"
     },
     {
       "id": "repositorio",
       "lane": "worker",
       "col": 5,
       "type": "backend",
-      "label": "`repositorio.ts` — toda leitura e escrita do worker; `organization_id` sempre do TRONCO (endpoint do Asterisk), nunca de dado do chamador. O cartão \"Ligação em andamento\" (fila visível, entrega 1): `abrirCartaoDaLigacao` o cria quando a recebida é atendida, `registrarNaConversa` o completa no fim e `consertarCartoesOrfaos` fecha o que ficou para trás"
+      "label": "`repositorio.ts` — toda leitura e escrita do worker; `organization_id` sempre do TRONCO (endpoint do Asterisk), nunca de dado do chamador. O cartão \"Ligação em andamento\" (fila visível, entrega 1): `abrirCartaoDaLigacao` o cria quando a recebida é atendida, `registrarNaConversa` o completa no fim e `consertarCartoesOrfaos` fecha o que ficou para trás. A fila visível (entrega 2): `marcarNaFila` grava a ordem de chegada e `marcarPrazoDaFila`, o \"cai em\"; `timeParaAFila` devolve o teto do time"
     },
     {
       "id": "rota_numeros",
@@ -259,7 +259,7 @@
       "lane": "banco",
       "col": 3,
       "type": "database",
-      "label": "`voice_calls` — `provider = sip_trunk`, `sip_call_ref` único por org (idempotência), `ringing_user_id`, `conversation_id`, `team_id`, `answered_at`, `end_reason` (fase 2: `after_hours`); `menu_id`, `menu_digit`, `menu_outcome` (`chosen` / `default_no_input` / `default_invalid`) e `emergency_heard_at` (0288); `peer_ringing_at` (0294): quando o telefone do cliente começou a chamar na feita, gravado no fechamento"
+      "label": "`voice_calls` — `provider = sip_trunk`, `sip_call_ref` único por org (idempotência), `ringing_user_id`, `conversation_id`, `team_id`, `answered_at`, `end_reason` (fase 2: `after_hours`); `menu_id`, `menu_digit`, `menu_outcome` (`chosen` / `default_no_input` / `default_invalid`) e `emergency_heard_at` (0288); `peer_ringing_at` (0294): quando o telefone do cliente começou a chamar na feita, gravado no fechamento; `queued_at` (0295): a ordem de chegada na fila, quando passou a esperar por uma pessoa; `queue_deadline_at` (0295): quando a espera sem ninguém livre esgota, o \"cai em\" da aba Telefone"
     },
     {
       "id": "t_contacts",
@@ -476,7 +476,7 @@
       "lane": "banco",
       "col": 15,
       "type": "database",
-      "label": "`attendance_teams.phone_emergency_*` — o aviso de instabilidade do time: fala, desde, até (nulo = até desligar), quem ligou. Vigente = `active_since` preenchido e `expires_at` nulo ou no futuro"
+      "label": "`attendance_teams.phone_emergency_*` — o aviso de instabilidade do time: fala, desde, até (nulo = até desligar), quem ligou. Vigente = `active_since` preenchido e `expires_at` nulo ou no futuro. E `phone_queue_max_wait_seconds` (0295): a espera máxima na fila do telefone deste time, 30 a 1800 s, nulo = 120"
     },
     {
       "id": "gravacoes",
@@ -582,6 +582,34 @@
       "col": 17,
       "type": "database",
       "label": "`phone_extensions` (0291) — o número do ramal de cada pessoa (201…), dado pelo gatilho `trg_ramal_por_papel` a quem ganha papel de atendimento e liberado de quem perde, com trava por organização; `voice_calls` aceita `direction = internal` sem número da empresa e com `peer_user_id`"
+    },
+    {
+      "id": "rota_fila",
+      "lane": "api",
+      "col": 22,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/fila` (viewer+) + `fila-da-tela.ts` (`lerFilaDoTelefone`) — a fila ao vivo, lida do banco com o `organization_id` da sessão em toda consulta: `ativa`, `agora` (o relógio do banco), `times` com a espera máxima em vigor, `numeros`, `ligacoes` (recebidas vivas, cada uma na sua fase: menu, avisos, aguardando, tocando, em_ligacao, transferencia_na_fila; com a posição na fila do time e o `cai_em`) e `perdidas` (últimos 30 min, com o motivo). Sem a ARI configurada, `ativa: false` sem tocar o banco. Leitura compartilhada por 1,5 s por organização, na memória da instância. Não diz quantos atendentes estão livres (entrega 3)"
+    },
+    {
+      "id": "rota_espera",
+      "lane": "api",
+      "col": 23,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/fila/times` e `PUT /api/v1/telefonia/fila/times/[teamId]` (manager+) + `espera-do-time.ts` — a espera máxima na fila do telefone de cada time (30 a 1800 s; `null` volta ao padrão, 120 s): o GET devolve o gravado e o que vale dos times ativos; o PUT confere o time desta organização e não arquivado, grava e audita `phone.queue_wait_changed` (de/para)"
+    },
+    {
+      "id": "aba_telefone",
+      "lane": "tela",
+      "col": 18,
+      "type": "frontend",
+      "label": "Inbox › aba Telefone (`FilaDoTelefone`, `LinhaDaFila`, `ChipsDaFila`; `useFilaDoTelefone` chamado uma vez no `InboxLayout`) — só existe com `ativa: true`, e o selo do trilho conta quem espera. Quatro seções (na fila por ordem de chegada, no menu, em ligação, perdidas dos últimos 30 min), chips por time e seletor de número; a linha diz a posição, o time, \"pelo <número da empresa>\" e o estado (\"Aguardando há 3:42 · cai em 1:18\", em destaque pelo teto do time). Relê pelo Realtime de `voice_calls` (juntado) e a cada 15 s; a releitura que falha acende \"Sem atualização no momento\""
+    },
+    {
+      "id": "cartao_espera",
+      "lane": "tela",
+      "col": 19,
+      "type": "frontend",
+      "label": "Configurações › Times › \"Fila do telefone\" (`EsperaMaximaDoTime.tsx`, depois do aviso de instabilidade): 2 minutos (o padrão), 5, 10, 15, 20 ou 30; grava na hora e vale para a próxima ligação, não para quem já espera. Só com telefonia na instalação"
     }
   ],
   "edges": [
@@ -604,7 +632,7 @@
     { "from": "sincronizador", "to": "ari", "label": "PUT/DELETE `/asterisk/config/dynamic/res_pjsip/…` · AMI lê os registros" },
     { "from": "t_sessions", "to": "sincronizador", "label": "troncos ativos, senha decifrada (`fn_decrypt_oauth`)" },
     { "from": "sincronizador", "to": "t_sessions", "label": "WORKING / FAILED + `registro_recusado` · `sem_resposta_da_operadora` · `senha_ilegivel` · `configuracao_invalida`" },
-    { "from": "controle", "to": "distribuicao", "label": "`proximoToque(disponíveis, estado)`" },
+    { "from": "controle", "to": "distribuicao", "label": "`proximoToque(disponíveis, estado)` · `eAVezDela(naFrente, livres)`: com n livres só as n mais antigas do time tocam" },
     { "from": "controle", "to": "ari", "label": "comandos da ligação" },
     { "from": "distribuicao", "to": "controle", "label": "tocar <atendente> · esperar na fila · desistir (vira perdida)" },
     { "from": "controle", "to": "repositorio", "label": "contato, conversa, ligação, desfecho; abre o cartão \"Ligação em andamento\" ao atender (e na transferência, para quem pegou a ligação)" },
@@ -613,7 +641,7 @@
     { "from": "t_sessions", "to": "t_disponibilidade", "label": "`sip_team_id` escolhe o time que recebe" },
     { "from": "t_voice_calls", "to": "repositorio", "label": "RECEBIDAS atendidas hoje (fuso da org) e quem já está em ligação — o laço da distribuição" },
     { "from": "repositorio", "to": "distribuicao", "label": "`CandidatoAoToque[]`" },
-    { "from": "repositorio", "to": "t_voice_calls", "label": "cria · `ringing_user_id` · atendida · encerrada (idempotente) · escolha do menu (`registrarEscolhaDoMenu`) · aviso ouvido — sempre com o filtro da organização" },
+    { "from": "repositorio", "to": "t_voice_calls", "label": "cria · `ringing_user_id` · atendida · encerrada (idempotente) · escolha do menu (`registrarEscolhaDoMenu`) · aviso ouvido · ordem de chegada (`queued_at`) e prazo da fila (`queue_deadline_at`, no relógio do banco) — sempre com o filtro da organização" },
     { "from": "repositorio", "to": "t_contacts", "label": "acha pelo número ou cria" },
     { "from": "repositorio", "to": "t_conversations", "label": "acha ou cria a `phone`; atribui a quem atendeu (`fn_conversation_assign` claim); com a URA, leva a conversa ao time ESCOLHIDO — nunca a de dono humano, nunca a time arquivado" },
     { "from": "repositorio", "to": "t_messages", "label": "registro da ligação, uma vez — a recebida atendida o ganha ao atender, EM ANDAMENTO (`em_andamento: true`, `desfecho: atendida`), e o fim o completa mesclando no banco; o menu com os nomes daquela hora" },
@@ -722,7 +750,7 @@
     { "from": "t_sessions", "to": "t_menus", "label": "`sip_menu_id`: o número toca o menu" },
     { "from": "t_menus", "to": "repositorio", "label": "`menuPorId`: opções, falas e se o time padrão está ativo" },
     { "from": "t_prompts", "to": "repositorio", "label": "falas gerais, a do menu e a do aviso, com a duração" },
-    { "from": "t_times", "to": "repositorio", "label": "`timeParaAFila`: aberto / fora do horário / indisponível + o aviso VIGENTE (lê `expires_at`, não espera a passada)" },
+    { "from": "t_times", "to": "repositorio", "label": "`timeParaAFila`: aberto / fora do horário / indisponível + o aviso VIGENTE (lê `expires_at`, não espera a passada) + o teto da espera deste time (`phone_queue_max_wait_seconds`), lido na ENTRADA da fila" },
     { "from": "repositorio", "to": "t_times", "label": "`desligarAvisosVencidos` (`for no key update skip locked`), também de time arquivado" },
     { "from": "laco", "to": "repositorio", "label": "passada de 60 s: os avisos vencidos, com guarda própria (não esperam o Storage); e o cartão que ficou \"em andamento\" com a ligação já encerrada (`consertarCartoesOrfaos`)" },
     { "from": "repositorio", "to": "t_audit", "label": "`phone.emergency_expired`, sem ator" },
@@ -773,7 +801,21 @@
     { "from": "controle", "to": "t_ramais", "label": "a URA com ramal traduz o número digitado em pessoa; a interna toca o colega" },
     { "from": "painel_transferir", "to": "t_transferencias", "label": "a corrente de transferências no cartão da ligação (gravada no fim em `metadata.voice_call.transferencias`)" },
     { "from": "aba_ramais", "to": "rota_diretorio", "label": "o discador do cabeçalho: \"Seu ramal\" e os colegas por nome ou ramal, com a situação" },
-    { "from": "aba_ramais", "to": "aba_menus", "label": "\"O cliente pode digitar o ramal\" no menu (`accepts_extension`)" }
+    { "from": "aba_ramais", "to": "aba_menus", "label": "\"O cliente pode digitar o ramal\" no menu (`accepts_extension`)" },
+    { "from": "t_voice_calls", "to": "rota_fila", "label": "as recebidas vivas (`queued_at`, `queue_deadline_at`, `ringing_user_id`, `owner_user_id`, `menu_*`) e as perdidas dos últimos 30 minutos" },
+    { "from": "t_times", "to": "rota_fila", "label": "os times ativos, com a espera máxima em vigor (nulo = 120 s)" },
+    { "from": "t_sessions", "to": "rota_fila", "label": "os números SIP ativos: o filtro por número e o `ativa` da aba" },
+    { "from": "t_transferencias", "to": "rota_fila", "label": "a transferência ABERTA para um time põe a ligação na fila do time de destino, \"Transferida por\"" },
+    { "from": "rota_fila", "to": "aba_telefone", "label": "`ativa`, `agora`, `times`, `numeros`, `ligacoes`, `perdidas`; um pedido = uma leitura dentro de 1,5 s" },
+    { "from": "aba_telefone", "to": "rota_fila", "label": "`useFilaDoTelefone`: relê quando o Realtime de `voice_calls` avisa (rajada = uma releitura) e a cada 15 s" },
+    { "from": "t_voice_calls", "to": "aba_telefone", "label": "Realtime de `voice_calls` da organização: cada toque do worker avisa a aba" },
+    { "from": "inbox", "to": "aba_telefone", "label": "a aba `phone` do trilho; o `InboxLayout` lê a fila uma vez e a passa ao selo e à coluna" },
+    { "from": "aba_telefone", "to": "inbox", "label": "clicar numa ligação com conversa a abre à direita, pelo caminho de sempre" },
+    { "from": "aba_telefone", "to": "botao_ligar", "label": "a perdida: o botão de ligar de volta (`BotaoLigar`, some para quem não tem ramal)" },
+    { "from": "cartao_espera", "to": "rota_espera", "label": "lê o que vale (GET) · troca a espera do time (PUT)" },
+    { "from": "rota_espera", "to": "cartao_espera", "label": "`oferecida`, e por time o gravado e o que vale (`em_vigor_s`)" },
+    { "from": "rota_espera", "to": "t_times", "label": "grava `phone_queue_max_wait_seconds` (30 a 1800 s; nulo volta ao padrão)" },
+    { "from": "rota_espera", "to": "t_audit", "label": "`phone.queue_wait_changed`, com o antes e o depois" }
   ],
   "cards": [
     {
@@ -807,7 +849,7 @@
         "Aviso de instabilidade esquecido: vence no prazo escolhido. Na hora da ligação o worker lê `expires_at` e não depende da passada; a passada de 60 s o desliga, audita `phone.emergency_expired` e avisa na Central (`phone_emergency_expired`)",
         "A ligação nunca chama a ElevenLabs (D15): só a prévia sintetiza, 30 por hora por organização, e o mesmo texto com a mesma voz não é pago de novo. `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts` reprova módulo de `lib/channels/telefonia/` ou `workers/` que alcance o cliente; neste mapa, nenhuma peça do worker tem aresta para `elevenlabs` (`tests/unit/mapas-de-arquitetura.test.ts`)",
         "Prévia que ninguém salvou não fica para sempre no Storage, que é a mesma cota do cliente: sai 24 h depois de CRIADA, junto com o áudio que nenhuma fala usa. Limitação aceita na v1: a idade conta da criação, não do último uso — a prévia que reaproveita um objeto antigo sem referência (voltar ao texto anterior) pode sumir antes do \"Salvar e usar\", que recusa com `previa_ausente`; gerar de novo paga uma síntese",
-        "Fora do horário SEM a fala pronta segue a fase 1 (fila de 2 min → perdida com \"Ligar de volta\"): desligar calado seria beco sem saída para quem ainda não cadastrou a chave"
+        "Fora do horário SEM a fala pronta segue a fase 1 (fila do time, 2 min por padrão → perdida com \"Ligar de volta\"): desligar calado seria beco sem saída para quem ainda não cadastrou a chave"
       ]
     },
     {
@@ -830,6 +872,17 @@
         "A ordem que não chega ao worker (ARI fora): a rota recusa a linha e responde 503 — a transferência aberta nunca trava a próxima; worker reiniciado cancela as abertas (`worker_reiniciou`)",
         "Ramal digitado na URA que não existe, ou de quem está ocupado: conta como tecla errada (a fala de inválida e o menu, e o time padrão na terceira); a pessoa do ramal que não atende passa a ligação à fila inteira do time padrão",
         "Ligação interna sem resposta (colega offline, ocupado, não atendeu): tom de ocupado para quem ligou e fim, sem Central — não há cliente esperando"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Fila visível, entrega 2 — a aba Telefone: o laço de retorno (invariante 7)",
+      "items": [
+        "Teto curto demais ou fila lenta: a aba lista as perdidas dos últimos 30 minutos com o motivo (`fila_esgotada`, `desistiu_na_fila`, `ninguem_atendeu`…) e quanto esperaram — quem ajusta a espera máxima do time (gerente+, Configurações › Times) lê o sinal ali. Relatório por período é a F5, dívida declarada",
+        "O teto e a ordem de chegada decidem quem cai e quem é atendido: quem esperou mais toca primeiro, e mudar o teto vale para a próxima ligação, nunca para quem já espera",
+        "Fila que não atualiza: a releitura que falha mantém a fila antiga e acende \"Sem atualização no momento\", com \"Tentar novamente\"; sem o Realtime, a releitura de 15 s segue; a leitura compartilhada por 1,5 s evita uma consulta por navegador no pico",
+        "O banco que falha ao gravar `queued_at` ou `queue_deadline_at` vira aviso no log e a ligação segue: a tela perde a posição ou o \"cai em\", a fila não para",
+        "Não existe ainda: nada avisa, fora da aba, que a fila encheu — a Central só recebe a perdida depois que ela aconteceu; e a aba não age (atender e mover pela fila são a entrega 3)"
       ]
     }
   ]
