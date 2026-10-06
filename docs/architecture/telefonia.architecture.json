@@ -217,7 +217,7 @@
       "lane": "tela",
       "col": 5,
       "type": "frontend",
-      "label": "Inbox — card com ícone `PhoneCall` (`data-meio=\"phone\"`), `Composer` só em nota interna (`somenteNota`), `CartaoDaLigacao` no chat (sentido, quem atendeu, duração, desfecho); fase 2: o que a URA fez (\"No menu X, digitou 1 e foi para o time Y\"; \"…digitou uma tecla que não existe e foi para o time padrão, Y\"; \"Desligou no menu X, antes de escolher\"), \"Ouviu o aviso de instabilidade\" e \"Ligação fora do horário\""
+      "label": "Inbox — card com ícone `PhoneCall` (`data-meio=\"phone\"`), `Composer` só em nota interna (`somenteNota`), `CartaoDaLigacao` no chat (sentido, quem atendeu, duração, desfecho); fase 2: o que a URA fez (\"No menu X, digitou 1 e foi para o time Y\"; \"…digitou uma tecla que não existe e foi para o time padrão, Y\"; \"Desligou no menu X, antes de escolher\"), \"Ouviu o aviso de instabilidade\" e \"Ligação fora do horário\"; a feita sem resposta (0294) diz quem ligou no selo e, embaixo, quanto o telefone chamou e quem encerrou (\"Chamou 4 s · desligada por quem ligou\" / \"Chamou 38 s · ninguém atendeu\" / \"O número estava ocupado\")"
     },
     {
       "id": "central",
@@ -259,7 +259,7 @@
       "lane": "banco",
       "col": 3,
       "type": "database",
-      "label": "`voice_calls` — `provider = sip_trunk`, `sip_call_ref` único por org (idempotência), `ringing_user_id`, `conversation_id`, `team_id`, `answered_at`, `end_reason` (fase 2: `after_hours`); `menu_id`, `menu_digit`, `menu_outcome` (`chosen` / `default_no_input` / `default_invalid`) e `emergency_heard_at` (0288)"
+      "label": "`voice_calls` — `provider = sip_trunk`, `sip_call_ref` único por org (idempotência), `ringing_user_id`, `conversation_id`, `team_id`, `answered_at`, `end_reason` (fase 2: `after_hours`); `menu_id`, `menu_digit`, `menu_outcome` (`chosen` / `default_no_input` / `default_invalid`) e `emergency_heard_at` (0288); `peer_ringing_at` (0294): quando o telefone do cliente começou a chamar na feita, gravado no fechamento"
     },
     {
       "id": "t_contacts",
@@ -329,7 +329,7 @@
       "lane": "api",
       "col": 11,
       "type": "backend",
-      "label": "`lib/telefonia/fim-da-saida.ts` — puro, usado pelo worker E pelo navegador: a perna que acabou sem atender vira `nao_completada_<causa>` (nunca tocou, ou causa de recusa), `ocupado_17` ou `sem_resposta_<causa>`; e o mesmo motivo vira o aviso que o atendente lê. Medido num Asterisk 20.11.1: a recusa com 404 + `Reason` cause 16 chega sem causa no StasisEnd e sem RINGING"
+      "label": "`lib/telefonia/fim-da-saida.ts` — puro, usado pelo worker E pelo navegador: a perna que acabou sem atender vira `nao_completada_<causa>` (nunca tocou, ou causa de recusa), `ocupado_17` ou `sem_resposta_<causa>`; e o mesmo motivo vira o aviso que o atendente lê. Medido num Asterisk 20.11.1: a recusa com 404 + `Reason` cause 16 chega sem causa no StasisEnd e sem RINGING. 0294: `comoAcabouASaidaSemResposta` lê o motivo e o `toque_ms` do registro e diz quem encerrou a feita sem resposta e quanto ela chamou"
     },
     {
       "id": "elevenlabs",
@@ -646,7 +646,7 @@
     { "from": "rota_chamadas", "to": "t_conversations", "label": "acha/cria a `phone` e atribui a quem liga" },
     { "from": "rota_chamadas", "to": "t_audit", "label": "`phone_call.started`" },
     { "from": "t_conversations", "to": "inbox", "label": "`channel = phone` decide ícone e compositor" },
-    { "from": "t_messages", "to": "inbox", "label": "`metadata.voice_call` → `CartaoDaLigacao` (o menu só por `menuDaLigacao`, nunca pelo path cru)" },
+    { "from": "t_messages", "to": "inbox", "label": "`metadata.voice_call` → `CartaoDaLigacao` (o menu só por `menuDaLigacao`, nunca pelo path cru); só o REGISTRO da ligação vira cartão — `ligacaoDoRegistro` exige o `external_id` `ligacao:<id>`, que só o sistema escreve" },
     { "from": "capacidades", "to": "inbox", "label": "`meioDoCanal` → `phone`; janela `sem_restricao`" },
     { "from": "capacidades", "to": "recusa_envio", "label": "`canalConhecidoSemMensagem`" },
     { "from": "recusa_envio", "to": "inbox", "label": "422 com a mensagem traduzida" },
@@ -669,6 +669,7 @@
     { "from": "conta_sip", "to": "sincronizador", "label": "`problemaDoTronco`: fora da régua não vai para o Asterisk" },
     { "from": "controle", "to": "fim_da_saida", "label": "perna acabou sem atender: desfecho + motivo (`end_reason`)" },
     { "from": "fim_da_saida", "to": "ramal_nav", "label": "`avisoDoFimDaSaida`: o motivo lido do banco vira aviso na tela" },
+    { "from": "fim_da_saida", "to": "inbox", "label": "`comoAcabouASaidaSemResposta`: motivo + `toque_ms` → a linha embaixo do selo \"Ligação sem resposta\"" },
     { "from": "conta_sip", "to": "controle", "label": "`enderecoDeSaida`: prefixo fora da régua não vira destino (`tronco_configuracao_invalida`)" },
     { "from": "t_sessions", "to": "controle", "label": "`sip_dial_prefix` do tronco usado, lido junto com ele" },
     { "from": "cartao_elevenlabs", "to": "rota_chave", "label": "salvar e testar a chave — só no corpo, nunca na URL" },

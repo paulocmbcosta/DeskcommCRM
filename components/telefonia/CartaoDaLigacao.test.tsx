@@ -27,7 +27,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { DESFECHOS_DO_MENU, type DesfechoDoMenu } from "@/lib/telefonia/vocabulario";
 
-import { CartaoDaLigacao, ligacaoDaMensagem } from "./CartaoDaLigacao";
+import { CartaoDaLigacao, ligacaoDaMensagem, ligacaoDoRegistro } from "./CartaoDaLigacao";
 
 afterEach(() => cleanup());
 
@@ -180,6 +180,148 @@ describe("a ligação sem URA continua exatamente igual", () => {
     expect(c.raiz.textContent).toBe(`Ligação perdida· ${HORA}`);
     expect(c.ura).toBeNull();
     expect(c.raiz.children).toHaveLength(1);
+  });
+});
+
+/**
+ * A FEITA QUE NINGUÉM ATENDEU (0294). O selo vermelho era o mesmo para quem
+ * deixou o telefone do cliente chamar até a rede desistir e para quem deu um
+ * toque e desligou — e servia de "tentei ligar" nos dois casos. Agora o selo diz
+ * quem ligou, e a linha de baixo, por quanto tempo chamou e quem encerrou.
+ */
+describe("a feita que ninguém atendeu: quem ligou, quanto chamou e quem encerrou", () => {
+  const feita = (extra: Record<string, unknown> = {}) => ({
+    voice_call: { id: "vc-9", direcao: "outbound", desfecho: "sem_resposta", duracao_ms: null, atendente_nome: "Onetiana", ...extra },
+  });
+  const fimDe = (c: { raiz: Element }) => c.raiz.querySelector("[data-ligacao-fim]");
+  const selo = (c: { raiz: Element }) => c.raiz.firstElementChild?.textContent;
+
+  it("deu um toque e desligou: o selo diz quem ligou, e a linha, que chamou 4 s e quem ligou desligou", () => {
+    const c = cartao(feita({ motivo: "atendente_desligou", toque_ms: 4_200 }));
+    expect(selo(c)).toBe(`Ligação sem resposta· por Onetiana· ${HORA}`);
+    expect(fimDe(c)?.textContent).toBe("Chamou 4 s · desligada por quem ligou");
+    expect(fimDe(c)?.getAttribute("data-ligacao-fim")).toBe("atendente_desligou");
+  });
+
+  it("deixou chamar até a rede desistir: chamou 38 s e ninguém atendeu", () => {
+    const c = cartao(feita({ motivo: "sem_resposta_19", toque_ms: 38_000 }));
+    expect(fimDe(c)?.textContent).toBe("Chamou 38 s · ninguém atendeu");
+    expect(fimDe(c)?.getAttribute("data-ligacao-fim")).toBe("ninguem_atendeu");
+  });
+
+  // A rede não avisou que o telefone chamava (nenhum 180/183). O cartão não afirma
+  // que chamou, mas conta quanto a tentativa durou: quem esperou 40 s não fica
+  // igual a quem desligou em 1 s.
+  it("desligou sem sinal de toque: 'após 40 s' contra 'após 1 s' — e o tempo de toque, quando existe, vem primeiro", () => {
+    const esperou = cartao(feita({ motivo: "atendente_desligou", tentativa_ms: 40_300 }));
+    expect(fimDe(esperou)?.textContent).toBe("Desligada por quem ligou após 40 s");
+    cleanup();
+    const desistiuLogo = cartao(feita({ motivo: "atendente_desligou", tentativa_ms: 1_200 }));
+    expect(fimDe(desistiuLogo)?.textContent).toBe("Desligada por quem ligou após 1 s");
+    cleanup();
+    const chamou = cartao(feita({ motivo: "atendente_desligou", toque_ms: 4_200, tentativa_ms: 6_000 }));
+    expect(fimDe(chamou)?.textContent).toBe("Chamou 4 s · desligada por quem ligou");
+    cleanup();
+    // A tentativa é de quem DESLIGOU: quando a rede desistiu sem tempo de toque, nada a acrescentar.
+    expect(fimDe(cartao(feita({ motivo: "sem_resposta_19", tentativa_ms: 40_000 })))).toBeNull();
+  });
+
+  it("número ocupado: diz isso, sem tempo", () => {
+    const c = cartao(feita({ motivo: "ocupado_17", toque_ms: 2_000 }));
+    expect(fimDe(c)?.textContent).toBe("O número estava ocupado");
+  });
+
+  // O registro de antes da 0294 tem o motivo e o nome, mas não o tempo: o cartão
+  // diz quem encerrou e não inventa quanto chamou.
+  it("registro antigo, sem o tempo: quem ligou desligou — e 'ninguém atendeu' não repete o título", () => {
+    const desistiu = cartao(feita({ motivo: "atendente_desligou" }));
+    expect(selo(desistiu)).toBe(`Ligação sem resposta· por Onetiana· ${HORA}`);
+    expect(fimDe(desistiu)?.textContent).toBe("Desligada por quem ligou");
+    cleanup();
+    const aRedeDesistiu = cartao(feita({ motivo: "sem_resposta_19" }));
+    expect(fimDe(aRedeDesistiu)).toBeNull();
+    expect(aRedeDesistiu.raiz.children).toHaveLength(1);
+  });
+
+  it.each([
+    ["tempo que não é número", { motivo: "atendente_desligou", toque_ms: "4000", tentativa_ms: "9000" }, "Desligada por quem ligou"],
+    ["tempo negativo", { motivo: "atendente_desligou", toque_ms: -3, tentativa_ms: -9 }, "Desligada por quem ligou"],
+    ["tempo zero", { motivo: "sem_resposta_19", toque_ms: 0 }, null],
+  ])("metadado estranho (%s): nunca um tempo que ninguém mediu", (_, extra, esperado) => {
+    const c = cartao(feita(extra));
+    expect(fimDe(c)?.textContent ?? null).toBe(esperado);
+  });
+
+  it.each([
+    ["sem motivo", {}],
+    ["o serviço reiniciou no meio", { motivo: "encerrada_apos_reinicio", toque_ms: 9_000, tentativa_ms: 9_000 }],
+    ["motivo de um worker mais novo", { motivo: "caixa_postal", toque_ms: 9_000 }],
+  ])("motivo que não diz como acabou (%s): o cartão cala", (_, extra) => {
+    const c = cartao(feita(extra));
+    expect(fimDe(c)).toBeNull();
+    expect(selo(c)).toBe(`Ligação sem resposta· por Onetiana· ${HORA}`);
+  });
+
+  it("só a feita SEM RESPOSTA ganha a linha: a não completada, a atendida e a recebida ficam como eram", () => {
+    const naoCompletada = cartao(feita({ desfecho: "recusada_pela_rede", motivo: "nao_completada_16", toque_ms: 5_000 }));
+    expect(fimDe(naoCompletada)).toBeNull();
+    expect(selo(naoCompletada)).toBe(`Ligação não completada· por Onetiana· ${HORA}`);
+    cleanup();
+    const atendida = cartao(feita({ desfecho: "atendida", duracao_ms: 5_000, motivo: "atendente_desligou", toque_ms: 5_000 }));
+    expect(fimDe(atendida)).toBeNull();
+    expect(selo(atendida)).toBe(`Ligação feita· por Onetiana· 0:05· ${HORA}`);
+    cleanup();
+    // Na recebida perdida, o nome não aparece (ninguém atendeu) e o motivo não vira frase.
+    const perdida = cartao(registro({ motivo: "atendente_desligou", atendente_nome: "Onetiana", toque_ms: 5_000 }));
+    expect(fimDe(perdida)).toBeNull();
+    expect(perdida.raiz.textContent).toBe(`Ligação perdida· ${HORA}`);
+  });
+
+  it("em espanhol", () => {
+    const es = (el: ReactElement) => <IdiomaProvider locale="es">{el}</IdiomaProvider>;
+    expect(fimDe(cartao(feita({ motivo: "atendente_desligou", toque_ms: 65_000 }), es))?.textContent).toBe(
+      "Sonó 1 min 05 s · colgó quien llamó",
+    );
+    cleanup();
+    expect(fimDe(cartao(feita({ motivo: "sem_resposta_19", toque_ms: 38_000 }), es))?.textContent).toBe("Sonó 38 s · nadie contestó");
+    cleanup();
+    expect(fimDe(cartao(feita({ motivo: "atendente_desligou" }), es))?.textContent).toBe("Colgó quien llamó");
+    cleanup();
+    expect(fimDe(cartao(feita({ motivo: "atendente_desligou", tentativa_ms: 40_000 }), es))?.textContent).toBe(
+      "Colgó quien llamó tras 40 s",
+    );
+    cleanup();
+    expect(fimDe(cartao(feita({ motivo: "ocupado_17" }), es))?.textContent).toBe("El número estaba ocupado");
+  });
+});
+
+/**
+ * SÓ O REGISTRO DA LIGAÇÃO VIRA CARTÃO. Qualquer membro escreve em `messages`
+ * pela REST: uma mensagem comum com `metadata.voice_call` plantado desenhava um
+ * cartão dizendo o que o autor quisesse. O `external_id` `ligacao:<id>` só o
+ * sistema escreve (trigger da 0289), e é ele que a conversa confere.
+ */
+describe("só o registro da ligação vira cartão (ligacaoDoRegistro)", () => {
+  const vc = { id: "3f1c2b8e-9a4d-4c6e-8f00-1234567890ab", direcao: "outbound", desfecho: "sem_resposta", duracao_ms: null, toque_ms: 45_000, motivo: "sem_resposta_19" };
+
+  it("o registro que o worker grava (`ligacao:<id da ligação>`) é lido", () => {
+    expect(ligacaoDoRegistro({ external_id: `ligacao:${vc.id}`, metadata: { voice_call: vc } })).toMatchObject({ id: vc.id, toque_ms: 45_000 });
+  });
+
+  it.each([
+    ["sem external_id", null],
+    ["external_id ausente", undefined],
+    ["external_id de mensagem comum", "wamid.HBgM123"],
+    ["`ligacao:` de OUTRA ligação", "ligacao:00000000-0000-4000-8000-000000000000"],
+    ["só o prefixo", "ligacao:"],
+    ["o id sem o prefixo", vc.id],
+  ])("mensagem com o metadado de ligação plantado (%s): não é registro, e não vira cartão", (_, external_id) => {
+    expect(ligacaoDoRegistro({ external_id, metadata: { voice_call: vc } })).toBeNull();
+  });
+
+  it("registro sem metadado de ligação: nulo", () => {
+    expect(ligacaoDoRegistro({ external_id: `ligacao:${vc.id}`, metadata: {} })).toBeNull();
+    expect(ligacaoDoRegistro({ external_id: `ligacao:${vc.id}`, metadata: null })).toBeNull();
   });
 });
 
