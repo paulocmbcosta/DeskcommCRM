@@ -79,7 +79,15 @@ export class AriFalso implements PortaAri {
   };
   indicarChamando = (c: string) => this.reg("indicarChamando", c);
   desligar = (c: string, m?: string) => this.reg("desligar", c, m);
+  /** Quantas vezes o `originar` ainda lança (o ramal sumiu entre a pergunta e o toque). */
+  falharOriginar = 0;
   originar = async (p: { endpoint: string; appArgs: string }) => {
+    if (this.falharOriginar > 0) {
+      this.falharOriginar--;
+      // Fora de "originar": `originados()` e `ultimoOriginado()` contam só os toques que saíram.
+      await this.reg("originar_recusado", p.endpoint, p.appArgs);
+      throw new ErroAri(500, "Internal Server Error", "/channels");
+    }
     await this.reg("originar", p.endpoint, p.appArgs);
     return { id: `ramal-canal-${++this.seq}` };
   };

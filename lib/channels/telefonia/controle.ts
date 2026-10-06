@@ -383,6 +383,8 @@ export const REPETIR_AGUARDE_MS = 40_000;
  * internet), em vez de reler os disponíveis a cada uma delas dentro da fila serial.
  */
 export const REAVALIAR_APOS_O_FIM_MS = 2_000;
+/** A espera sem ninguém livre de quem não tem teto do time: o padrão de sempre (2 min). */
+const TETO_PADRAO_DA_ESPERA_MS = esperaMaximaMs(null);
 
 /**
  * O chamar que acaba `done` sozinho em menos que isto não chegou a tocar de
@@ -686,7 +688,7 @@ export class ControladorDeChamadas {
         esperando: false,
         inicioDaEspera: null,
         entrouEm: null,
-        tetoMs: esperaMaximaMs(null),
+        tetoMs: TETO_PADRAO_DA_ESPERA_MS,
         relogios: { reavaliar: null, aguarde: null },
       },
       fala: semFalaNoAr(),
@@ -806,7 +808,10 @@ export class ControladorDeChamadas {
     if (l.fim) return;
     l.fila.avisoPendente = entrada.aviso;
     // O teto de espera do time (0295), lido AQUI: mudar a configuração não altera quem já está esperando.
-    l.fila.tetoMs = esperaMaximaMs(entrada.esperaMaximaS);
+    // Só com o time ABERTO: fora do horário sem a fala pronta, arquivado ou com a
+    // agenda ilegível, ninguém vai atender — e esperar o teto longo de um time
+    // que não atende (30 min de música) é pior que os 2 min de sempre.
+    l.fila.tetoMs = entrada.situacao === "aberto" ? esperaMaximaMs(entrada.esperaMaximaS) : TETO_PADRAO_DA_ESPERA_MS;
 
     // Fora do horário SÓ com a fala pronta e tocando. Sem ela (ou se ela não
     // toca), a fase 1: fila e "Ligar de volta" — desligar calado seria um beco
@@ -875,10 +880,19 @@ export class ControladorDeChamadas {
     for (const l of this.porId.values()) {
       if (l.tipo !== "recebida" || l.fim || l.atendidaPor || l.encerrando || l.ura) continue;
       if (l.org !== org || l.fila.teamId !== teamId || l.fila.entrouEm === null || l.fila.ramal) continue;
-      if (l.fala.atual && l.fala.atual.papel !== "espera") continue;
+      if (this.ouvindoUmaFalaInteira(l)) continue;
       fila.push(l);
     }
     return fila.sort((a, b) => a.fila.entrouEm! - b.fila.entrouEm! || (a.vcId < b.vcId ? -1 : 1));
+  }
+
+  /**
+   * A ligação ouve uma fala que toca INTEIRA antes dos ramais — o aviso de
+   * instabilidade ou o de gravação, de quem voltou à entrada da fila. O
+   * "aguarde" não conta: é a fala de quem já está esperando.
+   */
+  private ouvindoUmaFalaInteira(l: Recebida): boolean {
+    return l.fala.atual !== null && l.fala.atual.papel !== "espera";
   }
 
   /** Quem a passada reavalia: as que esperam sem ninguém livre nesta organização, da mais antiga para a mais nova. */
@@ -927,11 +941,17 @@ export class ControladorDeChamadas {
    * são puladas nesta passada (e seguem com o relógio delas), em vez de cada
    * uma reler os disponíveis para chegar à mesma resposta. Times diferentes
    * seguem independentes.
+   *
+   * Pula quem ouve o aviso de instabilidade (ou o de gravação): a ligação que
+   * já esperou e voltou à entrada da fila segue marcada como esperando, e tocar
+   * um ramal no MEIO do aviso faria a fila tocar outro por cima quando ele
+   * acabasse. Os ramais dela tocam no fim da fala, como sempre.
    */
   private async reavaliarQuemEspera(org: string): Promise<void> {
     const semQuemTocar = new Set<string | null>();
     for (const l of this.quemEspera(org)) {
       if (l.fim || l.atendidaPor || l.encerrando || l.ura || l.fila.ramal) continue;
+      if (this.ouvindoUmaFalaInteira(l)) continue;
       if (semQuemTocar.has(l.fila.teamId)) continue;
       await this.tocarProximo(l).catch((e) =>
         this.log.warn("telefonia: reavaliação da fila falhou — o relógio de 5 s tenta de novo", { voice_call: l.vcId, erro: mensagemDe(e, 160) }),
@@ -952,6 +972,56 @@ export class ControladorDeChamadas {
       l.atendidaPelaRede = false;
       throw e;
     }
+  }
+
+  /**
+   * Segurar na linha, sem que a falha pare a fila: se o Asterisk não atende o
+   * cliente, a ligação segue reavaliando e esgota no teto — parada, só o
+   * cliente desligando a tirava da memória, e ela seguraria a vez na fila do
+   * time. A marca `segurando` volta: a avaliação seguinte tenta de novo, em vez
+   * de deixar o cliente só com o toque da operadora (que, num teto longo, a
+   * rede derruba).
+   */
+  private async segurarSemParar(l: Recebida): Promise<void> {
+    await this.segurarNaLinha(l).catch((e) => {
+      l.fila.segurando = false;
+      this.log.warn("telefonia: não consegui segurar o cliente na linha — a fila segue e reavalia", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+    });
+  }
+
+  /**
+   * O teto LONGO do time só vale enquanto o time pode atender (0295). A ligação
+   * que espera com um teto maior que o padrão relê a situação do time a cada
+   * avaliação; se ele deixou de estar aberto (o expediente acabou, foi
+   * arquivado), o teto volta ao padrão, contado do começo da espera — e o
+   * prazo da tela é regravado pelo que resta. Só com teto longo: o caso comum
+   * não ganha uma consulta a cada 5 s. A leitura que falha não muda nada.
+   */
+  private async rebaixarOTetoSeOTimeFechou(l: Recebida): Promise<void> {
+    if (!l.fila.teamId || l.fila.tetoMs <= TETO_PADRAO_DA_ESPERA_MS) return;
+    let aberto: boolean;
+    try {
+      aberto = (await this.banco.timeParaAFila(l.org, l.fila.teamId, new Date(this.agora()))).situacao === "aberto";
+    } catch (e) {
+      this.log.warn("telefonia: situação do time não relida — a espera segue com o teto que tinha", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      return;
+    }
+    if (aberto || l.fim) return;
+    l.fila.tetoMs = TETO_PADRAO_DA_ESPERA_MS;
+    const restante = Math.max(0, TETO_PADRAO_DA_ESPERA_MS - (this.agora() - (l.fila.inicioDaEspera ?? this.agora())));
+    this.log.info("telefonia: o time deixou de atender com a ligação na fila — a espera volta ao teto padrão", {
+      voice_call: l.vcId,
+      time: l.fila.teamId,
+    });
+    await this.banco
+      .marcarPrazoDaFila(l.org, l.vcId, restante)
+      .catch((e) => this.log.warn("telefonia: prazo da fila não gravado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
   }
 
   /**
@@ -1082,6 +1152,12 @@ export class ControladorDeChamadas {
 
   private async tocarProximo(l: Recebida): Promise<void> {
     if (l.fim || l.atendidaPor || l.encerrando) return;
+    // Há um ramal tocando para esta ligação: outro toque por cima derrubaria
+    // quem atendesse o primeiro (`ramalAtendeu` larga o canal que não é o da
+    // vez). Quem segue a fila é o fim desse toque — atendeu, recusou ou venceu.
+    // Chega aqui o relógio de 5 s que disparou e esperou, na fila serial, atrás
+    // da passada que tocou alguém.
+    if (l.fila.ramal) return;
     // O ramal digitado na URA (v3) toca primeiro, sozinho.
     const direto = l.fila.direto;
     if (direto && !direto.tentou) {
@@ -1125,19 +1201,16 @@ export class ControladorDeChamadas {
           .marcarPrazoDaFila(l.org, l.vcId, l.fila.tetoMs)
           .catch((e) => this.log.warn("telefonia: prazo da fila não gravado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
         if (l.fim) return;
-        // Segurar na linha pode falhar (o Asterisk não atendeu o cliente). A
-        // ligação NUNCA fica sem relógio por isso: sem a música, ela segue
-        // reavaliando e esgota no teto — parada, só o cliente desligando a
-        // tirava da memória, e ela seguraria a vez na fila do time.
-        await this.segurarNaLinha(l).catch((e) =>
-          this.log.warn("telefonia: não consegui segurar o cliente na linha — a fila segue e reavalia", {
-            voice_call: l.vcId,
-            erro: mensagemDe(e, 160),
-          }),
-        );
+        await this.segurarSemParar(l);
         if (l.fim) return;
         await this.marcarTocando(l, null);
+      } else if (!l.fila.segurando) {
+        // Segurar na linha falhou numa avaliação anterior: tenta de novo.
+        await this.segurarSemParar(l);
+        if (l.fim) return;
       }
+      await this.rebaixarOTetoSeOTimeFechou(l);
+      if (l.fim) return;
       if (this.agora() - (l.fila.inicioDaEspera ?? this.agora()) >= l.fila.tetoMs) {
         return this.encerrarComFala(l, "fila_esgotada");
       }
