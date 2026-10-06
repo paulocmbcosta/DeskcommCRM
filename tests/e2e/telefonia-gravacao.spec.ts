@@ -11,7 +11,13 @@
  *     vê no cartão da ligação "Ouvir a gravação · 0:01", clica, e o `<audio>`
  *     carrega a URL assinada do Storage e TOCA (duração medida no elemento, não a
  *     olho); a auditoria ganha UMA `phone.recording_listened` com ele como ator;
- *  3. a rota genérica de mídia NÃO serve a gravação (404) — só a escuta auditada.
+ *  3. a rota genérica de mídia NÃO serve a gravação (404) — só a escuta auditada;
+ *  4. a ligação FEITA que ninguém atendeu (migration 0294, J42) diz no selo quem
+ *     ligou e, embaixo, quanto o telefone do cliente chamou e quem encerrou —
+ *     "Chamou 4 s · desligada por quem ligou", "Chamou 38 s · ninguém atendeu"
+ *     e, sem sinal de toque da rede, "Desligada por quem ligou após 40 s" —,
+ *     cada frase numa linha só (medido no elemento); e uma mensagem comum com o
+ *     metadado de ligação PLANTADO não vira cartão.
  *
  * A ligação e a gravação são SEMEADAS (voice_calls `stored` + a mensagem da
  * ligação + o arquivo no Storage local), como o worker as deixa ao fim do
@@ -49,6 +55,18 @@ const TIME = { id: randomUUID(), nome: `Suporte Gravação ${SUFIXO}` };
 const NUMERO = { id: randomUUID(), nome: `Número Gravação ${SUFIXO}`, e164: `+55613002${QUATRO_DIGITOS}` };
 const AVISO = { id: randomUUID(), texto: "Esta ligação poderá ser gravada para garantir a qualidade do atendimento." };
 const LIGACAO = randomUUID();
+/**
+ * As feitas sem resposta (0294): o toque de 4 s que o atendente desligou, a de
+ * 38 s que a rede encerrou, e a que o atendente desligou depois de 40 s sem a
+ * rede avisar que o telefone chamava (`toqueMs` nulo: sem instante de toque).
+ */
+const SEM_RESPOSTA: ReadonlyArray<{ id: string; motivo: string; toqueMs: number | null; tentativaMs: number; fim: string; frase: string }> = [
+  { id: randomUUID(), motivo: "atendente_desligou", toqueMs: 4_200, tentativaMs: 6_000, fim: "atendente_desligou", frase: "Chamou 4 s · desligada por quem ligou" },
+  { id: randomUUID(), motivo: "sem_resposta_19", toqueMs: 38_000, tentativaMs: 40_000, fim: "ninguem_atendeu", frase: "Chamou 38 s · ninguém atendeu" },
+  { id: randomUUID(), motivo: "atendente_desligou", toqueMs: null, tentativaMs: 40_000, fim: "atendente_desligou", frase: "Desligada por quem ligou após 40 s" },
+];
+/** O que alguém plantaria numa mensagem comum para forjar um cartão de ligação. */
+const PLANTADA = "Chamou 45 s · ninguém atendeu";
 
 test.use({
   viewport: { width: 1440, height: 900 },
@@ -227,6 +245,75 @@ test.describe("telefonia — gravação das ligações pela tela", () => {
       ],
     );
     mensagemId = mensagem!.id;
+
+    // Duas ligações FEITAS que ninguém atendeu, como `encerrarLigacao` e
+    // `registrarNaConversa` as deixam (0294): o instante do primeiro toque na
+    // linha, e o tempo de toque e o motivo no registro da conversa.
+    for (const [i, l] of SEM_RESPOSTA.entries()) {
+      await sql(
+        `insert into public.voice_calls
+           (id, organization_id, channel_session_id, contact_id, provider, sip_call_ref, direction, peer_phone, status,
+            started_at, ended_at, peer_ringing_at, conversation_id, team_id, owner_user_id, created_by, end_reason)
+         values ($1, $2, $3, $4, 'sip_trunk', $5, 'outbound', $6, 'ended',
+                 now() - interval '10 seconds' - make_interval(secs => $12::double precision / 1000), now() - interval '10 seconds',
+                 now() - interval '10 seconds' - make_interval(secs => $7::double precision / 1000),
+                 $8, $9, $10, $10, $11)`,
+        [l.id, orgId, NUMERO.id, contato!.id, `pedido-grav-${SUFIXO}-${i}`, `+55619901${QUATRO_DIGITOS}`, l.toqueMs, conversaId, TIME.id, atendente.id, l.motivo, l.tentativaMs],
+      );
+      await sql(
+        `insert into public.messages
+           (organization_id, conversation_id, contact_id, channel_session_id, external_id, direction, type, body,
+            sent_via, status, metadata)
+         values ($1, $2, $3, $4, $5, 'outbound', 'system', 'Ligação feita · sem resposta', 'system', 'sent', $6)`,
+        [
+          orgId,
+          conversaId,
+          contato!.id,
+          NUMERO.id,
+          `ligacao:${l.id}`,
+          JSON.stringify({
+            voice_call: {
+              id: l.id,
+              direcao: "outbound",
+              desfecho: "sem_resposta",
+              duracao_ms: null,
+              atendente_id: atendente.id,
+              atendente_nome: "Bruno Atendente",
+              motivo: l.motivo,
+              menu: null,
+              ouviu_aviso: false,
+              ...(l.toqueMs !== null ? { toque_ms: l.toqueMs } : {}),
+              tentativa_ms: l.tentativaMs,
+            },
+          }),
+        ],
+      );
+    }
+    // Uma mensagem COMUM com o metadado de ligação plantado — o que um membro
+    // consegue gravar pela REST (sem o `external_id` `ligacao:*`, que só o
+    // sistema escreve). Não pode virar cartão.
+    await sql(
+      `insert into public.messages
+         (organization_id, conversation_id, contact_id, channel_session_id, direction, type, body, sent_via, status, metadata)
+       values ($1, $2, $3, $4, 'outbound', 'system', 'Mensagem plantada', 'system', 'sent', $5)`,
+      [
+        orgId,
+        conversaId,
+        contato!.id,
+        NUMERO.id,
+        JSON.stringify({
+          voice_call: {
+            id: randomUUID(),
+            direcao: "outbound",
+            desfecho: "sem_resposta",
+            duracao_ms: null,
+            atendente_nome: "Bruno Atendente",
+            motivo: "sem_resposta_19",
+            toque_ms: 45_000,
+          },
+        }),
+      ],
+    );
     // O caminho CANÔNICO da gravação (`<org>/<conversa>/<mensagem>.mp3`): a escuta
     // recusa qualquer outro.
     const caminho = `${orgId}/${conversaId}/${mensagemId}.mp3`;
@@ -309,5 +396,37 @@ test.describe("telefonia — gravação das ligações pela tela", () => {
         await contexto.close();
       }
     });
+  });
+
+  test("a ligação feita que ninguém atendeu diz quem ligou, quanto chamou e quem encerrou", async ({ page }) => {
+    test.setTimeout(120_000);
+    await entrar(page, atendente.email, atendente.senha);
+    await page.goto(`/app/inbox/${conversaId}`);
+
+    for (const l of SEM_RESPOSTA) {
+      const cartao = page.locator('[data-ligacao="sem_resposta"]').filter({ hasText: l.frase });
+      await expect(cartao).toBeVisible({ timeout: 30_000 });
+      await expect(cartao.locator("[data-ligacao-titulo]")).toHaveText("Ligação sem resposta");
+      // O selo diz QUEM ligou — antes só a ligação atendida dizia.
+      await expect(cartao).toContainText("por Bruno Atendente");
+      const linha = cartao.locator("[data-ligacao-fim]");
+      await expect(linha).toHaveText(l.frase);
+      await expect(linha).toHaveAttribute("data-ligacao-fim", l.fim);
+
+      // Medido no elemento: a frase cabe numa linha só.
+      const medida = await linha.evaluate((el) => ({
+        altura: el.getBoundingClientRect().height,
+        alturaDaLinha: parseFloat(getComputedStyle(el).lineHeight),
+      }));
+      expect(medida.altura, `"${l.frase}" quebrou em mais de uma linha`).toBeLessThan(medida.alturaDaLinha * 1.5);
+    }
+    // A atendida segue sem a linha: ela é só da feita sem resposta.
+    await expect(page.locator('[data-ligacao="atendida"] [data-ligacao-fim]')).toHaveCount(0);
+    // A mensagem plantada está na conversa, e NÃO virou cartão: os cartões são os
+    // quatro registros de verdade (a atendida e as três sem resposta).
+    await expect(page.getByText("Mensagem plantada")).toBeVisible();
+    await expect(page.locator("[data-ligacao]")).toHaveCount(1 + SEM_RESPOSTA.length);
+    await expect(page.getByText(PLANTADA)).toHaveCount(0);
+    await page.screenshot({ path: `${EVIDENCIA}/ligacao-sem-resposta-quanto-chamou.png`, fullPage: true });
   });
 });

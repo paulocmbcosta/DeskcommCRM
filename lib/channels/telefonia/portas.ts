@@ -87,7 +87,8 @@ export interface PortaBanco {
   // As escritas da ligação ficam presas à organização dela (`l.org`).
   marcarTocando(org: string, id: string, userId: string | null): Promise<void>;
   marcarAtendida(org: string, id: string, userId: string): Promise<void>;
-  encerrarLigacao(org: string, id: string, motivo: string): Promise<LigacaoDoBanco | null>;
+  /** `desdeOPrimeiroToqueMs` (0294): há quanto tempo o telefone do cliente começou a chamar, na feita; `null` = não chamou. */
+  encerrarLigacao(org: string, id: string, motivo: string, desdeOPrimeiroToqueMs?: number | null): Promise<LigacaoDoBanco | null>;
   atribuirConversa(org: string, conversationId: string, userId: string, motivo?: "claim" | "transfer"): Promise<void>;
   registrarNaConversa(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, duracaoMs: number | null): Promise<void>;
   avisarPerdida(l: LigacaoDoBanco): Promise<void>;

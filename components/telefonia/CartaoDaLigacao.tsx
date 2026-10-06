@@ -18,6 +18,12 @@
  * rota da ESCUTA AUDITADA (cada pedido é uma linha na auditoria) só no clique:
  * abrir a conversa não conta como escuta. Quem não alcança o piso de papel
  * (`voice.recording.listen`) vê que a ligação foi gravada, sem o botão.
+ *
+ * A feita que ninguém atendeu (0294): o selo diz QUEM ligou, e a linha de baixo
+ * diz por quanto tempo o telefone do cliente chamou e quem encerrou — quem ligou
+ * ou a rede. Sem isso, deixar chamar até o fim e dar um toque e desligar eram a
+ * mesma linha vermelha. O tempo só aparece quando o registro o traz
+ * (`comoAcabouASaidaSemResposta`): a ligação de antes da 0294 diz só quem encerrou.
  */
 import { format } from "date-fns";
 import { useState } from "react";
@@ -27,6 +33,7 @@ import { PhoneIncoming, PhoneOutgoing, PhoneX, Play, X } from "@/lib/ui/icons";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
+import { comoAcabouASaidaSemResposta, tempoDeToque, type FimDaSaidaSemResposta } from "@/lib/telefonia/fim-da-saida";
 import { gravacaoDaLigacao, type GravacaoDaLigacao } from "@/lib/telefonia/gravacao";
 import { fraseDoElo } from "@/lib/telefonia/texto-da-transferencia";
 import {
@@ -43,8 +50,12 @@ export interface MetadadoDaLigacao {
   desfecho: "atendida" | "perdida" | "sem_resposta" | "recusada_pela_rede";
   duracao_ms: number | null;
   atendente_nome?: string | null;
-  /** Por que terminou (`voice_calls.end_reason`). Só `after_hours` muda o cartão. */
+  /** Por que terminou (`voice_calls.end_reason`): `after_hours` muda o título; na feita não atendida, diz quem encerrou. */
   motivo?: string | null;
+  /** Feita e não atendida (0294): por quanto tempo o telefone do cliente chamou. Nulo = o registro não traz. */
+  toque_ms?: number | null;
+  /** Feita e não atendida (0294): quanto durou a tentativa, do clique em "Ligar" ao fim. */
+  tentativa_ms?: number | null;
   /** O que a URA fez, quando o número tocava um menu (fase 2) — lido por `menuDaLigacao`. */
   menu?: MenuDaLigacao | null;
   /** O cliente ouviu o aviso de instabilidade do time até o fim. */
@@ -63,11 +74,26 @@ export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
   return {
     ...(v as MetadadoDaLigacao),
     motivo: typeof v.motivo === "string" ? v.motivo : null,
+    toque_ms: typeof v.toque_ms === "number" ? v.toque_ms : null,
+    tentativa_ms: typeof v.tentativa_ms === "number" ? v.tentativa_ms : null,
     menu: menuDaLigacao(v.menu),
     ouviu_aviso: v.ouviu_aviso === true,
     gravacao: gravacaoDaLigacao(v.gravacao),
     transferencias: transferenciasDaLigacao(v.transferencias),
   };
+}
+
+/**
+ * A mensagem É o registro de uma ligação — e não uma mensagem qualquer com
+ * `metadata.voice_call` plantado. Qualquer membro escreve em `messages` pela
+ * REST, e sem esta conferência plantava na conversa um cartão dizendo o que
+ * quisesse ("Chamou 45 s · ninguém atendeu"). O `external_id` `ligacao:<id>` só
+ * o sistema escreve: o trigger da 0289 recusa criá-lo ou alterá-lo com o JWT de
+ * um membro. É por aqui que a conversa decide desenhar o cartão.
+ */
+export function ligacaoDoRegistro(m: { external_id?: string | null; metadata: unknown }): MetadadoDaLigacao | null {
+  const l = ligacaoDaMensagem(m.metadata);
+  return l && m.external_id === `ligacao:${l.id}` ? l : null;
 }
 
 function duracao(ms: number | null): string | null {
@@ -83,6 +109,25 @@ function duracao(ms: number | null): string | null {
  */
 function preencher(modelo: string, valores: { menu: string; tecla: string; time: string }): string {
   return modelo.replace(/\{(menu|tecla|time)\}/g, (_, chave: "menu" | "tecla" | "time") => valores[chave]);
+}
+
+/**
+ * A frase de leigo de como acabou a feita que ninguém atendeu. Cada frase é um
+ * `t()` literal (o guarda de i18n confere o espanhol); o tempo entra por função,
+ * como os nomes do menu.
+ */
+function comoAcabou(fim: FimDaSaidaSemResposta, t: (texto: string) => string): string {
+  if (fim.fim === "ocupado") return t("O número estava ocupado");
+  const tempo = fim.toqueMs === null ? null : tempoDeToque(fim.toqueMs);
+  if (fim.fim === "atendente_desligou") {
+    if (tempo !== null) return trocarMarcador(t("Chamou {tempo} · desligada por quem ligou"), "{tempo}", tempo);
+    // Sem sinal de toque da rede: quanto a tentativa durou, sem afirmar que o telefone chamou.
+    return fim.tentativaMs === null
+      ? t("Desligada por quem ligou")
+      : trocarMarcador(t("Desligada por quem ligou após {tempo}"), "{tempo}", tempoDeToque(fim.tentativaMs));
+  }
+  // Sem o tempo, "ninguém atendeu" só repetiria o título do selo.
+  return tempo === null ? "" : trocarMarcador(t("Chamou {tempo} · ninguém atendeu"), "{tempo}", tempo);
 }
 
 /** O `data-ligacao-menu` do cartão: o desfecho do vocabulário, ou o que houve sem ele. */
@@ -266,6 +311,12 @@ export function CartaoDaLigacao({
   const hora = format(new Date(em), "HH:mm", { locale: localeDaData });
   const tempo = duracao(ligacao.duracao_ms);
   const ura = ligacao.menu ? oQueAUraFez(ligacao.menu, t) : null;
+  // Só a FEITA que ninguém atendeu: a não completada já diz o que houve no título.
+  const fim =
+    !recebida && ligacao.desfecho === "sem_resposta"
+      ? comoAcabouASaidaSemResposta({ motivo: ligacao.motivo, toque_ms: ligacao.toque_ms, tentativa_ms: ligacao.tentativa_ms })
+      : null;
+  const fraseDoFim = fim ? comoAcabou(fim, t) : "";
 
   return (
     <div className="flex flex-col items-center gap-0.5 py-1" data-ligacao={ligacao.desfecho}>
@@ -278,7 +329,8 @@ export function CartaoDaLigacao({
         <span className="font-medium" data-ligacao-titulo>
           {titulo}
         </span>
-        {ligacao.atendente_nome && atendida ? (
+        {/* Na recebida, só quem ATENDEU; na feita, quem ligou — também na que ninguém atendeu. */}
+        {ligacao.atendente_nome && (atendida || !recebida) ? (
           <span className="text-muted-foreground">
             · {recebida ? t("atendida por") : t("por")} {ligacao.atendente_nome}
           </span>
@@ -286,6 +338,11 @@ export function CartaoDaLigacao({
         {tempo ? <span className="tabular-nums text-muted-foreground">· {tempo}</span> : null}
         <span className="tabular-nums text-muted-foreground">· {hora}</span>
       </div>
+      {fim && fraseDoFim ? (
+        <p className="max-w-full px-4 text-center text-xs leading-snug text-muted-foreground" data-ligacao-fim={fim.fim}>
+          {fraseDoFim}
+        </p>
+      ) : null}
       {ura || ligacao.ouviu_aviso ? (
         // Fora da pílula, e não dentro dela: a frase é longa, e uma pílula que
         // quebra em duas linhas vira um borrão no chat estreito.

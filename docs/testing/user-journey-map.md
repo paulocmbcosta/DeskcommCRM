@@ -3478,3 +3478,64 @@ protocolo da abertura e não envia se o vigente mudou (`EncerrarAtendimentoDialo
   os assuntos e ligar os interruptores).
 - A troca de setor pelo seletor, em componente: o `Select` não abre de forma confiável no jsdom. Está
   coberta pela spec, no navegador de verdade.
+
+## J42 — A ligação feita sem resposta diz quanto chamou e quem encerrou `[P1]` (2026-10-06)
+
+Pedido do dono: quando o atendente liga e ninguém atende, a conversa ganhava o selo vermelho
+"Ligação sem resposta" — o mesmo para quem deixou o telefone do cliente chamar até a rede
+desistir e para quem deu um toque e desligou. O toque servia de "tentei ligar". A saída que ele
+tinha achado era mandar a equipe deixar chamar até cair na caixa postal, que vira "Ligação feita"
+com gravação; ela depende de o cliente ter caixa postal, custa uma ligação completada na operadora
+e conta como ligação atendida.
+
+O selo passa a dizer quem ligou, e a linha de baixo, quanto o telefone chamou e quem encerrou.
+Migration 0294 (`voice_calls.peer_ringing_at`); spec 20 §4.2 item 6; mapa em
+`docs/architecture/telefonia.architecture.json` (aresta `fim_da_saida → inbox`).
+
+**Como é provado.** A regra pura (motivo + tempo → o que o cartão conta) em
+`lib/telefonia/fim-da-saida.test.ts`; a medida do tempo pelo controlador, com relógio de mentira,
+em `lib/channels/telefonia/controle.test.ts` (bloco "o tempo que o telefone do cliente chamou"); o
+SQL no Postgres real, com duas organizações, em
+`tests/invariants/telefonia-primeiro-toque-da-saida.test.ts`; o texto do cartão, em português e
+espanhol, em `components/telefonia/CartaoDaLigacao.test.tsx`; e a tela, com as duas ligações
+semeadas como o worker as deixa, em `tests/e2e/telefonia-gravacao.spec.ts`.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J42.1 O atendente liga, o telefone chama 4 s e ele desliga: na conversa, "Ligação sem resposta · por Bruno" e, embaixo, "Chamou 4 s · desligada por quem ligou" | `[P1]` | em unidade, no Postgres real e pela tela (e2e, ligação semeada) |
+| J42.2 O atendente deixa chamar até a rede desistir: "Chamou 38 s · ninguém atendeu" | `[P1]` | em unidade, no Postgres real e pela tela (e2e, ligação semeada) |
+| J42.3 A rede repete o 180 e manda 183 depois: o tempo conta do PRIMEIRO toque | `[P1]` | em unidade (`controle.test.ts`) |
+| J42.4 O atendente desliga sem a rede avisar que o telefone chamava: "Desligada por quem ligou após 40 s" (a tentativa, do clique ao fim) — nunca um tempo de toque que ninguém mediu | `[P1]` | em unidade, no Postgres real e pela tela (e2e, ligação semeada) |
+| J42.5 Número ocupado: "O número estava ocupado" | `[P2]` | em unidade |
+| J42.6 Ligação de antes da 0294 (sem o tempo no registro): o selo ganha o nome de quem ligou e a linha diz só quem encerrou | `[P1]` | em unidade (`CartaoDaLigacao.test.tsx`) |
+| J42.7 A não completada, a atendida e a recebida ficam como eram | `[P1]` | em unidade e pela tela (a atendida, no mesmo e2e) |
+| J42.8 O agent não forja o toque pela REST: a linha do telefone é só-leitura, e a do WaCalls recusa o instante (CHECK) | `[P0]` | no Postgres real, com o JWT do agent |
+| J42.9 Ligação real pelo tronco da operadora: o tempo do cartão bate com o que o atendente ouviu chamar | `[P1]` | pendente — prova na VPS |
+| J42.10 Uma mensagem comum com o metadado de ligação plantado pela REST não vira cartão: só o registro `ligacao:<id>`, que só o sistema escreve | `[P0]` | em unidade (`ligacaoDoRegistro`) e pela tela (e2e) |
+| J42.11 O sistema falha antes de discar e o atendente desliga: "Ligação não completada", e não "desligada por quem ligou" | `[P1]` | em unidade (`controle.test.ts`) |
+| J42.12 A ARI lenta no desmonte da ligação não infla o tempo de toque | `[P1]` | em unidade (`controle.test.ts`) |
+| J42.13 A linha do WaCalls criada pela REST não serve de pedido de saída, e não quebra o fechamento | `[P0]` | no Postgres real |
+
+### O que NÃO foi provado
+
+- **Ligação real.** Em que instante a operadora manda o primeiro 180/183 em relação ao telefone
+  do cliente tocar de fato não foi medido. Um 183 com anúncio da operadora ("fora da área de
+  cobertura") conta como "chamou".
+- **Caixa postal.** Para a rede ela é uma ligação atendida: segue virando "Ligação feita", com
+  gravação. O sistema não separa pessoa de caixa postal.
+- **A imagem da tela.** O e2e mede o texto e a altura de cada frase no navegador, mas o CI só guarda
+  capturas quando falha.
+- **A ligação recuperada depois de um reinício do worker no meio do toque** fecha como não atendida
+  mesmo que o cliente tenha atendido depois (defeito anterior a esta mudança): o cartão sai
+  "Ligação sem resposta · por <quem ligou>", sem a linha.
+
+### O que a revisão independente achou
+
+Um subagente leu o diff sem as conclusões de quem escreveu, com a suíte verde, e rodou o
+controlador de verdade em cenários que os testes não tinham: (1) o tempo de toque era lido DEPOIS
+do desmonte da ligação, e a ARI lenta o inflava (5 s viravam 21 s); (2) quando o próprio worker
+falhava antes de discar, o registro saía "sem resposta · desligada por quem ligou"; (3) sem sinal
+de toque da rede, quem esperou 40 s ficava igual a quem desligou em 1 s; (4) qualquer membro
+plantava um cartão de ligação com uma mensagem comum pela REST (brecha anterior, que passou a
+importar); (5) uma linha do WaCalls criada pela REST servia de pedido de saída, e o CHECK novo
+quebraria o fechamento dela. Os cinco foram corrigidos antes do merge (casos J42.4 e J42.10–13).

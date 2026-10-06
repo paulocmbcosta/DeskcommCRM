@@ -135,6 +135,7 @@ export const DICIONARIO: Traducoes = {
   "A operadora não completou a ligação. Confira o número e o prefixo de discagem do número SIP.": { es: "La operadora no completó la llamada. Revisa el número y el prefijo de marcación del número SIP." },
   "O número chamado está ocupado.": { es: "El número llamado está ocupado." },
   "Ninguém atendeu.": { es: "Nadie contestó." },
+  "Não foi possível fazer a ligação agora. Tente de novo.": { es: "No se pudo hacer la llamada ahora. Inténtalo de nuevo." },
   "O prefixo de discagem do número da empresa é inválido. Revise em Conexões › Telefone.": { es: "El prefijo de marcación del número de la empresa no es válido. Revísalo en Conexiones › Teléfono." },
   "O número da empresa usado nesta ligação não está disponível agora.": { es: "El número de la empresa usado en esta llamada no está disponible ahora." },
   "Abrir a conversa": { es: "Abrir la conversación" },
@@ -156,6 +157,12 @@ export const DICIONARIO: Traducoes = {
   "Ligação perdida": { es: "Llamada perdida" },
   "Ligação recebida": { es: "Llamada recibida" },
   "Ligação sem resposta": { es: "Llamada sin respuesta" },
+  // Como acabou a ligação feita que ninguém atendeu (0294): quanto chamou e quem encerrou
+  "Chamou {tempo} · desligada por quem ligou": { es: "Sonó {tempo} · colgó quien llamó" },
+  "Chamou {tempo} · ninguém atendeu": { es: "Sonó {tempo} · nadie contestó" },
+  "Desligada por quem ligou": { es: "Colgó quien llamó" },
+  "Desligada por quem ligou após {tempo}": { es: "Colgó quien llamó tras {tempo}" },
+  "O número estava ocupado": { es: "El número estaba ocupado" },
   "Ligações pelo telefone": { es: "Llamadas por teléfono" },
   // Selo do canal no card do Inbox
   "Fone": { es: "Tel." },

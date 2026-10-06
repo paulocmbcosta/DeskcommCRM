@@ -261,11 +261,15 @@ export class BancoFalso implements PortaBanco {
   };
   /** O que `encerrarLigacao` devolveu — a linha do banco, que o controlador repassa ao "Ligar de volta". */
   devolvidasAoEncerrar: LigacaoDoBanco[] = [];
-  encerrarLigacao = async (org: string, id: string, motivo: string) => {
+  /** Como o SQL: fecha com o relógio do "banco", e o primeiro toque fica a `desdeOPrimeiroToqueMs` do fim (0294). */
+  encerrarLigacao = async (org: string, id: string, motivo: string, desdeOPrimeiroToqueMs: number | null = null) => {
     const l = this.ligacoes.get(id);
     if (!l || !this.daOrg(org, id, "encerrarLigacao") || l.status === "ended") return null;
     l.status = "ended";
     l.end_reason = motivo;
+    const fim = Date.now();
+    l.ended_at = new Date(fim).toISOString();
+    if (desdeOPrimeiroToqueMs !== null) l.peer_ringing_at = new Date(fim - desdeOPrimeiroToqueMs).toISOString();
     this.eventos.push(["encerrada", id, motivo]);
     const linha = { ...l };
     this.devolvidasAoEncerrar.push(linha);

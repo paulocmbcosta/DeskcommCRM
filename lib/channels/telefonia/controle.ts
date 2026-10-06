@@ -58,7 +58,7 @@ import {
   type CandidatoAoToque,
   type EstadoDoToque,
 } from "@/lib/telefonia/distribuicao";
-import { RECUSA_DA_SAIDA, fimDaSaidaNaoAtendida } from "@/lib/telefonia/fim-da-saida";
+import { ATENDENTE_DESLIGOU, RECUSA_DA_SAIDA, fimDaSaidaNaoAtendida } from "@/lib/telefonia/fim-da-saida";
 import { binaParaE164, numeroParaLigar } from "@/lib/telefonia/numero";
 import {
   ESTADO_INICIAL_DA_URA,
@@ -299,8 +299,20 @@ interface Feita {
    * gravação que começou junto é descartada.
    */
   gravacao: { aviso: FalaDoBanco; gravando: boolean; avisoNoAr: string | null } | null;
-  /** Chegou `Dial` RINGING (180) ou PROGRESS (183): a rede completou até o telefone. */
-  tocou: boolean;
+  /**
+   * Quando chegou o PRIMEIRO `Dial` RINGING (180) ou PROGRESS (183): a rede
+   * completou até o telefone. `null` = não tocou. O instante vai para o banco no
+   * fim da ligação (`peer_ringing_at`, 0294), e o cartão da não atendida conta
+   * dele por quanto tempo o telefone do cliente chamou.
+   */
+  tocouEm: number | null;
+  /**
+   * O worker mandou a operadora discar. `false` até o fim de `novaFeita`: se a
+   * ARI ou o banco falham no meio do pedido, a ligação fica viva sem nunca ter
+   * saído — e o registro não pode dizer que ninguém atendeu, nem que o atendente
+   * desistiu.
+   */
+  discou: boolean;
   causaDaRede: number | null;
   fim: boolean;
 }
@@ -1505,7 +1517,8 @@ export class ControladorDeChamadas {
       tom: null,
       atendida: false,
       gravacao: avisoDeGravacao ? { aviso: avisoDeGravacao, gravando: false, avisoNoAr: null } : null,
-      tocou: false,
+      tocouEm: null,
+      discou: false,
       causaDaRede: null,
       fim: false,
     };
@@ -1526,6 +1539,7 @@ export class ControladorDeChamadas {
     l.tom = (await this.ari.tocarTom(canal.id, "ring").catch(() => null))?.id ?? null;
     await this.banco.marcarTocando(vc.organization_id, vc.id, null);
     await this.ari.discar(perna.id, PRAZO_DA_SAIDA_S);
+    l.discou = true;
     this.log.info("telefonia: ligação feita", { voice_call: vc.id, tronco: tronco.id });
   }
 
@@ -1613,7 +1627,8 @@ export class ControladorDeChamadas {
     // do canal chegar sem causa própria (StasisEnd não traz).
     const causaDoDial: Record<string, number> = { BUSY: 17, NOANSWER: 19, CHANUNAVAIL: 34, CONGESTION: 34 };
     if (causaDoDial[s] !== undefined) this.causas.set(ev.peer.id, causaDoDial[s]!);
-    if (s === "RINGING" || s === "PROGRESS") l.tocou = true;
+    // Só o PRIMEIRO toque conta: a rede repete o 180, e manda 183 depois dele.
+    if ((s === "RINGING" || s === "PROGRESS") && l.tocouEm === null) l.tocouEm = this.agora();
     if (s === "PROGRESS") return this.pararTom(l);
     if (s === "ANSWER") {
       await this.pararTom(l);
@@ -1627,6 +1642,9 @@ export class ControladorDeChamadas {
   private async encerrarFeita(l: Feita, motivo: string, opcoes: { ligarDeVolta: boolean } = { ligarDeVolta: false }) {
     if (l.fim) return;
     l.fim = true;
+    // Medido AQUI, antes do desmonte: parar o tom, a gravação e os canais espera a
+    // ARI (até 5 s por pedido), e esse tempo não é o telefone do cliente chamando.
+    const desdeOPrimeiroToqueMs = l.tocouEm === null ? null : Math.max(0, this.agora() - l.tocouEm);
     await this.transferencias.aoEncerrarLigacao(l.vcId);
     // O tom ANTES dos canais: desligar o ramal com o chamar ainda tocando faz o
     // Asterisk registrar "Playback failed for tone:ring;tonezone=br" — medido
@@ -1648,9 +1666,14 @@ export class ControladorDeChamadas {
     // A perna da operadora acabou antes de alguém atender (e não foi o atendente
     // que desistiu): o motivo diz o que a rede fez, e a tela do atendente o lê.
     if (!l.atendida && l.causaDaRede !== null) {
-      ({ desfecho, motivo: motivoFinal } = fimDaSaidaNaoAtendida({ causa: l.causaDaRede, tocou: l.tocou }));
+      ({ desfecho, motivo: motivoFinal } = fimDaSaidaNaoAtendida({ causa: l.causaDaRede, tocou: l.tocouEm !== null }));
+    } else if (!l.atendida && !l.discou) {
+      // O pedido não chegou a ser discado (a ARI ou o banco falhou no meio de
+      // `novaFeita`): não é "sem resposta", e quem desligou não desistiu de nada.
+      desfecho = "recusada_pela_rede";
+      motivoFinal = RECUSA_DA_SAIDA.naoDiscada;
     }
-    await this.finalizar(l.org, l.vcId, desfecho, motivoFinal, opcoes.ligarDeVolta);
+    await this.finalizar(l.org, l.vcId, desfecho, motivoFinal, opcoes.ligarDeVolta, desdeOPrimeiroToqueMs);
   }
 
   // ─── interna (v3) ────────────────────────────────────────────────────────
@@ -1827,7 +1850,7 @@ export class ControladorDeChamadas {
         l.causaDaRede = causa;
         return this.encerrarFeita(l, "cliente_desligou");
       }
-      return this.encerrarFeita(l, "atendente_desligou");
+      return this.encerrarFeita(l, ATENDENTE_DESLIGOU);
     }
 
     if (l.tipo === "interna") {
@@ -1856,6 +1879,9 @@ export class ControladorDeChamadas {
    * `ligarDeVolta`: a transferência que ninguém pegou (D20) — a ligação FOI
    * atendida (o registro na conversa diz isso, com a duração), mas o cliente
    * ficou sem ninguém, e o "Ligar de volta" abre mesmo assim, para o time dela.
+   *
+   * `desdeOPrimeiroToqueMs`: só a FEITA sabe (0294) — há quanto tempo o telefone
+   * do cliente começou a chamar; entra no banco na mesma escrita que a fecha.
    */
   private async finalizar(
     org: string,
@@ -1863,8 +1889,9 @@ export class ControladorDeChamadas {
     desfechoPedido: DesfechoDaLigacao,
     motivo: string,
     ligarDeVolta = false,
+    desdeOPrimeiroToqueMs: number | null = null,
   ) {
-    const l = await this.banco.encerrarLigacao(org, vcId, motivo);
+    const l = await this.banco.encerrarLigacao(org, vcId, motivo, desdeOPrimeiroToqueMs);
     if (!l) return; // já encerrada por outro caminho
     const desfecho: DesfechoDaLigacao = l.answered_at ? "atendida" : desfechoPedido === "atendida" ? "perdida" : desfechoPedido;
     const duracao = l.answered_at ? this.agora() - new Date(l.answered_at).getTime() : null;
