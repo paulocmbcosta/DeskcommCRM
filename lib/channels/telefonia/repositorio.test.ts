@@ -13,6 +13,7 @@ import {
   situacaoDaLinhaDoTime,
   textoDoAvisoDePerdida,
   tentativaDaSaidaSemResposta,
+  textoDoCartaoEmAndamento,
   textoDoRegistro,
   toqueDaSaidaSemResposta,
 } from "./repositorio";
@@ -57,6 +58,13 @@ describe("textoDoRegistro", () => {
     expect(textoDoRegistro({ direcao: "outbound", desfecho: "sem_resposta", duracaoMs: null, quem: null, motivo: MOTIVO_FORA_DO_HORARIO })).toBe(
       "Ligação feita · sem resposta",
     );
+  });
+});
+
+describe("textoDoCartaoEmAndamento", () => {
+  it("diz com quem a ligação está; sem nome, só que está em andamento", () => {
+    expect(textoDoCartaoEmAndamento("Ana")).toBe("Ligação em andamento com Ana");
+    expect(textoDoCartaoEmAndamento(null)).toBe("Ligação em andamento");
   });
 });
 
