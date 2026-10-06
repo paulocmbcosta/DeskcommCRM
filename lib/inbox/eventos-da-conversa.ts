@@ -14,6 +14,8 @@
  * sem rótulo não quebra a tela (cai no genérico), mas vira uma linha que não
  * diz nada — o defeito que esta tela existe para acabar.
  */
+import { rotuloDoAssunto, type AssuntoDoAtendimento } from "@/lib/atendimento/encerramento";
+
 export const TIPOS_DE_EVENTO_DA_CONVERSA = [
   "opened",
   "closed",
@@ -112,17 +114,26 @@ export function descreverEventoDaConversa(evento: EventoDaConversa, t: Tradutor)
         tom: "entrada",
       };
     }
-    case "closed":
+    case "closed": {
+      // O ASSUNTO do encerramento (migration 0293) viaja no payload; o RESUMO
+      // não — é texto livre sobre o cliente, e mora só em `atendimentos`.
+      const assunto = texto(p.assunto);
+      const setor = texto(p.assunto_time);
+      // `backfill`: encerramento de ANTES da linha do tempo existir (migration
+      // 0268). O banco sabe QUANDO fechou, não POR QUEM — e dizer "automaticamente"
+      // sobre uma conversa que alguém fechou à mão seria inventar o autor.
+      const autor =
+        por("Por") ??
+        (p.backfill === true ? null : evento.actor_kind === "system" ? t("Encerrada automaticamente.") : null);
       return {
         titulo: t(DESFECHO_DO_STATUS[texto(p.status) ?? "closed"] ?? "Conversa encerrada"),
-        // `backfill`: encerramento de ANTES da linha do tempo existir (migration
-        // 0268). O banco sabe QUANDO fechou, não POR QUEM — e dizer "automaticamente"
-        // sobre uma conversa que alguém fechou à mão seria inventar o autor.
         detalhe:
-          por("Por") ??
-          (p.backfill === true ? null : evento.actor_kind === "system" ? t("Encerrada automaticamente.") : null),
+          [autor, assunto ? `${t("Assunto")}: ${rotuloDoAssunto({ nome: assunto, time: setor })}.` : null]
+            .filter(Boolean)
+            .join(" ") || null,
         tom: "fim",
       };
+    }
     case "reopened":
       return {
         titulo: t("Conversa reaberta"),
@@ -258,6 +269,10 @@ export interface AtendimentoResumo {
   closed_by_name: string | null;
   assigned_to_user_name: string | null;
   team_id: string | null;
+  /** O assunto registrado no encerramento (migration 0293). `null` = sem assunto. */
+  assunto: AssuntoDoAtendimento | null;
+  /** O resumo escrito por quem encerrou. `null` = sem resumo (ou contato anonimizado). */
+  closure_summary: string | null;
   /** Por onde entrou: número ou nome do canal. */
   canal: string | null;
   /** Só na busca por protocolo: de quem é. */

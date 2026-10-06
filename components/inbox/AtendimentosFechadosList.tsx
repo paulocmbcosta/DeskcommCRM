@@ -16,6 +16,7 @@ import { ArrowBendUpLeft, Hash, Phone, UsersThree } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 
 import { EmptyPorFiltro } from "./EmptyPorFiltro";
+import { rotuloDoAssunto } from "@/lib/atendimento/encerramento";
 
 /**
  * A ABA "FECHADAS" LISTA ATENDIMENTOS, NÃO CONVERSAS.
@@ -149,6 +150,13 @@ export function AtendimentosFechadosList({
                   {(a.closed_by_name ?? a.assigned_to_user_name) &&
                     ` ${t("por")} ${a.closed_by_name ?? a.assigned_to_user_name}`}
                 </div>
+                {/* DO QUE TRATOU (migration 0293): o gestor que lê a aba Fechadas no
+                    fim do dia quer saber o assunto sem abrir cada atendimento. */}
+                {a.assunto && (
+                  <div className="mt-0.5 truncate text-[12px] font-medium text-text" data-testid="assunto-do-fechado">
+                    {rotuloDoAssunto(a.assunto)}
+                  </div>
+                )}
                 {/* O cliente voltou: este atendimento acabou, mas a conversa anda.
                     Sem a marca, "Fechada" ao lado de um cliente que está sendo
                     atendido AGORA leria como contradição. */}

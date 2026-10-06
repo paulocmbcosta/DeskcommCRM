@@ -12,7 +12,8 @@ import { NovoAtendimentoAviso } from "@/components/inbox/NovoAtendimentoAviso";
 import { conversaEncerrada } from "@/lib/atendimento/conversa-do-contato";
 import { useQueryClient } from "@tanstack/react-query";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
-import { useCloseConversation } from "@/hooks/inbox/useCloseConversation";
+import { EncerrarAtendimentoDialog } from "./EncerrarAtendimentoDialog";
+import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { useMarkAsRead } from "@/hooks/inbox/useMarkAsRead";
 import {
   useConversationsRealtime,
@@ -351,7 +352,26 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   const atendimentoEmTela = atendimentoEscolhido ?? atendimentoVigente;
 
   const claim = useClaimConversation();
-  const close = useCloseConversation();
+  // A JANELA DE ENCERRAMENTO (migration 0293). Mora aqui porque duas portas a
+  // abrem — o botão "Fechar" do cabeçalho e o atalho `e` — e porque ela precisa
+  // do atendimento vigente, que este componente já carrega.
+  //
+  // O estado é o ALVO, e não um booleano: a janela fecha o atendimento em que
+  // foi aberta. Um `open` solto continuaria verdadeiro quando a conversa sai da
+  // tela, e a janela reapareceria sozinha em cima da PRÓXIMA conversa clicada —
+  // com os atalhos mortos no intervalo. E o que ela mostra (de quem é, qual
+  // protocolo) é o que valia na abertura: a conversa pode sumir da lista por um
+  // instante enquanto recarrega, e isso não pode desmontar o que foi digitado.
+  const [encerrando, setEncerrando] = useState<{
+    conversationId: string;
+    contato: string;
+    protocolo: string | null;
+    revisao: number | undefined;
+    grupo: boolean;
+    anonimizado: boolean;
+  } | null>(null);
+  // Trocou de conversa: a janela da anterior não acompanha.
+  if (encerrando !== null && encerrando.conversationId !== selectedId) setEncerrando(null);
 
   // A leitura da conversa aberta é do upstream e fica: sem ela o contador de
   // não-lidas nunca zera para quem abre a conversa.
@@ -420,10 +440,29 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       expected_assignee: selectedConversation.assigned_to_user_id,
     });
   }, [claim, selectedConversation]);
-  const handleClose = useCallback(() => {
-    if (!selectedConversation) return;
-    close.mutate({ conversation_id: selectedConversation.id });
-  }, [close, selectedConversation]);
+  // Encerrada não se encerra de novo, e atendimento antigo na tela não é o de
+  // agora: nos dois casos o atalho `e` não abre nada (o botão nem aparece).
+  const podeEncerrar =
+    selectedConversation != null &&
+    !["closed", "resolved", "archived"].includes(selectedConversation.status) &&
+    !vendoAtendimentoAntigo;
+  // Função simples, sem `useCallback`: nenhum dos dois consumidores (o cabeçalho
+  // e os atalhos) depende da identidade dela.
+  const handleClose = () => {
+    if (!podeEncerrar || !selectedConversation) return;
+    setEncerrando({
+      conversationId: selectedConversation.id,
+      contato: rotuloDoContato(selectedConversation.contacts ?? null, t),
+      protocolo: atendimentoVigente?.protocol ?? selectedConversation.protocol ?? null,
+      revisao: selectedConversation.service_revision,
+      grupo: Boolean(selectedConversation.is_group),
+      anonimizado: Boolean(selectedConversation.contacts?.is_anonymized),
+    });
+  };
+  // A conversa da janela, quando está na tela: é dela que vêm o protocolo e a
+  // revisão de AGORA. Fora da tela por um instante, valem os da abertura.
+  const conversaDaJanela =
+    encerrando !== null && selectedConversation?.id === encerrando.conversationId ? selectedConversation : null;
 
   // A janela vence SOZINHA com a aba aberta. Sem este relógio, quem deixa o
   // inbox aberto a tarde inteira seguiria com o composer liberado numa conversa
@@ -764,7 +803,11 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         )}
         {selectedConversation ? (
           <>
-            <ConversationHeader conversation={selectedConversation} somenteLeitura={vendoAtendimentoAntigo} />
+            <ConversationHeader
+              conversation={selectedConversation}
+              somenteLeitura={vendoAtendimentoAntigo}
+              onEncerrar={handleClose}
+            />
             {/* ATENDIMENTO ANTIGO NA TELA. O aviso diz três coisas que o
                 atendente precisa saber antes de qualquer outra: que aquilo não
                 é o presente, de quando é, e como voltar. */}
@@ -893,7 +936,38 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         onClaim={supportReadonly ? () => {} : handleClaim}
         onClose={supportReadonly ? () => {} : handleClose}
         onToggleHelp={() => setHelpOpen((v) => !v)}
+        // Com a janela aberta os atalhos param: `j`/`k` trocariam de conversa
+        // por baixo dela, e o registro iria para o atendimento errado.
+        enabled={encerrando === null}
       />
+      {encerrando !== null && (
+        <EncerrarAtendimentoDialog
+          conversationId={encerrando.conversationId}
+          expectedRevision={conversaDaJanela?.service_revision ?? encerrando.revisao}
+          contato={encerrando.contato}
+          protocolo={encerrando.protocolo}
+          protocoloAtual={conversaDaJanela ? (conversaDaJanela.protocol ?? null) : encerrando.protocolo}
+          jaEncerrada={
+            conversaDaJanela !== null && ["closed", "resolved", "archived"].includes(conversaDaJanela.status)
+          }
+          // Só o atendimento ABERTO, e só o da abertura: é dele o registro que a
+          // janela mostra preenchido (caso do "Reabrir").
+          atendimento={
+            conversaDaJanela !== null &&
+            atendimentoVigente &&
+            !atendimentoVigente.closed_at &&
+            atendimentoVigente.protocol === encerrando.protocolo
+              ? atendimentoVigente
+              : null
+          }
+          grupo={encerrando.grupo}
+          anonimizado={encerrando.anonimizado}
+          open
+          onOpenChange={(v) => {
+            if (!v) setEncerrando(null);
+          }}
+        />
+      )}
       <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
     </OpenConversationProvider>

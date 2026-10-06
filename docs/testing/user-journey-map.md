@@ -3380,3 +3380,101 @@ continua levando para a conversa — o caminho de chamar ali é a ficha do negó
 **O que NÃO mudou, de propósito.** `POST /api/v1/messages` segue aceitando envio para conversa
 encerrada: é a porta de integrações por token, e recusar ali mudaria contrato de API. Quem deixou
 de oferecer esse envio foi a tela.
+
+## J41 — Encerrar o atendimento com assunto e resumo `[P0]` (2026-10-05)
+
+Pedido do dono do produto: encerrar uma conversa era um `confirm()` do navegador, e o atendimento
+fechava sem dizer do que tratou. Faltavam os números ("quais assuntos geram mais atendimento, no
+dia e no mês") e o histórico do cliente listava protocolos mudos.
+
+`[P0]` porque fechar é o gesto que todo atendente faz dezenas de vezes por dia: uma janela que
+trava, que perde o texto ou que cobra o que já foi registrado é atrito em toda a operação.
+
+### O que foi medido, em produção, só leitura (2026-10-05, 14 dias)
+
+| Medida | Valor |
+|---|---|
+| Atendimentos encerrados | 1.063 — entre 110 e 165 por dia útil |
+| Encerrados por pessoa (e não pelo sistema) | 1.063, por 15 pessoas |
+| Encerrados **sem time** | 336 (32%) |
+| Times ativos | 6 |
+
+O terço sem time decidiu o desenho: o assunto é cadastrado **por time**, mas a janela deixa escolher
+o **setor do assunto** na hora — e essa escolha não transfere a conversa.
+
+### O desenho, em quatro linhas
+
+- o registro mora no **atendimento** (`atendimentos.assunto_id` e `closure_summary`), não na conversa;
+- a regra ("exigir o assunto", "exigir o resumo") é **da organização** e é aplicada no **banco**,
+  por `fn_atendimento_encerrar` — a mesma função para o botão, o atalho e a API;
+- os dois interruptores **nascem desligados**: quem atualiza ganha a janela e nenhum bloqueio;
+- o resumo é texto sobre o cliente: não vai para evento nem para auditoria, e é zerado na anonimização.
+
+Desenho completo: `docs/superpowers/specs/2026-10-05-janela-de-encerramento-design.md`.
+
+### Casos
+
+Spec: `tests/e2e/encerrar-com-assunto-e-resumo.spec.ts`, em `SPECS_PARTE_3`.
+
+| Caso | Prioridade | Onde está provado |
+|---|---|---|
+| J41.1 Gerente cadastra assuntos por time; nome repetido é recusado com frase; arquivar tira da lista e deixa à vista | `[P0]` | pela tela (spec) e no Postgres real |
+| J41.2 Ligar os dois interruptores e recarregar: continuam ligados | `[P0]` | pela tela (spec) |
+| J41.3 "Fechar" abre a janela — nenhum diálogo nativo do navegador em toda a jornada | `[P0]` | pela tela (spec) |
+| J41.4 Em branco, com a exigência ligada: a janela marca os dois campos e o atendimento **segue aberto** | `[P0]` | pela tela (spec) e no Postgres real |
+| J41.5 Conversa sem time: escolhe o setor, o assunto arquivado não é oferecido, e a conversa **não** muda de time | `[P0]` | pela tela (spec) e no Postgres real |
+| J41.6 O registro aparece na ficha, na linha do tempo (sem o resumo), em "Atendimentos anteriores" e na aba Fechadas | `[P0]` | pela tela (spec) |
+| J41.7 "Reabrir" e "Fechar" de novo: a janela volta preenchida | `[P0]` | pela tela (spec), em componente e no Postgres real |
+| J41.8 Métricas conta o assunto no setor dele | `[P1]` | pela tela (spec), em unidade e no Postgres real |
+| J41.9 Assunto de outra organização, arquivado ou de time arquivado é recusado | `[P0]` | no Postgres real |
+| J41.10 "Exigir o assunto" sem nenhum assunto cadastrado não trava o encerramento | `[P0]` | no Postgres real e em componente |
+| J41.11 Quem chega depois de a conversa já estar fechada não sobrescreve o registro | `[P1]` | no Postgres real |
+| J41.12 Anonimizar o contato zera o resumo e preserva o assunto | `[P0]` | no Postgres real |
+| J41.13 Conversa de grupo (sem atendimento) fecha só com a confirmação | `[P1]` | no Postgres real e em componente |
+| J41.14 A janela cabe na tela em 1440×1000, medido por `boundingBox` | `[P1]` | pela tela (spec) |
+
+"No Postgres real" = `tests/invariants/encerramento-com-assunto-e-resumo.test.ts`, que roda no job
+`invariants` contra o `baseline.sql`.
+
+### Execução (2026-10-05): **PASS na jornada pela tela**
+
+`e2e` no CI por `Run workflow` na branch, Chromium real, Supabase local com o `baseline.sql`, app em
+produção (`next build` + `next start`). Três execuções, porque a entrega mudou duas vezes depois da
+primeira:
+
+| Execução | Commit | Esta spec | Parte 3 |
+|---|---|---|---|
+| 37352262599 | `b388043e` (antes da revisão) | verde, 24,3 s | 119 passaram, 2 falharam |
+| 37356123390 | `fdd13cad` (com as correções da revisão) | verde, 33,1 s | 119 passaram, 2 falharam |
+| 37362113350 | `26263afc` (versão final) | verde, 30,4 s | **120 passaram, 1 falhou** |
+
+A falha a mais das duas primeiras era **desta mudança**: `encerramento-atendimento.spec.ts` fecha a
+conversa uma terceira vez com a tela em espanhol (botão "Cerrar"), e esse clique dependia do
+handler de diálogo nativo que saiu junto com o `confirm()`. A troca que adaptou as specs antigas
+procurou só por "Fechar". Corrigida no `26263afc`, que também confere o título traduzido da janela.
+
+As falhas que sobram na versão final **não são desta mudança** — são as mesmas do último `e2e` da
+`main` (run 37306934272, `33b8595d`): `card-pelo-classificador.spec.ts:354` na parte 1 e
+`inbox-rotulo-de-origem.spec.ts:224` na parte 3. A parte 2 passou inteira (103).
+
+No job `invariants` (Postgres real, `baseline.sql` em modo install e update):
+`tests/invariants/encerramento-com-assunto-e-resumo.test.ts` verde — 29 casos na primeira execução,
+e os três acrescentados pela revisão (quebra de linha não conta como letra, resumo em branco apaga,
+contato anonimizado não ganha resumo) na seguinte.
+
+**O que a revisão independente achou e os testes não tinham pegado.** Um subagente leu o diff sem as
+conclusões de quem escreveu. Com typecheck, lint, 681 arquivos de unidade e os 29 invariantes verdes,
+ele apontou que a janela não fixava o atendimento em que foi aberta: o `confirm()` era síncrono, a
+janela fica aberta enquanto alguém escreve, e se nesse intervalo um colega encerrasse e o cliente
+voltasse, o clique gravaria o resumo do atendimento antigo no novo. Hoje a janela guarda o
+protocolo da abertura e não envia se o vigente mudou (`EncerrarAtendimentoDialog.test.tsx`, bloco
+"a janela fecha o atendimento em que foi aberta, ou nenhum").
+
+### O que NÃO foi provado
+
+- A corrida "outro atendente encerra e o cliente volta com a janela aberta" está presa em teste de
+  componente, não em navegador com duas sessões.
+- Com uma pessoa logada na instalação de produção: pendente (depende de atualizar a VPS, cadastrar
+  os assuntos e ligar os interruptores).
+- A troca de setor pelo seletor, em componente: o `Select` não abre de forma confiável no jsdom. Está
+  coberta pela spec, no navegador de verdade.

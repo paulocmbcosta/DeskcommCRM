@@ -14,7 +14,7 @@ import { ROLE_RANK } from "@/lib/auth/types";
 import { DesbloquearContatoDialog } from "@/components/contacts/DesbloquearContatoDialog";
 import { useClaimConversation } from "@/hooks/inbox/useClaimConversation";
 import { useReleaseConversation } from "@/hooks/inbox/useReleaseConversation";
-import { useCloseConversation, useReopenConversation } from "@/hooks/inbox/useCloseConversation";
+import { useReopenConversation } from "@/hooks/inbox/useCloseConversation";
 import { useResumeAiAttendance } from "@/hooks/inbox/useResumeAiAttendance";
 import { usePauseAiAttendance } from "@/hooks/inbox/usePauseAiAttendance";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
@@ -38,6 +38,12 @@ interface Props {
    * achando que mexia no antigo. A identidade fica, a barra de ações sai.
    */
   somenteLeitura?: boolean;
+  /**
+   * Abre a JANELA DE ENCERRAMENTO (migration 0293). A janela mora no layout, e
+   * não aqui, porque o atalho de teclado abre a mesma — e ela precisa do
+   * atendimento vigente, que o layout já carrega.
+   */
+  onEncerrar: () => void;
 }
 
 /**
@@ -66,12 +72,11 @@ const STATUS_LABEL: Record<string, string> = {
   archived: "Arquivada",
 };
 
-export function ConversationHeader({ conversation, somenteLeitura = false }: Props) {
+export function ConversationHeader({ conversation, somenteLeitura = false, onEncerrar }: Props) {
   const t = useT();
   const { user, activeOrg } = useAuth();
   const claim = useClaimConversation();
   const release = useReleaseConversation();
-  const close = useCloseConversation();
   const reopen = useReopenConversation();
   const retomar = useResumeAiAttendance();
   const pausar = usePauseAiAttendance();
@@ -402,12 +407,12 @@ export function ConversationHeader({ conversation, somenteLeitura = false }: Pro
           <Button
             size="sm"
             variant="outline"
-            disabled={close.isPending}
-            onClick={() => {
-              if (confirm(t("Fechar esta conversa?"))) {
-                close.mutate({ conversation_id: conversation.id, expected_revision: conversation.service_revision });
-              }
-            }}
+            data-testid="fechar-conversa"
+            // O rótulo é contrato (specs e dicionário o citam). O que mudou é o
+            // gesto: em vez do `confirm()` do navegador, abre a janela que
+            // registra o assunto e o resumo do atendimento.
+            title={t("Encerra o atendimento e registra o assunto e o resumo.")}
+            onClick={onEncerrar}
           >
             {t("Fechar")}
           </Button>

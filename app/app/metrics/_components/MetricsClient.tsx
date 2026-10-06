@@ -4,6 +4,7 @@ import { useT } from "@/hooks/i18n/useT";
 import { useState } from "react";
 
 import { useAttendantMetrics, type AttendantMetric } from "@/hooks/metrics/useAttendantMetrics";
+import { AssuntosPanel } from "./AssuntosPanel";
 import { AtritoPanel } from "./AtritoPanel";
 import { useTeamMembers } from "@/hooks/team/useTeamMembers";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -88,6 +89,10 @@ export function MetricsClient({ canCompare, currentUserId }: Props) {
           Não filtra por atendente — atrito é propriedade do sistema, e quebrá-lo
           por pessoa convida a otimização local que degrada o todo. */}
       <AtritoPanel podeEditarRegua={canCompare} />
+
+      {/* Do que os atendimentos trataram (migration 0293). Só gestão: a rota é
+          manager+, e para o atendente o painel seria um erro de permissão. */}
+      {canCompare ? <AssuntosPanel /> : null}
 
       <Card>
         <CardHeader>

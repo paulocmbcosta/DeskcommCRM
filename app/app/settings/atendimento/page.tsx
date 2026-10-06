@@ -26,7 +26,8 @@ import { loadChannelRoutingSettings } from "@/lib/routing/channel-policies";
 import { ChannelRoutingForm } from "./_channels-form";
 import { AtendimentoForm } from "./_form";
 import { ReguaDeEsperaForm } from "./_regua-de-espera";
-import { reguaDeEspera } from "@/lib/schemas/settings";
+import { encerramentoDoAtendimento, reguaDeEspera } from "@/lib/schemas/settings";
+import { EncerramentoForm } from "./_encerramento";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,15 @@ export default async function AtendimentoSettingsPage() {
   const routing = routingConfigSchema.catch(routingConfigSchema.parse({})).parse(settings.routing ?? {});
   const idioma = user.idioma;
   const channels = await loadChannelRoutingSettings(supabase, activeOrg.orgId);
+  // Quantos assuntos ATIVOS existem: é o que decide o aviso de "exigir o assunto
+  // sem nenhum cadastrado". Falha de leitura vira `null` — sem aviso, em vez de
+  // um aviso falso dizendo que não há cadastro.
+  const { count: contagemDeAssuntos, error: erroDosAssuntos } = await supabase
+    .from("atendimento_assuntos")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", activeOrg.orgId)
+    .is("archived_at", null);
+  const assuntosAtivos = erroDosAssuntos ? null : (contagemDeAssuntos ?? 0);
 
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
@@ -77,6 +87,8 @@ export default async function AtendimentoSettingsPage() {
       {/* O termômetro do Inbox (migration 0279): quanto tempo o cliente pode
           esperar uma pessoa antes de o card mudar de cor. */}
       <ReguaDeEsperaForm inicial={reguaDeEspera(settings)} />
+      {/* O que a janela de encerramento exige (migration 0293): assunto e resumo. */}
+      <EncerramentoForm inicial={encerramentoDoAtendimento(settings)} assuntosAtivos={assuntosAtivos} />
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
+import { carregarAssuntos } from "@/lib/atendimento/assuntos-server";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import type { AtendimentoResumo } from "@/lib/inbox/eventos-da-conversa";
@@ -38,6 +39,8 @@ interface Linha {
   closed_by_name: string | null;
   assigned_to_user_name: string | null;
   team_id: string | null;
+  assunto_id: string | null;
+  closure_summary: string | null;
   conversations: {
     contact_id: string;
     channel_sessions: { phone_number: string | null; display_name: string | null } | null;
@@ -63,7 +66,7 @@ export async function GET(
     .from("atendimentos")
     .select(
       `id, conversation_id, protocol, started_at, closed_at, closed_status, closed_by_name,
-       assigned_to_user_name, team_id,
+       assigned_to_user_name, team_id, assunto_id, closure_summary,
        conversations!inner (contact_id, channel_sessions:channel_session_id (phone_number, display_name))`,
     )
     .eq("organization_id", authz.org.orgId)
@@ -72,7 +75,9 @@ export async function GET(
     .limit(TETO);
   if (error) return fail("internal_error", t("Não foi possível ler o histórico de atendimentos."), 500, { requestId });
 
-  const linhas = ((data ?? []) as unknown as Linha[]).map<AtendimentoResumo>((a) => ({
+  const brutas = (data ?? []) as unknown as Linha[];
+  const assuntos = await carregarAssuntos(db, authz.org.orgId, brutas.map((a) => a.assunto_id));
+  const linhas = brutas.map<AtendimentoResumo>((a) => ({
     id: a.id,
     conversation_id: a.conversation_id,
     protocol: a.protocol,
@@ -82,6 +87,8 @@ export async function GET(
     closed_by_name: a.closed_by_name,
     assigned_to_user_name: a.assigned_to_user_name,
     team_id: a.team_id,
+    assunto: a.assunto_id ? (assuntos.get(a.assunto_id) ?? null) : null,
+    closure_summary: a.closure_summary,
     canal: rotuloDoCanal(a.conversations?.channel_sessions ?? null),
   }));
   return ok(linhas, { requestId });

@@ -7,6 +7,8 @@
  */
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { carregarAssuntos } from "@/lib/atendimento/assuntos-server";
+import { rotuloDoAssunto } from "@/lib/atendimento/encerramento";
 import { logger } from "@/lib/logger";
 import type { Json } from "@/lib/database.types";
 
@@ -39,6 +41,20 @@ export interface ConsentRow {
   granted: boolean;
   granted_at: string | null;
   source?: string | null;
+}
+
+/**
+ * Um atendimento do titular (migration 0293): protocolo, período e o REGISTRO
+ * do encerramento — o assunto e o resumo que quem atendeu escreveu sobre ele.
+ */
+export interface AtendimentoRow {
+  id: string;
+  conversation_id: string;
+  protocol: string;
+  started_at: string;
+  closed_at: string | null;
+  assunto: string | null;
+  closure_summary: string | null;
 }
 
 export interface ConversationRow {
@@ -258,6 +274,13 @@ export interface ExportPayload {
    * próprio cascade.
    */
   voice_calls: VoiceCallRow[];
+  /**
+   * Atendimentos do titular, com assunto e resumo do encerramento (migration
+   * 0293). Entra pela mesma regra de `voice_calls`: a anonimização APAGA o
+   * resumo, e o que se apaga a pedido do titular é o que se entrega a pedido
+   * dele. Opcional porque um payload gerado antes da 0293 não o traz.
+   */
+  atendimentos?: AtendimentoRow[];
   reply_drafts?: Array<{
     id: string;
     status: string;
@@ -440,6 +463,40 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
         is_group: Boolean(c.is_group),
         created_at: c.created_at,
       }));
+    }
+  }
+
+  // Atendimentos — o contato não está em `atendimentos` (vem da conversa, por
+  // FK), então a lista sai das conversas que acabamos de carregar.
+  let atendimentos: AtendimentoRow[] = [];
+  if (conversations.length > 0) {
+    const { data, error } = await admin
+      .from("atendimentos")
+      .select("id, conversation_id, protocol, started_at, closed_at, assunto_id, closure_summary")
+      .eq("organization_id", organizationId)
+      .in("conversation_id", conversations.map((c) => c.id))
+      .order("started_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      logger.warn("[lgpd-export-worker] atendimentos load failed", {
+        request_id: requestId,
+        error: error.message,
+      });
+    } else if (data) {
+      const linhas = data as Array<Omit<AtendimentoRow, "assunto"> & { assunto_id: string | null }>;
+      const assuntos = await carregarAssuntos(admin, organizationId, linhas.map((a) => a.assunto_id));
+      atendimentos = linhas.map((a) => {
+        const assunto = a.assunto_id ? assuntos.get(a.assunto_id) : undefined;
+        return {
+          id: a.id,
+          conversation_id: a.conversation_id,
+          protocol: a.protocol,
+          started_at: a.started_at,
+          closed_at: a.closed_at,
+          assunto: assunto ? rotuloDoAssunto(assunto) : null,
+          closure_summary: a.closure_summary,
+        };
+      });
     }
   }
 
@@ -817,6 +874,7 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
     meeting_deliveries,
     appointment_notices,
     voice_calls,
+    atendimentos,
   };
 }
 
@@ -848,5 +906,6 @@ function emptyPayload(
     meeting_deliveries: [],
     appointment_notices: [],
     voice_calls: [],
+    atendimentos: [],
   };
 }
