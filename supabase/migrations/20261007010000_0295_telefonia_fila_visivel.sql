@@ -14,7 +14,9 @@
 -- ligação cai ("fila esgotada"). Gravado pelo worker quando a espera começa,
 -- como `now()` do banco mais o que falta no relógio dele — o mesmo desenho da
 -- 0294, para a conta não depender de os dois relógios baterem. É o "cai em
--- 1:18" da tela. NULL = não está esperando sem ninguém livre.
+-- 1:18" da tela. Fica gravado enquanto um ramal toca (a tela só o mostra enquanto
+-- ninguém toca) e é apagado quando a ligação é atendida. NULL = nunca esperou
+-- sem ninguém livre, ou já foi atendida.
 --
 -- `attendance_teams.phone_queue_max_wait_seconds`: a espera máxima na fila do
 -- telefone DESTE time, em segundos. NULL = o padrão de sempre (120). Entre 30 e
@@ -75,7 +77,7 @@ create index if not exists idx_voice_calls_perdidas_recentes
 comment on column public.voice_calls.queued_at is
   'Recebida: quando passou a esperar por uma pessoa (o começo dos toques, depois do menu e dos avisos). A ordem de chegada da fila. NULL = ainda no menu/avisos, ou anterior à 0295. Só sip_trunk.';
 comment on column public.voice_calls.queue_deadline_at is
-  'Recebida: quando a espera sem ninguém livre esgota (o "cai em" da aba Telefone). Gravado pelo worker no relógio do banco. NULL = não está esperando. Só sip_trunk.';
+  'Recebida: quando a espera sem ninguém livre esgota (o "cai em" da aba Telefone). Gravado pelo worker no relógio do banco quando a espera começa, e apagado quando a ligação é atendida; fica gravado enquanto um ramal toca (a tela só o mostra enquanto ninguém toca). NULL = nunca esperou sem ninguém livre, ou já foi atendida. Só sip_trunk.';
 comment on column public.attendance_teams.phone_queue_max_wait_seconds is
   'Espera máxima na fila do telefone deste time, em segundos (30 a 1800). NULL = o padrão, 120. Lido pelo worker quando a ligação entra na fila do time.';
 
