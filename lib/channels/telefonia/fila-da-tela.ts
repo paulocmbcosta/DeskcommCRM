@@ -24,9 +24,15 @@ const PERDIDAS_DESDE = "30 minutes";
 const MAXIMO_DE_PERDIDAS = 100;
 
 const iso = (v: string | Date | null): string | null => (v === null ? null : new Date(v).toISOString());
-/** O nome cadastrado de alguém da equipe ou, sem ele, o e-mail — a régua do cartão da ligação. */
-const NOME_DE = (coluna: string) =>
-  `(select coalesce(nullif(u.raw_user_meta_data->>'full_name', ''), u.email) from auth.users u where u.id = ${coluna})`;
+/**
+ * O nome de alguém da equipe pela régua única do banco (`fn_nome_do_usuario`,
+ * migration 0270): o nome cadastrado e, sem ele, o que vem antes do `@` do
+ * e-mail — NUNCA o endereço inteiro. A fila de todos os times vai para todo
+ * `viewer`, e o e-mail do colega não é dado de fila. A função é fechada a
+ * `authenticated`; a conexão do app é a do dono do banco, a mesma que já chama
+ * `fn_encrypt_oauth` em numeros.ts.
+ */
+const NOME_DE = (coluna: string) => `public.fn_nome_do_usuario(${coluna})`;
 
 export async function lerFilaDoTelefone(db: Queryable, organizationId: string): Promise<FilaDoTelefone> {
   const numeros = await db.query<{ id: string; nome: string | null; numero: string | null }>(

@@ -20,8 +20,9 @@
  *  3. a posição na fila do time (1, 2, 3 pela ordem de `queued_at`), só em quem
  *     espera por uma pessoa;
  *  4. `cai_em` só em quem espera sem ninguém tocando; para quem toca e com quem
- *     fala, pelo nome cadastrado (ou o e-mail); na transferência para um time, o
- *     time de DESTINO e quem transferiu;
+ *     fala, pelo nome cadastrado — sem ele, o começo do e-mail, NUNCA o endereço
+ *     (a fila de todos os times vai para todo `viewer`); na transferência para
+ *     um time, o time de DESTINO e quem transferiu;
  *  5. as perdidas dos últimos 30 minutos, da mais recente para a mais antiga, com
  *     o motivo e quanto esperou;
  *  6. os times ativos com a espera em vigor (o padrão ou a configurada);
@@ -50,7 +51,7 @@ const OUTRA = "c0de0297-0000-4000-8000-00000000000b";
 const SEM_TELEFONE = "c0de0297-0000-4000-8000-00000000000c";
 const ANA = "c0de0297-1111-4000-8000-000000000001";
 const BRUNO = "c0de0297-1111-4000-8000-000000000002";
-/** Sem nome cadastrado: só o e-mail. */
+/** Sem nome cadastrado: só o e-mail — na fila ele aparece pelo que vem antes do `@`. */
 const CAIO = "c0de0297-1111-4000-8000-000000000003";
 const DANI = "c0de0297-1111-4000-8000-000000000004";
 const SUPORTE = "c0de0297-2222-4000-8000-000000000001";
@@ -64,6 +65,7 @@ const NUMERO_OUTRA = "c0de0297-5555-4000-8000-000000000002";
 const WHATSAPP_SEM_TELEFONE = "c0de0297-5555-4000-8000-000000000003";
 const NUMERO_ARQUIVADO = "c0de0297-5555-4000-8000-000000000004";
 const EMAIL_DO_CAIO = "caio-fila-tela@invariant.test";
+const CAIO_NA_FILA = "caio-fila-tela";
 
 interface Semente {
   org: string;
@@ -361,11 +363,21 @@ describe("a fila do telefone lida do banco", () => {
     expect(g.atendida).not.toBeNull();
   });
 
-  it("na transferência para um time: o time de DESTINO, desde o pedido, e quem transferiu (sem nome, o e-mail)", () => {
+  it("na transferência para um time: o time de DESTINO, desde o pedido, e quem transferiu", () => {
     expect(de(filaA, L.transferencia)).toMatchObject({
       fase: "transferencia_na_fila", time_id: FINANCEIRO, na_fila_desde: transferidaEm,
-      com: { id: CAIO, nome: EMAIL_DO_CAIO }, tocando_para: null,
+      com: { id: CAIO, nome: CAIO_NA_FILA }, tocando_para: null,
     });
+  });
+
+  it("quem não tem nome cadastrado aparece pelo começo do e-mail — o endereço de ninguém vai na fila", () => {
+    expect(de(filaA, L.transferencia).com).toEqual({ id: CAIO, nome: CAIO_NA_FILA });
+    // Nem o do Caio, nem o de quem TEM nome: nenhum `@` na resposta inteira, das duas organizações.
+    for (const fila of [filaA, filaB]) {
+      const tudo = JSON.stringify(fila);
+      expect(tudo).not.toContain(EMAIL_DO_CAIO);
+      expect(tudo).not.toContain("@");
+    }
   });
 
   it("as perdidas dos últimos 30 minutos, da mais recente para a mais antiga, com o motivo e quanto esperou", async () => {
