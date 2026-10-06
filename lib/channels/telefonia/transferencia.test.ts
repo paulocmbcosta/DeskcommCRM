@@ -120,6 +120,8 @@ describe("direta para pessoa", () => {
     expect(banco.tem("passou")).toEqual([["passou", "vc-1", BIA]]);
     expect(banco.tem("atribuida")).toContainEqual(["atribuida", "conversa-1", BIA, "transfer"]);
     expect(transferencia()).toMatchObject({ status: "ended", desfecho: "answered", atendidaPor: BIA });
+    // Quem pegou a transferência entra no cartão em andamento (fila visível, entrega 1).
+    expect(banco.tem("cartao").at(-1)).toEqual(["cartao", "vc-1", BIA]);
     expect(ctl.transferenciasEmCurso).toBe(0);
 
     // B desliga: a ligação acaba como atendida, sem "Ligar de volta".

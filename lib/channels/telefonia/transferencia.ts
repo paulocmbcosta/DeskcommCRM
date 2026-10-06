@@ -669,6 +669,10 @@ export class Transferencias<L> {
       await this.d.banco
         .atribuirConversa(em.org, v.conversationId, userId, "transfer")
         .catch((e) => this.d.log.warn("telefonia: conversa não atribuída a quem pegou a transferência", { erro: mensagemDe(e) }));
+      // Quem pegou a transferência entra no cartão em andamento (fila visível, entrega 1).
+      await this.d.banco
+        .abrirCartaoDaLigacao(em.org, em.vcId)
+        .catch((e) => this.d.log.warn("telefonia: cartão da ligação não atualizado na transferência", { erro: mensagemDe(e) }));
     }
     await this.fechar(em, { desfecho, motivo: null, atendidaPor: userId });
     this.d.log.info("telefonia: transferência atendida", { voice_call: em.vcId, desfecho, atendente: userId });

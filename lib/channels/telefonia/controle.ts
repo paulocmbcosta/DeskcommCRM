@@ -1432,6 +1432,16 @@ export class ControladorDeChamadas {
       await this.banco.atribuirConversa(l.org, l.conversationId, l.atendidaPor).catch((e) =>
         this.log.warn("telefonia: conversa não atribuída a quem atendeu", { erro: String(e) }),
       );
+      // O cartão "Ligação em andamento" (fila visível, entrega 1) — DEPOIS da
+      // atribuição: é ela que reabre a conversa encerrada e abre o atendimento
+      // novo, e o cartão tem de nascer dentro dele. Não abrir o cartão não pode
+      // derrubar a ligação: o fim o insere, como sempre.
+      await this.banco.abrirCartaoDaLigacao(l.org, vcId).catch((e) =>
+        this.log.warn("telefonia: cartão da ligação em andamento não aberto — o fim o registra", {
+          voice_call: vcId,
+          erro: mensagemDe(e, 160),
+        }),
+      );
     }
     this.log.info("telefonia: ligação atendida", { voice_call: vcId, atendente: l.atendidaPor });
   }
