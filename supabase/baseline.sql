@@ -30790,6 +30790,86 @@ comment on column public.voice_calls.peer_ringing_at is
 
 notify pgrst, 'reload schema';
 
+-- ---- telefonia: a fila visível (migration 0295) ----
+-- Racional no cabeçalho de
+-- supabase/migrations/20261007010000_0295_telefonia_fila_visivel.sql.
+-- Quem escreve `queued_at` e `queue_deadline_at` é o worker da telefonia
+-- (`marcarNaFila` e `marcarPrazoDaFila`, lib/channels/telefonia/repositorio.ts);
+-- quem lê é a aba Telefone do Inbox (`GET /api/v1/telefonia/fila`), que ordena a
+-- fila pela chegada e mostra em quanto tempo a ligação cai. O teto do time é
+-- gravado pela rota de Configurações › Times, pela conexão do app, e lido pelo
+-- worker quando a ligação entra na fila do time (`timeParaAFila`). Cobrado em
+-- tests/invariants/telefonia-fila-visivel-schema.test.ts.
+--
+-- Os CHECKs só quando faltam, curados antes. O de `voice_calls` nasce NOT VALID
+-- e a validação é só enquanto ele está assim: a tabela cresce com o histórico, e
+-- a reaplicação do update.sh não a varre de novo. O de `attendance_teams` nasce
+-- validado — a tabela tem uma linha por time.
+alter table public.voice_calls
+  add column if not exists queued_at timestamptz,
+  add column if not exists queue_deadline_at timestamptz;
+
+do $fila_0295$
+begin
+  -- A fila é da ligação do TELEFONE: a linha do WaCalls a REST escreve com o JWT
+  -- do atendente, e ninguém forja por ela uma ligação na fila (a mesma regra da
+  -- URA na 0288, da gravação na 0289 e do toque na 0294).
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_calls'::regclass
+                    and conname = 'voice_calls_fila_so_no_telefone_check') then
+    update public.voice_calls set queued_at = null, queue_deadline_at = null
+     where provider <> 'sip_trunk' and (queued_at is not null or queue_deadline_at is not null);
+    alter table public.voice_calls add constraint voice_calls_fila_so_no_telefone_check
+      check (provider = 'sip_trunk' or (queued_at is null and queue_deadline_at is null)) not valid;
+  end if;
+
+  if exists (select 1 from pg_constraint k
+              where k.conrelid = 'public.voice_calls'::regclass and k.contype = 'c' and not k.convalidated
+                and k.conname = 'voice_calls_fila_so_no_telefone_check') then
+    begin
+      alter table public.voice_calls validate constraint voice_calls_fila_so_no_telefone_check;
+    exception when check_violation then
+      raise warning '0295: voice_calls tem linha que viola voice_calls_fila_so_no_telefone_check — o CHECK vale para toda linha nova (NOT VALID); corrija a linha e o próximo update.sh o valida';
+    end;
+  end if;
+end $fila_0295$;
+
+alter table public.attendance_teams
+  add column if not exists phone_queue_max_wait_seconds integer;
+
+do $espera_0295$
+begin
+  -- Teto fora da faixa (só possível com o CHECK derrubado à mão) volta ao padrão:
+  -- nulo é "120 s", o que o time tinha antes de alguém configurar.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.attendance_teams'::regclass
+                    and conname = 'attendance_teams_phone_queue_max_wait_check') then
+    update public.attendance_teams set phone_queue_max_wait_seconds = null
+     where phone_queue_max_wait_seconds is not null
+       and phone_queue_max_wait_seconds not between 30 and 1800;
+    alter table public.attendance_teams add constraint attendance_teams_phone_queue_max_wait_check
+      check (phone_queue_max_wait_seconds is null or phone_queue_max_wait_seconds between 30 and 1800);
+  end if;
+end $espera_0295$;
+
+-- A aba Telefone lê as recebidas VIVAS da organização a cada mudança, e as
+-- perdidas dos últimos 30 minutos. Parciais: o histórico não entra em nenhum dos dois.
+create index if not exists idx_voice_calls_recebidas_vivas
+  on public.voice_calls (organization_id, started_at)
+  where status <> 'ended' and direction = 'inbound';
+create index if not exists idx_voice_calls_perdidas_recentes
+  on public.voice_calls (organization_id, ended_at desc)
+  where direction = 'inbound' and answered_at is null and ended_at is not null;
+
+comment on column public.voice_calls.queued_at is
+  'Recebida: quando passou a esperar por uma pessoa (o começo dos toques, depois do menu e dos avisos). A ordem de chegada da fila. NULL = ainda no menu/avisos, ou anterior à 0295. Só sip_trunk.';
+comment on column public.voice_calls.queue_deadline_at is
+  'Recebida: quando a espera sem ninguém livre esgota (o "cai em" da aba Telefone). Gravado pelo worker no relógio do banco. NULL = não está esperando. Só sip_trunk.';
+comment on column public.attendance_teams.phone_queue_max_wait_seconds is
+  'Espera máxima na fila do telefone deste time, em segundos (30 a 1800). NULL = o padrão, 120. Lido pelo worker quando a ligação entra na fila do time.';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES
