@@ -10101,6 +10101,21 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível abrir a gravação. Tente de novo.": { es: "No se pudo abrir la grabación. Inténtalo de nuevo." },
   // Telefonia — a fila visível (0295): a rota da fila e a espera máxima do time em Configurações › Times.
   "Não foi possível ler a fila do telefone.": { es: "No se pudo leer la cola del teléfono." },
+  "Escolha uma espera entre 30 segundos e 30 minutos.": { es: "Elige una espera de entre 30 segundos y 30 minutos." },
+  "Este time está arquivado.": { es: "Este equipo está archivado." },
+  "Fila do telefone": { es: "Cola del teléfono" },
+  "Quanto tempo um cliente espera na fila do telefone deste time quando ninguém está livre. Depois disso a ligação cai e vira \"Ligar de volta\" na Central.": {
+    es: "Cuánto tiempo espera un cliente en la cola del teléfono de este equipo cuando nadie está libre. Después de eso la llamada se corta y se convierte en \"Devolver la llamada\" en la Central.",
+  },
+  "Espera máxima": { es: "Espera máxima" },
+  // `{n}` é trocado pelo seletor; "padrão" entra depois da primeira opção ("2 minutos — padrão").
+  "{n} minutos": { es: "{n} minutos" },
+  "{n} segundos": { es: "{n} segundos" },
+  "padrão": { es: "predeterminado" },
+  "Espera máxima do telefone salva.": { es: "Espera máxima del teléfono guardada." },
+  "Não foi possível carregar a espera da fila do telefone. Recarregue a página.": {
+    es: "No se pudo cargar la espera de la cola del teléfono. Recarga la página.",
+  },
   // Janela de encerramento: assunto por time e resumo do atendimento (migration 0293).
   "Encerra o atendimento e registra o assunto e o resumo.": { es: "Cierra la atención y registra el asunto y el resumen." },
   "Encerrar conversa": { es: "Cerrar conversación" },

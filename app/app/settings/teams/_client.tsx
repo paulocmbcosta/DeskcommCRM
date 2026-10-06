@@ -9,6 +9,7 @@
 import { useState } from "react";
 
 import { AvisoDeInstabilidadeDoTime } from "@/components/telefonia/AvisoDeInstabilidadeDoTime";
+import { EsperaMaximaDoTime } from "@/components/telefonia/EsperaMaximaDoTime";
 import { AssuntosDoTime } from "@/components/times/AssuntosDoTime";
 import { EditorDeTime } from "@/components/times/EditorDeTime";
 import { useTimes } from "@/components/times/useTimes";
@@ -67,6 +68,8 @@ export function PainelDeTimes() {
           <AssuntosDoTime timeId={x.id} timeNome={x.name} timeSlug={x.slug} />
           {/* O aviso de instabilidade do telefone é do TIME (desenho da fase 2, D7). */}
           <AvisoDeInstabilidadeDoTime teamId={x.id} />
+          {/* A espera máxima na fila do telefone também é do TIME (migration 0295). */}
+          <EsperaMaximaDoTime teamId={x.id} />
         </div>
       ))}
 
