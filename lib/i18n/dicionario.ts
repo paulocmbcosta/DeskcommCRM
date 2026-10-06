@@ -10078,6 +10078,8 @@ export const DICIONARIO: Traducoes = {
   "Não atendida": { es: "No atendida" },
   "esperou": { es: "esperó" },
   "Nenhuma ligação agora.": { es: "Ninguna llamada ahora." },
+  // A releitura da fila falhou e a tela ficou com a leitura de antes.
+  "Sem atualização no momento. A fila abaixo pode estar atrasada.": { es: "Sin actualización por ahora. La cola de abajo puede estar atrasada." },
   // Telefonia — gravação das ligações (0289, DYD-53).
   "A gravação de uma ligação não foi salva": { es: "La grabación de una llamada no se guardó" },
   "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.": { es: "Verifica que el servicio de telefonía esté funcionando. Las próximas llamadas se siguen grabando; esta grabación se perdió." },

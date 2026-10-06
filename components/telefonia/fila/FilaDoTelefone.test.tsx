@@ -7,6 +7,7 @@
  * (`setInterval` e `Date`): o `setTimeout` segue de verdade, que é com ele que o
  * `userEvent` e o `Select` do Radix trabalham.
  */
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -420,16 +421,106 @@ describe("quando não há fila para mostrar", () => {
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
-  it("a releitura falhou mas há dado: a fila que se tinha continua na tela", () => {
-    pintar(fila(), { isError: true });
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(linhasDa("na-fila")).toHaveLength(4);
-  });
-
   it("organização sem telefone: diz isso, e não desenha fila nem chip", () => {
     pintar(fila({ ativa: false, times: [], numeros: [], ligacoes: [], perdidas: [] }));
     expect(screen.getByText("O telefone não está ligado nesta organização.")).toBeInTheDocument();
     expect(screen.queryByTestId("fila-do-telefone")).toBeNull();
     expect(screen.queryByTestId("chips-da-fila")).toBeNull();
+  });
+});
+
+describe("a releitura falhou e a tela ficou com a fila antiga", () => {
+  const FAIXA = "fila-do-telefone-sem-atualizacao";
+
+  it("avisa que está sem atualização, mantém a fila que se tinha, e o botão tenta de novo", async () => {
+    const { refetch } = pintar(fila(), { isError: true });
+
+    const faixa = screen.getByTestId(FAIXA);
+    expect(faixa).toHaveAttribute("role", "status");
+    expect(faixa).toHaveTextContent("Sem atualização no momento. A fila abaixo pode estar atrasada.");
+    // A fila antiga continua inteira — é melhor que tela vazia, DESDE que se saiba que é antiga.
+    expect(linhasDa("na-fila")).toHaveLength(4);
+    expect(linhasDa("perdidas")).toHaveLength(2);
+    expect(screen.getByTestId("chips-da-fila")).toBeInTheDocument();
+    // Não é o erro de tela cheia: aquele é de quando não há o que mostrar.
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await userEvent.click(within(faixa).getByRole("button", { name: "Tentar novamente" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fica FORA da área que rola: com a fila cheia, rolar a lista não esconde o aviso", () => {
+    pintar(fila(), { isError: true });
+    expect(screen.getByTestId("fila-do-telefone").contains(screen.getByTestId(FAIXA))).toBe(false);
+  });
+
+  it("vale também para a fila vazia: 'nenhuma ligação' de uma leitura antiga pode ser mentira", () => {
+    pintar(fila({ ligacoes: [], perdidas: [] }), { isError: true });
+    expect(screen.getByTestId(FAIXA)).toBeInTheDocument();
+    expect(screen.getByText("Nenhuma ligação agora.")).toBeInTheDocument();
+  });
+
+  it("CONTROLE — com dado e sem erro, não há faixa", () => {
+    pintar(fila());
+    expect(screen.queryByTestId(FAIXA)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("CONTROLE — sem dado e com erro, é o erro de sempre, sem a faixa", () => {
+    pintar(undefined, { isPending: false, isError: true });
+    expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível ler a fila do telefone.");
+    expect(screen.queryByTestId(FAIXA)).toBeNull();
+  });
+
+  it("organização sem telefone não ganha faixa: não há fila abaixo para estar atrasada", () => {
+    pintar(fila({ ativa: false, times: [], numeros: [], ligacoes: [], perdidas: [] }), { isError: true });
+    expect(screen.queryByTestId(FAIXA)).toBeNull();
+  });
+
+  /**
+   * A consulta DE VERDADE (TanStack Query instalado), e não um objeto montado à
+   * mão: é ela que diz se "a releitura falhou com dado na tela" chega à coluna
+   * como `isError` com `data` — a premissa de todos os casos acima — e é só com
+   * ela que se vê a faixa SUMIR sozinha quando a leitura volta.
+   */
+  it("com a consulta de verdade: a faixa aparece quando a releitura falha e some quando volta a dar certo", async () => {
+    const CHAVE = ["fila-de-teste"];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(CHAVE, fila());
+    const ler = vi.fn<() => Promise<FilaComRelogio>>();
+
+    function ComConsultaDeVerdade() {
+      const consulta = useQuery({ queryKey: CHAVE, queryFn: ler, staleTime: Infinity });
+      return <FilaDoTelefone consulta={consulta} selectedId={null} onSelect={() => {}} />;
+    }
+    render(
+      <QueryClientProvider client={qc}>
+        <ComConsultaDeVerdade />
+      </QueryClientProvider>,
+    );
+    expect(linhasDa("na-fila")).toHaveLength(4);
+    expect(screen.queryByTestId(FAIXA)).toBeNull();
+
+    // A consulta avisa quem a observa numa volta SEGUINTE do laço de eventos
+    // (`setTimeout(0)`, que aqui segue de verdade): a espera entra no `act`.
+    const reler = () =>
+      act(async () => {
+        await qc.refetchQueries({ queryKey: CHAVE });
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+    // A releitura falha: o dado antigo fica, e a faixa diz que ele é antigo.
+    ler.mockRejectedValueOnce(new Error("502"));
+    await reler();
+    expect(ler).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId(FAIXA)).toBeInTheDocument();
+    expect(linhasDa("na-fila")).toHaveLength(4);
+
+    // A leitura volta (uma ligação a menos): a faixa some sem ninguém fechar.
+    ler.mockResolvedValueOnce(fila({ ligacoes: LIGACOES.filter((l) => l.id !== "primeira-de-vendas") }));
+    await reler();
+    expect(ler).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId(FAIXA)).toBeNull();
+    expect(linhasDa("na-fila")).toHaveLength(3);
   });
 });

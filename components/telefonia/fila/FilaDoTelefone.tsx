@@ -216,6 +216,31 @@ export function FilaDoTelefone({ consulta, selectedId, onSelect }: Props) {
           </Select>
         </div>
       )}
+      {/* SEM ATUALIZAÇÃO. A releitura falhou e a tela ficou com a fila de antes
+          — com os relógios andando, que é o que a faz parecer viva. Quem
+          coordena o atendimento olharia uma fila parada sem saber, e num pico
+          isso é pior que tela vazia. A fila antiga fica (ainda é a melhor
+          informação que há), e a faixa diz que ela é antiga.
+
+          `isError` COM dado é exatamente "a última leitura falhou": a consulta
+          guarda o dado anterior e marca o erro, e a primeira leitura boa o
+          limpa — a faixa some sozinha.
+
+          Fica ACIMA da área que rola, e não dentro dela: com a fila cheia, um
+          aviso que sai da tela ao rolar não avisa. (O fundo é translúcido;
+          grudado no topo da rolagem, as linhas apareceriam por baixo.) */}
+      {consulta.isError && (
+        <div
+          role="status"
+          className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-warning-bg px-3 py-1.5 text-xs text-warning-fg"
+          data-testid="fila-do-telefone-sem-atualizacao"
+        >
+          <span>{t("Sem atualização no momento. A fila abaixo pode estar atrasada.")}</span>
+          <Button size="sm" variant="outline" className="h-6 shrink-0 text-xs" onClick={() => void consulta.refetch()}>
+            {t("Tentar novamente")}
+          </Button>
+        </div>
+      )}
       {/* `min-h-0 flex-1`, e não `h-full`: os chips e o seletor ficam acima, e
           com a altura cheia o fim da lista passaria da coluna — as últimas
           ligações ficariam fora do alcance da rolagem. */}
