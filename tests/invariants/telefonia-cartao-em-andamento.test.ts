@@ -180,13 +180,18 @@ describe("o cartão nasce quando a ligação é atendida", () => {
     expect(rows[0].team_id).toBe(FINANCEIRO);
   });
 
-  it("a conversa que estava em outro time passa para o time da ligação", async () => {
+  it("abrir o cartão NÃO mexe no time da conversa — nem grava 'transferida para a fila do time' com a ligação já atendida", async () => {
     const c = await contato(ORG);
     const { vc, conversa } = await ligacaoAtendida({ org: ORG, numero: NUMERO, contato: c, time: SUPORTE, dono: ANA });
+    // A conversa de quem já ligou antes guarda o time do atendimento anterior.
     await pool.query("update public.conversations set team_id = $2 where id = $1", [conversa, FINANCEIRO]);
-    await repo.abrirCartaoDaLigacao(pool, ORG, vc);
+    const eventosDeTime = async () =>
+      (await pool.query("select id from public.conversation_events where conversation_id = $1 and type = 'team_changed'", [conversa])).rows.length;
+    const antes = await eventosDeTime();
+    expect(await repo.abrirCartaoDaLigacao(pool, ORG, vc)).toBe(true);
     const { rows } = await pool.query("select team_id from public.conversations where id = $1", [conversa]);
-    expect(rows[0].team_id).toBe(SUPORTE);
+    expect(rows[0].team_id).toBe(FINANCEIRO);
+    expect(await eventosDeTime()).toBe(antes);
   });
 
   it("nada a fazer: outra organização, ligação feita, ainda tocando, sem conversa", async () => {
@@ -238,7 +243,8 @@ describe("quem já ligou antes: a conversa encerrada reabre com atendimento novo
 
     const { rows } = await pool.query<{ status: string; assigned_to_user_id: string; team_id: string; protocol: string; service_started_at: string }>(
       "select status, assigned_to_user_id, team_id, protocol, service_started_at from public.conversations where id = $1", [conversa]);
-    expect(rows[0]).toMatchObject({ status: "claimed", assigned_to_user_id: ANA, team_id: SUPORTE });
+    // O time fica o do atendimento anterior (ver "abrir o cartão NÃO mexe no time").
+    expect(rows[0]).toMatchObject({ status: "claimed", assigned_to_user_id: ANA, team_id: FINANCEIRO });
     expect(rows[0]!.protocol).not.toBe(antes[0]!.protocol);
     const { rows: abertos } = await pool.query("select id from public.atendimentos where conversation_id = $1 and closed_at is null", [conversa]);
     expect(abertos).toHaveLength(1);
@@ -265,6 +271,39 @@ describe("o fim completa o MESMO cartão", () => {
     expect("em_andamento" in v).toBe(false);
     expect(linhas[0]!.metadata.outra_chave).toBe(1);
     expect(linhas[0]!.body).toBe("Ligação recebida, atendida por Ana do Cartão · 1 min 05 s");
+  });
+
+  it("gravada: o fim marca a gravação como em processamento — e NÃO pisa a que o processamento já guardou", async () => {
+    const gravada = async () => {
+      const { vc } = await ligacaoAtendida({ org: ORG, numero: NUMERO, contato: await contato(ORG), time: SUPORTE, dono: ANA });
+      await repo.abrirCartaoDaLigacao(pool, ORG, vc);
+      await pool.query(
+        "update public.voice_calls set recording_status = 'recording', recording_notice_at = now() where id = $1",
+        [vc],
+      );
+      return vc;
+    };
+    // O caso comum: o cartão ainda não tem gravação, e o fim a põe "processando".
+    const comum = await gravada();
+    const l1 = await repo.encerrarLigacao(pool, ORG, comum, "cliente_desligou");
+    await repo.registrarNaConversa(pool, l1!, "atendida", 9_000);
+    expect((await cartao(ORG, comum))[0]!.metadata.voice_call.gravacao).toEqual({ situacao: "processando", duracao_ms: null });
+
+    // A corrida: a passada das gravações (fora da fila serial) guarda o arquivo
+    // ENTRE o fechamento da ligação e a escrita do cartão.
+    const corrida = await gravada();
+    const l2 = await repo.encerrarLigacao(pool, ORG, corrida, "cliente_desligou");
+    await pool.query(
+      `update public.messages
+          set metadata = jsonb_set(metadata, '{voice_call,gravacao}', '{"situacao":"pronta","duracao_ms":9000}'::jsonb)
+        where organization_id = $1 and external_id = $2`,
+      [ORG, `ligacao:${corrida}`],
+    );
+    await repo.registrarNaConversa(pool, l2!, "atendida", 9_000);
+    const v = (await cartao(ORG, corrida))[0]!.metadata.voice_call;
+    expect(v.gravacao).toEqual({ situacao: "pronta", duracao_ms: 9000 });
+    expect("em_andamento" in v).toBe(false);
+    expect(v.duracao_ms).toBe(9_000);
   });
 
   it("o fim reenviado não muda nada (o cartão fechado não é reescrito)", async () => {

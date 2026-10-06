@@ -85,16 +85,14 @@ de nada; a 3 depende da aba da 2. Nenhuma mexe na imagem do Asterisk nem no dial
 
 **Worker** (`controle.ts` + `repositorio.ts`):
 
-- **Ao atender, na criação do cartão**, a conversa passa para o time da ligação (e
-  não "ao entrar na fila", como este desenho dizia antes do plano). Hoje só o caminho
-  do menu faz isso (`registrarEscolhaDoMenu`); o número que aponta direto para um
-  time só grava o time na criação da conversa, e quem já ligou antes fica com o time
-  do atendimento anterior. Entrar na fila não resolvia: a conversa encerrada de quem
-  já ligou guarda o dono antigo, e a regra do menu não mexe em conversa com dono. Ao
-  atender o dono é quem atendeu, e o atendimento novo pertence ao time que recebeu a
-  ligação. Só na criação: na troca de atendente por transferência o time não é
-  tocado, para que o setor mudado pela tela no meio da ligação fique como foi
-  escolhido.
+- **O time da conversa não muda** (este desenho dizia "ao entrar na fila, a conversa
+  passa para o time da fila"; o plano levou isso para o atender; a revisão independente
+  tirou). A conversa de quem já ligou antes guarda o time do atendimento anterior, e
+  trocá-lo ao atender gravava na linha do tempo "Transferida para a fila do time…
+  Aguardando operador disponível" com a ligação já atendida: o gatilho de
+  `conversations` só cala esse evento quando o time muda no MESMO comando que reabre a
+  conversa. Fica como era antes desta entrega; o conserto pede migration (o gatilho
+  precisa saber que a troca veio de uma ligação atendida).
 - Em `ramalAtendeu`, depois de `marcarAtendida` e `atribuirConversa`, uma função nova
   `abrirCartaoDaLigacao` insere a mensagem `ligacao:<voice_call_id>` (mesmo
   `external_id` de hoje) com `metadata.voice_call.em_andamento = true` e

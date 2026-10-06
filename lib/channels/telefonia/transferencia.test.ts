@@ -97,6 +97,18 @@ describe("a ordem da tela", () => {
 });
 
 describe("direta para pessoa", () => {
+  it("o banco cai ao atualizar o cartão na transferência: ela fecha como atendida mesmo assim", async () => {
+    await recebidaComAna();
+    banco.falharCartao = true;
+    pedir();
+    await ordem("transferir");
+    await destruir("ramal-canal-1");
+    await atende("ramal-canal-2", "transf");
+    expect(banco.tem("passou")).toEqual([["passou", "vc-1", BIA]]);
+    expect(transferencia()).toMatchObject({ status: "ended", desfecho: "answered", atendidaPor: BIA });
+    expect(ctl.transferenciasEmCurso).toBe(0);
+  });
+
   it("B atende: música na ponte, A sai, B entra, a ligação e a conversa passam a B", async () => {
     await recebidaComAna();
     pedir();

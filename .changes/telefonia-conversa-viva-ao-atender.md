@@ -10,8 +10,6 @@ atende, a conversa sobe para o topo de Minhas com o cartão "Ligação em andame
 desde 14:32" e um atendimento aberto: dá para escrever nota interna enquanto fala. Quando a
 ligação acaba, o mesmo cartão vira "Ligação recebida", com a duração e a gravação.
 
-A conversa de quem já tinha ligado antes passa para o time que recebeu esta ligação.
-
 A ligação que ninguém atende continua como era: o registro entra no fim, com o aviso de
 "Ligar de volta" na Central. Nada muda nas ligações feitas.
 

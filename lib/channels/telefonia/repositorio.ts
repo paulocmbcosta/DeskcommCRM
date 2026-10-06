@@ -1253,11 +1253,15 @@ export function textoDoCartaoEmAndamento(quem: string | null): string {
  * aba que não recarregou depois da atualização leria um desfecho desconhecido
  * como "não atendida" e mostraria "Ligação perdida" durante a ligação.
  *
- * Idempotente. A primeira chamada cria o cartão e leva a conversa ao time da
- * ligação (o atendimento é do time que a recebeu; quem já ligou antes guardava
- * o time do atendimento anterior). As seguintes — a transferência que passa a
- * ligação a outra pessoa — só trocam o nome de quem está com ela: se alguém
- * mudou o setor da conversa pela tela no meio da ligação, a escolha fica.
+ * Idempotente. A primeira chamada cria o cartão; as seguintes — a transferência
+ * que passa a ligação a outra pessoa — só trocam o nome de quem está com ela.
+ *
+ * NÃO mexe no time da conversa. A conversa de quem já ligou antes guarda o time
+ * do atendimento anterior, e levá-la ao time desta ligação aqui gravaria na
+ * linha do tempo "Transferida para a fila do time… Aguardando operador
+ * disponível" com a ligação já atendida (o gatilho de `conversations` só cala
+ * esse evento quando o time muda no MESMO comando que reabre a conversa). O
+ * conserto pede migration e ficou fora desta entrega.
  *
  * `false` = nada a fazer: ligação de outra organização, feita, ainda não
  * atendida, sem conversa (número oculto) ou já encerrada.
@@ -1298,17 +1302,6 @@ export async function abrirCartaoDaLigacao(db: Queryable, organizationId: string
     return true;
   }
 
-  // Direto na coluna, como `registrarEscolhaDoMenu`: `fn_conversation_set_team` é
-  // o gesto de uma pessoa (exige sessão e solta o dono). Só time ATIVO desta organização.
-  if (l.team_id) {
-    await db.query(
-      `update conversations c set team_id = $3, updated_at = now()
-        where c.id = $1 and c.organization_id = $2 and c.team_id is distinct from $3
-          and exists (select 1 from attendance_teams t
-                       where t.id = $3 and t.organization_id = $2 and t.archived_at is null)`,
-      [l.conversation_id, organizationId, l.team_id],
-    );
-  }
   const menu = await menuDoRegistro(db, l);
   try {
     await db.query(
@@ -1413,10 +1406,21 @@ export async function registrarNaConversa(
     ...(l.recording_status === "recording" ? { gravacao: GRAVACAO_EM_PROCESSAMENTO } : {}),
   };
   if (emAndamento) {
+    // A `gravacao` que JÁ está no cartão vence a do registro: o cartão existe
+    // desde o atender, e a passada das gravações (fora da fila serial) pode
+    // guardar o arquivo entre o fechamento da ligação e esta escrita — o
+    // "processando" do registro por cima dela esconderia o botão de ouvir para sempre.
     await db.query(
       `update messages
           set body = $3,
-              metadata = jsonb_set(metadata, '{voice_call}', ((metadata->'voice_call') - 'em_andamento') || $4::jsonb)
+              metadata = jsonb_set(
+                metadata,
+                '{voice_call}',
+                ((metadata->'voice_call') - 'em_andamento') || $4::jsonb
+                  || case when (metadata->'voice_call') ? 'gravacao'
+                          then jsonb_build_object('gravacao', metadata->'voice_call'->'gravacao')
+                          else '{}'::jsonb end
+              )
         where organization_id = $1 and external_id = $2
           and metadata->'voice_call'->>'em_andamento' = 'true'`,
       [l.organization_id, externalId, texto, JSON.stringify(registro)],

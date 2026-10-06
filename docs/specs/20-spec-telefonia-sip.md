@@ -337,10 +337,11 @@ Navegador do atendente (JsSIP) ────────────────�
   aba que não recarregou leria "não atendida" e mostraria "Ligação perdida" durante a ligação),
   o texto "Ligação em andamento com <nome>" e o `last_message_at` da conversa, a coluna pela
   qual o Inbox ordena — é o que a leva ao topo de Minhas, com um atendimento aberto onde o
-  atendente já pode escrever nota interna. A função é idempotente: na criação ela também leva a
-  conversa ao time da ligação (a de quem já ligou antes guardava o do atendimento anterior), e
-  chamada de novo — a transferência passa a ligação a outra pessoa — só troca o nome de quem
-  está com ela. No fim, `registrarNaConversa` COMPLETA a mesma mensagem (mescla
+  atendente já pode escrever nota interna. A função é idempotente: chamada de novo — a
+  transferência passa a ligação a outra pessoa — só troca o nome de quem está com ela. Ela NÃO
+  mexe no time da conversa: a de quem já ligou antes segue com o time do atendimento anterior
+  (trocá-lo ali gravava "Transferida para a fila do time… Aguardando operador disponível" na
+  linha do tempo de uma ligação já atendida; o conserto pede migration). No fim, `registrarNaConversa` COMPLETA a mesma mensagem (mescla
   `metadata.voice_call` no banco e tira `em_andamento`), e o cartão já fechado não é reescrito.
   A passada de 60 s do telefone fecha o cartão que ficou "em andamento" com a ligação já
   encerrada (`consertarCartoesOrfaos`: recebida atendida, encerrada há mais de 1 minuto e há
