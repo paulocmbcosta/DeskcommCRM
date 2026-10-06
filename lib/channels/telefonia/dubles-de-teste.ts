@@ -145,6 +145,8 @@ export class BancoFalso implements PortaBanco {
   /** O que `timeParaAFila` devolve; `falharFila` simula o banco fora do ar. */
   situacao: SituacaoDoTime = "aberto";
   aviso: FalaDoBanco | null = null;
+  /** O teto do time que `timeParaAFila` devolve, em segundos (`null` = o padrão). */
+  esperaMaximaS: number | null = null;
   falharFila = false;
   gerais: FalasGerais = { aguarde: null, ninguem: null, foraDoHorario: null };
   menus = new Map<string, MenuDoBanco>();
@@ -168,7 +170,7 @@ export class BancoFalso implements PortaBanco {
     // Também na linha do tempo dos efeitos: é a ENTRADA na fila, e há teste que mede o que vem antes dela.
     this.eventos.push(["entrou_na_fila", org, teamId]);
     if (this.falharFila) throw new Error("banco fora do ar");
-    return { situacao: this.situacao, aviso: this.aviso };
+    return { situacao: this.situacao, aviso: this.aviso, esperaMaximaS: this.esperaMaximaS };
   };
   falasGerais = async (org: string) => {
     this.consultas.push(["falasGerais", org]);
@@ -251,6 +253,14 @@ export class BancoFalso implements PortaBanco {
   };
   /** `marcarTocando` lança (o banco caiu no meio da ligação). */
   falharTocando = false;
+  marcarNaFila = async (org: string, id: string) => {
+    if (!this.daOrg(org, id, "marcarNaFila")) return;
+    this.eventos.push(["na_fila", id]);
+  };
+  marcarPrazoDaFila = async (org: string, id: string, restanteMs: number | null) => {
+    if (!this.daOrg(org, id, "marcarPrazoDaFila")) return;
+    this.eventos.push(["prazo_da_fila", id, restanteMs]);
+  };
   marcarAtendida = async (org: string, id: string, u: string) => {
     if (!this.daOrg(org, id, "marcarAtendida")) return;
     const l = this.ligacoes.get(id)!;

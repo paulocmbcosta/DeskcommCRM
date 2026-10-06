@@ -221,7 +221,7 @@ describe("situação do time — 'fora do horário' separado de 'ninguém dispon
         return pool.query(t, v);
       }) as Queryable["query"],
     };
-    expect(await repo.timeParaAFila(espiao, ORG, FECHADO, AGORA)).toEqual({ situacao: "fora_do_horario", aviso: null });
+    expect(await repo.timeParaAFila(espiao, ORG, FECHADO, AGORA)).toEqual({ situacao: "fora_do_horario", aviso: null, esperaMaximaS: null });
     expect(textos).toHaveLength(1);
   });
 
@@ -335,12 +335,13 @@ describe("falas gerais e aviso do time", () => {
     expect(await repo.timeParaAFila(pool, ORG, ABERTO, AGORA)).toEqual({
       situacao: "aberto",
       aviso: { id: AVISO, storagePath: caminho(ORG, "c"), duracaoMs: 2000 },
+      esperaMaximaS: null,
     });
     // Vence exatamente em AGORA + 1 h: nesse instante já não toca (`avisoVigente`: expires_at > agora).
     expect(await aviso(ORG, ABERTO, new Date(AGORA.getTime() + HORA))).toBeNull();
     expect(await aviso(ORG, ABERTO, new Date(AGORA.getTime() + 2 * HORA))).toBeNull();
     // A organização de fora não ouve o aviso do time de A.
-    expect(await repo.timeParaAFila(pool, OUTRA, ABERTO, AGORA)).toEqual({ situacao: "indisponivel", aviso: null });
+    expect(await repo.timeParaAFila(pool, OUTRA, ABERTO, AGORA)).toEqual({ situacao: "indisponivel", aviso: null, esperaMaximaS: null });
   });
 
   it("'até alguém desligar' toca sempre; o do time ARQUIVADO nunca toca, mesmo vigente", async () => {
@@ -350,9 +351,10 @@ describe("falas gerais e aviso do time", () => {
     expect(await repo.timeParaAFila(pool, ORG, FECHADO, new Date(AGORA.getTime() + 48 * HORA))).toEqual({
       situacao: "fora_do_horario",
       aviso: { id: AVISO, storagePath: caminho(ORG, "c"), duracaoMs: 2000 },
+      esperaMaximaS: null,
     });
     await ligarAviso(ARQUIVADO, AVISO, new Date(AGORA.getTime() - HORA), null);
-    expect(await repo.timeParaAFila(pool, ORG, ARQUIVADO, AGORA)).toEqual({ situacao: "indisponivel", aviso: null });
+    expect(await repo.timeParaAFila(pool, ORG, ARQUIVADO, AGORA)).toEqual({ situacao: "indisponivel", aviso: null, esperaMaximaS: null });
   });
 });
 

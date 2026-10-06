@@ -764,7 +764,7 @@ export class ControladorDeChamadas {
    */
   private async entrarNaFila(l: Recebida): Promise<void> {
     if (l.fim) return;
-    let entrada: TimeParaAFila = { situacao: "aberto", aviso: null };
+    let entrada: TimeParaAFila = { situacao: "aberto", aviso: null, esperaMaximaS: null };
     if (l.fila.teamId) {
       try {
         entrada = await this.banco.timeParaAFila(l.org, l.fila.teamId, new Date(this.agora()));

@@ -193,12 +193,14 @@ interface LinhaDoTimeNaFila {
   aviso_fala_id: string | null;
   aviso_fala_caminho: string | null;
   aviso_fala_duracao: number | null;
+  espera_maxima_s: number | null;
 }
 
 /** UMA leitura da linha do time DESTA organização — `undefined` se ele não existe nela. */
 async function lerTimeNaFila(db: Queryable, organizationId: string, teamId: string): Promise<LinhaDoTimeNaFila | undefined> {
   const { rows } = await db.query<LinhaDoTimeNaFila>(
     `select t.schedule, t.archived_at,
+            t.phone_queue_max_wait_seconds as espera_maxima_s,
             t.phone_emergency_active_since as aviso_desde, t.phone_emergency_expires_at as aviso_expira_em,
             p.id as aviso_fala_id, p.storage_path as aviso_fala_caminho, p.duration_ms as aviso_fala_duracao
        from attendance_teams t
@@ -496,6 +498,8 @@ export interface TimeParaAFila {
    * do controlador, não desta leitura.
    */
   aviso: FalaDoBanco | null;
+  /** A espera máxima na fila deste time, em segundos (0295) — `null` = o padrão. Lida aqui, na entrada: mudar a configuração não altera quem já está esperando. */
+  esperaMaximaS: number | null;
 }
 
 /**
@@ -515,10 +519,12 @@ export async function timeParaAFila(
 ): Promise<TimeParaAFila> {
   const t = await lerTimeNaFila(db, organizationId, teamId);
   const situacao = situacaoDaLinhaDoTime(t, agora);
+  // O teto vem com a situação que for; o time que não existe NESTA organização não tem teto (`null` = o padrão).
+  const esperaMaximaS = t?.espera_maxima_s ?? null;
   if (!t || t.archived_at || !avisoVigente({ desde: t.aviso_desde, expiraEm: t.aviso_expira_em }, agora)) {
-    return { situacao, aviso: null };
+    return { situacao, aviso: null, esperaMaximaS };
   }
-  return { situacao, aviso: falaOuNada(t.aviso_fala_id, t.aviso_fala_caminho, t.aviso_fala_duracao) };
+  return { situacao, aviso: falaOuNada(t.aviso_fala_id, t.aviso_fala_caminho, t.aviso_fala_duracao), esperaMaximaS };
 }
 
 /** O que a URA decidiu: a tecla (nula = nenhuma tecla válida), o desfecho e o time para onde a ligação vai. */
@@ -835,12 +841,47 @@ export async function marcarTocando(
   );
 }
 
-/** Atendida por `userId`. Presa à organização da ligação. */
+/**
+ * A ligação passou a ESPERAR POR UMA PESSOA (0295): o começo dos toques. Guarda
+ * a PRIMEIRA vez — é a ordem de chegada da fila, e mover de time não a muda.
+ */
+export async function marcarNaFila(db: Queryable, organizationId: string, id: string): Promise<void> {
+  await db.query(
+    `update voice_calls set queued_at = coalesce(queued_at, now()), updated_at = now()
+      where id = $1 and organization_id = $2 and status <> 'ended'`,
+    [id, organizationId],
+  );
+}
+
+/**
+ * Quando a espera sem ninguém livre esgota (0295) — o "cai em" da aba Telefone.
+ * `restanteMs` é o que falta no relógio do worker; vira `now()` do BANCO mais
+ * isso, para a conta não depender de os dois relógios baterem (o desenho da
+ * 0294). `null` = não está mais esperando.
+ */
+export async function marcarPrazoDaFila(
+  db: Queryable,
+  organizationId: string,
+  id: string,
+  restanteMs: number | null,
+): Promise<void> {
+  await db.query(
+    `update voice_calls
+        set queue_deadline_at = case when $3::double precision is null then null
+                                     else now() + make_interval(secs => $3::double precision / 1000) end,
+            updated_at = now()
+      where id = $1 and organization_id = $2 and status <> 'ended'`,
+    [id, organizationId, restanteMs],
+  );
+}
+
+/** Atendida por `userId`. Presa à organização da ligação. Quem foi atendido não cai por espera: o prazo da fila some (0295). */
 export async function marcarAtendida(db: Queryable, organizationId: string, id: string, userId: string): Promise<void> {
   await db.query(
     `update voice_calls
         set status = 'connected', answered_at = coalesce(answered_at, now()),
-            owner_user_id = coalesce(owner_user_id, $3), ringing_user_id = null, updated_at = now()
+            owner_user_id = coalesce(owner_user_id, $3), ringing_user_id = null,
+            queue_deadline_at = null, updated_at = now()
       where id = $1 and organization_id = $2 and status <> 'ended'`,
     [id, organizationId, userId],
   );

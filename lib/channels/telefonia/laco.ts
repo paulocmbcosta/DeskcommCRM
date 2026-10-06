@@ -93,6 +93,8 @@ function portaBanco(pool: pg.Pool): PortaBanco {
     ligacaoDoAtendente: (u, id) => repo.ligacaoDoAtendente(pool, u, id),
     ligacoesVivas: () => repo.ligacoesVivas(pool),
     marcarTocando: (org, id, u) => repo.marcarTocando(pool, org, id, u),
+    marcarNaFila: (org, id) => repo.marcarNaFila(pool, org, id),
+    marcarPrazoDaFila: (org, id, ms) => repo.marcarPrazoDaFila(pool, org, id, ms),
     marcarAtendida: (org, id, u) => repo.marcarAtendida(pool, org, id, u),
     encerrarLigacao: (org, id, m, toque) => repo.encerrarLigacao(pool, org, id, m, toque),
     atribuirConversa: (org, c, u, m) => repo.atribuirConversa(pool, org, c, u, m),

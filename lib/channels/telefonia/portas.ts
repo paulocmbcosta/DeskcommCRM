@@ -86,6 +86,10 @@ export interface PortaBanco {
   ligacoesVivas(): Promise<LigacaoDoBanco[]>;
   // As escritas da ligação ficam presas à organização dela (`l.org`).
   marcarTocando(org: string, id: string, userId: string | null): Promise<void>;
+  /** A ligação passou a esperar por uma pessoa (0295): a ordem de chegada. Guarda a primeira vez. */
+  marcarNaFila(org: string, id: string): Promise<void>;
+  /** Quando a espera sem ninguém livre esgota, em ms a partir de agora (0295); `null` = não espera mais. */
+  marcarPrazoDaFila(org: string, id: string, restanteMs: number | null): Promise<void>;
   marcarAtendida(org: string, id: string, userId: string): Promise<void>;
   /** `desdeOPrimeiroToqueMs` (0294): há quanto tempo o telefone do cliente começou a chamar, na feita; `null` = não chamou. */
   encerrarLigacao(org: string, id: string, motivo: string, desdeOPrimeiroToqueMs?: number | null): Promise<LigacaoDoBanco | null>;
