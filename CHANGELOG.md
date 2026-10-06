@@ -8,6 +8,22 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.55.0] — 2026-10-06
+
+### Adicionado
+
+- **Telefone — a conversa aparece enquanto a ligação acontece** Quando o atendente atendia uma ligação, a conversa do cliente só ganhava o registro da ligação
+  depois de desligar — durante a chamada não havia onde anotar. Agora, no instante em que ele
+  atende, a conversa sobe para o topo de Minhas com o cartão "Ligação em andamento · com Ana ·
+  desde 14:32" e um atendimento aberto: dá para escrever nota interna enquanto fala. Quando a
+  ligação acaba, o mesmo cartão vira "Ligação recebida", com a duração e a gravação.
+
+  A ligação que ninguém atende continua como era: o registro entra no fim, com o aviso de
+  "Ligar de volta" na Central. Nada muda nas ligações feitas.
+
+  Nada a fazer na atualização. Quem estiver com o CRM aberto precisa recarregar a página para
+  ver o cartão novo; até lá, a ligação em curso aparece como "Ligação recebida".
+
 ## [1.54.0] — 2026-10-06
 
 ### Adicionado
@@ -6028,7 +6044,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.54.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.55.0...HEAD
+[1.55.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.54.0...v1.55.0
 [1.54.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.53.0...v1.54.0
 [1.53.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.6...v1.53.0
 [1.52.6]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.52.5...v1.52.6
