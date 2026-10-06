@@ -156,6 +156,8 @@ vi.mock("./gravacoes", () => ({ gravacoesDoWorker: vi.fn(() => ({ passada: vi.fn
 vi.mock("./repositorio", async (importOriginal) => ({
   ...(await importOriginal<typeof ModuloRepositorio>()),
   desligarAvisosVencidos: vi.fn(),
+  // O conserto de verdade consultaria o `pool` de mentira e lançaria em TODO caso do laço.
+  consertarCartoesOrfaos: vi.fn(async () => 0),
 }));
 
 import type pg from "pg";
@@ -163,7 +165,7 @@ import type pg from "pg";
 import type { Registro } from "./controle";
 import { falasDoWorker, type FalasNoDisco } from "./falas-no-disco";
 import { passadaDoTelefone, runTelefoniaLoop } from "./laco";
-import { desligarAvisosVencidos, type AvisoDesligado } from "./repositorio";
+import { consertarCartoesOrfaos, desligarAvisosVencidos, type AvisoDesligado } from "./repositorio";
 
 const ORG = "00000000-0000-4000-8000-00000000000a";
 const TIME = "00000000-0000-4000-8000-0000000000b1";
@@ -209,7 +211,7 @@ afterEach(() => {
 
 // ─── 1. a passada ────────────────────────────────────────────────────────────
 
-describe("passadaDoTelefone — as três etapas de 60 s", () => {
+describe("passadaDoTelefone — as etapas de 60 s", () => {
   it("desliga os avisos vencidos, sincroniza as falas e limpa o Storage — com o relógio da passada", async () => {
     const ordem: string[] = [];
     const falas = falasFalsas();
@@ -300,6 +302,34 @@ describe("passadaDoTelefone — as três etapas de 60 s", () => {
     expect(log.warn).toHaveBeenCalledWith("telefonia: a passada de gravações das ligações falhou — tenta de novo a cada minuto", {
       erro: "Error: ari 503",
     });
+  });
+
+  it("fecha os cartões de ligação que ficaram em andamento, e diz quantos", async () => {
+    const consertar = vi.fn(async () => 2);
+    const log = registro();
+    await passadaDoTelefone({ falas: falasFalsas(), desligarAvisosVencidos: async () => [], consertarCartoes: consertar, log })();
+    expect(consertar).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith(
+      "telefonia: cartão de ligação em andamento fechado pela passada",
+      { cartoes: 2 },
+    );
+  });
+
+  it("sem cartão órfão a passada não escreve nada; e a etapa que lança não derruba as outras", async () => {
+    const falas = falasFalsas();
+    const log = registro();
+    await passadaDoTelefone({ falas, desligarAvisosVencidos: async () => [], consertarCartoes: async () => 0, log })();
+    expect(log.info).not.toHaveBeenCalled();
+    await passadaDoTelefone({
+      falas,
+      desligarAvisosVencidos: async () => [],
+      consertarCartoes: async () => {
+        throw new Error("banco fora do ar");
+      },
+      log,
+    })();
+    expect(falas.sincronizar).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 
   it("não reentra: o Storage lento não empilha outra sincronização — e a seguinte, depois dele, roda inteira", async () => {
@@ -450,11 +480,15 @@ describe("runTelefoniaLoop — a passada no laço", () => {
     expect(falas.limparStorage).toHaveBeenCalledTimes(1);
     expect(desligarAvisosVencidos).toHaveBeenCalledTimes(1);
     expect(vi.mocked(desligarAvisosVencidos).mock.calls[0]![0]).toBe(pool);
+    // O conserto do cartão órfão (fila visível, entrega 1) entra na mesma passada, com o pool do worker.
+    expect(consertarCartoesOrfaos).toHaveBeenCalledTimes(1);
+    expect(consertarCartoesOrfaos).toHaveBeenCalledWith(pool);
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(falas.sincronizar).toHaveBeenCalledTimes(2);
     expect(falas.limparStorage).toHaveBeenCalledTimes(2);
     expect(desligarAvisosVencidos).toHaveBeenCalledTimes(2);
+    expect(consertarCartoesOrfaos).toHaveBeenCalledTimes(2);
 
     // O disco das falas é a porta `falas` do controlador (5º argumento): é por
     // ele que a ligação garante o arquivo antes de tocar.

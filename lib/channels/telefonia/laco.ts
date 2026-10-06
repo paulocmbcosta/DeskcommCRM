@@ -8,10 +8,12 @@
  * volume de eventos de telefonia é de dezenas por ligação, não de milhares.
  *
  * Ao lado da fila, a PASSADA de 60 s (`passadaDoTelefone`): os avisos de
- * instabilidade vencidos, as falas do Storage para o volume `telefonia-falas` e a
- * limpeza do Storage (desenho da fase 2, §4 e §5.5) — que não dependem da ARI — e
- * as GRAVAÇÕES das ligações que ficaram por guardar (F3, `gravacoes.ts`), que
- * dependem: com o Asterisk fora, só essa etapa falha, e tenta no minuto seguinte.
+ * instabilidade vencidos, as falas do Storage para o volume `telefonia-falas`, a
+ * limpeza do Storage (desenho da fase 2, §4 e §5.5) e o cartão de ligação que
+ * ficou "em andamento" depois de ela acabar (fila visível, entrega 1) — que não
+ * dependem da ARI — e as GRAVAÇÕES das ligações que ficaram por guardar (F3,
+ * `gravacoes.ts`), que dependem: com o Asterisk fora, só essa etapa falha, e
+ * tenta no minuto seguinte.
  *
  * Sem `TELEFONIA_ARI_URL`/`TELEFONIA_ARI_PASSWORD` o laço não sobe — a
  * telefonia é um profile opcional do compose (spec 20 §4.3). Nem a passada: o
@@ -122,6 +124,11 @@ export interface DependenciasDaPassada {
   gravacoes?: Pick<GravacoesDaTelefonia, "passada"> | null;
   /** `repo.desligarAvisosVencidos` com o pool do worker: desliga, audita e avisa na Central. */
   desligarAvisosVencidos: (agora: Date) => Promise<repo.AvisoDesligado[]>;
+  /**
+   * `repo.consertarCartoesOrfaos` com o pool do worker: fecha o cartão "em
+   * andamento" de ligação já encerrada (fila visível, entrega 1). Ausente = nada a fazer.
+   */
+  consertarCartoes?: () => Promise<number>;
   log: Registro;
   /** Relógio. Padrão: `new Date()`. */
   agora?: () => Date;
@@ -145,7 +152,7 @@ function semReentrancia(fn: () => Promise<void>): () => Promise<void> {
 
 /**
  * A passada de 60 s do telefone que NÃO depende da ARI — roda com o Asterisk fora.
- * Duas frentes, cada uma com a SUA guarda de reentrância:
+ * Três frentes, cada uma com a SUA guarda de reentrância:
  *  - os avisos de instabilidade VENCIDOS (§5.5): desligados, auditados
  *    (`phone.emergency_expired`) e avisados na Central por
  *    `desligarAvisosVencidos` num comando só; aqui só entram no log. Guarda
@@ -154,14 +161,19 @@ function semReentrancia(fn: () => Promise<void>): () => Promise<void> {
  *    auditoria e a Central — esperaria o Storage;
  *  - o Storage: as falas para o volume (`sincronizar`) e, depois, a limpeza do
  *    bucket (`limparStorage`, com freio próprio de 10 min —
- *    `INTERVALO_DA_LIMPEZA_MS` —, então pode ser chamada a cada passada).
+ *    `INTERVALO_DA_LIMPEZA_MS` —, então pode ser chamada a cada passada);
+ *  - o cartão "Ligação em andamento" de ligação que JÁ ACABOU (fila visível,
+ *    entrega 1): o fim fechou a ligação no banco e não conseguiu completar o
+ *    cartão; `consertarCartoes` o fecha pelo caminho de sempre, e só entra no log
+ *    quando fechou algum. Guarda própria pelo motivo dos avisos: só fala com o
+ *    banco, e não pode esperar o Storage.
  *
  * Cada etapa é isolada: a que falha não impede as outras nem a próxima passada.
  * Sem inundar o log (30 MB, divididos com o motor da IA): `FalasNoDisco` registra
  * as próprias quedas na transição, e a etapa que LANÇA — `desligarAvisosVencidos`
- * com o banco fora; `sincronizar`/`limparStorage` só se quebrarem o contrato de
- * nunca lançar — é registrada uma vez ao cair e uma ao voltar. Passada sem efeito
- * não escreve nada.
+ * e `consertarCartoes` com o banco fora; `sincronizar`/`limparStorage` só se
+ * quebrarem o contrato de nunca lançar — é registrada uma vez ao cair e uma ao
+ * voltar. Passada sem efeito não escreve nada.
  *
  * No desligamento (`signal`), nenhuma passada nem etapa começa, e a etapa que
  * falha DEPOIS do sinal não é registrada: o worker encerra o pool em seguida
@@ -214,10 +226,20 @@ export function passadaDoTelefone(d: DependenciasDaPassada): () => Promise<void>
       await g.passada();
     });
   });
+  // O cartão "em andamento" de ligação que já acabou: o fim fechou a ligação no
+  // banco e não conseguiu completar o cartão. Sem isto ele diria "em andamento" para sempre.
+  const cartoes = semReentrancia(() =>
+    etapa("cartões de ligação em andamento", async () => {
+      const consertar = d.consertarCartoes;
+      if (!consertar) return;
+      const n = await consertar();
+      if (n > 0) d.log.info("telefonia: cartão de ligação em andamento fechado pela passada", { cartoes: n });
+    }),
+  );
 
   return async () => {
     if (desligando()) return;
-    await Promise.all([avisos(), storage(), gravacoes()]);
+    await Promise.all([avisos(), storage(), gravacoes(), cartoes()]);
   };
 }
 
@@ -297,6 +319,7 @@ export async function runTelefoniaLoop(opts: {
     falas,
     gravacoes,
     desligarAvisosVencidos: (agora) => repo.desligarAvisosVencidos(opts.pool, agora),
+    consertarCartoes: () => repo.consertarCartoesOrfaos(opts.pool),
     log: opts.log,
     signal: opts.signal,
   });
