@@ -12,6 +12,7 @@ import {
   desligouNoMenu,
   situacaoDaLinhaDoTime,
   textoDoAvisoDePerdida,
+  tentativaDaSaidaSemResposta,
   textoDoRegistro,
   toqueDaSaidaSemResposta,
 } from "./repositorio";
@@ -138,6 +139,32 @@ describe("toqueDaSaidaSemResposta", () => {
     expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: "ontem" })).toBeNull();
     expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: feita.ended_at })).toBeNull();
     expect(toqueDaSaidaSemResposta({ ...feita, peer_ringing_at: "2026-10-06T22:48:00.000Z" })).toBeNull();
+  });
+});
+
+/** Do pedido ao fim — o que o cartão conta de quem desligou sem a rede avisar o toque. */
+describe("tentativaDaSaidaSemResposta", () => {
+  const feita = {
+    direction: "outbound" as const,
+    answered_at: null,
+    started_at: "2026-10-06T22:47:00.000Z",
+    ended_at: "2026-10-06T22:47:40.300Z",
+  };
+
+  it("feita e não atendida: do pedido ao fim (também com as datas do `pg`)", () => {
+    expect(tentativaDaSaidaSemResposta(feita)).toBe(40_300);
+    expect(
+      tentativaDaSaidaSemResposta({ ...feita, started_at: new Date(feita.started_at) as unknown as string, ended_at: new Date(feita.ended_at) }),
+    ).toBe(40_300);
+  });
+
+  it("atendida, recebida, interna, sem o fim, ou datas tortas: nulo", () => {
+    expect(tentativaDaSaidaSemResposta({ ...feita, answered_at: "2026-10-06T22:47:12.000Z" })).toBeNull();
+    expect(tentativaDaSaidaSemResposta({ ...feita, direction: "inbound" })).toBeNull();
+    expect(tentativaDaSaidaSemResposta({ ...feita, direction: "internal" })).toBeNull();
+    expect(tentativaDaSaidaSemResposta({ ...feita, ended_at: null })).toBeNull();
+    expect(tentativaDaSaidaSemResposta({ ...feita, ended_at: feita.started_at })).toBeNull();
+    expect(tentativaDaSaidaSemResposta({ ...feita, started_at: "ontem" })).toBeNull();
   });
 });
 

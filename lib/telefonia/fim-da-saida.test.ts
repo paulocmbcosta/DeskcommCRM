@@ -50,6 +50,10 @@ describe("avisoDoFimDaSaida", () => {
     expect(sem("tronco_indisponivel")).toMatch(/não está disponível/);
   });
 
+  it("a ligação que o sistema não chegou a discar avisa que a falha não foi de quem ligou", () => {
+    expect(sem("saida_nao_discada")).toBe("Não foi possível fazer a ligação agora. Tente de novo.");
+  });
+
   it("nada a avisar quando o próprio atendente desligou, ou quando a ligação foi atendida", () => {
     expect(sem("atendente_desligou")).toBeNull();
     expect(sem(null)).toBeNull();
@@ -74,9 +78,20 @@ describe("avisoDoFimDaSaida", () => {
  */
 describe("comoAcabouASaidaSemResposta", () => {
   it("o atendente desistiu: diz isso, com o tempo que o telefone chamou", () => {
-    expect(comoAcabouASaidaSemResposta({ motivo: ATENDENTE_DESLIGOU, toque_ms: 4_200 })).toEqual({
+    expect(comoAcabouASaidaSemResposta({ motivo: ATENDENTE_DESLIGOU, toque_ms: 4_200, tentativa_ms: 6_000 })).toEqual({
       fim: "atendente_desligou",
       toqueMs: 4_200,
+      tentativaMs: 6_000,
+    });
+  });
+
+  // A rede que não avisa que o telefone chama (nenhum 180/183): quem esperou 40 s
+  // e desligou não pode ficar igual a quem desligou em 1 s — vale a tentativa.
+  it("desistiu sem sinal de toque: sem tempo de toque, com o tempo da tentativa", () => {
+    expect(comoAcabouASaidaSemResposta({ motivo: ATENDENTE_DESLIGOU, toque_ms: null, tentativa_ms: 40_000 })).toEqual({
+      fim: "atendente_desligou",
+      toqueMs: null,
+      tentativaMs: 40_000,
     });
   });
 
@@ -85,21 +100,22 @@ describe("comoAcabouASaidaSemResposta", () => {
     expect(comoAcabouASaidaSemResposta({ motivo, toque_ms: 38_000 })).toEqual({ fim: "ninguem_atendeu", toqueMs: 38_000 });
   });
 
-  it("ocupado não tem tempo: o telefone não chamou", () => {
-    const { motivo } = fimDaSaidaNaoAtendida({ causa: 17, tocou: false });
+  // Ocupado antes de tocar, ou o cliente recusou depois de tocar (486 após o 180):
+  // nos dois quem encerrou foi a rede, e o cartão não conta tempo.
+  it.each([false, true])("ocupado (tocou=%s): o cartão diz só isso, sem tempo", (tocou) => {
+    const { motivo } = fimDaSaidaNaoAtendida({ causa: 17, tocou });
     expect(comoAcabouASaidaSemResposta({ motivo, toque_ms: 9_000 })).toEqual({ fim: "ocupado" });
   });
 
   // O registro de antes da 0294 não traz o tempo, e o da ligação que acabou antes
   // de o telefone chamar também não: o cartão diz quem encerrou, sem inventar tempo.
   it.each([undefined, null, 0, -5, Number.NaN, "4000"])("tempo ausente ou estranho (%s) vira 'sem tempo', nunca um número", (toque) => {
-    expect(comoAcabouASaidaSemResposta({ motivo: ATENDENTE_DESLIGOU, toque_ms: toque as number })).toEqual({
-      fim: "atendente_desligou",
-      toqueMs: null,
-    });
+    expect(
+      comoAcabouASaidaSemResposta({ motivo: ATENDENTE_DESLIGOU, toque_ms: toque as number, tentativa_ms: toque as number }),
+    ).toEqual({ fim: "atendente_desligou", toqueMs: null, tentativaMs: null });
   });
 
-  it.each([null, undefined, "", "encerrada_apos_reinicio", "interrompida_no_reinicio", "pedido_expirado", "nao_completada_16", "cliente_desligou"])(
+  it.each([null, undefined, "", "encerrada_apos_reinicio", "interrompida_no_reinicio", "pedido_expirado", "nao_completada_16", "cliente_desligou", "saida_nao_discada"])(
     "motivo que não diz como acabou (%s): nulo, e o cartão cala",
     (motivo) => {
       expect(comoAcabouASaidaSemResposta({ motivo, toque_ms: 4_000 })).toBeNull();
@@ -124,7 +140,7 @@ describe("tempoDeToque", () => {
 describe("todo aviso tem tradução", () => {
   // A tela faz `t(aviso)` com uma VARIÁVEL: o guarda de i18n, que lê literais
   // no AST, não enxerga estas frases. Este caso é quem as cobra.
-  it.each(["nao_completada_16", "ocupado_17", "sem_resposta_19", "tronco_configuracao_invalida", "tronco_indisponivel"])(
+  it.each(["nao_completada_16", "ocupado_17", "sem_resposta_19", "tronco_configuracao_invalida", "tronco_indisponivel", "saida_nao_discada"])(
     "%s → frase com espanhol no dicionário",
     (motivo) => {
       const aviso = avisoDoFimDaSaida({ end_reason: motivo, answered_at: null })!;

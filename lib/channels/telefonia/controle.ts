@@ -306,6 +306,13 @@ interface Feita {
    * dele por quanto tempo o telefone do cliente chamou.
    */
   tocouEm: number | null;
+  /**
+   * O worker mandou a operadora discar. `false` até o fim de `novaFeita`: se a
+   * ARI ou o banco falham no meio do pedido, a ligação fica viva sem nunca ter
+   * saído — e o registro não pode dizer que ninguém atendeu, nem que o atendente
+   * desistiu.
+   */
+  discou: boolean;
   causaDaRede: number | null;
   fim: boolean;
 }
@@ -1511,6 +1518,7 @@ export class ControladorDeChamadas {
       atendida: false,
       gravacao: avisoDeGravacao ? { aviso: avisoDeGravacao, gravando: false, avisoNoAr: null } : null,
       tocouEm: null,
+      discou: false,
       causaDaRede: null,
       fim: false,
     };
@@ -1531,6 +1539,7 @@ export class ControladorDeChamadas {
     l.tom = (await this.ari.tocarTom(canal.id, "ring").catch(() => null))?.id ?? null;
     await this.banco.marcarTocando(vc.organization_id, vc.id, null);
     await this.ari.discar(perna.id, PRAZO_DA_SAIDA_S);
+    l.discou = true;
     this.log.info("telefonia: ligação feita", { voice_call: vc.id, tronco: tronco.id });
   }
 
@@ -1633,6 +1642,9 @@ export class ControladorDeChamadas {
   private async encerrarFeita(l: Feita, motivo: string, opcoes: { ligarDeVolta: boolean } = { ligarDeVolta: false }) {
     if (l.fim) return;
     l.fim = true;
+    // Medido AQUI, antes do desmonte: parar o tom, a gravação e os canais espera a
+    // ARI (até 5 s por pedido), e esse tempo não é o telefone do cliente chamando.
+    const desdeOPrimeiroToqueMs = l.tocouEm === null ? null : Math.max(0, this.agora() - l.tocouEm);
     await this.transferencias.aoEncerrarLigacao(l.vcId);
     // O tom ANTES dos canais: desligar o ramal com o chamar ainda tocando faz o
     // Asterisk registrar "Playback failed for tone:ring;tonezone=br" — medido
@@ -1655,8 +1667,12 @@ export class ControladorDeChamadas {
     // que desistiu): o motivo diz o que a rede fez, e a tela do atendente o lê.
     if (!l.atendida && l.causaDaRede !== null) {
       ({ desfecho, motivo: motivoFinal } = fimDaSaidaNaoAtendida({ causa: l.causaDaRede, tocou: l.tocouEm !== null }));
+    } else if (!l.atendida && !l.discou) {
+      // O pedido não chegou a ser discado (a ARI ou o banco falhou no meio de
+      // `novaFeita`): não é "sem resposta", e quem desligou não desistiu de nada.
+      desfecho = "recusada_pela_rede";
+      motivoFinal = RECUSA_DA_SAIDA.naoDiscada;
     }
-    const desdeOPrimeiroToqueMs = l.tocouEm === null ? null : Math.max(0, this.agora() - l.tocouEm);
     await this.finalizar(l.org, l.vcId, desfecho, motivoFinal, opcoes.ligarDeVolta, desdeOPrimeiroToqueMs);
   }
 

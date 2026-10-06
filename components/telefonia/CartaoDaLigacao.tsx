@@ -54,6 +54,8 @@ export interface MetadadoDaLigacao {
   motivo?: string | null;
   /** Feita e não atendida (0294): por quanto tempo o telefone do cliente chamou. Nulo = o registro não traz. */
   toque_ms?: number | null;
+  /** Feita e não atendida (0294): quanto durou a tentativa, do clique em "Ligar" ao fim. */
+  tentativa_ms?: number | null;
   /** O que a URA fez, quando o número tocava um menu (fase 2) — lido por `menuDaLigacao`. */
   menu?: MenuDaLigacao | null;
   /** O cliente ouviu o aviso de instabilidade do time até o fim. */
@@ -73,11 +75,25 @@ export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
     ...(v as MetadadoDaLigacao),
     motivo: typeof v.motivo === "string" ? v.motivo : null,
     toque_ms: typeof v.toque_ms === "number" ? v.toque_ms : null,
+    tentativa_ms: typeof v.tentativa_ms === "number" ? v.tentativa_ms : null,
     menu: menuDaLigacao(v.menu),
     ouviu_aviso: v.ouviu_aviso === true,
     gravacao: gravacaoDaLigacao(v.gravacao),
     transferencias: transferenciasDaLigacao(v.transferencias),
   };
+}
+
+/**
+ * A mensagem É o registro de uma ligação — e não uma mensagem qualquer com
+ * `metadata.voice_call` plantado. Qualquer membro escreve em `messages` pela
+ * REST, e sem esta conferência plantava na conversa um cartão dizendo o que
+ * quisesse ("Chamou 45 s · ninguém atendeu"). O `external_id` `ligacao:<id>` só
+ * o sistema escreve: o trigger da 0289 recusa criá-lo ou alterá-lo com o JWT de
+ * um membro. É por aqui que a conversa decide desenhar o cartão.
+ */
+export function ligacaoDoRegistro(m: { external_id?: string | null; metadata: unknown }): MetadadoDaLigacao | null {
+  const l = ligacaoDaMensagem(m.metadata);
+  return l && m.external_id === `ligacao:${l.id}` ? l : null;
 }
 
 function duracao(ms: number | null): string | null {
@@ -104,9 +120,11 @@ function comoAcabou(fim: FimDaSaidaSemResposta, t: (texto: string) => string): s
   if (fim.fim === "ocupado") return t("O número estava ocupado");
   const tempo = fim.toqueMs === null ? null : tempoDeToque(fim.toqueMs);
   if (fim.fim === "atendente_desligou") {
-    return tempo === null
+    if (tempo !== null) return trocarMarcador(t("Chamou {tempo} · desligada por quem ligou"), "{tempo}", tempo);
+    // Sem sinal de toque da rede: quanto a tentativa durou, sem afirmar que o telefone chamou.
+    return fim.tentativaMs === null
       ? t("Desligada por quem ligou")
-      : trocarMarcador(t("Chamou {tempo} · desligada por quem ligou"), "{tempo}", tempo);
+      : trocarMarcador(t("Desligada por quem ligou após {tempo}"), "{tempo}", tempoDeToque(fim.tentativaMs));
   }
   // Sem o tempo, "ninguém atendeu" só repetiria o título do selo.
   return tempo === null ? "" : trocarMarcador(t("Chamou {tempo} · ninguém atendeu"), "{tempo}", tempo);
@@ -296,7 +314,7 @@ export function CartaoDaLigacao({
   // Só a FEITA que ninguém atendeu: a não completada já diz o que houve no título.
   const fim =
     !recebida && ligacao.desfecho === "sem_resposta"
-      ? comoAcabouASaidaSemResposta({ motivo: ligacao.motivo, toque_ms: ligacao.toque_ms })
+      ? comoAcabouASaidaSemResposta({ motivo: ligacao.motivo, toque_ms: ligacao.toque_ms, tentativa_ms: ligacao.tentativa_ms })
       : null;
   const fraseDoFim = fim ? comoAcabou(fim, t) : "";
 

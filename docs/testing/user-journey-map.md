@@ -3505,12 +3505,16 @@ semeadas como o worker as deixa, em `tests/e2e/telefonia-gravacao.spec.ts`.
 | J42.1 O atendente liga, o telefone chama 4 s e ele desliga: na conversa, "Ligação sem resposta · por Bruno" e, embaixo, "Chamou 4 s · desligada por quem ligou" | `[P1]` | em unidade, no Postgres real e pela tela (e2e, ligação semeada) |
 | J42.2 O atendente deixa chamar até a rede desistir: "Chamou 38 s · ninguém atendeu" | `[P1]` | em unidade, no Postgres real e pela tela (e2e, ligação semeada) |
 | J42.3 A rede repete o 180 e manda 183 depois: o tempo conta do PRIMEIRO toque | `[P1]` | em unidade (`controle.test.ts`) |
-| J42.4 O atendente desliga antes de o telefone chamar: "Desligada por quem ligou", sem tempo — nunca um tempo que ninguém mediu | `[P1]` | em unidade e no Postgres real |
+| J42.4 O atendente desliga sem a rede avisar que o telefone chamava: "Desligada por quem ligou após 40 s" (a tentativa, do clique ao fim) — nunca um tempo de toque que ninguém mediu | `[P1]` | em unidade, no Postgres real e pela tela (e2e, ligação semeada) |
 | J42.5 Número ocupado: "O número estava ocupado" | `[P2]` | em unidade |
 | J42.6 Ligação de antes da 0294 (sem o tempo no registro): o selo ganha o nome de quem ligou e a linha diz só quem encerrou | `[P1]` | em unidade (`CartaoDaLigacao.test.tsx`) |
 | J42.7 A não completada, a atendida e a recebida ficam como eram | `[P1]` | em unidade e pela tela (a atendida, no mesmo e2e) |
 | J42.8 O agent não forja o toque pela REST: a linha do telefone é só-leitura, e a do WaCalls recusa o instante (CHECK) | `[P0]` | no Postgres real, com o JWT do agent |
 | J42.9 Ligação real pelo tronco da operadora: o tempo do cartão bate com o que o atendente ouviu chamar | `[P1]` | pendente — prova na VPS |
+| J42.10 Uma mensagem comum com o metadado de ligação plantado pela REST não vira cartão: só o registro `ligacao:<id>`, que só o sistema escreve | `[P0]` | em unidade (`ligacaoDoRegistro`) e pela tela (e2e) |
+| J42.11 O sistema falha antes de discar e o atendente desliga: "Ligação não completada", e não "desligada por quem ligou" | `[P1]` | em unidade (`controle.test.ts`) |
+| J42.12 A ARI lenta no desmonte da ligação não infla o tempo de toque | `[P1]` | em unidade (`controle.test.ts`) |
+| J42.13 A linha do WaCalls criada pela REST não serve de pedido de saída, e não quebra o fechamento | `[P0]` | no Postgres real |
 
 ### O que NÃO foi provado
 
@@ -3519,5 +3523,19 @@ semeadas como o worker as deixa, em `tests/e2e/telefonia-gravacao.spec.ts`.
   cobertura") conta como "chamou".
 - **Caixa postal.** Para a rede ela é uma ligação atendida: segue virando "Ligação feita", com
   gravação. O sistema não separa pessoa de caixa postal.
-- **A imagem da tela.** O e2e mede o texto e a caixa de cada frase no navegador, mas o CI só guarda
+- **A imagem da tela.** O e2e mede o texto e a altura de cada frase no navegador, mas o CI só guarda
   capturas quando falha.
+- **A ligação recuperada depois de um reinício do worker no meio do toque** fecha como não atendida
+  mesmo que o cliente tenha atendido depois (defeito anterior a esta mudança): o cartão sai
+  "Ligação sem resposta · por <quem ligou>", sem a linha.
+
+### O que a revisão independente achou
+
+Um subagente leu o diff sem as conclusões de quem escreveu, com a suíte verde, e rodou o
+controlador de verdade em cenários que os testes não tinham: (1) o tempo de toque era lido DEPOIS
+do desmonte da ligação, e a ARI lenta o inflava (5 s viravam 21 s); (2) quando o próprio worker
+falhava antes de discar, o registro saía "sem resposta · desligada por quem ligou"; (3) sem sinal
+de toque da rede, quem esperou 40 s ficava igual a quem desligou em 1 s; (4) qualquer membro
+plantava um cartão de ligação com uma mensagem comum pela REST (brecha anterior, que passou a
+importar); (5) uma linha do WaCalls criada pela REST servia de pedido de saída, e o CHECK novo
+quebraria o fechamento dela. Os cinco foram corrigidos antes do merge (casos J42.4 e J42.10–13).

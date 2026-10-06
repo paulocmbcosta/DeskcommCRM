@@ -24,7 +24,12 @@
  *  5. o instante é só da linha do TELEFONE (CHECK): a do WaCalls, que a REST
  *     escreve com o JWT do agent, não o aceita — e a do telefone a REST não altera;
  *  6. o bloco do baseline se cura sozinho: com o CHECK derrubado e uma linha
- *     fora da regra, reaplicá-lo limpa a linha e recria o CHECK.
+ *     fora da regra, reaplicá-lo limpa a linha e recria o CHECK;
+ *  7. o registro leva também quanto a tentativa durou (`tentativa_ms`, do pedido
+ *     ao fim) — o que o cartão conta de quem desligou sem a rede avisar o toque;
+ *  8. a linha do WaCalls que o agent cria pela REST não serve de pedido de saída
+ *     (`ligacaoDoAtendente` só devolve a do telefone) — e, se uma chegar ao
+ *     fechamento, ele não quebra no CHECK: fecha, sem instante de toque.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -177,6 +182,8 @@ describe("o instante do primeiro toque entra na escrita que fecha a ligação", 
 describe("o registro da conversa conta quanto chamou e quem encerrou", () => {
   it("a feita que o atendente desligou: tempo, motivo e o nome de quem ligou — e o leitor do cartão entende", async () => {
     const id = await feita(ORG, NUMERO, ANA, "toque-0294-5");
+    // O pedido foi há 6 s (o clique em "Ligar"); o telefone chamou nos últimos 4,2 s.
+    await pool.query("update public.voice_calls set started_at = now() - interval '6 seconds' where id = $1", [id]);
     const l = await repo.encerrarLigacao(pool, ORG, id, ATENDENTE_DESLIGOU, 4_200);
     await repo.registrarNaConversa(pool, l!, "sem_resposta", null);
     const vc = await registroDaLigacao(ORG, id);
@@ -187,10 +194,12 @@ describe("o registro da conversa conta quanto chamou e quem encerrou", () => {
       atendente_nome: "Ana do Toque",
       toque_ms: 4_200,
     });
-    expect(comoAcabouASaidaSemResposta({ motivo: vc!.motivo as string, toque_ms: vc!.toque_ms as number })).toEqual({
-      fim: "atendente_desligou",
-      toqueMs: 4_200,
-    });
+    // O registro leva também a tentativa (do pedido ao fim); com o toque medido, é o toque que o cartão mostra.
+    expect(vc!.tentativa_ms as number).toBeGreaterThanOrEqual(6_000);
+    expect(vc!.tentativa_ms as number).toBeLessThan(11_000);
+    expect(
+      comoAcabouASaidaSemResposta({ motivo: vc!.motivo as string, toque_ms: vc!.toque_ms as number, tentativa_ms: vc!.tentativa_ms as number }),
+    ).toEqual({ fim: "atendente_desligou", toqueMs: 4_200, tentativaMs: vc!.tentativa_ms });
   });
 
   it("a que a rede desistiu: 'ninguém atendeu', com o tempo; cada organização com a sua", async () => {
@@ -216,6 +225,20 @@ describe("o registro da conversa conta quanto chamou e quem encerrou", () => {
     expect(vc).not.toHaveProperty("toque_ms");
   });
 
+  it("desligou sem sinal de toque depois de esperar 40 s: o registro leva quanto a tentativa durou", async () => {
+    const id = await feita(ORG, NUMERO, ANA, "toque-0294-11");
+    await pool.query("update public.voice_calls set started_at = now() - interval '40 seconds' where id = $1", [id]);
+    const l = await repo.encerrarLigacao(pool, ORG, id, ATENDENTE_DESLIGOU);
+    await repo.registrarNaConversa(pool, l!, "sem_resposta", null);
+    const vc = await registroDaLigacao(ORG, id);
+    expect(vc).not.toHaveProperty("toque_ms");
+    expect(vc!.tentativa_ms as number).toBeGreaterThanOrEqual(40_000);
+    expect(vc!.tentativa_ms as number).toBeLessThan(45_000);
+    expect(
+      comoAcabouASaidaSemResposta({ motivo: vc!.motivo as string, toque_ms: null, tentativa_ms: vc!.tentativa_ms as number }),
+    ).toMatchObject({ fim: "atendente_desligou", toqueMs: null, tentativaMs: vc!.tentativa_ms });
+  });
+
   it("atendida: o instante do toque fica na linha, e o registro não ganha tempo de toque", async () => {
     const id = await feita(ORG, NUMERO, ANA, "toque-0294-8");
     await repo.marcarAtendida(pool, ORG, id, ANA);
@@ -225,6 +248,34 @@ describe("o registro da conversa conta quanto chamou e quem encerrou", () => {
     const vc = await registroDaLigacao(ORG, id);
     expect(vc).toMatchObject({ desfecho: "atendida", duracao_ms: 5_000 });
     expect(vc).not.toHaveProperty("toque_ms");
+    expect(vc).not.toHaveProperty("tentativa_ms");
+  });
+});
+
+describe("o pedido que o ramal disca é só o do telefone", () => {
+  /** A linha que o agent cria pela REST: do WaCalls (o default), de saída, dele, apontando para o tronco SIP. */
+  const linhaDoWacalls = async (ref: string) =>
+    (
+      await pool.query<{ id: string }>(
+        `insert into public.voice_calls
+           (organization_id, channel_session_id, wacalls_call_id, direction, peer_phone, status, created_by, owner_user_id)
+         values ($1, $2, $3, 'outbound', '+5561999990294', 'starting', $4, $4) returning id`,
+        [ORG, NUMERO, ref, ANA],
+      )
+    ).rows[0]!.id;
+
+  it("a linha do WaCalls não volta como pedido; a do telefone, sim (controle positivo)", async () => {
+    const forjada = await linhaDoWacalls("wa-0294-pedido-forjado");
+    expect(await repo.ligacaoDoAtendente(pool, ANA, forjada)).toBeNull();
+    const doTelefone = await feita(ORG, NUMERO, ANA, "toque-0294-12");
+    expect(await repo.ligacaoDoAtendente(pool, ANA, doTelefone)).toMatchObject({ id: doTelefone, provider: "sip_trunk" });
+  });
+
+  it("fechar uma linha que não é do telefone, com toque medido: fecha, e o instante não entra (o CHECK não quebra o fechamento)", async () => {
+    const id = await linhaDoWacalls("wa-0294-fechamento");
+    const l = await repo.encerrarLigacao(pool, ORG, id, ATENDENTE_DESLIGOU, 5_000);
+    expect(l).toMatchObject({ id, status: "ended", end_reason: ATENDENTE_DESLIGOU });
+    expect((await naLinha(id)).peer_ringing_at).toBeNull();
   });
 });
 

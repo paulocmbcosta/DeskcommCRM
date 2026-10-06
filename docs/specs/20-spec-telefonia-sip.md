@@ -225,9 +225,21 @@ Navegador do atendente (JsSIP) ────────────────�
    (`toque_ms`) só da feita NÃO atendida, e o `end_reason` já diz quem encerrou:
    `atendente_desligou` (quem ligou desistiu) ou `sem_resposta_<causa>` (a rede desistiu — a
    operadora, ou o nosso prazo de 60 s). Sem o primeiro toque, a coluna fica nula e o registro
-   sai sem tempo: o cartão nunca mostra um tempo que ninguém mediu. A ligação que cai na caixa
-   postal do cliente é ATENDIDA para a rede (`ANSWER`) e segue como "Ligação feita", com
-   gravação — o sistema não separa pessoa de caixa postal.
+   sai sem tempo de toque: o cartão nunca mostra um tempo que ninguém mediu. O tempo é lido no
+   instante em que a ligação acaba, ANTES do desmonte (parar o tom, derrubar os canais e a
+   ponte espera a ARI, até 5 s por pedido). O registro leva também `tentativa_ms`, do pedido
+   (`started_at`, o clique em "Ligar") ao fim: é o que o cartão conta de quem desligou quando a
+   rede não avisou que o telefone chamava — quem esperou 40 s não fica igual a quem desligou em
+   1 s. A ligação que cai na caixa postal do cliente é ATENDIDA para a rede (`ANSWER`) e segue
+   como "Ligação feita", com gravação — o sistema não separa pessoa de caixa postal.
+7. **O pedido que não chegou a ser discado.** Se a ARI ou o banco falham no meio de
+   `novaFeita` (depois de o ramal entrar na ponte e antes do `dial`), a ligação fica viva sem
+   nunca ter saído, e o atendente espera e desliga. O controlador marca `discou` só depois do
+   `dial` aceito; sem a marca, o fim vira desfecho `recusada_pela_rede` com motivo
+   `saida_nao_discada` — "Ligação não completada" na conversa e "Não foi possível fazer a
+   ligação agora. Tente de novo." para quem ligou —, e não "sem resposta · desligada por quem
+   ligou". Derrubar o ramal na hora da falha, em vez de esperar o atendente desligar, segue
+   por fazer.
 
 ### 4.3 Rede e empacotamento
 
@@ -304,7 +316,10 @@ Navegador do atendente (JsSIP) ────────────────�
   `after_hours` muda o cartão —, `menu` e `ouviu_aviso`; desde a 0294, `toque_ms` na feita
   não atendida — por quanto tempo o telefone do cliente chamou, lido por
   `comoAcabouASaidaSemResposta`, em `lib/telefonia/fim-da-saida.ts`, e ausente quando ele não
-  chamou). `menu` é nulo quando a ligação não
+  chamou —, e `tentativa_ms`, do pedido ao fim). A conversa só desenha o cartão para o REGISTRO
+  da ligação (`ligacaoDoRegistro`: o `external_id` tem de ser `ligacao:<id>` do próprio
+  metadado, que só o sistema escreve — trigger da 0289): uma mensagem comum com
+  `metadata.voice_call` plantado pela REST não vira cartão. `menu` é nulo quando a ligação não
   passou por menu; senão segue o schema `MenuDaLigacao` de `lib/telefonia/vocabulario.ts`:
   `nome` do menu e `time_nome` DAQUELA hora (renomear ou arquivar depois não reescreve a
   história), `desfecho` (`chosen` / `default_no_input` / `default_invalid`, nulo quando a
@@ -375,9 +390,11 @@ Navegador do atendente (JsSIP) ────────────────�
   de texto que escape do compositor é recusada pela API com 422 antes de gravar.
 - **A feita que ninguém atendeu** (0294): o selo "Ligação sem resposta" diz quem ligou ("por
   Ana"), e a linha de baixo, quanto o telefone chamou e quem encerrou — "Chamou 4 s · desligada
-  por quem ligou", "Chamou 38 s · ninguém atendeu" ou "O número estava ocupado". O registro de
-  antes da 0294 não tem o tempo: diz só "Desligada por quem ligou", quando foi o caso. A linha
-  é da feita SEM RESPOSTA; a não completada, a atendida e a recebida ficam como eram.
+  por quem ligou", "Chamou 38 s · ninguém atendeu" ou "O número estava ocupado". Quando quem
+  ligou desligou sem a rede avisar que o telefone chamava, a linha conta a tentativa:
+  "Desligada por quem ligou após 40 s". O registro de antes da 0294 não tem tempo nenhum: diz
+  só "Desligada por quem ligou", quando foi o caso. A linha é da feita SEM RESPOSTA; a não
+  completada, a atendida e a recebida ficam como eram.
 - **Fase 2, versão 1** (nenhuma rota de tela nova; §6 do desenho): em Conexões › Telefone, as
   sub-abas **Menus** e **Voz e falas** (`?aba=telefone&sub=menus|falas`) e, em Números,
   "Quando ligarem": tocar no time ou tocar o menu; em Credenciais de IA, o cartão
@@ -423,6 +440,12 @@ Navegador do atendente (JsSIP) ────────────────�
   instante em que a operadora da Totus manda o primeiro 180/183 em relação ao telefone do
   cliente tocar de fato não foi medido. Um 183 com anúncio da operadora ("fora da área de
   cobertura") conta como "chamou": para o worker, é a rede dizendo que a ligação progrediu.
+  E os dois instantes (primeiro toque e fim) são os de quando o worker PROCESSOU o evento, numa
+  fila que também serve as outras ligações — o desvio disso não foi medido.
+- **A ligação recuperada depois de um reinício do worker no meio do toque** fecha como não
+  atendida mesmo que o cliente tenha atendido depois (o `ANSWER` da recuperada é ignorado —
+  defeito anterior à 0294). O cartão dela sai "Ligação sem resposta · por <quem ligou>", sem a
+  linha de como acabou.
 - **Fase 2, versão 1** (a prova na VPS é a Task 29 do plano; casos na J36 do mapa de
   jornadas): a URA numa ligação real (tecla, repetição, time padrão, desligar no menu); as
   falas tocadas pelo Asterisk de produção a partir do volume; o fim da fala quando o cliente

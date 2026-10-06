@@ -646,7 +646,7 @@
     { "from": "rota_chamadas", "to": "t_conversations", "label": "acha/cria a `phone` e atribui a quem liga" },
     { "from": "rota_chamadas", "to": "t_audit", "label": "`phone_call.started`" },
     { "from": "t_conversations", "to": "inbox", "label": "`channel = phone` decide ícone e compositor" },
-    { "from": "t_messages", "to": "inbox", "label": "`metadata.voice_call` → `CartaoDaLigacao` (o menu só por `menuDaLigacao`, nunca pelo path cru)" },
+    { "from": "t_messages", "to": "inbox", "label": "`metadata.voice_call` → `CartaoDaLigacao` (o menu só por `menuDaLigacao`, nunca pelo path cru); só o REGISTRO da ligação vira cartão — `ligacaoDoRegistro` exige o `external_id` `ligacao:<id>`, que só o sistema escreve" },
     { "from": "capacidades", "to": "inbox", "label": "`meioDoCanal` → `phone`; janela `sem_restricao`" },
     { "from": "capacidades", "to": "recusa_envio", "label": "`canalConhecidoSemMensagem`" },
     { "from": "recusa_envio", "to": "inbox", "label": "422 com a mensagem traduzida" },

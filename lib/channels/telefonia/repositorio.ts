@@ -797,16 +797,17 @@ const COLUNAS_DA_LIGACAO = `id, organization_id, channel_session_id, contact_id,
   peer_ringing_at, ended_at`;
 
 /**
- * A ligação `id`, se ela for DESTE atendente (`owner_user_id`) — o pedido de
- * ligação de saída que o ramal disca (`c-<id>`). A catraca aqui é o atendente, e
+ * A ligação `id`, se ela for DESTE atendente (`owner_user_id`) e do TELEFONE — o
+ * pedido de ligação de saída que o ramal disca (`c-<id>`). A linha do WaCalls o
+ * agent cria pela REST: sem o filtro de provider ela servia de pedido forjado. A catraca aqui é o atendente, e
  * não a organização: quando o ramal disca, a organização ainda não é conhecida
  * (o ramal é da pessoa, que pode estar em mais de uma), e ela sai da PRÓPRIA
  * linha, que o controlador confere contra o tronco antes de discar.
  */
 export async function ligacaoDoAtendente(db: Queryable, userId: string, id: string): Promise<LigacaoDoBanco | null> {
   const { rows } = await db.query<LigacaoDoBanco>(
-    `select ${COLUNAS_DA_LIGACAO} from voice_calls where id = $1 and owner_user_id = $2`,
-    [id, userId],
+    `select ${COLUNAS_DA_LIGACAO} from voice_calls where id = $1 and owner_user_id = $2 and provider = $3`,
+    [id, userId, PROVIDER],
   );
   return rows[0] ?? null;
 }
@@ -854,7 +855,8 @@ export async function marcarAtendida(db: Queryable, organizationId: string, id: 
  * `peer_ringing_at` no relógio do BANCO (`now()` menos esse tempo), na mesma
  * escrita que fecha a ligação: `ended_at - peer_ringing_at` é exatamente o que
  * o worker mediu, mesmo com os dois relógios fora de sincronia. `null` = não
- * chamou (ou ninguém mediu): a coluna fica como está.
+ * chamou (ou ninguém mediu): a coluna fica como está. Só na linha do telefone:
+ * em qualquer outra o CHECK da 0294 recusaria a escrita, e a ligação não fecharia.
  */
 export async function encerrarLigacao(
   db: Queryable,
@@ -868,12 +870,12 @@ export async function encerrarLigacao(
         set status = 'ended', ended_at = now(), end_reason = $3, ringing_user_id = null,
             duration_ms = case when answered_at is null then null
                                else (extract(epoch from (now() - answered_at)) * 1000)::int end,
-            peer_ringing_at = case when $4::double precision is null then peer_ringing_at
+            peer_ringing_at = case when $4::double precision is null or provider <> $5 then peer_ringing_at
                                    else now() - make_interval(secs => $4::double precision / 1000) end,
             updated_at = now()
       where id = $1 and organization_id = $2 and status <> 'ended'
       returning ${COLUNAS_DA_LIGACAO}`,
-    [id, organizationId, motivo, desdeOPrimeiroToqueMs],
+    [id, organizationId, motivo, desdeOPrimeiroToqueMs, PROVIDER],
   );
   return rows[0] ?? null;
 }
@@ -1211,6 +1213,20 @@ export function toqueDaSaidaSemResposta(
 }
 
 /**
+ * Quanto durou a tentativa da FEITA que ninguém atendeu: do pedido (o clique em
+ * "Ligar", `started_at`) ao fim. É o que o cartão conta de quem desligou quando
+ * a rede não avisou que o telefone chamava — quem esperou 40 s não fica igual a
+ * quem desligou em 1 s. As duas pontas no relógio do banco.
+ */
+export function tentativaDaSaidaSemResposta(
+  l: Pick<LigacaoDoBanco, "direction" | "answered_at" | "started_at" | "ended_at">,
+): number | null {
+  if (l.direction !== "outbound" || l.answered_at || !l.started_at || !l.ended_at) return null;
+  const ms = Math.round(new Date(l.ended_at).getTime() - new Date(l.started_at).getTime());
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/**
  * O registro da ligação DENTRO da conversa — a linha que o atendente vê no chat.
  *
  * `type=system`, `sent_via=system`, `direction=outbound`, de propósito: uma
@@ -1250,6 +1266,7 @@ export async function registrarNaConversa(
   const menu = await menuDoRegistro(db, l);
   const transferencias = await transferenciasDoRegistro(db, l);
   const toqueMs = toqueDaSaidaSemResposta(l);
+  const tentativaMs = tentativaDaSaidaSemResposta(l);
   try {
     await db.query(
     `insert into messages
@@ -1276,6 +1293,8 @@ export async function registrarNaConversa(
           ouviu_aviso: Boolean(l.emergency_heard_at),
           // Feita e não atendida: por quanto tempo o telefone do cliente chamou (0294). Ausente sem a medida.
           ...(toqueMs !== null ? { toque_ms: toqueMs } : {}),
+          // E quanto durou a tentativa, do pedido ao fim — o que o cartão conta de quem desligou sem o toque.
+          ...(tentativaMs !== null ? { tentativa_ms: tentativaMs } : {}),
           // A corrente de transferências (v2), com os nomes daquela hora. Ausente sem transferência.
           ...(transferencias.length > 0 ? { transferencias } : {}),
           // Gravada: o arquivo ainda vai ser guardado (lib/channels/telefonia/gravacoes.ts),
