@@ -10056,6 +10056,28 @@ export const DICIONARIO: Traducoes = {
   "Ouviu o aviso de instabilidade": { es: "Escuchó el aviso de inestabilidad" },
   // A ligação em andamento (fila visível, entrega 1): "Ligação em andamento · com Ana · desde 14:32".
   "desde": { es: "desde" },
+  // A aba Telefone do Inbox (fila visível, entrega 2; 0295): a coluna, a linha e os chips.
+  // As frases da linha são montadas em pedaços — "Aguardando há 3:42 · cai em 1:18",
+  // "Tocando para Ana · na fila há 0:30", "Com Bruno há 4:12", "Vendas · pelo +55…".
+  "pelo": { es: "por el" },
+  "cai em": { es: "se corta en" },
+  "Tocando para": { es: "Sonando para" },
+  "na fila há": { es: "en la cola hace" },
+  "Ouvindo as opções": { es: "Escuchando las opciones" },
+  "Ouvindo os avisos": { es: "Escuchando los avisos" },
+  "Transferida por": { es: "Transferida por" },
+  "aguardando há": { es: "esperando hace" },
+  "O telefone não está ligado nesta organização.": { es: "El teléfono no está activado en esta organización." },
+  "Filtrar por número da empresa": { es: "Filtrar por número de la empresa" },
+  "Na fila, por ordem de chegada": { es: "En la cola, por orden de llegada" },
+  "No menu": { es: "En el menú" },
+  "Perdidas nos últimos 30 minutos": { es: "Perdidas en los últimos 30 minutos" },
+  "Desistiu na fila": { es: "Desistió en la cola" },
+  "A fila esgotou": { es: "La cola se agotó" },
+  "Interrompida": { es: "Interrumpida" },
+  "Não atendida": { es: "No atendida" },
+  "esperou": { es: "esperó" },
+  "Nenhuma ligação agora.": { es: "Ninguna llamada ahora." },
   // Telefonia — gravação das ligações (0289, DYD-53).
   "A gravação de uma ligação não foi salva": { es: "La grabación de una llamada no se guardó" },
   "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.": { es: "Verifica que el servicio de telefonía esté funcionando. Las próximas llamadas se siguen grabando; esta grabación se perdió." },
