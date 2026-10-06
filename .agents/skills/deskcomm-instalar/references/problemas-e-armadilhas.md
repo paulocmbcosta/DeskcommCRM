@@ -129,18 +129,6 @@ aparece em github.com/paulocmbcosta/DeskcommCRM/releases).
 sem internet para o GitHub, ou a versão pedida é anterior à instalada). **Nada foi tocado.** Tente
 de novo com internet; voltar no tempo é só com `--force`, de propósito.
 
-**`update.sh` avisou que ia "PAUSAR A IA".** O banco estava em uso e três tentativas não bastaram
-para terminar a parte do banco. O sistema continua no ar; só a IA (e o telefone) ficam sem atender
-até a versão nova subir, e ela volta sozinha. Não interrompa o script. No fim ele confirma: "precisei
-pausar a IA durante a atualização — ela já voltou".
-
-**`update.sh` parou com "Atualização interrompida ANTES de trocar o sistema" (código 4).** Alguma
-coisa manteve tabelas do banco presas durante toda a tentativa. **O sistema continua no ar na versão
-de antes** e nada se perdeu; a IA foi religada. Rode de novo daqui a alguns minutos, de preferência
-fora do horário de atendimento. Se repetir, as linhas "sessão … | usuário … | programa … | parada há
-…" logo acima da mensagem dizem quem está segurando o banco (por exemplo, uma janela do SQL Editor
-do Supabase esquecida com uma transação aberta).
-
 **Instalação antiga sem o botão "Atualizar agora".** Rode `bash hostgator-setup-kit/update.sh`
 **duas vezes**: a primeira ainda é o script antigo, a segunda instala o cron do agente.
 

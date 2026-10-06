@@ -195,8 +195,9 @@ describe("o envio da IA não segura trava de tabela enquanto acontece", () => {
 
     const ddl = await operador.connect();
     try {
-      // 2 s é o prazo do TESTE, não do kit: com a trava presa o comando morre em
-      // 55P03 em vez de pendurar a suíte até o timeout do vitest.
+      // 2 s é o prazo do TESTE. O `update.sh` roda o baseline SEM prazo — em
+      // produção este comando esperou 13 minutos. Aqui, com a trava presa, ele
+      // morre em 55P03 em vez de pendurar a suíte até o timeout do vitest.
       await ddl.query("set lock_timeout = '2s'");
       // O comando literal de `supabase/baseline.sql` que ficou 13 minutos em
       // `Lock/relation`. `add column if not exists` pede `AccessExclusiveLock`

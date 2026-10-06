@@ -32,24 +32,6 @@ done
 # em 401. Ver `recusar_projeto_de_outra_arvore` em _common.sh.
 recusar_projeto_de_outra_arvore || die "Atualização interrompida para não quebrar a instalação que está no ar."
 
-# ── 0+. Se EU parei a IA, EU religo — saia este script por onde sair ─────────
-# O passo de banco pode parar o worker (bloco 4). No caminho feliz quem o traz
-# de volta é o `dc up -d` do bloco 5; em qualquer outra saída — interrupção,
-# erro sob `set -e`, Ctrl-C — é este trap. Sem ele, um script que morre entre o
-# `stop` e o `up -d` deixava a instalação atendendo SEM a IA, e sem aviso.
-WORKER_PARADO_POR_MIM=""
-IA_FICOU_PAUSADA=""
-religar_worker_se_parei() {
-  [ -n "$WORKER_PARADO_POR_MIM" ] || return 0
-  WORKER_PARADO_POR_MIM=""
-  if dc up -d worker >/dev/null 2>&1; then
-    c_grn "✓ IA religada."
-  else
-    c_ylw "⚠ não consegui religar a IA — rode: docker compose $(dc_files) up -d worker"
-  fi
-}
-trap religar_worker_se_parei EXIT
-
 # ── 0. Liga o agente da tela ANTES de qualquer decisão de versão ─────────────
 # Instalar o cron aqui, e não no fim, é o que faz o bootstrap ter fim: os
 # caminhos "já está na versão mais recente" e "essa versão é anterior à sua"
@@ -223,65 +205,8 @@ if [ -f supabase/baseline.sql ]; then
     "create extension if not exists vector with schema public; create extension if not exists citext with schema public; create extension if not exists pg_trgm with schema public;" \
     >/dev/null 2>&1 || true
 
-  # O baseline roda com PRAZO para esperar trava (`aplicar_baseline`, em
-  # _common.sh — o porquê inteiro está lá): comando que não consegue a vez
-  # desiste em vez de enfileirar o sistema atrás de si. Desistência é comando
-  # PULADO, então a passada se repete até sair limpa:
-  #
-  #   1ª a 3ª  com tudo no ar. É o caso normal: a tabela estava em uso por um
-  #            instante, e na passada seguinte já não está.
-  #   4ª e 5ª  com a IA parada. O worker é a única peça nossa que mantém
-  #            transação aberta por segundos; se as três primeiras não bastaram,
-  #            é ele (ou alguém de fora) segurando — parar foi o que destravou a
-  #            produção em 2026-10-05. Custo: a IA e o telefone ficam sem atender
-  #            até o `dc up -d` do bloco 5. Por isso é escalada, não rotina.
-  #   depois   interrompe ANTES de trocar o app. Seguir adiante seria subir a
-  #            versão nova sobre um banco em que faltam comandos dela.
-  PASSADAS_COM_TUDO_NO_AR=3
-  PASSADAS_COM_A_IA_PARADA=2
-  PAUSA_ENTRE_PASSADAS="${DESKCOMM_PAUSA_ENTRE_PASSADAS:-5}"
-  passada=0
-  while :; do
-    passada=$((passada + 1))
-    raw="$(aplicar_baseline supabase/baseline.sql)"
-    sem_vez="$(printf '%s\n' "$raw" | comandos_sem_vez)"
-    [ "$sem_vez" -eq 0 ] && break
-
-    if [ "$passada" -ge $((PASSADAS_COM_TUDO_NO_AR + PASSADAS_COM_A_IA_PARADA)) ]; then
-      c_red "✖ O banco não deu a vez a $sem_vez comando(s), nem com a IA parada."
-      parados="$(sessoes_paradas_em_transacao)"
-      if [ -n "$parados" ]; then
-        c_ylw "  Quem está com o banco preso agora (transação aberta e parada):"
-        printf '%s\n' "$parados" | sed 's/^/    /'
-      fi
-      religar_worker_se_parei
-      interromper "Atualização interrompida ANTES de trocar o sistema.
-     O sistema continua no ar na versão de antes, e nenhum dado foi perdido.
-     O que aconteceu: alguma coisa manteve tabelas do banco presas durante toda a
-     tentativa, e a atualização do banco ficou incompleta. Ela é segura de repetir:
-     rode a atualização de novo daqui a alguns minutos, de preferência fora do
-     horário de atendimento."
-    fi
-
-    if [ "$passada" -eq "$PASSADAS_COM_TUDO_NO_AR" ]; then
-      if worker_no_ar; then
-        c_ylw "⚠ O banco não deu a vez a $sem_vez comando(s) em $passada tentativas: algo está usando as tabelas sem parar."
-        c_ylw "  Vou PAUSAR A IA para terminar o banco. Enquanto isso o sistema segue no ar, mas a IA"
-        c_ylw "  não responde e o telefone não atende. Ela volta sozinha ao fim da atualização."
-        # Marcado ANTES do stop: se o script morrer no meio dele, o trap religa.
-        WORKER_PARADO_POR_MIM=1
-        IA_FICOU_PAUSADA=1
-        dc stop worker >/dev/null 2>&1 \
-          || c_ylw "  (não consegui parar a IA — sigo tentando assim mesmo)"
-      else
-        c_ylw "⚠ O banco não deu a vez a $sem_vez comando(s) em $passada tentativas — e a IA já estava parada."
-        c_ylw "  Quem segura as tabelas não é ela. Tento mais $PASSADAS_COM_A_IA_PARADA vez(es)."
-      fi
-    else
-      c_ylw "  $sem_vez comando(s) do banco não conseguiram a vez (a tabela estava em uso). Tento de novo — tentativa $((passada + 1))."
-    fi
-    sleep "$PAUSA_ENTRE_PASSADAS"
-  done
+  raw="$(docker run --rm -i -v "$PROJECT_DIR/supabase/baseline.sql:/b.sql:ro" \
+        postgres:17-alpine psql "$(url_do_schema)" -f /b.sql 2>&1 || true)"
 
   # Erros benignos ao re-aplicar sobre uma base existente:
   benign='already exists|multiple primary keys|multiple default values|is already a member|already a partition'
@@ -425,9 +350,6 @@ fi
 # então ninguém está lendo a tela para decifrar isso. Mesma função do install.sh.
 garantir_rede_do_proxy
 dc up -d
-# O `up -d` pleno acabou de recriar o worker na imagem nova: daqui em diante não
-# há mais o que o trap do bloco 0+ religar.
-WORKER_PARADO_POR_MIM=""
 
 # O Caddyfile entra no container por bind mount de UM ARQUIVO, e bind mount de
 # arquivo fica preso ao inode. O `git pull` não edita o arquivo: escreve outro e
@@ -467,11 +389,6 @@ if [ -n "$ok" ]; then
   # e o worker seguia um canal móvel. Agora ele sabe que existiu e que acabou.
   if [ -n "$PIN_FALTANDO_ANTES" ]; then
     c_ylw "  (de quebra: a versão de $PIN_FALTANDO_ANTES estava solta e foi fixada agora)"
-  fi
-  # Idem: a pausa aconteceu lá em cima, no meio do passo de banco, e quem só lê
-  # o fim precisa saber que ela existiu — e que acabou.
-  if [ -n "$IA_FICOU_PAUSADA" ]; then
-    c_ylw "  (o banco estava em uso e precisei pausar a IA durante a atualização — ela já voltou)"
   fi
   # Dito aqui pelo mesmo motivo do pin: é no fim que o dono lê.
   if [ -n "$AVISO_SITE_URL" ]; then
