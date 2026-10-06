@@ -3641,7 +3641,7 @@ mapa em `docs/architecture/telefonia.architecture.json` (nós `rota_fila`, `aba_
   (fase, motivo, posição, resumo, relógio, urgência). Provam a ORDEM das chamadas e as regras, nunca o SQL
   nem o tempo real.
 - **teste de rota:** `app/api/v1/telefonia/fila/route.test.ts` (papel, telefonia desligada, organização da
-  sessão, a leitura compartilhada por 1,5 s, a que falha) e
+  sessão, a leitura compartilhada em voo único — quem chega durante uma leitura recebe a próxima —, a que falha) e
   `app/api/v1/telefonia/fila/times/route.test.ts` e `app/api/v1/telefonia/fila/times/[teamId]/route.test.ts`
   (papel `manager`, suporte somente-leitura, cada recusa, a auditoria). O banco e a sessão são dublês.
 - **teste de componente:** `components/telefonia/fila/FilaDoTelefone.test.tsx`, `LinhaDaFila.test.tsx` e
@@ -3699,7 +3699,7 @@ mapa em `docs/architecture/telefonia.architecture.json` (nós `rota_fila`, `aba_
   simultâneas — lido na configuração, não medido. Com o teto chegando a 30 minutos, a fila de um pico
   pode bater nesse limite, e o que o cliente ouve então não foi visto.
 - **A carga da rota com a fila cheia.** Dezenas de ligações na fila e muitos navegadores abertos não
-  foram medidos; o que está provado é a lógica da leitura compartilhada por 1,5 s, não o tempo nem o
+  foram medidos; o que está provado é a lógica da leitura compartilhada (uma em curso e uma na fila), não o tempo nem o
   custo de cada consulta.
 - **O Realtime de `voice_calls` chegando ao navegador de cada papel.** A tabela tem RLS, e o teste do
   hook dubla o canal. Se o aviso não chegar a um `viewer` ou a um `agent`, a fila se atualiza a cada 15 s,

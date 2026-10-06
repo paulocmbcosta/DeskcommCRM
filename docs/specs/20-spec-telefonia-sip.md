@@ -534,9 +534,11 @@ passa a seguir a ordem de chegada. O que muda nos passos acima:
   — `desligou_no_menu`, `desistiu_na_fila`, `fila_esgotada`, `ninguem_atendeu`,
   `fora_do_horario`, `interrompida` ou `outro` — e quanto esperaram. Sem telefonia na instalação
   (a ARI não configurada) ou sem número SIP ativo na organização: `ativa: false` e listas vazias —
-  no primeiro caso sem tocar o banco. A leitura é compartilhada por 1,5 s por organização, em
-  memória da instância (vários navegadores que pedem no mesmo instante dividem uma leitura, e a
-  que falha não fica guardada: responde 500 e a seguinte tenta de novo). A rota NÃO diz quantos
+  no primeiro caso sem tocar o banco. A leitura é compartilhada por organização, em memória da
+  instância, em voo único com fila de um: no máximo uma leitura em curso e uma na fila, com 500 ms
+  entre os inícios; quem chega durante uma leitura recebe a PRÓXIMA, nunca a que começou antes do
+  pedido (um cache por tempo entregava a fila de antes da mudança a quem relia logo depois do aviso
+  do Realtime). A que falha não fica guardada: responde 500 e a seguinte lê de novo. A rota NÃO diz quantos
   atendentes estão livres — isso pede a ARI e o diretório a cada pedido (entrega 3). Leitura não
   audita.
 - **Configurações › Times › "Fila do telefone"** (fila visível, entrega 2;
@@ -624,11 +626,12 @@ passa a seguir a ordem de chegada. O que muda nos passos acima:
   preciso, é proposta à parte. Para ver a faixa em vigor numa instalação:
   `grep -E '^TELEFONIA_RTP_(INICIO|FIM)=' .env` (ausentes = os padrões).
 - **A carga da rota da fila com a fila cheia** (fila visível, entrega 2). A rota é lida por todo
-  navegador com o Inbox aberto, a cada aviso do Realtime (juntado em 400 ms, no máximo uma
-  releitura a cada 2 s) e a cada 15 s, e a leitura compartilhada por 1,5 s existe para que o pico
-  não vire uma consulta por navegador. Nada disso foi medido com dezenas de ligações na fila e
-  muitos navegadores abertos: o que está provado é a lógica (um pedido = uma leitura dentro da
-  janela, organizações separadas, a que falha não fica presa), não o tempo nem o custo.
+  navegador com o Inbox aberto, a cada aviso do Realtime (juntado em 800 ms, no máximo uma
+  releitura a cada 4 s, e nenhuma em aba escondida) e a cada 15 s, e a leitura compartilhada (uma
+  em curso e uma na fila por organização) existe para que o pico não vire uma consulta por navegador.
+  Nada disso foi medido com dezenas de ligações na fila e muitos navegadores abertos: o que está
+  provado é a lógica (quem chega durante uma leitura recebe a próxima, organizações separadas, a
+  que falha não fica presa), não o tempo nem o custo.
 - **O aviso do Realtime de `voice_calls` chegando ao navegador de cada papel.** A aba relê quando
   esse aviso chega e, de segurança, a cada 15 s; o teste do hook dubla o canal. Que o aviso chegue
   de fato a um `viewer` ou a um `agent` — a tabela tem RLS — não foi visto; sem ele, a fila se

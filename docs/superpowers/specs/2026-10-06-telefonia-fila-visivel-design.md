@@ -208,9 +208,14 @@ consertar cartão "em andamento" cuja `voice_calls` já está `ended`.
 
   Emendas do plano. (a) A resposta ganha `ativa` (a instalação tem telefonia E a
   organização tem número) e `agora` (o relógio do banco), para a aba saber se existe e
-  a tela medir a defasagem do relógio dela. (b) A leitura é compartilhada por 1,5 s por
-  organização, em memória da instância: no pico, todo navegador com o Inbox aberto pede
-  ao mesmo tempo — o Realtime avisa todos juntos —, e uma leitura do banco serve a todos.
+  a tela medir a defasagem do relógio dela. (b) A leitura é compartilhada por
+  organização, em memória da instância, em voo único com fila de um (no máximo uma em
+  curso e uma na fila, 500 ms entre os inícios): no pico, todo navegador com o Inbox
+  aberto pede ao mesmo tempo — o Realtime avisa todos juntos —, e uma leitura do banco
+  serve a todos. O plano previa um cache de 1,5 s; a revisão independente mostrou que ele
+  entregava a fila de ANTES da mudança a quem relia logo depois do aviso, e ninguém relia
+  de novo até o próximo evento. Agora nenhum pedido recebe uma leitura que começou antes
+  de ele chegar.
 - `PUT /api/v1/telefonia/fila/times/[teamId]` — a espera máxima do time. `manager`+
   (o mesmo papel do aviso de instabilidade, `telefonia/emergencias/[teamId]`), Zod,
   time desta organização e não arquivado, auditoria `phone.queue_wait_changed`.

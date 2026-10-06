@@ -588,7 +588,7 @@
       "lane": "api",
       "col": 22,
       "type": "backend",
-      "label": "`GET /api/v1/telefonia/fila` (viewer+) + `fila-da-tela.ts` (`lerFilaDoTelefone`) — a fila ao vivo, lida do banco com o `organization_id` da sessão em toda consulta: `ativa`, `agora` (o relógio do banco), `times` com a espera máxima em vigor, `numeros`, `ligacoes` (recebidas vivas, cada uma na sua fase: menu, avisos, aguardando, tocando, em_ligacao, transferencia_na_fila; com a posição na fila do time e o `cai_em`) e `perdidas` (últimos 30 min, com o motivo). Sem a ARI configurada, `ativa: false` sem tocar o banco. Leitura compartilhada por 1,5 s por organização, na memória da instância. Não diz quantos atendentes estão livres (entrega 3)"
+      "label": "`GET /api/v1/telefonia/fila` (viewer+) + `fila-da-tela.ts` (`lerFilaDoTelefone`) — a fila ao vivo, lida do banco com o `organization_id` da sessão em toda consulta: `ativa`, `agora` (o relógio do banco), `times` com a espera máxima em vigor, `numeros`, `ligacoes` (recebidas vivas, cada uma na sua fase: menu, avisos, aguardando, tocando, em_ligacao, transferencia_na_fila; com a posição na fila do time e o `cai_em`) e `perdidas` (últimos 30 min, com o motivo). Sem a ARI configurada, `ativa: false` sem tocar o banco. Leitura compartilhada por organização na memória da instância (uma em curso e uma na fila; quem chega durante uma leitura recebe a próxima). Não diz quantos atendentes estão livres (entrega 3)"
     },
     {
       "id": "rota_espera",
@@ -806,7 +806,7 @@
     { "from": "t_times", "to": "rota_fila", "label": "os times ativos, com a espera máxima em vigor (nulo = 120 s)" },
     { "from": "t_sessions", "to": "rota_fila", "label": "os números SIP ativos: o filtro por número e o `ativa` da aba" },
     { "from": "t_transferencias", "to": "rota_fila", "label": "a transferência ABERTA para um time põe a ligação na fila do time de destino, \"Transferida por\"" },
-    { "from": "rota_fila", "to": "aba_telefone", "label": "`ativa`, `agora`, `times`, `numeros`, `ligacoes`, `perdidas`; um pedido = uma leitura dentro de 1,5 s" },
+    { "from": "rota_fila", "to": "aba_telefone", "label": "`ativa`, `agora`, `times`, `numeros`, `ligacoes`, `perdidas`; nenhum pedido recebe uma leitura que começou antes dele" },
     { "from": "aba_telefone", "to": "rota_fila", "label": "`useFilaDoTelefone`: relê quando o Realtime de `voice_calls` avisa (rajada = uma releitura) e a cada 15 s" },
     { "from": "t_voice_calls", "to": "aba_telefone", "label": "Realtime de `voice_calls` da organização: cada toque do worker avisa a aba" },
     { "from": "inbox", "to": "aba_telefone", "label": "a aba `phone` do trilho; o `InboxLayout` lê a fila uma vez e a passa ao selo e à coluna" },
@@ -880,7 +880,7 @@
       "items": [
         "Teto curto demais ou fila lenta: a aba lista as perdidas dos últimos 30 minutos com o motivo (`fila_esgotada`, `desistiu_na_fila`, `ninguem_atendeu`…) e quanto esperaram — quem ajusta a espera máxima do time (gerente+, Configurações › Times) lê o sinal ali. Relatório por período é a F5, dívida declarada",
         "O teto e a ordem de chegada decidem quem cai e quem é atendido: quem esperou mais toca primeiro, e mudar o teto vale para a próxima ligação, nunca para quem já espera",
-        "Fila que não atualiza: a releitura que falha mantém a fila antiga e acende \"Sem atualização no momento\", com \"Tentar novamente\"; sem o Realtime, a releitura de 15 s segue; a leitura compartilhada por 1,5 s evita uma consulta por navegador no pico",
+        "Fila que não atualiza: a releitura que falha mantém a fila antiga e acende \"Sem atualização no momento\", com \"Tentar novamente\"; sem o Realtime, a releitura de 15 s segue; a leitura compartilhada (uma em curso e uma na fila por organização) evita uma consulta por navegador no pico",
         "O banco que falha ao gravar `queued_at` ou `queue_deadline_at` vira aviso no log e a ligação segue: a tela perde a posição ou o \"cai em\", a fila não para",
         "Não existe ainda: nada avisa, fora da aba, que a fila encheu — a Central só recebe a perdida depois que ela aconteceu; e a aba não age (atender e mover pela fila são a entrega 3)"
       ]

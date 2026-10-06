@@ -15,8 +15,8 @@
  * Os números são da revisão independente da entrega (estimados, não medidos em
  * produção): cada pedido à rota da fila custa cerca de cinco chamadas ao
  * Supabase só para autenticar (`requireRole`), e isso NÃO se divide entre
- * navegadores — a leitura compartilhada da rota (1,5 s por organização) vem
- * DEPOIS da autenticação e poupa só o banco da fila. Com o worker escrevendo em
+ * navegadores — a leitura compartilhada da rota (uma em curso e uma na fila por
+ * organização) vem DEPOIS da autenticação e poupa só o banco da fila. Com o worker escrevendo em
  * `voice_calls` a cada toque, cada navegador relia até uma vez a cada 2 s:
  * 20 navegadores ≈ 10 pedidos/s ≈ 50 chamadas/s ao Supabase, justamente no
  * pico. É a forma do incidente de 2026-09-24 (cabeçalho de
