@@ -90,6 +90,12 @@ export interface PortaBanco {
   /** `desdeOPrimeiroToqueMs` (0294): há quanto tempo o telefone do cliente começou a chamar, na feita; `null` = não chamou. */
   encerrarLigacao(org: string, id: string, motivo: string, desdeOPrimeiroToqueMs?: number | null): Promise<LigacaoDoBanco | null>;
   atribuirConversa(org: string, conversationId: string, userId: string, motivo?: "claim" | "transfer"): Promise<void>;
+  /**
+   * O cartão "Ligação em andamento" na conversa (fila visível, entrega 1): cria
+   * ao atender; chamado de novo, troca o nome de quem está com a ligação.
+   * `false` = nada a fazer (sem conversa, feita, não atendida, já encerrada).
+   */
+  abrirCartaoDaLigacao(org: string, id: string): Promise<boolean>;
   registrarNaConversa(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, duracaoMs: number | null): Promise<void>;
   avisarPerdida(l: LigacaoDoBanco): Promise<void>;
   registrarFim(l: LigacaoDoBanco, desfecho: DesfechoDaLigacao, motivo: string): Promise<void>;

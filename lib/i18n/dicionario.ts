@@ -10054,6 +10054,8 @@ export const DICIONARIO: Traducoes = {
   "Desligou no menu {menu}, antes de escolher": { es: "Colgó en el menú {menu}, antes de elegir" },
   "A ligação terminou no menu {menu}, antes de escolher": { es: "La llamada terminó en el menú {menu}, antes de elegir" },
   "Ouviu o aviso de instabilidade": { es: "Escuchó el aviso de inestabilidad" },
+  // A ligação em andamento (fila visível, entrega 1): "Ligação em andamento · com Ana · desde 14:32".
+  "desde": { es: "desde" },
   // Telefonia — gravação das ligações (0289, DYD-53).
   "A gravação de uma ligação não foi salva": { es: "La grabación de una llamada no se guardó" },
   "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.": { es: "Verifica que el servicio de telefonía esté funcionando. Las próximas llamadas se siguen grabando; esta grabación se perdió." },

@@ -17,7 +17,15 @@
  *     "Chamou 4 s · desligada por quem ligou", "Chamou 38 s · ninguém atendeu"
  *     e, sem sinal de toque da rede, "Desligada por quem ligou após 40 s" —,
  *     cada frase numa linha só (medido no elemento); e uma mensagem comum com o
- *     metadado de ligação PLANTADO não vira cartão.
+ *     metadado de ligação PLANTADO não vira cartão;
+ *  5. a ligação EM ANDAMENTO (fila visível, entrega 1; J43 do mapa): com a
+ *     recebida atendida, a conversa já mostra "Ligação em andamento · com Bruno
+ *     Atendente · desde HH:mm"; o compositor da conversa de telefone abre em
+ *     nota interna, e a nota escrita ali entra ABAIXO do cartão (medido no
+ *     elemento); e, quando a ligação acaba, o MESMO cartão vira "Ligação
+ *     recebida" com a duração — pelo Realtime, SEM recarregar a página. O
+ *     cartão é semeado como `abrirCartaoDaLigacao` o deixa e fechado com o
+ *     UPDATE de `registrarNaConversa`: prova a TELA, não que o worker o escreva.
  *
  * A ligação e a gravação são SEMEADAS (voice_calls `stored` + a mensagem da
  * ligação + o arquivo no Storage local), como o worker as deixa ao fim do
@@ -428,5 +436,172 @@ test.describe("telefonia — gravação das ligações pela tela", () => {
     await expect(page.locator("[data-ligacao]")).toHaveCount(1 + SEM_RESPOSTA.length);
     await expect(page.getByText(PLANTADA)).toHaveCount(0);
     await page.screenshot({ path: `${EVIDENCIA}/ligacao-sem-resposta-quanto-chamou.png`, fullPage: true });
+  });
+
+  test("a ligação atendida aparece na conversa enquanto acontece, aceita nota interna, e vira 'Ligação recebida' no fim sem recarregar", async ({ page }) => {
+    test.setTimeout(120_000);
+    // Contato, conversa e ligação PRÓPRIOS do caso, e gerados aqui dentro: os
+    // cartões da conversa de cima são contados pelo caso anterior, e este conta os dele.
+    const ligacao = randomUUID();
+    const externalId = `ligacao:${ligacao}`;
+    const telefone = `+55619902${String(1000 + Math.floor(Math.random() * 9000))}`;
+    const previa = "Ligação em andamento com Bruno Atendente";
+    const nota = `Cliente pediu a segunda via do boleto por e-mail ${ligacao.slice(0, 8)}`;
+
+    // Semeado como `ramalAtendeu` deixa (lib/channels/telefonia/controle.ts): a
+    // conversa atribuída a quem atendeu (`fn_conversation_assign` → `claimed`), a
+    // ligação `connected` com dono, e o cartão que `abrirCartaoDaLigacao` insere —
+    // com a posição e a prévia que ele dá à conversa.
+    const [contato] = await sql<{ id: string }>(
+      `insert into public.contacts (organization_id, display_name, phone_number, source) values ($1, 'Cliente em Ligação', $2, 'phone_call') returning id`,
+      [orgId, telefone],
+    );
+    const [conversa] = await sql<{ id: string }>(
+      `insert into public.conversations
+         (organization_id, contact_id, channel_session_id, channel, status, is_group, unread_count_for_assignee,
+          team_id, assignee_kind, assigned_to_user_id, assigned_to_user_name, last_message_at, last_message_preview)
+       values ($1, $2, $3, 'phone', 'claimed', false, 0, $4, 'user', $5, 'Bruno Atendente', now(), $6) returning id`,
+      [orgId, contato!.id, NUMERO.id, TIME.id, atendente.id, previa],
+    );
+    await sql(
+      `insert into public.voice_calls
+         (id, organization_id, channel_session_id, contact_id, provider, sip_call_ref, direction, peer_phone, status,
+          started_at, answered_at, conversation_id, team_id, owner_user_id)
+       values ($1, $2, $3, $4, 'sip_trunk', $5, 'inbound', $6, 'connected',
+               now() - interval '20 seconds', now(), $7, $8, $9)`,
+      [ligacao, orgId, NUMERO.id, contato!.id, `canal-vivo-${ligacao}`, telefone, conversa!.id, TIME.id, atendente.id],
+    );
+    await sql(
+      `insert into public.messages
+         (organization_id, conversation_id, contact_id, channel_session_id, external_id, direction, type, body,
+          sent_via, status, metadata)
+       values ($1, $2, $3, $4, $5, 'outbound', 'system', $6, 'system', 'sent', $7)`,
+      [
+        orgId,
+        conversa!.id,
+        contato!.id,
+        NUMERO.id,
+        externalId,
+        previa,
+        JSON.stringify({
+          voice_call: {
+            id: ligacao,
+            direcao: "inbound",
+            desfecho: "atendida",
+            em_andamento: true,
+            duracao_ms: null,
+            atendente_id: atendente.id,
+            atendente_nome: "Bruno Atendente",
+            motivo: null,
+            menu: null,
+            ouviu_aviso: false,
+          },
+        }),
+      ],
+    );
+
+    await entrar(page, atendente.email, atendente.senha);
+    await page.goto(`/app/inbox/${conversa!.id}`);
+    const thread = page.getByTestId("chat-thread");
+
+    await test.step("enquanto a ligação acontece: o cartão diz que está em andamento, com quem e desde quando", async () => {
+      const vivo = page.locator('[data-ligacao="em_andamento"]');
+      await expect(vivo).toBeVisible({ timeout: 30_000 });
+      await expect(vivo.locator("[data-ligacao-titulo]")).toHaveText("Ligação em andamento");
+      await expect(vivo).toContainText("com Bruno Atendente");
+      await expect(vivo).toContainText(/desde \d{2}:\d{2}/);
+      // Em andamento não é desfecho: nada de "atendida por", e é o ÚNICO cartão desta conversa.
+      await expect(vivo).not.toContainText("atendida por");
+      await expect(page.locator("[data-ligacao]")).toHaveCount(1);
+    });
+
+    await test.step("o atendente anota durante a ligação: a nota interna entra abaixo do cartão", async () => {
+      // A conversa de telefone não transporta texto (`somenteNota`): o compositor
+      // já ABRE em nota interna — quem está na linha não precisa trocar de aba para anotar.
+      const campo = page.getByLabel("Mensagem", { exact: true });
+      await expect(page.getByRole("button", { name: "Nota interna", exact: true })).toBeVisible({ timeout: 20_000 });
+      await expect(campo, "o compositor da conversa de telefone não abriu em nota interna").toHaveAttribute(
+        "placeholder",
+        "Escreva uma nota interna… (só o time vê)",
+      );
+      await expect(campo).toBeEnabled();
+      // O gesto de quem atende (o mesmo de `inbox-protocolo-e-historico.spec.ts`): escreve e dá Enter.
+      await campo.fill(nota);
+      await campo.press("Enter");
+      await expect(thread.getByText(nota, { exact: true })).toBeVisible({ timeout: 20_000 });
+      await expect(thread).toContainText("Nota interna · só o time vê");
+
+      // Medido no elemento, as duas caixas lidas no MESMO quadro (o chat rola
+      // sozinho até o fim quando a nota chega): a nota fica abaixo do cartão.
+      const posicao = await thread.evaluate((raiz, texto) => {
+        const cartao = raiz.querySelector('[data-ligacao="em_andamento"]');
+        const paragrafo = Array.from(raiz.querySelectorAll("p")).find((p) => p.textContent === texto);
+        return cartao && paragrafo
+          ? { fimDoCartao: cartao.getBoundingClientRect().bottom, topoDaNota: paragrafo.getBoundingClientRect().top }
+          : null;
+      }, nota);
+      expect(posicao, "o cartão em andamento e a nota não foram achados no chat").not.toBeNull();
+      expect(posicao!.topoDaNota, "a nota escrita durante a ligação fica ABAIXO do cartão").toBeGreaterThanOrEqual(posicao!.fimDoCartao);
+      await page.screenshot({ path: `${EVIDENCIA}/ligacao-em-andamento-com-nota.png`, fullPage: true });
+    });
+
+    await test.step("a ligação acaba: o MESMO cartão vira 'Ligação recebida', sem recarregar, e a nota fica", async () => {
+      // Filtro barato, ANTES da escrita (o mesmo de `inbox-tempo-real.spec.ts`):
+      // o canal que nem assinou reprova aqui, perto da causa, e não 20 s depois
+      // com um "element(s) not found" que não distingue nada.
+      await expect(thread).toHaveAttribute("data-realtime-status-mensagens", "subscribed", { timeout: 20_000 });
+      // Uma marca na janela: um recarregamento a apagaria. É o que sustenta o "sem recarregar".
+      const marca = randomUUID();
+      await page.evaluate((m) => {
+        (window as unknown as { __paginaDaLigacao?: string }).__paginaDaLigacao = m;
+      }, marca);
+
+      // O fim, na ordem e com o SQL do worker: `encerrarLigacao` fecha a linha da
+      // ligação, e `registrarNaConversa` COMPLETA a mesma mensagem — tira a marca
+      // e mescla o resto no banco — e atualiza a prévia da conversa.
+      const fim = "Ligação recebida, atendida por Bruno Atendente · 1 min 05 s";
+      await sql(
+        `update public.voice_calls
+            set status = 'ended', ended_at = now(), duration_ms = 65000, end_reason = 'cliente_desligou'
+          where id = $1 and organization_id = $2`,
+        [ligacao, orgId],
+      );
+      const completadas = await sql<{ id: string }>(
+        `update public.messages
+            set body = $3,
+                metadata = jsonb_set(metadata, '{voice_call}', ((metadata->'voice_call') - 'em_andamento') || $4::jsonb)
+          where organization_id = $1 and external_id = $2
+            and metadata->'voice_call'->>'em_andamento' = 'true'
+          returning id`,
+        [orgId, externalId, fim, JSON.stringify({ duracao_ms: 65_000, motivo: "cliente_desligou" })],
+      );
+      expect(completadas, "o fim completa UMA mensagem: a do cartão em andamento").toHaveLength(1);
+      await sql(
+        `update public.conversations
+            set last_message_at = now(), last_message_preview = left($3, 200), updated_at = now()
+          where id = $1 and organization_id = $2`,
+        [conversa!.id, orgId, fim],
+      );
+
+      // Pelo Realtime de `messages` (o UPDATE também chega: `event: "*"`), sem recarregar.
+      const recebida = page.locator('[data-ligacao="atendida"]');
+      await expect(recebida).toBeVisible({ timeout: 20_000 });
+      await expect(recebida.locator("[data-ligacao-titulo]")).toHaveText("Ligação recebida");
+      await expect(recebida).toContainText("atendida por Bruno Atendente");
+      // A duração que o fim gravou (65 s), e não mais o "desde". Com o "· " na
+      // frente: às 11:05 a hora do cartão também contém "1:05".
+      await expect(recebida).toContainText("· 1:05");
+      await expect(recebida).not.toContainText("desde");
+      await expect(page.locator('[data-ligacao="em_andamento"]')).toHaveCount(0);
+      // O mesmo registro, completado — não um segundo cartão ao lado do primeiro.
+      await expect(page.locator("[data-ligacao]")).toHaveCount(1);
+      expect(
+        await page.evaluate(() => (window as unknown as { __paginaDaLigacao?: string }).__paginaDaLigacao),
+        "a página foi recarregada no meio do caso — a troca tinha de chegar sozinha",
+      ).toBe(marca);
+      // A nota escrita durante a ligação continua na conversa.
+      await expect(thread.getByText(nota, { exact: true })).toBeVisible();
+      await page.screenshot({ path: `${EVIDENCIA}/ligacao-em-andamento-vira-recebida.png`, fullPage: true });
+    });
   });
 });

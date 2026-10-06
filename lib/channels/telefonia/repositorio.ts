@@ -1226,6 +1226,126 @@ export function tentativaDaSaidaSemResposta(
   return Number.isFinite(ms) && ms > 0 ? ms : null;
 }
 
+/** O nome de quem atende, como o registro da conversa o escreve: o cadastrado ou, sem ele, o e-mail. */
+async function nomeDoAtendente(db: Queryable, userId: string | null): Promise<string | null> {
+  if (!userId) return null;
+  const { rows } = await db.query<{ nome: string | null }>(
+    "select coalesce(raw_user_meta_data->>'full_name', email) as nome from auth.users where id = $1",
+    [userId],
+  );
+  return rows[0]?.nome ?? null;
+}
+
+/** A prévia da conversa enquanto a ligação está em andamento — em português, como todo `body` de registro. */
+export function textoDoCartaoEmAndamento(quem: string | null): string {
+  return `Ligação em andamento${quem ? ` com ${quem}` : ""}`;
+}
+
+/**
+ * O CARTÃO "LIGAÇÃO EM ANDAMENTO" (fila visível, entrega 1). Chamado quando a
+ * recebida é atendida — DEPOIS de `atribuirConversa`, que reabre a conversa
+ * encerrada e abre o atendimento novo: o cartão tem de nascer dentro dele, e é
+ * ele que dá posição à conversa na lista (`last_message_at`). O atendente passa
+ * a ter onde escrever uma nota interna enquanto fala.
+ *
+ * É a MESMA mensagem que `registrarNaConversa` completa no fim (`ligacao:<id>`),
+ * com `em_andamento: true` e `desfecho: "atendida"` — e não um desfecho novo: a
+ * aba que não recarregou depois da atualização leria um desfecho desconhecido
+ * como "não atendida" e mostraria "Ligação perdida" durante a ligação.
+ *
+ * Idempotente. A primeira chamada cria o cartão; as seguintes — a transferência
+ * que passa a ligação a outra pessoa — só trocam o nome de quem está com ela.
+ *
+ * NÃO mexe no time da conversa. A conversa de quem já ligou antes guarda o time
+ * do atendimento anterior, e levá-la ao time desta ligação aqui gravaria na
+ * linha do tempo "Transferida para a fila do time… Aguardando operador
+ * disponível" com a ligação já atendida (o gatilho de `conversations` só cala
+ * esse evento quando o time muda no MESMO comando que reabre a conversa). O
+ * conserto pede migration e ficou fora desta entrega.
+ *
+ * `false` = nada a fazer: ligação de outra organização, feita, ainda não
+ * atendida, sem conversa (número oculto) ou já encerrada.
+ */
+export async function abrirCartaoDaLigacao(db: Queryable, organizationId: string, id: string): Promise<boolean> {
+  const { rows } = await db.query<LigacaoDoBanco>(
+    `select ${COLUNAS_DA_LIGACAO} from voice_calls
+      where id = $1 and organization_id = $2 and provider = $3
+        and direction = 'inbound' and status = 'connected'`,
+    [id, organizationId, PROVIDER],
+  );
+  const l = rows[0];
+  if (!l || !l.conversation_id || !l.contact_id || !l.owner_user_id) return false;
+  const quem = await nomeDoAtendente(db, l.owner_user_id);
+  const texto = textoDoCartaoEmAndamento(quem);
+  const externalId = `ligacao:${l.id}`;
+
+  const { rows: ja } = await db.query<{ em_andamento: string | null }>(
+    "select metadata->'voice_call'->>'em_andamento' as em_andamento from messages where organization_id = $1 and external_id = $2 limit 1",
+    [organizationId, externalId],
+  );
+  if (ja[0]) {
+    if (ja[0].em_andamento !== "true") return false;
+    await db.query(
+      `update messages
+          set body = $3,
+              metadata = jsonb_set(metadata, '{voice_call}', (metadata->'voice_call') || $4::jsonb)
+        where organization_id = $1 and external_id = $2
+          and metadata->'voice_call'->>'em_andamento' = 'true'`,
+      [organizationId, externalId, texto, JSON.stringify({ atendente_id: l.owner_user_id, atendente_nome: quem })],
+    );
+    await db.query(
+      // Só enquanto a prévia ainda é a do cartão: uma mensagem mais nova na conversa não é pisada.
+      `update conversations set last_message_preview = left($3, 200), updated_at = now()
+        where id = $1 and organization_id = $2 and last_message_preview like $4`,
+      [l.conversation_id, organizationId, texto, `${textoDoCartaoEmAndamento(null)}%`],
+    );
+    return true;
+  }
+
+  const menu = await menuDoRegistro(db, l);
+  try {
+    await db.query(
+      `insert into messages
+         (organization_id, conversation_id, contact_id, channel_session_id, external_id,
+          direction, type, body, sent_via, status, metadata)
+       values ($1, $2, $3, $4, $5, 'outbound', 'system', $6, 'system', 'sent', $7)`,
+      [
+        organizationId,
+        l.conversation_id,
+        l.contact_id,
+        l.channel_session_id,
+        externalId,
+        texto,
+        JSON.stringify({
+          voice_call: {
+            id: l.id,
+            direcao: "inbound",
+            desfecho: "atendida",
+            em_andamento: true,
+            duracao_ms: null,
+            atendente_id: l.owner_user_id,
+            atendente_nome: quem,
+            motivo: null,
+            menu,
+            ouviu_aviso: Boolean(l.emergency_heard_at),
+          },
+        }),
+      ],
+    );
+  } catch (e) {
+    // A trava única é DEFERRABLE (ver `registrarNaConversa`): quem perdeu a corrida não tem o que fazer.
+    if ((e as { code?: string }).code === "23505") return false;
+    throw e;
+  }
+  await db.query(
+    `update conversations
+        set last_message_at = now(), last_message_preview = left($3, 200), updated_at = now()
+      where id = $1 and organization_id = $2`,
+    [l.conversation_id, organizationId, texto],
+  );
+  return true;
+}
+
 /**
  * O registro da ligação DENTRO da conversa — a linha que o atendente vê no chat.
  *
@@ -1234,6 +1354,10 @@ export function tentativaDaSaidaSemResposta(
  * religa o termômetro de espera — e uma ligação não é uma fala a responder por
  * texto. `external_id` com o id da ligação: o mesmo registro não entra duas
  * vezes (índice único por organização).
+ *
+ * Fila visível, entrega 1: a recebida ATENDIDA já tem o cartão — `abrirCartaoDaLigacao`
+ * o criou "em andamento". Aqui ele é COMPLETADO, mesclando no banco (reações e
+ * gravação escrevem no mesmo `metadata`); o cartão já fechado não é reescrito.
  */
 export async function registrarNaConversa(
   db: Queryable,
@@ -1243,14 +1367,7 @@ export async function registrarNaConversa(
 ): Promise<void> {
   // A interna (v3) não tem conversa nem contato: não há onde registrar.
   if (!l.conversation_id || !l.contact_id || l.direction === "internal") return;
-  let quem: string | null = null;
-  if (l.owner_user_id) {
-    const { rows } = await db.query<{ nome: string | null }>(
-      "select coalesce(raw_user_meta_data->>'full_name', email) as nome from auth.users where id = $1",
-      [l.owner_user_id],
-    );
-    quem = rows[0]?.nome ?? null;
-  }
+  const quem = await nomeDoAtendente(db, l.owner_user_id);
   const texto = textoDoRegistro({ direcao: l.direction, desfecho, duracaoMs, quem, motivo: l.end_reason ?? null });
   // Sem `on conflict`: a trava única de `(organization_id, external_id)` é
   // DEFERRABLE, e o Postgres recusa trava deferível como árbitro ("ON CONFLICT
@@ -1258,55 +1375,77 @@ export async function registrarNaConversa(
   // tela, onde isso derrubava o fim da ligação inteiro. Conferir antes e tratar
   // o 23505 do reenvio cobre o mesmo caso.
   const externalId = `ligacao:${l.id}`;
-  const { rows: ja } = await db.query(
-    "select 1 from messages where organization_id = $1 and external_id = $2 limit 1",
+  const { rows: ja } = await db.query<{ em_andamento: string | null }>(
+    "select metadata->'voice_call'->>'em_andamento' as em_andamento from messages where organization_id = $1 and external_id = $2 limit 1",
     [l.organization_id, externalId],
   );
-  if (ja.length > 0) return;
+  const emAndamento = ja[0]?.em_andamento === "true";
+  if (ja.length > 0 && !emAndamento) return;
   const menu = await menuDoRegistro(db, l);
   const transferencias = await transferenciasDoRegistro(db, l);
   const toqueMs = toqueDaSaidaSemResposta(l);
   const tentativaMs = tentativaDaSaidaSemResposta(l);
-  try {
+  const registro = {
+    id: l.id,
+    direcao: l.direction,
+    desfecho,
+    duracao_ms: duracaoMs,
+    atendente_id: l.owner_user_id,
+    atendente_nome: quem,
+    motivo: l.end_reason ?? null,
+    menu,
+    ouviu_aviso: Boolean(l.emergency_heard_at),
+    // Feita e não atendida: por quanto tempo o telefone do cliente chamou (0294). Ausente sem a medida.
+    ...(toqueMs !== null ? { toque_ms: toqueMs } : {}),
+    // E quanto durou a tentativa, do pedido ao fim — o que o cartão conta de quem desligou sem o toque.
+    ...(tentativaMs !== null ? { tentativa_ms: tentativaMs } : {}),
+    // A corrente de transferências (v2), com os nomes daquela hora. Ausente sem transferência.
+    ...(transferencias.length > 0 ? { transferencias } : {}),
+    // Gravada: o arquivo ainda vai ser guardado (lib/channels/telefonia/gravacoes.ts),
+    // e é o processamento que troca a situação, sempre mesclando no banco.
+    ...(l.recording_status === "recording" ? { gravacao: GRAVACAO_EM_PROCESSAMENTO } : {}),
+  };
+  if (emAndamento) {
+    // A `gravacao` que JÁ está no cartão vence a do registro: o cartão existe
+    // desde o atender, e a passada das gravações (fora da fila serial) pode
+    // guardar o arquivo entre o fechamento da ligação e esta escrita — o
+    // "processando" do registro por cima dela esconderia o botão de ouvir para sempre.
     await db.query(
-    `insert into messages
-       (organization_id, conversation_id, contact_id, channel_session_id, external_id,
-        direction, type, body, sent_via, status, metadata)
-     values ($1, $2, $3, $4, $5, 'outbound', 'system', $6, 'system', 'sent', $7)`,
-    [
-      l.organization_id,
-      l.conversation_id,
-      l.contact_id,
-      l.channel_session_id,
-      externalId,
-      texto,
-      JSON.stringify({
-        voice_call: {
-          id: l.id,
-          direcao: l.direction,
-          desfecho,
-          duracao_ms: duracaoMs,
-          atendente_id: l.owner_user_id,
-          atendente_nome: quem,
-          motivo: l.end_reason ?? null,
-          menu,
-          ouviu_aviso: Boolean(l.emergency_heard_at),
-          // Feita e não atendida: por quanto tempo o telefone do cliente chamou (0294). Ausente sem a medida.
-          ...(toqueMs !== null ? { toque_ms: toqueMs } : {}),
-          // E quanto durou a tentativa, do pedido ao fim — o que o cartão conta de quem desligou sem o toque.
-          ...(tentativaMs !== null ? { tentativa_ms: tentativaMs } : {}),
-          // A corrente de transferências (v2), com os nomes daquela hora. Ausente sem transferência.
-          ...(transferencias.length > 0 ? { transferencias } : {}),
-          // Gravada: o arquivo ainda vai ser guardado (lib/channels/telefonia/gravacoes.ts),
-          // e é o processamento que troca a situação, sempre mesclando no banco.
-          ...(l.recording_status === "recording" ? { gravacao: GRAVACAO_EM_PROCESSAMENTO } : {}),
-        },
-      }),
-    ],
+      `update messages
+          set body = $3,
+              metadata = jsonb_set(
+                metadata,
+                '{voice_call}',
+                ((metadata->'voice_call') - 'em_andamento') || $4::jsonb
+                  || case when (metadata->'voice_call') ? 'gravacao'
+                          then jsonb_build_object('gravacao', metadata->'voice_call'->'gravacao')
+                          else '{}'::jsonb end
+              )
+        where organization_id = $1 and external_id = $2
+          and metadata->'voice_call'->>'em_andamento' = 'true'`,
+      [l.organization_id, externalId, texto, JSON.stringify(registro)],
     );
-  } catch (e) {
-    if ((e as { code?: string }).code === "23505") return;
-    throw e;
+  } else {
+    try {
+      await db.query(
+        `insert into messages
+           (organization_id, conversation_id, contact_id, channel_session_id, external_id,
+            direction, type, body, sent_via, status, metadata)
+         values ($1, $2, $3, $4, $5, 'outbound', 'system', $6, 'system', 'sent', $7)`,
+        [
+          l.organization_id,
+          l.conversation_id,
+          l.contact_id,
+          l.channel_session_id,
+          externalId,
+          texto,
+          JSON.stringify({ voice_call: registro }),
+        ],
+      );
+    } catch (e) {
+      if ((e as { code?: string }).code === "23505") return;
+      throw e;
+    }
   }
   await db.query(
     `update conversations
@@ -1412,6 +1551,60 @@ export async function registrarFim(
     usuarioId: l.owner_user_id,
     payload: { canal: "telefone", desfecho, motivo },
   });
+}
+
+// ─── o cartão que ficou "em andamento" (fila visível, entrega 1) ──────────
+
+/**
+ * Ligações do telefone já ENCERRADAS cujo cartão ficou "em andamento": a
+ * ligação fechou no banco e a escrita do cartão falhou (o banco caiu entre uma
+ * e outra). Varre a instalação inteira de propósito, como `ligacoesVivas` — e
+ * cada conserto escreve na organização da PRÓPRIA linha. Parte de `voice_calls`
+ * (pequena) e sonda `messages` pelo índice único de `(organization_id,
+ * external_id)`: nunca varre `messages`. O minuto de folga deixa o fim normal
+ * (`finalizar`) terminar antes; as 24 h limitam a sonda ao que ainda importa.
+ */
+export async function ligacoesComCartaoOrfao(db: Queryable, limite = 20): Promise<LigacaoDoBanco[]> {
+  const { rows } = await db.query<LigacaoDoBanco>(
+    `select ${COLUNAS_DA_LIGACAO} from voice_calls v
+      where v.provider = $1 and v.status = 'ended' and v.direction = 'inbound' and v.answered_at is not null
+        and v.ended_at > now() - interval '24 hours' and v.ended_at < now() - interval '1 minute'
+        and exists (select 1 from messages m
+                     where m.organization_id = v.organization_id
+                       and m.external_id = 'ligacao:' || v.id::text
+                       and m.metadata->'voice_call'->>'em_andamento' = 'true')
+      order by v.ended_at
+      limit $2`,
+    [PROVIDER, limite],
+  );
+  return rows;
+}
+
+/**
+ * Fecha os cartões órfãos pelo caminho de sempre (`registrarNaConversa`).
+ * Devolve quantos FECHOU. O que falha fica para a próxima passada e não segura
+ * os outros: uma ligação que não fecha nunca não pode deixar as demais dizendo
+ * "em andamento".
+ */
+export async function consertarCartoesOrfaos(db: Queryable): Promise<number> {
+  const orfas = await ligacoesComCartaoOrfao(db);
+  let fechados = 0;
+  for (const l of orfas) {
+    const duracao =
+      l.answered_at && l.ended_at
+        ? Math.max(0, Math.round(new Date(l.ended_at).getTime() - new Date(l.answered_at).getTime()))
+        : null;
+    try {
+      await registrarNaConversa(db, l, "atendida", duracao);
+      fechados++;
+    } catch (e) {
+      logger.warn("telefonia: cartão em andamento de ligação encerrada não fechado — a próxima passada tenta de novo", {
+        voice_call: l.id,
+        erro: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+      });
+    }
+  }
+  return fechados;
 }
 
 // ─── ramais e ligação interna (fase 2, versão 3; migration 0291) ──────────

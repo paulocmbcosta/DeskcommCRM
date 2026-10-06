@@ -126,7 +126,7 @@
       "lane": "worker",
       "col": 5,
       "type": "backend",
-      "label": "`repositorio.ts` — toda leitura e escrita do worker; `organization_id` sempre do TRONCO (endpoint do Asterisk), nunca de dado do chamador"
+      "label": "`repositorio.ts` — toda leitura e escrita do worker; `organization_id` sempre do TRONCO (endpoint do Asterisk), nunca de dado do chamador. O cartão \"Ligação em andamento\" (fila visível, entrega 1): `abrirCartaoDaLigacao` o cria quando a recebida é atendida, `registrarNaConversa` o completa no fim e `consertarCartoesOrfaos` fecha o que ficou para trás"
     },
     {
       "id": "rota_numeros",
@@ -217,7 +217,7 @@
       "lane": "tela",
       "col": 5,
       "type": "frontend",
-      "label": "Inbox — card com ícone `PhoneCall` (`data-meio=\"phone\"`), `Composer` só em nota interna (`somenteNota`), `CartaoDaLigacao` no chat (sentido, quem atendeu, duração, desfecho); fase 2: o que a URA fez (\"No menu X, digitou 1 e foi para o time Y\"; \"…digitou uma tecla que não existe e foi para o time padrão, Y\"; \"Desligou no menu X, antes de escolher\"), \"Ouviu o aviso de instabilidade\" e \"Ligação fora do horário\"; a feita sem resposta (0294) diz quem ligou no selo e, embaixo, quanto o telefone chamou e quem encerrou (\"Chamou 4 s · desligada por quem ligou\" / \"Chamou 38 s · ninguém atendeu\" / \"O número estava ocupado\")"
+      "label": "Inbox — card com ícone `PhoneCall` (`data-meio=\"phone\"`), `Composer` só em nota interna (`somenteNota`), `CartaoDaLigacao` no chat (sentido, quem atendeu, duração, desfecho); fase 2: o que a URA fez (\"No menu X, digitou 1 e foi para o time Y\"; \"…digitou uma tecla que não existe e foi para o time padrão, Y\"; \"Desligou no menu X, antes de escolher\"), \"Ouviu o aviso de instabilidade\" e \"Ligação fora do horário\"; a recebida atendida e ainda em curso diz \"Ligação em andamento · com Ana · desde 14:32\" (`em_andamento`) até o fim completar o mesmo cartão; a feita sem resposta (0294) diz quem ligou no selo e, embaixo, quanto o telefone chamou e quem encerrou (\"Chamou 4 s · desligada por quem ligou\" / \"Chamou 38 s · ninguém atendeu\" / \"O número estava ocupado\")"
     },
     {
       "id": "central",
@@ -607,7 +607,7 @@
     { "from": "controle", "to": "distribuicao", "label": "`proximoToque(disponíveis, estado)`" },
     { "from": "controle", "to": "ari", "label": "comandos da ligação" },
     { "from": "distribuicao", "to": "controle", "label": "tocar <atendente> · esperar na fila · desistir (vira perdida)" },
-    { "from": "controle", "to": "repositorio", "label": "contato, conversa, ligação, desfecho" },
+    { "from": "controle", "to": "repositorio", "label": "contato, conversa, ligação, desfecho; abre o cartão \"Ligação em andamento\" ao atender (e na transferência, para quem pegou a ligação)" },
     { "from": "controle", "to": "politica", "label": "confere o número de novo antes de discar" },
     { "from": "t_disponibilidade", "to": "repositorio", "label": "quem do time está disponível, dentro do horário" },
     { "from": "t_sessions", "to": "t_disponibilidade", "label": "`sip_team_id` escolhe o time que recebe" },
@@ -616,7 +616,7 @@
     { "from": "repositorio", "to": "t_voice_calls", "label": "cria · `ringing_user_id` · atendida · encerrada (idempotente) · escolha do menu (`registrarEscolhaDoMenu`) · aviso ouvido — sempre com o filtro da organização" },
     { "from": "repositorio", "to": "t_contacts", "label": "acha pelo número ou cria" },
     { "from": "repositorio", "to": "t_conversations", "label": "acha ou cria a `phone`; atribui a quem atendeu (`fn_conversation_assign` claim); com a URA, leva a conversa ao time ESCOLHIDO — nunca a de dono humano, nunca a time arquivado" },
-    { "from": "repositorio", "to": "t_messages", "label": "registro da ligação, uma vez; o menu com os nomes daquela hora" },
+    { "from": "repositorio", "to": "t_messages", "label": "registro da ligação, uma vez — a recebida atendida o ganha ao atender, EM ANDAMENTO (`em_andamento: true`, `desfecho: atendida`), e o fim o completa mesclando no banco; o menu com os nomes daquela hora" },
     { "from": "repositorio", "to": "t_inbox", "label": "recebida perdida → `voice_call_missed`, no idioma da organização e com o time (\"Ninguém do time X atendeu.\" / \"O cliente desligou no menu do telefone.\"); fala que não tocou, aviso vencido, menu com time padrão arquivado" },
     { "from": "repositorio", "to": "t_activities", "label": "`emitAgentActivityForContact`" },
     { "from": "aba", "to": "rota_numeros", "label": "adicionar · editar · remover" },
@@ -724,7 +724,7 @@
     { "from": "t_prompts", "to": "repositorio", "label": "falas gerais, a do menu e a do aviso, com a duração" },
     { "from": "t_times", "to": "repositorio", "label": "`timeParaAFila`: aberto / fora do horário / indisponível + o aviso VIGENTE (lê `expires_at`, não espera a passada)" },
     { "from": "repositorio", "to": "t_times", "label": "`desligarAvisosVencidos` (`for no key update skip locked`), também de time arquivado" },
-    { "from": "laco", "to": "repositorio", "label": "passada de 60 s: os avisos vencidos, com guarda própria (não esperam o Storage)" },
+    { "from": "laco", "to": "repositorio", "label": "passada de 60 s: os avisos vencidos, com guarda própria (não esperam o Storage); e o cartão que ficou \"em andamento\" com a ligação já encerrada (`consertarCartoesOrfaos`)" },
     { "from": "repositorio", "to": "t_audit", "label": "`phone.emergency_expired`, sem ator" },
     { "from": "t_voice_calls", "to": "sete_dias", "label": "`menu_digit` / `menu_outcome` das ligações ENCERRADAS com menu" },
     { "from": "sete_dias", "to": "aba_menus", "label": "o bloco \"últimos 7 dias\" e o alerta \"menu que confunde\"" },

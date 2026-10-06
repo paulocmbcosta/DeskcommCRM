@@ -2398,3 +2398,54 @@ describe("o som de chamando na fila (DYD-52): com atendente livre, o chamar — 
     expect(ari.chamadas.slice(n)).toEqual([]);
   });
 });
+
+describe("o cartão 'Ligação em andamento' (fila visível, entrega 1)", () => {
+  beforeEach(() => {
+    banco.disponiveis = [{ userId: ANA, atendidasHoje: 0, ultimaAtendidaEm: null }];
+    ari.online.add(ANA);
+  });
+
+  it("ao atender, o cartão entra na conversa DEPOIS da atribuição — e com quem atendeu", async () => {
+    await entrar();
+    await ramalAtende(ari.ultimoOriginado());
+    expect(banco.tem("cartao")).toEqual([["cartao", "vc-1", ANA]]);
+    const nomes = banco.eventos.map((e) => e[0]);
+    expect(nomes.indexOf("atribuida")).toBeGreaterThan(-1);
+    expect(nomes.indexOf("cartao")).toBeGreaterThan(nomes.indexOf("atribuida"));
+  });
+
+  it("enquanto ninguém atende não há cartão, e a perdida não ganha um", async () => {
+    await entrar();
+    expect(banco.tem("cartao")).toEqual([]);
+    await destruir("cli-1");
+    expect(banco.tem("cartao")).toEqual([]);
+    expect(banco.tem("registro")).toEqual([["registro", "vc-1", "perdida"]]);
+  });
+
+  it("o banco cai ao abrir o cartão: a ponte se forma, a ligação segue e o fim registra", async () => {
+    banco.falharCartao = true;
+    await entrar();
+    await ramalAtende(ari.ultimoOriginado());
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "ramal-canal-1"]);
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("cartão da ligação em andamento não aberto"),
+      expect.anything(),
+    );
+    await destruir("cli-1");
+    expect(banco.tem("registro")).toEqual([["registro", "vc-1", "atendida"]]);
+    expect(ctl.ativas).toBe(0);
+  });
+
+  it("número oculto (sem conversa): a ligação é atendida, e não há conversa onde pôr o cartão", async () => {
+    // A mesma montagem do caso de número oculto da gravação: a bina não vira E.164, e a ligação nasce sem conversa.
+    await ctl.tratar({
+      type: "StasisStart",
+      channel: canal("cli-1", `PJSIP/tronco-${TRONCO}-00000001`, { caller: { name: "", number: "anonymous" } }),
+      args: ["entrada"],
+    });
+    await ramalAtende(ari.ultimoOriginado());
+    expect(banco.tem("atendida")).toHaveLength(1);
+    expect(banco.tem("cartao")).toEqual([]);
+  });
+});

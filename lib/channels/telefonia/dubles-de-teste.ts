@@ -278,6 +278,15 @@ export class BancoFalso implements PortaBanco {
   atribuirConversa = async (_o: string, c: string, u: string, motivo: "claim" | "transfer" = "claim") => {
     this.eventos.push(motivo === "claim" ? ["atribuida", c, u] : ["atribuida", c, u, motivo]);
   };
+  /** `abrirCartaoDaLigacao` lança (o banco caiu logo depois de a ligação ser atendida). */
+  falharCartao = false;
+  /** O cartão "em andamento": registra com QUEM a ligação está na hora da chamada. */
+  abrirCartaoDaLigacao = async (org: string, id: string) => {
+    if (!this.daOrg(org, id, "abrirCartaoDaLigacao")) return false;
+    if (this.falharCartao) throw new Error("banco fora do ar");
+    this.eventos.push(["cartao", id, this.ligacoes.get(id)!.owner_user_id]);
+    return true;
+  };
   registrarNaConversa = async (l: LigacaoDoBanco, d: string) => {
     this.eventos.push(["registro", l.id, d]);
   };
