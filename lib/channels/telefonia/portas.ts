@@ -11,12 +11,14 @@ import type { CanalAri } from "./ari";
 import type { CandidatoAoToque } from "@/lib/telefonia/distribuicao";
 import type {
   DesfechoDaLigacao,
+  DesfechoDaOrdemDaFila,
   DesfechoDaTransferencia,
   EscolhaDoMenu,
   FalasGerais,
   LigacaoDoBanco,
   MenuDoBanco,
   NovaLigacao,
+  OrdemDaFilaDoBanco,
   TimeParaAFila,
   TransferenciaDoBanco,
   TroncoDoBanco,
@@ -125,6 +127,16 @@ export interface PortaBanco {
   timeDaLigacao(org: string, id: string): Promise<string | null>;
   /** A pessoa está numa ligação viva (falando, tocando, ou do outro lado de uma interna). */
   pessoaEmLigacao(org: string, userId: string): Promise<boolean>;
+  // ── as ordens da fila (fila visível, entrega 3; migration 0296) ──
+  /** A ordem ABERTA `id` desta ligação, nesta organização (o evento da ARI é só ponteiro). */
+  ordemDaFilaAberta(org: string, vcId: string, id: string): Promise<OrdemDaFilaDoBanco | null>;
+  encerrarOrdemDaFila(org: string, id: string, fim: { desfecho: DesfechoDaOrdemDaFila; motivo: string | null }): Promise<void>;
+  /** A ordem chegou para uma ligação que este worker não acompanha: recusada, presa ao par (ordem, ligação). */
+  recusarOrdemDaFilaOrfa(id: string, vcId: string, motivo: string): Promise<void>;
+  /** Na (re)conexão: as abertas morreram com o worker anterior. */
+  cancelarOrdensDaFilaAbertas(motivo: string): Promise<number>;
+  /** A ligação acabou: a ordem que ficou aberta nela fecha `cancelled`. */
+  cancelarOrdensDaLigacao(org: string, vcId: string, motivo: string): Promise<number>;
   // ── ramais (v3, migration 0291) ──
   /** Quem tem o ramal `numero` nesta organização (a URA com ramal). */
   donoDoRamal(org: string, numero: string): Promise<string | null>;
@@ -155,8 +167,9 @@ export interface PlaybackAri {
  * O que chega no WebSocket. `PlaybackFinished` fecha as falas (URA e fila).
  * `ChannelDtmfReceived` é lido SÓ enquanto a URA está ativa (§5.1): na fila, de
  * propósito, tecla nenhuma muda nada — o aviso de instabilidade toca INTEIRO.
- * `ChannelUserevent` é a ORDEM da tela para a transferência (versão 2): a API a
- * emite pela ARI, e ela chega aqui como qualquer evento da aplicação.
+ * `ChannelUserevent` é a ORDEM da tela — para a transferência (versão 2) e para
+ * a fila (atender e mover, 0296), cada uma com o seu `eventname`: a API a emite
+ * pela ARI, e ela chega aqui como qualquer evento da aplicação.
  */
 export type EventoAri =
   | { type: "StasisStart"; channel: CanalAri; args: string[] }

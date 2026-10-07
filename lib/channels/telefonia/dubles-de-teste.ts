@@ -7,6 +7,7 @@
 import { ErroAri, type CanalAri } from "./ari";
 import type { PortaAri, PortaBanco, PortaFalas } from "./controle";
 import type {
+  DesfechoDaOrdemDaFila,
   DesfechoDaTransferencia,
   EscolhaDoMenu,
   FalaDoBanco,
@@ -14,6 +15,7 @@ import type {
   LigacaoDoBanco,
   MenuDoBanco,
   NovaLigacao,
+  OrdemDaFilaDoBanco,
   SituacaoDoTime,
   TransferenciaDoBanco,
   TroncoDoBanco,
@@ -81,7 +83,13 @@ export class AriFalso implements PortaAri {
   desligar = (c: string, m?: string) => this.reg("desligar", c, m);
   /** Quantas vezes o `originar` ainda lança (o ramal sumiu entre a pergunta e o toque). */
   falharOriginar = 0;
-  originar = async (p: { endpoint: string; appArgs: string }) => {
+  /**
+   * Os toques que saíram, INTEIROS — o prazo, a bina e os cabeçalhos. `chamadas`
+   * guarda só o endpoint e o papel (é o que quase todo teste confere); o toque
+   * de quem puxou a ligação da fila se distingue pelo que só está aqui.
+   */
+  toques: Array<Parameters<PortaAri["originar"]>[0]> = [];
+  originar = async (p: Parameters<PortaAri["originar"]>[0]) => {
     if (this.falharOriginar > 0) {
       this.falharOriginar--;
       // Fora de "originar": `originados()` e `ultimoOriginado()` contam só os toques que saíram.
@@ -89,6 +97,7 @@ export class AriFalso implements PortaAri {
       throw new ErroAri(500, "Internal Server Error", "/channels");
     }
     await this.reg("originar", p.endpoint, p.appArgs);
+    this.toques.push(p);
     return { id: `ramal-canal-${++this.seq}` };
   };
   criarCanal = async (p: { endpoint: string; appArgs: string; callerId?: string }) => {
@@ -176,8 +185,15 @@ export class BancoFalso implements PortaBanco {
   falharDisponiveis = 0;
   /** Quantas vezes os disponíveis foram lidos — cada avaliação da fila de uma ligação lê uma vez. */
   leiturasDeDisponiveis = 0;
-  disponiveisNoTime = async () => {
+  /**
+   * De que (organização, time) os disponíveis foram lidos, em ordem. Fora de
+   * `consultas`: há teste que a confere inteira. Os parâmetros são opcionais só
+   * no dublê — há teste que o embrulha e o chama sem nada.
+   */
+  timesLidos: Array<[string | undefined, string | undefined]> = [];
+  disponiveisNoTime = async (org?: string, teamId?: string) => {
     this.leiturasDeDisponiveis++;
+    this.timesLidos.push([org, teamId]);
     if (this.falharDisponiveis > 0) {
       this.falharDisponiveis--;
       throw new Error("banco fora do ar");
@@ -398,6 +414,72 @@ export class BancoFalso implements PortaBanco {
   timeDaLigacao = async (org: string, id: string) => {
     if (!this.daOrg(org, id, "timeDaLigacao")) return null;
     return this.ligacoes.get(id)!.team_id ?? this.timeDaConversa;
+  };
+  // ── as ordens da fila (0296) ──
+  /** As ordens do banco, pelo id. `abrirOrdemDaFila` põe uma aberta, como a API faria. */
+  ordensDaFila = new Map<
+    string,
+    OrdemDaFilaDoBanco & { vcId: string; org: string; status: "open" | "ended"; desfecho?: DesfechoDaOrdemDaFila; motivo?: string | null }
+  >();
+  abrirOrdemDaFila(o: OrdemDaFilaDoBanco & { vcId: string; org?: string }) {
+    this.ordensDaFila.set(o.id, { ...o, org: o.org ?? ORG, status: "open" });
+  }
+  /** As escritas das ordens lançam (o banco caiu com a ordem em curso). */
+  falharOrdensDaFila = false;
+  ordemDaFilaAberta = async (org: string, vcId: string, id: string) => {
+    const o = this.ordensDaFila.get(id);
+    if (!o || o.org !== org || o.vcId !== vcId || o.status !== "open") return null;
+    return { id: o.id, kind: o.kind, requestedBy: o.requestedBy, toUserId: o.toUserId, toTeamId: o.toTeamId };
+  };
+  encerrarOrdemDaFila = async (org: string, id: string, fim: { desfecho: DesfechoDaOrdemDaFila; motivo: string | null }) => {
+    if (this.falharOrdensDaFila) throw new Error("banco fora do ar");
+    const o = this.ordensDaFila.get(id);
+    if (!o || o.org !== org) {
+      this.eventos.push(["org_errada", "encerrarOrdemDaFila", id, org]);
+      return;
+    }
+    if (o.status !== "open") return;
+    o.status = "ended";
+    o.desfecho = fim.desfecho;
+    o.motivo = fim.motivo;
+    this.eventos.push(["ordem_da_fila", id, fim.desfecho, fim.motivo]);
+  };
+  recusarOrdemDaFilaOrfa = async (id: string, vcId: string, motivo: string) => {
+    if (this.falharOrdensDaFila) throw new Error("banco fora do ar");
+    const o = this.ordensDaFila.get(id);
+    if (o && o.vcId === vcId && o.status === "open") {
+      o.status = "ended";
+      o.desfecho = "refused";
+      o.motivo = motivo;
+    }
+    this.eventos.push(["ordem_da_fila_orfa", id, motivo]);
+  };
+  cancelarOrdensDaFilaAbertas = async (motivo: string) => {
+    if (this.falharOrdensDaFila) throw new Error("banco fora do ar");
+    let n = 0;
+    for (const o of this.ordensDaFila.values()) {
+      if (o.status !== "open") continue;
+      o.status = "ended";
+      o.desfecho = "cancelled";
+      o.motivo = motivo;
+      n++;
+    }
+    return n;
+  };
+  /** Como o SQL: só as abertas DESTA ligação, nesta organização. Sem ordem aberta, não deixa rastro. */
+  cancelarOrdensDaLigacao = async (org: string, vcId: string, motivo: string) => {
+    if (this.falharOrdensDaFila) throw new Error("banco fora do ar");
+    if (!this.daOrg(org, vcId, "cancelarOrdensDaLigacao")) return 0;
+    let n = 0;
+    for (const o of this.ordensDaFila.values()) {
+      if (o.status !== "open" || o.vcId !== vcId || o.org !== org) continue;
+      o.status = "ended";
+      o.desfecho = "cancelled";
+      o.motivo = motivo;
+      this.eventos.push(["ordem_da_fila", o.id, "cancelled", motivo]);
+      n++;
+    }
+    return n;
   };
   /** Quem o banco diz estar em outra ligação. */
   ocupados = new Set<string>();

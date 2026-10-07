@@ -1125,6 +1125,114 @@ export async function pessoaEmLigacao(db: Queryable, organizationId: string, use
   return rows.length > 0;
 }
 
+// ─── as ordens da fila (fila visível, entrega 3; migration 0296) ──────────
+//
+// "Atender" e "Mover", pedidos pela aba Telefone. O mesmo desenho da
+// transferência: a API grava o PEDIDO (a linha `open`) e avisa o worker pela
+// ARI; o worker relê a linha aqui — pelo id, com a organização DA LIGAÇÃO em
+// memória e o id da ligação junto — e grava o DESFECHO. A variável do evento
+// é ponteiro, nunca autoridade.
+
+/** Como a ordem acaba (`voice_call_queue_orders.outcome`, o CHECK da 0296). */
+export type DesfechoDaOrdemDaFila = "done" | "refused" | "no_answer" | "cancelled";
+
+export interface OrdemDaFilaDoBanco {
+  id: string;
+  /** `pull`: puxar para o ramal de `toUserId`. `move`: mandar para a fila de `toTeamId`. */
+  kind: "pull" | "move";
+  requestedBy: string | null;
+  toUserId: string | null;
+  toTeamId: string | null;
+}
+
+/** A ordem ABERTA `id` desta ligação, nesta organização — ou `null`. */
+export async function ordemDaFilaAberta(
+  db: Queryable,
+  organizationId: string,
+  voiceCallId: string,
+  id: string,
+): Promise<OrdemDaFilaDoBanco | null> {
+  const { rows } = await db.query<{
+    id: string;
+    kind: "pull" | "move";
+    requested_by: string | null;
+    to_user_id: string | null;
+    to_team_id: string | null;
+  }>(
+    `select id, kind, requested_by, to_user_id, to_team_id
+       from voice_call_queue_orders
+      where id = $1 and organization_id = $2 and voice_call_id = $3 and status = 'open'`,
+    [id, organizationId, voiceCallId],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, kind: r.kind, requestedBy: r.requested_by, toUserId: r.to_user_id, toTeamId: r.to_team_id } : null;
+}
+
+/** Fecha a ordem com o desfecho. Idempotente: a que já fechou não muda. */
+export async function encerrarOrdemDaFila(
+  db: Queryable,
+  organizationId: string,
+  id: string,
+  fim: { desfecho: DesfechoDaOrdemDaFila; motivo: string | null },
+): Promise<void> {
+  await db.query(
+    `update voice_call_queue_orders
+        set status = 'ended', outcome = $3, reason = $4, ended_at = now()
+      where id = $1 and organization_id = $2 and status = 'open'`,
+    [id, organizationId, fim.desfecho, fim.motivo],
+  );
+}
+
+/**
+ * A ordem chegou para uma ligação que este worker não acompanha (ela acabou, ou
+ * ele reiniciou): recusada — a tela para de esperar por ela. Sem organização
+ * de propósito, como `recusarTransferenciaOrfa`: não há ligação em memória de
+ * onde tirá-la; fica presa ao PAR (ordem, ligação) que a própria ordem trouxe.
+ */
+export async function recusarOrdemDaFilaOrfa(db: Queryable, id: string, voiceCallId: string, motivo: string): Promise<void> {
+  await db.query(
+    `update voice_call_queue_orders
+        set status = 'ended', outcome = 'refused', reason = $3, ended_at = now()
+      where id = $1 and voice_call_id = $2 and status = 'open'`,
+    [id, voiceCallId, motivo],
+  );
+}
+
+/**
+ * Na (re)conexão do worker: toda ordem aberta morreu com o estado em memória do
+ * worker anterior — o ramal de quem puxou não toca mais por ela. Varre a
+ * instalação, como `cancelarTransferenciasAbertas`.
+ */
+export async function cancelarOrdensDaFilaAbertas(db: Queryable, motivo: string): Promise<number> {
+  const { rowCount } = await db.query(
+    `update voice_call_queue_orders
+        set status = 'ended', outcome = 'cancelled', reason = $1, ended_at = now()
+      where status = 'open'`,
+    [motivo],
+  );
+  return rowCount ?? 0;
+}
+
+/**
+ * A ligação acabou: a ordem que ficou aberta nela (o ramal de quem puxou ainda
+ * tocava, ou o evento nunca chegou ao worker) fecha `cancelled`. Presa à
+ * organização da ligação.
+ */
+export async function cancelarOrdensDaLigacao(
+  db: Queryable,
+  organizationId: string,
+  voiceCallId: string,
+  motivo: string,
+): Promise<number> {
+  const { rowCount } = await db.query(
+    `update voice_call_queue_orders
+        set status = 'ended', outcome = 'cancelled', reason = $3, ended_at = now()
+      where organization_id = $1 and voice_call_id = $2 and status = 'open'`,
+    [organizationId, voiceCallId, motivo],
+  );
+  return rowCount ?? 0;
+}
+
 function duracaoLegivel(ms: number | null): string {
   if (!ms || ms < 1000) return "";
   const s = Math.round(ms / 1000);
@@ -1229,6 +1337,53 @@ async function transferenciasDoRegistro(db: Queryable, l: LigacaoDoBanco): Promi
     }));
   } catch (e) {
     logger.warn("telefonia: transferências da ligação não lidas — o registro sai sem elas", {
+      voice_call: l.id,
+      erro: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+    });
+    return [];
+  }
+}
+
+/**
+ * O que a tela fez com a ligação enquanto ela esperava (0296), como o cartão o
+ * lê — a mesma forma de `AcaoNaFilaDaLigacao` (`lib/telefonia/vocabulario.ts`),
+ * escrita aqui para o worker não depender do leitor da tela.
+ */
+interface AcaoNaFilaDoRegistro {
+  tipo: "pull" | "move";
+  por_nome: string | null;
+  de_time: string | null;
+  para_time: string | null;
+}
+
+/**
+ * As ordens da fila que ACONTECERAM nesta ligação (`done`): quem a puxou, quem
+ * a moveu e entre que times — na ordem em que foram pedidas. A recusada, a que
+ * ninguém atendeu e a cancelada não mudaram a ligação e ficam fora do cartão.
+ * Os nomes são os desta hora, e os times lidos DESTA organização. NUNCA lança,
+ * pelo mesmo motivo de `menuDoRegistro`: é cosmético, e quem chama ainda tem o
+ * "Ligar de volta".
+ */
+async function acoesNaFilaDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<AcaoNaFilaDoRegistro[]> {
+  try {
+    const { rows } = await db.query<{
+      kind: AcaoNaFilaDoRegistro["tipo"];
+      por_nome: string | null;
+      de_time: string | null;
+      para_time: string | null;
+    }>(
+      `select o.kind,
+              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = o.requested_by) as por_nome,
+              (select tm.name from attendance_teams tm where tm.id = o.from_team_id and tm.organization_id = o.organization_id) as de_time,
+              (select tm.name from attendance_teams tm where tm.id = o.to_team_id and tm.organization_id = o.organization_id) as para_time
+         from voice_call_queue_orders o
+        where o.organization_id = $1 and o.voice_call_id = $2 and o.outcome = 'done'
+        order by o.created_at, o.id`,
+      [l.organization_id, l.id],
+    );
+    return rows.map((r) => ({ tipo: r.kind, por_nome: r.por_nome, de_time: r.de_time, para_time: r.para_time }));
+  } catch (e) {
+    logger.warn("telefonia: ordens da fila da ligação não lidas — o registro sai sem elas", {
       voice_call: l.id,
       erro: (e instanceof Error ? e.message : String(e)).slice(0, 160),
     });
@@ -1424,6 +1579,8 @@ export async function registrarNaConversa(
   if (ja.length > 0 && !emAndamento) return;
   const menu = await menuDoRegistro(db, l);
   const transferencias = await transferenciasDoRegistro(db, l);
+  // Só a recebida entra na fila: a feita não tem ordem a ler.
+  const fila = l.direction === "inbound" ? await acoesNaFilaDoRegistro(db, l) : [];
   const toqueMs = toqueDaSaidaSemResposta(l);
   const tentativaMs = tentativaDaSaidaSemResposta(l);
   const registro = {
@@ -1442,6 +1599,8 @@ export async function registrarNaConversa(
     ...(tentativaMs !== null ? { tentativa_ms: tentativaMs } : {}),
     // A corrente de transferências (v2), com os nomes daquela hora. Ausente sem transferência.
     ...(transferencias.length > 0 ? { transferencias } : {}),
+    // Puxada da fila ou movida de time pela aba Telefone (0296). Ausente quando ninguém agiu nela.
+    ...(fila.length > 0 ? { fila } : {}),
     // Gravada: o arquivo ainda vai ser guardado (lib/channels/telefonia/gravacoes.ts),
     // e é o processamento que troca a situação, sempre mesclando no banco.
     ...(l.recording_status === "recording" ? { gravacao: GRAVACAO_EM_PROCESSAMENTO } : {}),
