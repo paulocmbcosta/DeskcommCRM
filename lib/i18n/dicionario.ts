@@ -10080,6 +10080,26 @@ export const DICIONARIO: Traducoes = {
   "Nenhuma ligação agora.": { es: "Ninguna llamada ahora." },
   // A releitura da fila falhou e a tela ficou com a leitura de antes.
   "Sem atualização no momento. A fila abaixo pode estar atrasada.": { es: "Sin actualización por ahora. La cola de abajo puede estar atrasada." },
+  // A aba Telefone, entrega 3 (0296): atender e mover direto da fila — a linha, o
+  // menu de mover, os avisos do desfecho da ordem e as linhas do cartão da ligação.
+  // "Atender", "Conectando…", "{n} disponíveis" e "Fora do horário" já existem acima;
+  // "Você está em outra ligação." e "Outra pessoa já está cuidando desta ligação." estão
+  // com as recusas das rotas, mais abaixo.
+  "Tocando para você": { es: "Sonando para ti" },
+  "Mover para outro time": { es: "Mover a otro equipo" },
+  // `{nome}` é quem pediu para atender; `{time}`, o time de destino. Trocados por `trocarMarcador`.
+  "{nome} está atendendo…": { es: "{nome} está atendiendo…" },
+  "Movendo para {time}…": { es: "Moviendo a {time}…" },
+  "outro time": { es: "otro equipo" },
+  "Ligação movida para {time}.": { es: "Llamada movida a {time}." },
+  "Seu telefone não está conectado.": { es: "Tu teléfono no está conectado." },
+  "A ligação acabou antes.": { es: "La llamada terminó antes." },
+  "Outra pessoa atendeu antes.": { es: "Otra persona contestó antes." },
+  "Seu telefone não atendeu. A ligação voltou para a fila.": { es: "Tu teléfono no contestó. La llamada volvió a la cola." },
+  "Não foi possível concluir. Tente de novo.": { es: "No se pudo completar. Inténtalo de nuevo." },
+  // No cartão da ligação: `{quem}`, `{de}` e `{para}` entram numa passada só (`oQueSeFezNaFila`).
+  "Puxada da fila por {quem}": { es: "Tomada de la cola por {quem}" },
+  "Movida de {de} para {para} por {quem}": { es: "Movida de {de} a {para} por {quem}" },
   // Telefonia — gravação das ligações (0289, DYD-53).
   "A gravação de uma ligação não foi salva": { es: "La grabación de una llamada no se guardó" },
   "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.": { es: "Verifica que el servicio de telefonía esté funcionando. Las próximas llamadas se siguen grabando; esta grabación se perdió." },

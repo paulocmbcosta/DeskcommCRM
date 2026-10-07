@@ -25,7 +25,7 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
-import { DESFECHOS_DO_MENU, type DesfechoDoMenu } from "@/lib/telefonia/vocabulario";
+import { DESFECHOS_DO_MENU, acoesNaFilaDaLigacao, type DesfechoDoMenu } from "@/lib/telefonia/vocabulario";
 
 import { CartaoDaLigacao, ligacaoDaMensagem, ligacaoDoRegistro } from "./CartaoDaLigacao";
 
@@ -499,6 +499,121 @@ describe("a corrente de transferências (v2)", () => {
     expect(elos).toEqual([
       "Ana transferiu para Bruno · não atendeu, voltou para Ana",
       "Ana transferiu para Suporte · Bia atendeu",
+    ]);
+  });
+});
+
+/**
+ * O QUE SE FEZ COM A LIGAÇÃO NA FILA (entrega 3; migration 0296). O worker grava
+ * em `metadata.voice_call.fila` as ordens que DERAM CERTO — quem puxou a ligação
+ * para si, quem a moveu de time —, e o cartão as lê por `acoesNaFilaDaLigacao`.
+ */
+describe("o que se fez com a ligação na fila (entrega 3)", () => {
+  const base = { id: "vc-1", direcao: "inbound", desfecho: "atendida", duracao_ms: 60_000, atendente_nome: "Bia" };
+  const linhas = (container: HTMLElement) =>
+    [...container.querySelectorAll("[data-ligacao-acao-na-fila]")].map((e) => [e.getAttribute("data-ligacao-acao-na-fila"), e.textContent]);
+  const desenhar = (fila: unknown, embrulho: (el: ReactElement) => ReactElement = (el) => el) => {
+    const ligacao = ligacaoDaMensagem({ voice_call: { ...base, fila } })!;
+    return render(embrulho(<CartaoDaLigacao ligacao={ligacao} em={EM} />)).container;
+  };
+
+  it("puxada e movida viram uma linha cada, com os nomes daquela hora; registro sem ações não mostra nada", () => {
+    const sem = render(<CartaoDaLigacao ligacao={ligacaoDaMensagem({ voice_call: base })!} em={EM} />).container;
+    expect(sem.querySelector("[data-ligacao-fila]")).toBeNull();
+    cleanup();
+
+    const container = desenhar([
+      { tipo: "move", por_nome: "Carla", de_time: "Vendas", para_time: "Suporte" },
+      { tipo: "pull", por_nome: "Bia", de_time: "Suporte", para_time: null },
+    ]);
+    expect(linhas(container)).toEqual([
+      ["move", "Movida de Vendas para Suporte por Carla"],
+      ["pull", "Puxada da fila por Bia"],
+    ]);
+  });
+
+  it("sem o nome de quem fez, ou do time: 'alguém' e 'outro time' — nunca um buraco na frase", () => {
+    const container = desenhar([
+      { tipo: "pull", por_nome: null },
+      { tipo: "move", por_nome: "  ", de_time: null, para_time: "Suporte" },
+      { tipo: "move", por_nome: "Carla", de_time: "Vendas" },
+    ]);
+    expect(linhas(container)).toEqual([
+      ["pull", "Puxada da fila por alguém"],
+      ["move", "Movida de outro time para Suporte por alguém"],
+      ["move", "Movida de Vendas para outro time por Carla"],
+    ]);
+  });
+
+  it("o que o registro não sustenta é descartado: tipo fora do vocabulário, lixo, e o que não é lista", () => {
+    const container = desenhar([
+      { tipo: "atender", por_nome: "Ana" }, // o vocabulário do EVENTO, não o do registro
+      { por_nome: "Ana" },
+      null,
+      "pull",
+      42,
+      { tipo: "pull", por_nome: "Bia" },
+    ]);
+    expect(linhas(container)).toEqual([["pull", "Puxada da fila por Bia"]]);
+    cleanup();
+    for (const naoLista of [null, undefined, "pull", { tipo: "pull" }, 7, true]) {
+      expect(acoesNaFilaDaLigacao(naoLista)).toEqual([]);
+      expect(desenhar(naoLista).querySelector("[data-ligacao-fila]")).toBeNull();
+      cleanup();
+    }
+    // Lista só de lixo: nenhuma linha — e nem a lista vazia na tela.
+    expect(desenhar([{ tipo: "outra" }, null]).querySelector("[data-ligacao-fila]")).toBeNull();
+  });
+
+  it("o leitor devolve só os quatro campos, com o texto vazio como ausente", () => {
+    expect(
+      acoesNaFilaDaLigacao([{ tipo: "move", por_nome: "", de_time: "  ", para_time: "Suporte", segredo: "x", por_id: "u-1" }]),
+    ).toEqual([{ tipo: "move", por_nome: null, de_time: null, para_time: "Suporte" }]);
+    expect(acoesNaFilaDaLigacao([{ tipo: "pull", por_nome: 7, de_time: {}, para_time: [] }])).toEqual([
+      { tipo: "pull", por_nome: null, de_time: null, para_time: null },
+    ]);
+  });
+
+  it("o nome vem do cadastro e sai como está: `$&` e marcador no nome não viram outra coisa", () => {
+    const container = desenhar([
+      { tipo: "move", por_nome: "Ana $& {de}", de_time: "A {para}", para_time: "B$'{quem}" },
+      { tipo: "pull", por_nome: "{quem} $`" },
+    ]);
+    expect(linhas(container)).toEqual([
+      ["move", "Movida de A {para} para B$'{quem} por Ana $& {de}"],
+      ["pull", "Puxada da fila por {quem} $`"],
+    ]);
+  });
+
+  it("vem antes da corrente de transferências: primeiro a fila, depois o que houve com a ligação atendida", () => {
+    const ligacao = ligacaoDaMensagem({
+      voice_call: {
+        ...base,
+        fila: [{ tipo: "pull", por_nome: "Ana" }],
+        transferencias: [{ tipo: "blind", desfecho: "answered", de_nome: "Ana", para_nome: "Bia", para_time: null, atendida_por_nome: "Bia" }],
+      },
+    })!;
+    const { container } = render(<CartaoDaLigacao ligacao={ligacao} em={EM} />);
+    const fila = container.querySelector("[data-ligacao-fila]")!;
+    const transferencias = container.querySelector("[data-ligacao-transferencias]")!;
+    expect(fila.compareDocumentPosition(transferencias) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // E uma não entra na conta da outra.
+    expect(container.querySelectorAll("[data-ligacao-acao-na-fila]")).toHaveLength(1);
+    expect(container.querySelectorAll("[data-ligacao-transferencia]")).toHaveLength(1);
+  });
+
+  it("em espanhol", () => {
+    const es = (el: ReactElement) => <IdiomaProvider locale="es">{el}</IdiomaProvider>;
+    const container = desenhar(
+      [
+        { tipo: "pull", por_nome: "Bia" },
+        { tipo: "move", por_nome: null, de_time: "Vendas", para_time: null },
+      ],
+      es,
+    );
+    expect(linhas(container)).toEqual([
+      ["pull", "Tomada de la cola por Bia"],
+      ["move", "Movida de Vendas a otro equipo por alguien"],
     ]);
   });
 });

@@ -16,7 +16,8 @@ import {
 } from "./vocabulario";
 
 export interface EstadoParaOTexto {
-  fase: "discando" | "chamando" | "tocando" | "em_ligacao";
+  /** `atendendo` (a ligação puxada da fila, conectando) não tem o que dizer de transferência: cai no `null`. */
+  fase: "discando" | "chamando" | "tocando" | "atendendo" | "em_ligacao";
   papelDaEntrada: string | null;
   transferencia: {
     tipo: "blind" | "attended";

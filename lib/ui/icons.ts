@@ -109,6 +109,8 @@ export {
   DotsNine,
   Backspace,
   PhoneCall,
+  // aba Telefone do Inbox: mover a ligação que espera para a fila de outro time
+  ArrowsLeftRight,
   // selo do canal no card do Inbox: o meio WhatsApp tem ícone próprio
   WhatsappLogo,
   Paperclip,

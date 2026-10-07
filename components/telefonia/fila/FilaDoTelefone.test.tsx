@@ -6,9 +6,13 @@
  * entra por prop, com um dado fixo. O relógio é simulado SÓ no que a coluna usa
  * (`setInterval` e `Date`): o `setTimeout` segue de verdade, que é com ele que o
  * `userEvent` e o `Select` do Radix trabalham.
+ *
+ * AGIR NA FILA (entrega 3): quem vê "Atender" e "Mover" é decidido AQUI, pelo
+ * ramal e pelo papel de quem olha — a sessão e o telefone entram por dublê, e o
+ * que se mede é o botão na linha certa e o pedido que o clique faz.
  */
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,6 +20,23 @@ import type { FilaComRelogio } from "@/hooks/telefonia/useFilaDoTelefone";
 import type { LigacaoNaFila, PerdidaRecente } from "@/lib/telefonia/fila";
 
 vi.mock("@/hooks/i18n/useT", () => ({ useT: () => (texto: string) => texto }));
+// Quem olha: o papel na organização, o id e se tem ramal. Cada caso troca o que precisa.
+const sessao = vi.hoisted(() => ({
+  papel: "agent" as "viewer" | "agent" | "ai_operator" | "manager" | "admin",
+  euId: "u-eu",
+  temRamal: false,
+  atenderDaFila: vi.fn(),
+}));
+vi.mock("@/hooks/auth/AuthProvider", () => ({
+  useAuth: () => ({ user: { id: sessao.euId }, activeOrg: { orgId: "org-1", name: "Org", role: sessao.papel } }),
+}));
+vi.mock("@/components/telefonia/TelefoniaContext", () => ({
+  useTelefonia: () => ({ disponivel: sessao.temRamal, atenderDaFila: sessao.atenderDaFila }),
+}));
+const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock("@/lib/api/client", () => ({ apiClient: { get: api.get, post: api.post } }));
+const avisos = vi.hoisted(() => ({ showApiError: vi.fn() }));
+vi.mock("@/components/feedback/ApiErrorToast", () => ({ showApiError: avisos.showApiError }));
 // O botão de ligar lê o contexto do telefone (ramal, ligação em curso), que não
 // é desta coluna. Vira sonda: diz para QUEM ele ligaria.
 vi.mock("@/components/telefonia/BotaoLigar", () => ({
@@ -46,6 +67,7 @@ function ligacao(id: string, over: Partial<LigacaoNaFila>): LigacaoNaFila {
     tocando_para: null,
     com: null,
     atendida_em: null,
+    ordem: null,
     ...over,
   };
 }
@@ -168,6 +190,14 @@ beforeAll(() => {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
   vi.setSystemTime(AGORA);
+  // Atendente sem ramal: ninguém vê botão de agir — o estado de todos os casos de antes da entrega 3.
+  sessao.papel = "agent";
+  sessao.euId = "u-eu";
+  sessao.temRamal = false;
+  sessao.atenderDaFila.mockReset();
+  api.get.mockReset();
+  api.post.mockReset();
+  avisos.showApiError.mockReset();
 });
 afterEach(() => {
   cleanup();
@@ -359,6 +389,150 @@ describe("abrir a conversa", () => {
     pintar(fila(), {}, "conv-tocando");
     expect(linha("tocando-suporte")).toHaveAttribute("aria-current", "true");
     expect(linha("primeira-de-vendas")).not.toHaveAttribute("aria-current");
+  });
+});
+
+describe("atender e mover direto da fila (entrega 3)", () => {
+  const idsCom = (seletor: string) => [...document.querySelectorAll(seletor)].map((b) => b.getAttribute(seletor.slice(1, -1)));
+  const atenderDa = (id: string) => document.querySelector<HTMLButtonElement>(`[data-fila-atender="${id}"]`);
+  const moverDa = (id: string) => document.querySelector<HTMLButtonElement>(`[data-fila-mover="${id}"]`);
+  /** As três que esperam por uma pessoa, na ordem da tela; a transferida, a em ligação e as do menu ficam de fora. */
+  const AS_QUE_ESPERAM = ["primeira-de-vendas", "segunda-de-vendas", "tocando-suporte"];
+
+  describe("quem vê o quê", () => {
+    it("atendente SEM ramal não vê Atender nem Mover", () => {
+      pintar(fila());
+      expect(idsCom("[data-fila-atender]")).toEqual([]);
+      expect(idsCom("[data-fila-mover]")).toEqual([]);
+    });
+
+    it("atendente COM ramal vê Atender nas que esperam (aguardando e tocando) — e não vê Mover", () => {
+      sessao.temRamal = true;
+      pintar(fila());
+      expect(idsCom("[data-fila-atender]")).toEqual(AS_QUE_ESPERAM);
+      expect(idsCom("[data-fila-mover]")).toEqual([]);
+      // Fora da fila não há botão: nem na atendida, nem na transferida, nem no menu.
+      for (const id of ["em-ligacao", "transferida", "no-menu", "nos-avisos"]) {
+        expect(linha(id).closest("[data-linha-da-fila]")!.querySelector("button[data-fila-atender]")).toBeNull();
+      }
+    });
+
+    it.each([
+      ["viewer", false],
+      ["agent", false],
+      ["ai_operator", false],
+      ["manager", true],
+      ["admin", true],
+    ] as const)("papel %s: vê Mover? %s", (papel, ve) => {
+      sessao.papel = papel;
+      pintar(fila());
+      expect(idsCom("[data-fila-mover]")).toEqual(ve ? AS_QUE_ESPERAM : []);
+      // Sem ramal, ninguém atende — nem o gerente.
+      expect(idsCom("[data-fila-atender]")).toEqual([]);
+    });
+
+    it("gerente com ramal vê os dois, nas mesmas linhas", () => {
+      sessao.papel = "manager";
+      sessao.temRamal = true;
+      pintar(fila());
+      expect(idsCom("[data-fila-atender]")).toEqual(AS_QUE_ESPERAM);
+      expect(idsCom("[data-fila-mover]")).toEqual(AS_QUE_ESPERAM);
+    });
+
+    it("a ligação que toca para MIM não oferece Atender, e diz 'Tocando para você'", () => {
+      sessao.temRamal = true;
+      sessao.papel = "manager";
+      sessao.euId = "u-ana";
+      pintar(fila());
+      expect(idsCom("[data-fila-atender]")).toEqual(["primeira-de-vendas", "segunda-de-vendas"]);
+      expect(estadoDa("tocando-suporte")).toHaveTextContent("Tocando para você · na fila há 0:30");
+      // Mover continua: o gerente pode tirar do próprio toque e mandar a outro time.
+      expect(moverDa("tocando-suporte")).not.toBeNull();
+    });
+  });
+
+  describe("Atender", () => {
+    it("o clique pede AQUELA ligação pelo telefone deste navegador, e relê a fila", async () => {
+      sessao.temRamal = true;
+      let responder: (ordem: string | null) => void = () => {};
+      sessao.atenderDaFila.mockReturnValue(new Promise<string | null>((r) => (responder = r)));
+      const { onSelect, refetch } = pintar(fila());
+
+      await userEvent.click(atenderDa("segunda-de-vendas")!);
+      expect(sessao.atenderDaFila).toHaveBeenCalledTimes(1);
+      expect(sessao.atenderDaFila).toHaveBeenCalledWith("segunda-de-vendas");
+      expect(onSelect).not.toHaveBeenCalled();
+
+      // Enquanto o meu pedido corre: o botão dela fica ocupado, e os outros esperam.
+      expect(atenderDa("segunda-de-vendas")).toHaveAttribute("aria-busy", "true");
+      expect(atenderDa("segunda-de-vendas")).toBeDisabled();
+      expect(atenderDa("primeira-de-vendas")).toBeDisabled();
+      expect(atenderDa("primeira-de-vendas")).not.toHaveAttribute("aria-busy", "true");
+
+      // A rota recusou (o aviso sai pelo telefone): os botões voltam, e a fila é relida.
+      await act(async () => {
+        responder(null);
+        await Promise.resolve();
+      });
+      expect(atenderDa("segunda-de-vendas")).toBeEnabled();
+      expect(atenderDa("segunda-de-vendas")).not.toHaveAttribute("aria-busy", "true");
+      expect(atenderDa("primeira-de-vendas")).toBeEnabled();
+      expect(refetch).toHaveBeenCalled();
+    });
+  });
+
+  describe("Mover", () => {
+    it("o menu lista os outros times da fila, e escolher um pede à rota de mover DAQUELA ligação", async () => {
+      sessao.papel = "manager";
+      const recusa = new Error("O time está fora do horário de atendimento.");
+      api.post.mockRejectedValue(recusa);
+      // O diretório (quantos livres) não respondeu ainda: os times aparecem pelo nome.
+      api.get.mockReturnValue(new Promise(() => {}));
+      const { onSelect } = pintar(fila());
+
+      await userEvent.click(moverDa("primeira-de-vendas")!);
+      const itens = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+      // A ligação está em Vendas: os destinos são os OUTROS times ativos que a fila trouxe.
+      expect(itens.map((i) => i.textContent)).toEqual(["Suporte", "Financeiro"]);
+
+      await userEvent.click(itens[1]!);
+      expect(api.post).toHaveBeenCalledTimes(1);
+      expect(api.post).toHaveBeenCalledWith("/api/v1/telefonia/chamadas/primeira-de-vendas/mover", { team_id: "t-financeiro" });
+      expect(onSelect).not.toHaveBeenCalled();
+      // A recusa da rota aparece com o motivo dela.
+      await waitFor(() => expect(avisos.showApiError).toHaveBeenCalledWith(recusa));
+    });
+  });
+
+  describe("a ordem aberta", () => {
+    it("troca os botões pela frase de quem está cuidando — com o NOME do time de destino", () => {
+      sessao.papel = "manager";
+      sessao.temRamal = true;
+      const comOrdens = LIGACOES.map((l) =>
+        l.id === "primeira-de-vendas"
+          ? { ...l, ordem: { tipo: "pull" as const, por: { id: "u-ana", nome: "Ana" }, para_time_id: null } }
+          : l.id === "segunda-de-vendas"
+            ? { ...l, ordem: { tipo: "move" as const, por: { id: "u-bruno", nome: "Bruno" }, para_time_id: "t-financeiro" } }
+            : l,
+      );
+      pintar(fila({ ligacoes: comOrdens }));
+
+      const daPrimeira = linha("primeira-de-vendas").closest("[data-linha-da-fila]") as HTMLElement;
+      expect(within(daPrimeira).getByText("Ana está atendendo…")).toHaveAttribute("data-fila-ordem", "pull");
+      const daSegunda = linha("segunda-de-vendas").closest("[data-linha-da-fila]") as HTMLElement;
+      expect(within(daSegunda).getByText("Movendo para Financeiro…")).toHaveAttribute("data-fila-ordem", "move");
+      // Só a que não tem ordem segue com os botões.
+      expect(idsCom("[data-fila-atender]")).toEqual(["tocando-suporte"]);
+      expect(idsCom("[data-fila-mover]")).toEqual(["tocando-suporte"]);
+    });
+
+    it("o time de destino que a fila não trouxe (arquivado no meio): 'outro time'", () => {
+      const comOrdem = LIGACOES.map((l) =>
+        l.id === "primeira-de-vendas" ? { ...l, ordem: { tipo: "move" as const, por: null, para_time_id: "t-sumiu" } } : l,
+      );
+      pintar(fila({ ligacoes: comOrdem }));
+      expect(screen.getByText("Movendo para outro time…")).toBeInTheDocument();
+    });
   });
 });
 

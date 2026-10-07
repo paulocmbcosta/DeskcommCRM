@@ -34,6 +34,13 @@ describe("o que o painel diz da transferência", () => {
     expect(textoDaTransferencia({ ...base, fase: "tocando" }, AGORA)).toBeNull();
   });
 
+  it("a ligação puxada da fila, enquanto conecta (`atendendo`): nada — nem com sobras de uma transferência no estado", () => {
+    expect(textoDaTransferencia({ ...base, fase: "atendendo" }, AGORA)).toBeNull();
+    expect(
+      textoDaTransferencia({ ...base, fase: "atendendo", transferidaPor: "Ana", ultimaTransferencia: ultima() }, AGORA),
+    ).toBeNull();
+  });
+
   it("quem recebe vê quem transferiu, tocando e depois de atender", () => {
     expect(textoDaTransferencia({ ...base, fase: "tocando", papelDaEntrada: "transf", transferencia: aberta() }, AGORA)).toEqual({
       texto: "Transferida por {nome}",

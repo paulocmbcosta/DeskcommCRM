@@ -144,6 +144,44 @@ export function transferenciasDaLigacao(bruto: unknown): TransferenciaDaLigacao[
 }
 
 /**
+ * O que se fez com a ligação enquanto ela esperava na fila (aba Telefone,
+ * entrega 3; migration 0296), como fica no registro da conversa
+ * (`messages.metadata.voice_call.fila`): alguém a puxou para o próprio ramal
+ * (`pull`) ou a mandou para a fila de outro time (`move`). Quem ESCREVE é o
+ * worker no fim da ligação (`registrarNaConversa`), e só as ordens que deram
+ * certo; quem LÊ é o cartão da ligação, sempre por `acoesNaFilaDaLigacao`. Os
+ * nomes são os daquela hora. O `tipo` é o de `TIPOS_DA_ORDEM_DA_FILA`, no fim
+ * deste arquivo.
+ */
+export interface AcaoNaFilaDaLigacao {
+  tipo: TipoDaOrdemDaFila;
+  /** Quem puxou ou moveu. */
+  por_nome: string | null;
+  /** O time em que a ligação esperava. */
+  de_time: string | null;
+  /** No mover, o time para onde ela foi; no puxar, nulo. */
+  para_time: string | null;
+}
+
+/** Lê as ações e NUNCA lança: a que não sustenta o que houve (tipo fora do vocabulário, lixo) é descartada. */
+export function acoesNaFilaDaLigacao(bruto: unknown): AcaoNaFilaDaLigacao[] {
+  if (!Array.isArray(bruto)) return [];
+  const acoes: AcaoNaFilaDaLigacao[] = [];
+  for (const item of bruto) {
+    if (!item || typeof item !== "object") continue;
+    const a = item as Record<string, unknown>;
+    if (!TIPOS_DA_ORDEM_DA_FILA.includes(a.tipo as TipoDaOrdemDaFila)) continue;
+    acoes.push({
+      tipo: a.tipo as TipoDaOrdemDaFila,
+      por_nome: textoOuNulo(a.por_nome),
+      de_time: textoOuNulo(a.de_time),
+      para_time: textoOuNulo(a.para_time),
+    });
+  }
+  return acoes;
+}
+
+/**
  * Por que uma transferência foi recusada ou cancelada (`voice_call_transfers.reason`,
  * vocabulário aberto): o texto que o painel mostra. Em português; a tela passa
  * por `t()`. Motivo desconhecido cai no genérico.

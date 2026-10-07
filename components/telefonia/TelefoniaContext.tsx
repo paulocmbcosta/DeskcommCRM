@@ -13,6 +13,12 @@
  * encerrou) vem do banco por `GET /api/v1/telefonia/chamadas/[id]`: o ramal é
  * atendido pelo Asterisk na hora, para o atendente ouvir o chamar da operadora,
  * e o JsSIP sozinho não distingue "chamando" de "atendeu".
+ *
+ * ATENDER DA FILA (aba Telefone; entrega 3): `atenderDaFila` pede ao servidor
+ * que uma ligação da fila toque NESTE ramal, e o toque que chega com a ordem
+ * desse pedido é atendido sem um segundo clique. É o único toque que este
+ * contexto atende sozinho — a regra, e por que ela é tão estreita, está em
+ * `ehOToqueQueEuPedi`.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -20,6 +26,9 @@ import type { UA as JsSipUA } from "jssip";
 import type { RTCSession } from "jssip/lib/RTCSession";
 
 import { apiClient } from "@/lib/api/client";
+// Só a constante do cabeçalho: o módulo não importa nada de servidor (o único
+// import dele é de TIPO), e o nome tem de ser o MESMO que o worker escreve.
+import { CABECALHO_DO_ATENDER } from "@/lib/channels/telefonia/ordens-da-fila";
 import { avisoDoFimDaSaida } from "@/lib/telefonia/fim-da-saida";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import { usePermission } from "@/hooks/auth/AuthProvider";
@@ -47,8 +56,13 @@ interface Ramal {
 export interface EstadoDaLigacao {
   id: string | null;
   direcao: "entrada" | "saida";
-  /** discando = pedido criado, INVITE saindo; tocando = recebida esperando atender. */
-  fase: "discando" | "chamando" | "tocando" | "em_ligacao";
+  /**
+   * discando = pedido criado, INVITE saindo; tocando = recebida esperando atender;
+   * atendendo = a ligação da fila que ESTA pessoa pediu para atender chegou e já
+   * está sendo atendida sozinha — não toca e não espera clique; vira `em_ligacao`
+   * quando a sessão confirma.
+   */
+  fase: "discando" | "chamando" | "tocando" | "atendendo" | "em_ligacao";
   numero: string;
   nome: string | null;
   contatoId: string | null;
@@ -122,6 +136,12 @@ interface ContextoDoTelefone {
   /** Com `ramal`, a ligação interna para um colega (v3). */
   ligar(p: { contatoId?: string; numero?: string; ramal?: string; numeroDaEmpresaId?: string; nome?: string | null }): Promise<void>;
   atender(): void;
+  /**
+   * Pede para atender uma ligação que espera na fila (aba Telefone): ela toca
+   * neste ramal e o navegador atende sozinho. Devolve o id da ordem, para a tela
+   * acompanhar o desfecho; `null` = a rota recusou (o motivo já apareceu).
+   */
+  atenderDaFila(ligacaoId: string): Promise<string | null>;
   desligar(): void;
   alternarMudo(): void;
   teclar(digito: string): void;
@@ -145,6 +165,7 @@ export function useTelefonia(): ContextoDoTelefone {
       ultimoEncerramento: null,
       ligar: async () => undefined,
       atender: () => undefined,
+      atenderDaFila: async () => null,
       desligar: () => undefined,
       alternarMudo: () => undefined,
       teclar: () => undefined,
@@ -175,6 +196,44 @@ interface DetalheDaLigacao {
 
 const RETENTAR_REGISTRO_MS = 15_000;
 
+/** O pedido de atender da fila que ESTA aba fez e a rota aceitou. */
+interface PedidoDaFila {
+  ordemId: string;
+  /** Até quando o toque desse pedido é atendido sozinho (relógio deste navegador, ms). */
+  ate: number;
+}
+
+/**
+ * Por quanto tempo o pedido de atender vale. O worker faz o ramal de quem pediu
+ * tocar em menos de um segundo e desiste em dez (`TOQUE_DE_QUEM_PUXOU_MS`); o
+ * que passar disso não é mais o clique de agora.
+ */
+const PRAZO_DO_PEDIDO_DA_FILA_MS = 15_000;
+
+/**
+ * O ÚNICO TOQUE QUE ESTE NAVEGADOR ATENDE SOZINHO: o que traz, no cabeçalho
+ * `X-Fila-Atender`, a ordem que ESTA aba pediu e a rota aceitou há menos de
+ * 15 s. As três condições juntas, e nenhuma a menos:
+ *
+ *  - o toque traz o cabeçalho — a ligação comum do rodízio, a transferência e a
+ *    interna não trazem, e seguem tocando até alguém clicar;
+ *  - a ordem é a MESMA que esta aba guardou — a ordem de um colega, ou a de
+ *    outra aba desta mesma pessoa, não é desta aba;
+ *  - dentro do prazo — o pedido de um minuto atrás não é o clique de agora.
+ *
+ * Atender sem a pessoa pedir é abrir o microfone dela sem aviso: na dúvida, o
+ * toque é o de sempre, com a tela de toque e o som.
+ */
+function ehOToqueQueEuPedi(pedido: PedidoDaFila | null, ordemDoToque: string | null, agoraMs: number): boolean {
+  if (!pedido || !ordemDoToque) return false;
+  return ordemDoToque === pedido.ordemId && agoraMs < pedido.ate;
+}
+
+/** Atende a sessão. O clique em "Atender" e o toque que esta aba pediu passam pelo MESMO lugar. */
+function responder(s: Sessao): void {
+  s.answer({ mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] } });
+}
+
 export function TelefoniaProvider({ children }: { children: ReactNode }) {
   // `voice.call` (agent+) é a ação de "ligar e atender" — o mesmo piso da rota
   // `POST /api/v1/telefonia/ramal` (`requireRole("agent")`), e o acompanhamento
@@ -192,6 +251,8 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   /** Id da ligação de saída em curso — para ler, no fim, por que ela acabou. */
   const saidaRef = useRef<string | null>(null);
+  /** O último pedido de atender da fila que a rota aceitou — ver `ehOToqueQueEuPedi`. */
+  const pedidoDaFilaRef = useRef<PedidoDaFila | null>(null);
   const [tentativa, setTentativa] = useState(0);
 
   // 1. A credencial do ramal. Pedida de novo quando o registro é recusado
@@ -322,8 +383,11 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
       });
       ua.on("newRTCSession", (ev: { session: Sessao; originator: string; request: { getHeader(n: string): string | undefined; from?: { display_name?: string; uri?: { user?: string } } } }) => {
         const s = ev.session;
+        // O toque da ligação da fila que ESTA aba pediu para atender (entrega 3).
+        let euPedi = false;
         if (ev.originator === "remote") {
           // Já em ligação: recusa a segunda — o servidor passa para o próximo.
+          // Vale também para o toque que esta aba pediu: nada interrompe a ligação em curso.
           if (sessaoRef.current) {
             s.terminate({ status_code: 486, reason_phrase: "Busy Here" });
             return;
@@ -332,10 +396,14 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
           const id = ev.request.getHeader("X-Ligacao-Id") ?? null;
           // A ligação interna (v3) traz quem liga no header; o nome e o ramal vêm na bina.
           const interna = Boolean(ev.request.getHeader("X-Interna-De"));
+          const ordemDoToque = ev.request.getHeader(CABECALHO_DO_ATENDER)?.trim() || null;
+          euPedi = ehOToqueQueEuPedi(pedidoDaFilaRef.current, ordemDoToque, Date.now());
+          // Uma ordem, um atendimento: o mesmo cabeçalho de novo não atende de novo.
+          if (euPedi) pedidoDaFilaRef.current = null;
           setLigacao({
             id,
             direcao: "entrada",
-            fase: "tocando",
+            fase: euPedi ? "atendendo" : "tocando",
             numero: ev.request.from?.uri?.user ?? "",
             nome: ev.request.from?.display_name ?? null,
             contatoId: null,
@@ -355,6 +423,16 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
           setLigacao((l) => (l && l.direcao === "entrada" ? { ...l, fase: "em_ligacao", atendidaEm: Date.now() } : l)),
         );
         ligarAudio(s);
+        // Por último, com o fim e a falha da sessão já sendo ouvidos. Se o JsSIP
+        // recusar o atendimento na hora, o toque vira o de sempre — a tela de
+        // toque, à espera do clique —, em vez de um "Conectando…" sem saída.
+        if (euPedi) {
+          try {
+            responder(s);
+          } catch {
+            setLigacao((l) => (l && l.fase === "atendendo" ? { ...l, fase: "tocando" } : l));
+          }
+        }
       });
       ua.start();
     });
@@ -423,6 +501,8 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
     // O toque lê uma vez (o nome, a conversa, quem transferiu). Em ligação, a
     // leitura segue — mais espaçada — porque a transferência (v2) muda o que o
     // painel diz: "chamando Bruno…", "Bruno atendeu", a recusa e o motivo.
+    // A que nasce `atendendo` (puxada da fila) lê como a que sai: na hora, e de
+    // novo enquanto conecta — é daqui que vêm o nome do contato e a conversa.
     if (fase === "tocando") return () => void (vivo = false);
     const t = setInterval(ler, fase === "em_ligacao" ? 2_000 : 1_500);
     return () => {
@@ -483,7 +563,28 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
   const atender = useCallback(() => {
     const s = sessaoRef.current;
     if (!s) return;
-    s.answer({ mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] } });
+    responder(s);
+  }, []);
+
+  // Atender da fila (entrega 3): a rota confere e manda a ordem ao serviço de
+  // telefonia, que faz ESTE ramal tocar com a ordem no cabeçalho. Aqui só se
+  // guarda qual ordem esta aba pediu — quem atende é o `newRTCSession`, quando (e
+  // se) o toque dela chegar. Um pedido novo substitui o anterior.
+  const atenderDaFila = useCallback<ContextoDoTelefone["atenderDaFila"]>(async (ligacaoId) => {
+    try {
+      const r = await apiClient.post<{ data: { ordem_id?: unknown } }>(
+        `/api/v1/telefonia/chamadas/${encodeURIComponent(ligacaoId)}/atender`,
+        {},
+      );
+      const ordemId = r.data.ordem_id;
+      // Sem a ordem não há o que reconhecer no toque: nada é guardado.
+      if (typeof ordemId !== "string" || ordemId === "") return null;
+      pedidoDaFilaRef.current = { ordemId, ate: Date.now() + PRAZO_DO_PEDIDO_DA_FILA_MS };
+      return ordemId;
+    } catch (e) {
+      showApiError(e);
+      return null;
+    }
   }, []);
 
   const desligar = useCallback(() => {
@@ -550,13 +651,14 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
       ultimoEncerramento,
       ligar,
       atender,
+      atenderDaFila,
       desligar,
       alternarMudo,
       teclar,
       transferir,
       decidirConsulta,
     }),
-    [pronto, ramal, ligacao, ultimoEncerramento, ligar, atender, desligar, alternarMudo, teclar, transferir, decidirConsulta],
+    [pronto, ramal, ligacao, ultimoEncerramento, ligar, atender, atenderDaFila, desligar, alternarMudo, teclar, transferir, decidirConsulta],
   );
 
   return (
