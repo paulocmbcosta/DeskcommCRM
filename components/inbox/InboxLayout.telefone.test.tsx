@@ -122,6 +122,7 @@ const FILA: FilaComRelogio = {
       tocando_para: null,
       com: null,
       atendida_em: null,
+      ordem: null,
     },
     {
       id: "lig-em-ligacao",
@@ -138,6 +139,7 @@ const FILA: FilaComRelogio = {
       tocando_para: null,
       com: { id: "u-2", nome: "Bruno" },
       atendida_em: new Date(AGORA - 200_000).toISOString(),
+      ordem: null,
     },
   ],
   perdidas: [],

@@ -6,12 +6,16 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { TOQUE_DE_QUEM_PUXOU_MS } from "@/lib/channels/telefonia/ordens-da-fila";
+
 import { ESPERA_NA_FILA_MS } from "./distribuicao";
 import {
   FASES_DA_LIGACAO,
+  FASES_EM_QUE_SE_AGE,
   FASES_QUE_ESPERAM,
   FILA_DESLIGADA,
   MOTIVOS_DA_PERDIDA,
+  VALIDADE_DA_ORDEM_DA_FILA_S,
   faseDaLigacao,
   motivoDaPerdida,
   posicoesNaFila,
@@ -205,6 +209,39 @@ describe("quantasEsperam", () => {
     expect(quantasEsperam(fases.map((fase) => ({ fase })))).toBe(3);
     expect(quantasEsperam([])).toBe(0);
     expect([...FASES_QUE_ESPERAM].sort()).toEqual(["aguardando", "tocando", "transferencia_na_fila"]);
+  });
+});
+
+describe("FASES_EM_QUE_SE_AGE — em que fases a tela oferece Atender e Mover (entrega 3)", () => {
+  it("só quem espera por uma PESSOA: aguardando e tocando", () => {
+    expect([...FASES_EM_QUE_SE_AGE].sort()).toEqual(["aguardando", "tocando"]);
+  });
+
+  it("no menu e nos avisos não se age: quem não ouviu o aviso de gravação até o fim não é gravado", () => {
+    expect(FASES_EM_QUE_SE_AGE.has("menu")).toBe(false);
+    expect(FASES_EM_QUE_SE_AGE.has("avisos")).toBe(false);
+  });
+
+  it("a atendida não se puxa nem se move — nem a que foi transferida para a fila de um time, que ESPERA mas já tem dono", () => {
+    expect(FASES_EM_QUE_SE_AGE.has("em_ligacao")).toBe(false);
+    expect(FASES_QUE_ESPERAM.has("transferencia_na_fila")).toBe(true);
+    expect(FASES_EM_QUE_SE_AGE.has("transferencia_na_fila")).toBe(false);
+  });
+
+  it("toda fase em que se age é uma fase que espera — o botão nunca aparece numa linha que o selo não conta", () => {
+    for (const fase of FASES_EM_QUE_SE_AGE) expect(FASES_QUE_ESPERAM.has(fase)).toBe(true);
+  });
+});
+
+describe("VALIDADE_DA_ORDEM_DA_FILA_S — a ordem aberta vence", () => {
+  it("vence em 30 s: uma ordem esquecida não trava a ligação até o fim dela", () => {
+    expect(VALIDADE_DA_ORDEM_DA_FILA_S).toBe(30);
+  });
+
+  it("e sobra folga sobre a ordem que AINDA acontece: pelo menos o dobro do toque de quem puxou", () => {
+    // Se o toque de quem puxou crescer até perto da validade, o pedido seguinte
+    // fecharia como "vencida" uma puxada que ainda toca — e gravaria outra por cima.
+    expect(VALIDADE_DA_ORDEM_DA_FILA_S * 1000).toBeGreaterThanOrEqual(2 * TOQUE_DE_QUEM_PUXOU_MS);
   });
 });
 

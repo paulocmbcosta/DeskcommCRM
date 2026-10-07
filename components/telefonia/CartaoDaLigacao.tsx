@@ -30,6 +30,10 @@
  * a marca está lá, o cartão diz com quem a ligação está e desde quando — e o
  * atendente tem a conversa aberta para anotar. O `desfecho` desse registro já
  * é "atendida": a aba que não recarregou mostra "Ligação recebida", nunca "perdida".
+ *
+ * Agir na fila (fila visível, entrega 3): quem PUXOU a ligação da fila para si e
+ * quem a MOVEU para a fila de outro time, uma linha por ação — antes da corrente
+ * de transferências, que é o que houve depois de alguém atender.
  */
 import { format } from "date-fns";
 import { useState } from "react";
@@ -44,8 +48,10 @@ import { gravacaoDaLigacao, type GravacaoDaLigacao } from "@/lib/telefonia/grava
 import { fraseDoElo } from "@/lib/telefonia/texto-da-transferencia";
 import {
   MOTIVO_FORA_DO_HORARIO,
+  acoesNaFilaDaLigacao,
   menuDaLigacao,
   transferenciasDaLigacao,
+  type AcaoNaFilaDaLigacao,
   type MenuDaLigacao,
   type TransferenciaDaLigacao,
 } from "@/lib/telefonia/vocabulario";
@@ -72,6 +78,8 @@ export interface MetadadoDaLigacao {
   gravacao?: GravacaoDaLigacao | null;
   /** A corrente de transferências (v2), lida por `transferenciasDaLigacao`; vazia = não houve. */
   transferencias?: TransferenciaDaLigacao[];
+  /** O que se fez com a ligação na fila (entrega 3), lido por `acoesNaFilaDaLigacao`; vazia = nada. */
+  fila?: AcaoNaFilaDaLigacao[];
 }
 
 export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
@@ -89,6 +97,7 @@ export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
     ouviu_aviso: v.ouviu_aviso === true,
     gravacao: gravacaoDaLigacao(v.gravacao),
     transferencias: transferenciasDaLigacao(v.transferencias),
+    fila: acoesNaFilaDaLigacao(v.fila),
   };
 }
 
@@ -137,6 +146,22 @@ function comoAcabou(fim: FimDaSaidaSemResposta, t: (texto: string) => string): s
   }
   // Sem o tempo, "ninguém atendeu" só repetiria o título do selo.
   return tempo === null ? "" : trocarMarcador(t("Chamou {tempo} · ninguém atendeu"), "{tempo}", tempo);
+}
+
+/**
+ * A frase de leigo de uma ação na fila. Os nomes vêm do cadastro: `{de}`,
+ * `{para}` e `{quem}` entram numa passada só, por função, como em `preencher` —
+ * trocas em sequência deturpariam um time chamado "{quem}". O que o registro
+ * não traz vira "alguém" e "outro time".
+ */
+function oQueSeFezNaFila(acao: AcaoNaFilaDaLigacao, t: (texto: string) => string): string {
+  const valores = {
+    quem: acao.por_nome ?? t("alguém"),
+    de: acao.de_time ?? t("outro time"),
+    para: acao.para_time ?? t("outro time"),
+  };
+  const modelo = acao.tipo === "pull" ? t("Puxada da fila por {quem}") : t("Movida de {de} para {para} por {quem}");
+  return modelo.replace(/\{(de|para|quem)\}/g, (_, chave: "de" | "para" | "quem") => valores[chave]);
 }
 
 /** O `data-ligacao-menu` do cartão: o desfecho do vocabulário, ou o que houve sem ele. */
@@ -375,6 +400,15 @@ export function CartaoDaLigacao({
           {ura && ligacao.ouviu_aviso ? " · " : null}
           {ligacao.ouviu_aviso ? <span data-ligacao-ouviu-aviso>{t("Ouviu o aviso de instabilidade")}</span> : null}
         </p>
+      ) : null}
+      {(ligacao.fila ?? []).length > 0 ? (
+        <ul className="max-w-full px-4 text-center text-xs leading-snug text-muted-foreground" data-ligacao-fila>
+          {(ligacao.fila ?? []).map((acao, i) => (
+            <li key={i} data-ligacao-acao-na-fila={acao.tipo}>
+              {oQueSeFezNaFila(acao, t)}
+            </li>
+          ))}
+        </ul>
       ) : null}
       {(ligacao.transferencias ?? []).length > 0 ? (
         <ul className="max-w-full px-4 text-center text-xs leading-snug text-muted-foreground" data-ligacao-transferencias>

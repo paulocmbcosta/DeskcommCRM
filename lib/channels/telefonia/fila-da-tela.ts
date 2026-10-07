@@ -10,10 +10,12 @@ import {
   faseDaLigacao,
   motivoDaPerdida,
   posicoesNaFila,
+  VALIDADE_DA_ORDEM_DA_FILA_S,
   type FilaDoTelefone,
   type LigacaoNaFila,
   type PerdidaRecente,
 } from "@/lib/telefonia/fila";
+import type { TipoDaOrdemDaFila } from "@/lib/telefonia/vocabulario";
 
 import { PROVIDER } from "./repositorio";
 
@@ -54,6 +56,15 @@ export async function lerFilaDoTelefone(db: Queryable, organizationId: string): 
     [organizationId],
   );
 
+  // A ordem ABERTA de cada ligação (0296) vem junto: quem pediu para atender ou
+  // para mover, e para onde. É no máximo uma por ligação — o índice único
+  // parcial `voice_call_queue_orders_uma_aberta` garante —, então a junção não
+  // duplica a linha da ligação, como a da transferência aberta ao lado dela.
+  //
+  // Só a que ainda VALE (`VALIDADE_DA_ORDEM_DA_FILA_S`): a ordem que ficou aberta
+  // há mais que isso não está acontecendo, e mostrá-la deixaria a linha dizendo
+  // "Fulano está atendendo…", sem os botões, até a ligação acabar. O mesmo corte
+  // vale no pedido seguinte, que a fecha (`gravarOrdem`, em pedido-da-fila.ts).
   const vivas = await db.query<{
     id: string; status: string; peer_phone: string; team_id: string | null; channel_session_id: string;
     conversation_id: string | null; contact_id: string | null; contato_nome: string | null;
@@ -63,6 +74,8 @@ export async function lerFilaDoTelefone(db: Queryable, organizationId: string): 
     owner_user_id: string | null; dono_nome: string | null;
     transferencia_time_id: string | null; transferencia_desde: Date | null;
     transferida_por: string | null; transferida_por_nome: string | null;
+    ordem_tipo: TipoDaOrdemDaFila | null; ordem_por: string | null; ordem_por_nome: string | null;
+    ordem_para_time: string | null;
   }>(
     `select v.id, v.status, v.peer_phone, v.team_id, v.channel_session_id, v.conversation_id, v.contact_id,
             coalesce(c.display_name, c.name) as contato_nome,
@@ -70,16 +83,21 @@ export async function lerFilaDoTelefone(db: Queryable, organizationId: string): 
             v.ringing_user_id, ${NOME_DE("v.ringing_user_id")} as tocando_nome,
             v.owner_user_id, ${NOME_DE("v.owner_user_id")} as dono_nome,
             tr.to_team_id as transferencia_time_id, tr.created_at as transferencia_desde,
-            tr.from_user_id as transferida_por, ${NOME_DE("tr.from_user_id")} as transferida_por_nome
+            tr.from_user_id as transferida_por, ${NOME_DE("tr.from_user_id")} as transferida_por_nome,
+            o.kind as ordem_tipo, o.requested_by as ordem_por, ${NOME_DE("o.requested_by")} as ordem_por_nome,
+            o.to_team_id as ordem_para_time
        from voice_calls v
        left join contacts c on c.id = v.contact_id and c.organization_id = v.organization_id
        left join voice_call_transfers tr
          on tr.organization_id = v.organization_id and tr.voice_call_id = v.id
         and tr.status = 'open' and tr.to_team_id is not null
+       left join voice_call_queue_orders o
+         on o.organization_id = v.organization_id and o.voice_call_id = v.id and o.status = 'open'
+        and o.created_at >= now() - $3::int * interval '1 second'
       where v.organization_id = $1 and v.provider = $2 and v.direction = 'inbound' and v.status <> 'ended'
         and v.started_at > now() - interval '${VIVA_HA_NO_MAXIMO}'
       order by coalesce(v.queued_at, v.started_at) asc, v.id asc`,
-    [organizationId, PROVIDER],
+    [organizationId, PROVIDER, VALIDADE_DA_ORDEM_DA_FILA_S],
   );
 
   const ligacoes: LigacaoNaFila[] = vivas.rows.map((r) => {
@@ -106,6 +124,13 @@ export async function lerFilaDoTelefone(db: Queryable, organizationId: string): 
           ? { id: r.owner_user_id, nome: r.dono_nome }
           : null,
       atendida_em: iso(r.answered_at),
+      ordem: r.ordem_tipo
+        ? {
+            tipo: r.ordem_tipo,
+            por: r.ordem_por ? { id: r.ordem_por, nome: r.ordem_por_nome } : null,
+            para_time_id: r.ordem_para_time,
+          }
+        : null,
     };
   });
   const posicoes = posicoesNaFila(ligacoes);

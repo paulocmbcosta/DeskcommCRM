@@ -310,6 +310,134 @@ Enquanto há ordem aberta, a linha diz "Ana está atendendo…". O cartão da li
 ganha as linhas "Puxada da fila por {nome}" e "Movida de {time} para {time} por
 {nome}", com os nomes daquela hora (como as transferências).
 
+#### Emendas da implementação
+
+O plano (`docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-3.md`) e o código
+mudaram o texto acima nos pontos abaixo. Onde divergem, vale o código; a descrição corrente
+está na spec 20 (§4.2, §5, §7 e §9) e os casos, na J45 do mapa de jornadas.
+
+**As seis decisões do plano**
+
+1. **A mecânica do worker mora no controlador**, e não num módulo à parte com ganchos, como
+   este desenho dizia: puxar e mover mexem no estado privado da fila (o ramal que toca, as
+   voltas, o relógio), e separá-los pediria abrir esse estado. `ordens-da-fila.ts` ficou só com
+   o que os três lados combinam — o nome do evento (`telefonia_fila`), o cabeçalho do toque
+   (`X-Fila-Atender`), os 10 s e a leitura do evento, no molde de `lerOrdemDaTransferencia`.
+2. **Quem puxa toca por 10 s**, e não os 20 s do rodízio: o navegador que clicou atende em
+   menos de 1 s, e os 10 s só cobrem a aba que fechou no meio. Não atendeu → a ligação volta ao
+   rodízio de onde estava.
+3. **Derrubar o toque em curso não conta como recusa**: o canal do ramal que tocava sai da
+   ligação e do mapa de canais ANTES de ser desligado; o fim dele, que chega depois, não acha
+   mais a ligação, e por isso não gasta a vez de ninguém nem chama o próximo.
+4. **O resultado da ordem volta por uma rota de leitura própria**
+   (`GET /api/v1/telefonia/fila/ordens/[id]`), que este desenho não previa. A tela a consulta a
+   cada 1 s, por até 15 s depois do clique. Pela rota da fila não dava: aquela resposta é
+   dividida por todos os navegadores da organização e não pode levar dado de UM usuário.
+5. **Só se age sobre quem espera por uma pessoa** (`queued_at` preenchido, não atendida): no
+   menu e nos avisos a ligação não é puxada nem movida — quem não ouviu o aviso de gravação até
+   o fim não é gravado. A regra está na tela, na rota e no worker.
+6. **Mover não repete "fora do horário" nem o aviso de instabilidade** do time novo: a rota
+   recusa time fechado, e o worker revalida.
+
+**O que a implementação fez diferente do plano e deste desenho**
+
+- **Banco.** O apêndice faz `revoke all … from public, anon, authenticated, service_role` e
+  `grant select … to authenticated, service_role`; este desenho pedia só o `revoke` de `insert`,
+  `update` e `delete` para `anon` e `authenticated`. Nem a service key escreve pela REST: toda
+  tabela nova de `public` nasce com tudo concedido aos três papéis (o default ACL do Supabase),
+  e GRANT enumerado só acrescenta. O invariante virou três arquivos, e não um:
+  `telefonia-ordens-da-fila-schema`, `telefonia-pedido-da-fila` e
+  `telefonia-ordens-da-fila-repositorio`, em `tests/invariants/`.
+- **Mover grava o banco ANTES de derrubar o toque em curso** (este desenho e o plano
+  derrubavam primeiro). Se a escrita falha, a ordem é recusada com `falha_ao_mover` e nada muda
+  na ligação — o ramal que tocava nem é derrubado.
+- **Conferência que não pode ser feita recusa, em vez de seguir.** Se o worker não consegue
+  conferir se quem puxa está em outra ligação, ou ler o time de destino, a ordem fecha
+  `refused` / `falha_ao_conferir`. A transferência, na mesma situação, segue; aqui a ordem
+  derruba um toque em curso, e não se mexe na ligação de um cliente por uma conferência que
+  não foi feita.
+- **A ordem é relida do banco antes de qualquer recusa.** Um evento com o id de uma ordem de
+  outra ligação (ou de outra organização) não acha ordem aberta e não fecha nada; a ação que
+  vale é a gravada na ordem, não a do evento; e o mesmo evento entregue duas vezes é ignorado —
+  recusá-lo fecharia, no banco, a puxada cujo ramal está tocando. Só a ligação que o worker não
+  acompanha é recusada sem leitura (`ligacao_desconhecida`), presa ao par (ordem, ligação).
+- **Recusas que o desenho não listava**, no worker: a ligação que se despede ("ninguém
+  atendeu" no ar) é `ligacao_encerrada`; a que voltou do ramal digitado no menu e ainda ouve o
+  aviso de instabilidade ou o de gravação é `ligacao_fora_da_fila`, mesmo já tendo a ordem de
+  chegada; uma segunda ordem com o ramal de quem puxou tocando é `ja_ha_ordem`; quem pede e já
+  é quem toca por aquela ligação é `destino_em_ligacao`, sem perder o próprio toque; e o toque
+  de quem puxou que não sai fecha a ordem como `destino_offline`. A lista inteira dos motivos
+  está no §4.2 da spec 20, com o comando que a tira do código.
+- **A puxada que não dá certo devolve a vez.** Este desenho dizia só "a ligação volta ao ponto
+  em que estava, com as voltas e o teto preservados". Não bastava: quem tocava quando a ordem
+  chegou tinha o toque cortado e ficava marcado como "já tocou nesta volta" — e, no último
+  toque da última volta, a ligação do cliente era ENCERRADA por causa de uma puxada que ninguém
+  atendeu (a revisão independente reproduziu). Agora, não atendida ou com o toque que nem sai,
+  a puxada devolve a vez de quem ela interrompeu (`devolverAVez`): ele toca de novo, na mesma
+  volta, com o toque inteiro — também o ramal digitado no menu.
+- **A rede de segurança do toque segue sozinha.** Se o fim do canal não chega no prazo (mais
+  3 s), o canal sai da ligação e a fila segue o mesmo caminho do toque sem resposta. Só
+  desligar e esperar o evento deixava a ligação "tocando" para sempre quando ele se perdia.
+- **O worker não executa ordem vencida.** A que chega a ele com mais de 30 s (pelo relógio do
+  banco) é cancelada como `ordem_vencida`, sem efeito na ligação.
+- **Mover a ligação que tocava no ramal digitado no menu lê as falas gerais** na hora: ela
+  nunca passou pela entrada da fila, e sem isso esperaria no time novo sem o "aguarde" e cairia
+  sem o "ninguém atendeu".
+- **O navegador guarda o pedido no CLIQUE**, antes de a rota responder, e o prazo de 15 s conta
+  do clique (este desenho guardava a ordem depois da resposta). O worker pode tocar o ramal
+  antes de o 202 chegar ao navegador: nesse intervalo, e só nele, o toque é reconhecido pela
+  LIGAÇÃO que a pessoa clicou (`X-Ligacao-Id`), sempre com o cabeçalho `X-Fila-Atender`
+  presente; com a ordem já conhecida, só a mesma ordem vale. `atenderDaFila` devolve o id da
+  ordem (o plano dizia um booleano), para a tela acompanhar.
+- **"Atender" é de quem tem ramal neste navegador**, e não de todo `agent`+: o botão segue
+  `disponivel` (a rota do ramal entregou a credencial). O papel continua valendo na rota.
+- **As ações ficam numa faixa EMBAIXO do texto da linha** (o plano as punha ao lado): a coluna
+  da lista é estreita, e ao lado os botões espremeriam o nome e o estado. O de mover é um
+  ícone, com o nome "Mover para outro time", e some quando não há outro time ativo. Com um
+  "Atender" meu em curso, os outros "Atender" ficam desligados: só se puxa uma por vez. A
+  ligação que toca para quem olha diz "Tocando para você" e não oferece "Atender".
+- **O menu de mover lê o diretório só com o menu aberto** (e a cada 5 s enquanto ele fica), e
+  diz "N disponíveis" ou "Fora do horário" — as palavras do seletor da transferência. O time
+  fora do horário não fica desligado no menu: o que o diretório disse pode ter 5 s, e quem
+  decide é a rota.
+- **Sem resposta em 15 s a tela não afirma nada**: relê a fila, que é quem diz onde a ligação
+  está. E a linha da ordem aberta ganhou a variante do mover: "Movendo para {time}…".
+- **As linhas do cartão entram no FIM da ligação** (`registrarNaConversa`), e só das ordens que
+  aconteceram (`done`); o cartão "em andamento" não as tem. O nome de quem puxou ou moveu sai
+  da régua do banco (`fn_nome_do_usuario`), sem o e-mail — e não do padrão da corrente de
+  transferências, que grava o endereço de quem não tem nome cadastrado.
+- **A ordem aberta vence em 30 s** (`VALIDADE_DA_ORDEM_DA_FILA_S`), o que este desenho não
+  previa. Três caminhos deixam uma ordem `open` sem ninguém para fechá-la — a leitura dela falha
+  no worker, a rota morre entre gravar e avisar, ou a escrita do desfecho falha —, e sem o prazo
+  ela travava a ligação até o fim: a linha dizendo "Fulano está atendendo…" no lugar dos botões,
+  e todo pedido novo recusado. Passados 30 s (a puxada vive uns 13, o mover é imediato) a rota
+  da fila deixa de mostrá-la, e o pedido seguinte a fecha como `cancelled` / `ordem_vencida`
+  antes de gravar o dele.
+
+**O que ficou sabido e não foi consertado.** Quem atende no mesmo instante em que alguém puxa
+ou move perde a ligação; a reconexão da ARI com uma puxada em curso cancela a ordem (a ligação
+conecta, e o cartão não diz quem puxou); e a ordem que fica aberta sem ninguém para fechá-la
+segura a ligação por até 30 s, até vencer. Detalhe e o que nunca foi medido — nenhuma ligação
+real, o cabeçalho num INVITE de verdade, o formato do evento, o JsSIP atendendo sozinho, o mesmo
+atendente com duas abas — no §9 da spec 20 e na J45.
+
+**O checklist do §8, conferido contra o código desta entrega.** Quem alimenta: a aba
+(`useAcoesDaFila` e `atenderDaFila`), pelas duas rotas, e o evento `telefonia_fila`, pelo laço
+do worker. Quem é alimentado: `voice_call_queue_orders`; a linha da fila (`ordem`, em
+`GET /api/v1/telefonia/fila`); o cartão da ligação (`metadata.voice_call.fila`);
+`voice_calls.team_id` e o time da conversa, no mover. Log: `api_audit_log`
+(`phone.queue_call_pulled`, `phone.queue_call_moved` — o filtro do Audit Log é derivado de
+`AUDIT_ACTIONS`), a história de cada ordem na própria tabela, e o log do worker ("ligação
+puxada da fila", "ligação movida de time na fila", "ordem da fila recusada"). Tela: a faixa das
+ações e a frase da ordem na aba Telefone, os avisos do que houve, o painel do telefone em
+"Conectando…" e as linhas do cartão. Porta: a aba fica no Inbox; nenhuma tela nova.
+Anti-morte: a ordem aberta vence em 30 s, e fecha no fim da ligação, na reconexão do worker e
+quando o evento não sai (503); quem puxou e não atendeu devolve a ligação ao rodízio em 10 s. Configuração:
+nenhuma nova — os 10 s do toque e os 15 s do pedido são constantes sem tela. Laço de retorno: o
+desfecho volta a quem pediu pela ordem; **não existe ainda** nada que conte puxadas e movidas
+por time (F5). Mapa: `rota_atender`, `rota_mover`, `rota_ordem` e `t_ordens_da_fila`, em
+`docs/architecture/telefonia.architecture.json`.
+
 ## 5. O que não entra
 
 - Dizer ao cliente a posição dele na fila (pediria voz gerada dentro da ligação, que

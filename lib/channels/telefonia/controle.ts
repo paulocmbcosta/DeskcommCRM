@@ -37,6 +37,21 @@
  *             atende, e a gravação começa junto. A gravação para no fim, e o
  *             arquivo é guardado fora daqui (`gravacoes.ts`), pela porta própria.
  *
+ * ORDENS DA FILA (0296; desenho 2026-10-06-telefonia-fila-visivel-design.md, §4.3):
+ *             a aba Telefone manda duas ordens sobre a recebida que ESPERA POR
+ *             UMA PESSOA (depois do menu e dos avisos, antes de alguém atender).
+ *             ATENDER: o ramal de quem pediu toca sozinho, por 10 s, com o
+ *             cabeçalho que faz o navegador dele atender na hora; o toque que
+ *             estava em curso é derrubado sem contar como recusa; não atendeu
+ *             (ou o toque dele nem saiu) → a ligação volta ao ponto em que
+ *             estava, e quem tocava quando a ordem chegou toca de novo, na mesma
+ *             volta. MOVER: a ligação e a conversa vão para a fila de outro time
+ *             — voltas zeradas, o teto de espera dele, a mesma ordem de chegada.
+ *             Como na transferência, o evento é só ponteiro: a ordem é relida do
+ *             banco, presa à organização desta ligação, e revalidada aqui. Ordem
+ *             que não vale é recusada no banco — e a que chegou vencida (mais de
+ *             30 s, pelo relógio do banco), cancelada —, e a ligação nem percebe.
+ *
  * Sem fala nenhuma configurada, a fila é a da fase 1, chamada por chamada: o
  * número que aponta para um time se comporta como antes. Fala sem arquivo no
  * disco, ou que o Asterisk não tocou, é PULADA — a ligação segue como se ela não
@@ -60,6 +75,7 @@ import {
   type CandidatoAoToque,
   type EstadoDoToque,
 } from "@/lib/telefonia/distribuicao";
+import { VALIDADE_DA_ORDEM_DA_FILA_S } from "@/lib/telefonia/fila";
 import { ATENDENTE_DESLIGOU, RECUSA_DA_SAIDA, fimDaSaidaNaoAtendida } from "@/lib/telefonia/fim-da-saida";
 import { binaParaE164, numeroParaLigar } from "@/lib/telefonia/numero";
 import {
@@ -75,15 +91,24 @@ import { MOTIVO_FORA_DO_HORARIO } from "@/lib/telefonia/vocabulario";
 
 import { ErroAri, type CanalAri } from "./ari";
 import { FalasNoAr, semFalaNoAr, type FalaDaLigacao, type PortaFalas } from "./fala-no-ar";
+import {
+  CABECALHO_DO_ATENDER,
+  EVENTO_DA_FILA,
+  TOQUE_DE_QUEM_PUXOU_MS,
+  lerOrdemDaFila,
+  type OrdemDaFilaNoEvento,
+} from "./ordens-da-fila";
 import { donoDoEndpoint, endpointDoCanal, enderecoDeSaida, idDoRamal } from "./pjsip";
 import type { EventoAri, PortaAri, PortaBanco, Registro } from "./portas";
 import type { PoliticaDeGravacao } from "./repositorio-das-gravacoes";
 import type {
   DesfechoDaLigacao,
+  DesfechoDaOrdemDaFila,
   FalaDoBanco,
   FalasGerais,
   LigacaoDoBanco,
   MenuDoBanco,
+  OrdemDaFilaDoBanco,
   TimeParaAFila,
   TroncoDoBanco,
 } from "./repositorio";
@@ -238,6 +263,14 @@ interface FilaDaLigacao {
   entrouEm: number | null;
   /** A espera máxima sem ninguém livre, do TIME (0295); o padrão até a fila do time ser lida. */
   tetoMs: number;
+  /**
+   * A ordem "atender" em curso (0296): o ramal de quem puxou a ligação é o que
+   * toca agora (`ramal`), sozinho. `null` no resto do tempo — atendeu, não
+   * atendeu ou o toque não saiu, a ordem fecha e isto volta a `null`.
+   * `interrompeu`: de quem era o toque que a puxada derrubou (`null` = ninguém
+   * tocava) — se ela não der certo, é a vez dele que se devolve.
+   */
+  puxada: { ordemId: string; userId: string; interrompeu: string | null } | null;
   /**
    * `reavaliar`: reavaliar a fila, ou a rede de segurança do toque do ramal;
    * `aguarde`: a repetição do "aguarde" (~40 s de música entre um e outro).
@@ -395,6 +428,9 @@ const CHAMAR_CURTO_MS = 2_000;
 const RECOMECOS_RAPIDOS_DO_CHAMAR = 3;
 
 const SEM_FALAS_GERAIS: FalasGerais = Object.freeze({ aguarde: null, ninguem: null, foraDoHorario: null });
+
+/** O id da ligação que pode ir ao banco sem uma ligação em memória ao lado (a ordem órfã). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ponteDe = (vcId: string) => `p-${vcId}`;
 const mensagemDe = (e: unknown, max: number) => (e instanceof Error ? e.message.slice(0, max) : String(e).slice(0, max));
@@ -582,9 +618,17 @@ export class ControladorDeChamadas {
         }
         case "ChannelDtmfReceived":
           return await this.aoReceberTecla(ev as Extract<EventoAri, { type: "ChannelDtmfReceived" }>);
-        // A ordem da tela para a transferência (v2), emitida pela API como evento de usuário da ARI.
-        case "ChannelUserevent":
+        // A ordem da tela, emitida pela API como evento de usuário da ARI: para a
+        // fila (atender e mover, 0296) ou para a transferência (v2). O nome do evento separa as duas.
+        case "ChannelUserevent": {
+          const daFila = lerOrdemDaFila(ev);
+          if (daFila) return await this.aoReceberOrdemDaFila(daFila);
+          if ((ev as { eventname?: unknown }).eventname === EVENTO_DA_FILA) {
+            this.log.warn("telefonia: ordem da fila ilegível — ignorada");
+            return;
+          }
           return await this.transferencias.aoReceberOrdem(ev);
+        }
         default:
           return;
       }
@@ -689,6 +733,7 @@ export class ControladorDeChamadas {
         inicioDaEspera: null,
         entrouEm: null,
         tetoMs: TETO_PADRAO_DA_ESPERA_MS,
+        puxada: null,
         relogios: { reavaliar: null, aguarde: null },
       },
       fala: semFalaNoAr(),
@@ -1235,31 +1280,88 @@ export class ControladorDeChamadas {
 
   /** Toca UM ramal por 20 s (`oferta`): o do rodízio, ou o digitado na URA. */
   private async tocarRamal(l: Recebida, userId: string): Promise<void> {
+    if (await this.originarToque(l, userId, TOQUE_POR_ATENDENTE_MS)) return;
+    // Ramal que sumiu entre a pergunta e o toque: conta como tocado e segue.
+    return this.tocarProximo(l);
+  }
+
+  /**
+   * O toque de UM ramal (`oferta`), do pedido à rede de segurança — o mesmo para
+   * o rodízio (20 s) e para quem puxou a ligação da fila (10 s, e o cabeçalho
+   * que faz o navegador dele atender sozinho). `false` = o toque não saiu, e
+   * quem chamou decide o que vem depois; com `true`, a ligação tem o ramal
+   * tocando e o relógio armado (ou acabou no meio do pedido).
+   */
+  private async originarToque(l: Recebida, userId: string, prazoMs: number, cabecalhos: Record<string, string> = {}): Promise<boolean> {
     let canalDoRamal: { id: string };
     try {
       canalDoRamal = await this.ari.originar({
         endpoint: `PJSIP/${idDoRamal(userId)}`,
         appArgs: `oferta,${l.vcId}`,
         callerId: l.numeroExibido,
-        prazoS: Math.round(TOQUE_POR_ATENDENTE_MS / 1000),
-        variaveis: { "PJSIP_HEADER(add,X-Ligacao-Id)": l.vcId },
+        prazoS: Math.round(prazoMs / 1000),
+        variaveis: { "PJSIP_HEADER(add,X-Ligacao-Id)": l.vcId, ...cabecalhos },
       });
     } catch (e) {
-      // Ramal que sumiu entre a pergunta e o toque: conta como tocado e segue.
       this.log.warn("telefonia: não consegui tocar o ramal — próximo", {
         voice_call: l.vcId,
         erro: mensagemDe(e, 160),
       });
-      return this.tocarProximo(l);
+      return false;
+    }
+    // A ligação acabou enquanto o toque era pedido: o ramal novo não fica
+    // tocando para ninguém — e não entra no mapa de uma ligação que já saiu dele.
+    if (l.fim) {
+      await this.ari.desligar(canalDoRamal.id).catch(() => undefined);
+      return true;
     }
     l.fila.ramal = { canal: canalDoRamal.id, userId };
     this.porCanal.set(canalDoRamal.id, l);
     await this.marcarTocando(l, userId);
-    // Rede de segurança: se o Asterisk não derrubar o toque no prazo, derrubamos.
+    // Rede de segurança: se o fim do toque não chegar no prazo, é AQUI que ele
+    // acaba. Não basta desligar o canal e esperar o fim dele: quando esse evento
+    // se perdeu (o WebSocket da ARI piscou), o canal já não existe — o cliente
+    // da ARI engole o 404 —, o evento não vem nunca mais, e a ligação ficava com
+    // o ramal "tocando" e sem relógio, na música até o cliente desistir (e, na
+    // puxada, recusando toda ordem nova). O canal sai da ligação e do mapa ANTES
+    // do desligar: se ele ainda existia, o fim dele chega depois e não acha mais
+    // nada — o toque que venceu não é tratado duas vezes.
     const canalEsperado = canalDoRamal.id;
-    this.armar(l, TOQUE_POR_ATENDENTE_MS + 3_000, async () => {
-      if (l.fila.ramal?.canal === canalEsperado && !l.atendidaPor) await this.ari.desligar(canalEsperado, "no_answer");
+    this.armar(l, prazoMs + 3_000, async () => {
+      if (l.fila.ramal?.canal !== canalEsperado || l.atendidaPor) return;
+      l.fila.ramal = null;
+      this.porCanal.delete(canalEsperado);
+      await this.ari.desligar(canalEsperado, "no_answer").catch((e) =>
+        this.log.warn("telefonia: toque vencido não desligado — a fila segue sem ele", { voice_call: l.vcId, erro: mensagemDe(e, 160) }),
+      );
+      if (l.fim) return;
+      return this.aposToqueSemResposta(l);
     });
+    return true;
+  }
+
+  /**
+   * O toque do ramal acabou sem ninguém atender — não atendeu, recusou, o ramal
+   * caiu, ou venceu o prazo e a rede de segurança o tirou da ligação. Um caminho
+   * só para o fim do canal (`aoDestruirCanal`) e para o relógio: a tela deixa de
+   * mostrar o ramal, a puxada (se era o ramal de quem puxou) fecha como não
+   * atendida e devolve a vez de quem ela interrompeu, e a fila segue.
+   */
+  private async aposToqueSemResposta(l: Recebida): Promise<void> {
+    l.fila.ramal = null;
+    pararRelogio(l.fila.relogios, "reavaliar");
+    await this.marcarTocando(l, null);
+    // Era o ramal de quem PUXOU a ligação da fila (0296): a ordem fecha como não
+    // atendida, e a ligação volta ao ponto em que estava — as voltas e o teto
+    // são os que ela tinha, e quem tocava quando a ordem chegou toca de novo.
+    const puxada = l.fila.puxada;
+    if (puxada) {
+      l.fila.puxada = null;
+      this.devolverAVez(l, puxada.interrompeu);
+      await this.fecharOrdemDaFila(l, puxada.ordemId, "no_answer", null);
+    }
+    if (l.fim) return;
+    return this.seguirDepoisDoToque(l);
   }
 
   /** O estado na tela ("tocando para Fulano"). Não gravar não pode parar a fila: o relógio vem depois. */
@@ -1286,6 +1388,331 @@ export class ControladorDeChamadas {
     pararTodos(l.fila.relogios);
     this.falaNoAr.pararRelogio(l);
     if (l.ura) pararTodos(l.ura.relogios);
+  }
+
+  // ─── as ordens da fila (0296): atender e mover, pedidos pela tela ────────
+  //
+  // A rota conferiu e GRAVOU o pedido (`voice_call_queue_orders`) e emitiu o
+  // evento; aqui a ordem é relida do banco — pelo id, presa à organização e à
+  // ligação que ESTE worker tem em memória — e revalidada. Do evento só valem
+  // os dois ids. A ordem que não vale é recusada no banco, e a ligação nem
+  // percebe: nada na fila dela é tocado antes de a ordem passar por todas as
+  // conferências. E nada daqui derruba nem pendura ligação: toda escrita tem a
+  // sua guarda, e todo caminho que para o relógio da fila termina num toque,
+  // noutro relógio ou no fim da ligação.
+
+  private async aoReceberOrdemDaFila(ordem: OrdemDaFilaNoEvento): Promise<void> {
+    const l = this.porId.get(ordem.voiceCallId);
+    if (!l || l.fim) {
+      this.log.warn("telefonia: ordem da fila para ligação que este worker não acompanha — recusada", {
+        voice_call: ordem.voiceCallId,
+        ordem: ordem.ordemId,
+      });
+      // Recusada, e não largada aberta: a tela de quem pediu para de esperar. Só com o
+      // id que pode ir ao banco sozinho — aqui não há organização em memória para prendê-lo.
+      if (UUID.test(ordem.voiceCallId)) {
+        await this.banco
+          .recusarOrdemDaFilaOrfa(ordem.ordemId, ordem.voiceCallId, "ligacao_desconhecida")
+          .catch((e) => this.log.warn("telefonia: ordem da fila órfã não recusada", { erro: mensagemDe(e, 160) }));
+      }
+      return;
+    }
+    let o: OrdemDaFilaDoBanco | null;
+    try {
+      o = await this.banco.ordemDaFilaAberta(l.org, l.vcId, ordem.ordemId);
+    } catch (e) {
+      // Sem a ordem não há o que fazer nem o que recusar: o fim da ligação a fecha.
+      this.log.warn("telefonia: ordem da fila não lida — ignorada", {
+        voice_call: l.vcId,
+        ordem: ordem.ordemId,
+        erro: mensagemDe(e, 160),
+      });
+      return;
+    }
+    if (!o) {
+      this.log.warn("telefonia: ordem da fila sem ordem aberta no banco — ignorada", { voice_call: l.vcId, ordem: ordem.ordemId });
+      return;
+    }
+    // A leitura esperou: se a ligação acabou nesse meio, o fim dela já cancelou a ordem.
+    if (l.fim) return;
+    // O mesmo evento duas vezes: a ordem já está em curso. Fechá-la aqui — como
+    // recusada ou como vencida — fecharia, no banco, a puxada cujo ramal está
+    // tocando agora.
+    if (l.tipo === "recebida" && l.fila.puxada?.ordemId === o.id) {
+      this.log.warn("telefonia: ordem da fila repetida — ignorada", { voice_call: l.vcId, ordem: o.id });
+      return;
+    }
+    // A ordem VENCEU antes de chegar aqui (o evento esperou na fila do laço, num
+    // pico): quem pediu já desistiu — o pedido do navegador dele vale 15 s —,
+    // então o ramal tocaria como uma ligação comum, e quem tocava seria derrubado
+    // à toa. Cancelada antes de qualquer efeito: a ligação segue como estava. A
+    // idade é a do relógio do BANCO, e o corte é o mesmo da rota e da tela (vence
+    // a que tem MAIS que a validade).
+    if (o.idadeMs > VALIDADE_DA_ORDEM_DA_FILA_S * 1000) {
+      this.log.warn("telefonia: ordem da fila vencida — cancelada sem agir", {
+        voice_call: l.vcId,
+        ordem: o.id,
+        idade_s: Math.round(o.idadeMs / 1000),
+      });
+      return this.fecharOrdemDaFila(l, o.id, "cancelled", "ordem_vencida");
+    }
+    if (l.tipo !== "recebida") {
+      // Só a recebida tem fila. A retomada depois de um reinício é uma ligação já atendida.
+      return this.fecharOrdemDaFila(l, o.id, "refused", l.tipo === "recuperada" ? "ligacao_ja_atendida" : "ligacao_fora_da_fila");
+    }
+    const fora = this.foraDaFila(l);
+    if (fora) return this.fecharOrdemDaFila(l, o.id, "refused", fora);
+    // O que vale é o tipo GRAVADO na ordem, não a ação que o evento diz.
+    return o.kind === "pull" ? this.puxarDaFila(l, o) : this.moverDeTime(l, o);
+  }
+
+  /**
+   * Por que NÃO se age sobre esta ligação — ou `null`, se ela espera por uma
+   * pessoa: passou do menu e dos avisos (tem a ordem de chegada), ninguém a
+   * atendeu e ela não está se despedindo. No menu e nos avisos a ordem é
+   * recusada: o aviso de instabilidade toca INTEIRO, e quem não ouviu o de
+   * gravação até o fim não é gravado. E uma ordem por vez: com o ramal de quem
+   * puxou tocando, a ligação já é de alguém.
+   */
+  private foraDaFila(l: Recebida): string | null {
+    if (l.atendidaPor) return "ligacao_ja_atendida";
+    if (l.encerrando) return "ligacao_encerrada";
+    if (l.ura || l.fila.entrouEm === null || this.ouvindoUmaFalaInteira(l)) return "ligacao_fora_da_fila";
+    if (l.fila.puxada) return "ja_ha_ordem";
+    return null;
+  }
+
+  /**
+   * O desfecho da ordem, no banco — é por ele que a tela de quem pediu sabe o
+   * que aconteceu. Não gravar não muda a ligação: a ordem fica aberta até o fim
+   * dela, que a cancela.
+   */
+  private async fecharOrdemDaFila(
+    l: { org: string; vcId: string },
+    id: string,
+    desfecho: DesfechoDaOrdemDaFila,
+    motivo: string | null,
+  ): Promise<void> {
+    if (desfecho === "refused") this.log.warn("telefonia: ordem da fila recusada", { voice_call: l.vcId, ordem: id, motivo });
+    await this.banco
+      .encerrarOrdemDaFila(l.org, id, { desfecho, motivo })
+      .catch((e) =>
+        this.log.warn("telefonia: desfecho da ordem da fila não gravado", { voice_call: l.vcId, ordem: id, erro: mensagemDe(e, 160) }),
+      );
+  }
+
+  /**
+   * Derruba o toque em curso SEM que isso conte como recusa: o ramal sai da
+   * ligação e do mapa ANTES de ser desligado — o fim desse canal, que chega
+   * depois, não acha mais a ligação, e por isso não gasta a vez de ninguém nem
+   * chama o próximo. Sem ramal tocando, não faz nada.
+   */
+  private async derrubarOToqueEmCurso(l: Recebida): Promise<void> {
+    const canal = l.fila.ramal?.canal;
+    if (!canal) return;
+    l.fila.ramal = null;
+    this.porCanal.delete(canal);
+    await this.ari.desligar(canal).catch((e) =>
+      // O ramal segue tocando até o prazo do próprio toque; se atender, é largado (`ramalAtendeu`).
+      this.log.warn("telefonia: toque em curso não derrubado — o prazo dele o derruba", { voice_call: l.vcId, erro: mensagemDe(e, 160) }),
+    );
+  }
+
+  /**
+   * ATENDER: a ligação que espera toca no ramal de quem pediu, sozinha, por
+   * `TOQUE_DE_QUEM_PUXOU_MS`. Quem puxa é revalidado AQUI, mesmo que a rota já
+   * tenha conferido — entre o clique e a ordem o navegador pode ter caído, ou
+   * outra ligação pode ter chegado para ele. Só depois de tudo conferido a fila
+   * é tocada: o toque em curso cai, e o de quem puxou sai com o cabeçalho da
+   * ordem. Atendeu → `ramalAtendeu`, como qualquer ramal (ponte, gravação, a
+   * conversa de quem atendeu), e a ordem fecha `done`. Não atendeu → o fim do
+   * toque a fecha `no_answer` (`aposToqueSemResposta`), e a ligação volta ao
+   * ponto em que estava: quem tocava quando a ordem chegou toca de novo, na
+   * mesma volta (`devolverAVez`).
+   */
+  private async puxarDaFila(l: Recebida, o: OrdemDaFilaDoBanco): Promise<void> {
+    const recusar = (motivo: string) => this.fecharOrdemDaFila(l, o.id, "refused", motivo);
+    const userId = o.toUserId;
+    // Quem pediu foi apagado entre o pedido e a ordem: não há ramal para tocar.
+    if (!userId) return recusar("destino_offline");
+    if (!(await this.ari.ramalOnline(userId).catch(() => false))) return recusar("destino_offline");
+    let emLigacao: boolean;
+    try {
+      emLigacao = await this.banco.pessoaEmLigacao(l.org, userId);
+    } catch (e) {
+      // Sem a resposta, NÃO segue (ao contrário da transferência): puxar derruba
+      // o toque que está em curso, e não se mexe na ligação de um cliente por
+      // uma conferência que não foi feita. Quem pediu tenta de novo.
+      this.log.warn("telefonia: não consegui conferir se quem puxa está em ligação — a ordem não segue", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      return recusar("falha_ao_conferir");
+    }
+    if (emLigacao) return recusar("destino_em_ligacao");
+    // As leituras esperaram: a ligação pode ter acabado (e o fim dela já cancelou a ordem) ou mudado de mãos.
+    if (l.fim) return;
+    const fora = this.foraDaFila(l);
+    if (fora) return recusar(fora);
+    // Quem pede É quem já está tocando por esta ligação: basta atender o toque
+    // que tem. O banco costuma dizer isso antes (`pessoaEmLigacao` vê o
+    // `ringing_user_id`); aqui vale mesmo que essa escrita tenha falhado —
+    // derrubar o toque para tocar de novo no MESMO navegador é o caso do 486.
+    const interrompeu = l.fila.ramal?.userId ?? null;
+    if (interrompeu === userId) return recusar("destino_em_ligacao");
+
+    l.fila.puxada = { ordemId: o.id, userId, interrompeu };
+    pararRelogio(l.fila.relogios, "reavaliar");
+    await this.derrubarOToqueEmCurso(l);
+    if (l.fim) return;
+    this.log.info("telefonia: ligação puxada da fila", { voice_call: l.vcId, ordem: o.id, atendente: userId });
+    const cabecalho = { [`PJSIP_HEADER(add,${CABECALHO_DO_ATENDER})`]: o.id };
+    if (await this.originarToque(l, userId, TOQUE_DE_QUEM_PUXOU_MS, cabecalho)) return;
+
+    // O toque de quem puxou não saiu (o ramal sumiu entre a conferência e o
+    // toque): a ordem é recusada, quem tocava recebe a vez de volta e a ligação
+    // segue no rodízio — nunca fica parada sem ramal e sem relógio.
+    l.fila.puxada = null;
+    this.devolverAVez(l, interrompeu);
+    await recusar("destino_offline");
+    if (l.fim) return;
+    if (!interrompeu) return this.seguirDepoisDoToque(l);
+    // A tela não pode seguir mostrando como "tocando" o ramal que derrubamos.
+    await this.marcarTocando(l, null);
+    if (l.fim) return;
+    // Ele toca de novo — mas não NESTE instante: o navegador dele ainda fecha o
+    // toque que acabamos de derrubar, e o que chega com a sessão anterior aberta
+    // é recusado com 486 (o motivo de `REAVALIAR_APOS_O_FIM_MS`) — a recusa
+    // gastaria a vez que acabou de ser devolvida.
+    this.armar(l, REAVALIAR_APOS_O_FIM_MS, () => this.seguirDepoisDoToque(l));
+  }
+
+  /**
+   * Quem tocava quando a puxada chegou não gastou a vez: o toque dele foi cortado
+   * por uma ordem que não deu certo, e isso não é recusa (desenho §4.3). No
+   * rodízio, ele sai de quem já tocou NESTA volta — a volta é a mesma, nem anda
+   * nem recomeça — e volta a ser o próximo. O ramal digitado na URA (que toca
+   * fora do rodízio) volta a ser "ainda não tentado": toca de novo, sozinho,
+   * antes da fila do time. Sem ninguém interrompido, não faz nada.
+   */
+  private devolverAVez(l: Recebida, userId: string | null) {
+    if (!userId) return;
+    const toque = l.fila.toque;
+    if (toque.tocaramNestaVolta.has(userId)) {
+      const tocaram = new Set(toque.tocaramNestaVolta);
+      tocaram.delete(userId);
+      l.fila.toque = { volta: toque.volta, tocaramNestaVolta: tocaram };
+      return;
+    }
+    const direto = l.fila.direto;
+    if (direto?.tentou && direto.userId === userId) direto.tentou = false;
+  }
+
+  /**
+   * MOVER: a ligação que espera vai para a fila de outro time. O time de
+   * destino é relido AQUI (a rota conferiu, mas o expediente pode ter acabado
+   * entre o clique e a ordem); fechado → recusada. O banco vai PRIMEIRO, antes
+   * de qualquer coisa na fila: se a escrita falha, a ordem é recusada e a
+   * ligação segue exatamente como estava — o ramal que tocava nem é derrubado.
+   *
+   * Movida: o toque em curso cai sem contar como recusa; as voltas zeram (é
+   * outra lista de gente); o teto é o do time novo, contado de quando ela chega
+   * nele — o prazo gravado é limpo, e a espera o regrava se ninguém estiver
+   * livre lá. A ORDEM DE CHEGADA não muda (`entrouEm`): é do cliente, que não
+   * volta para o fim da fila por ter caído no time errado. Não repete "fora do
+   * horário" nem o aviso de instabilidade do time novo: direto aos ramais dele.
+   */
+  private async moverDeTime(l: Recebida, o: OrdemDaFilaDoBanco): Promise<void> {
+    const recusar = (motivo: string) => this.fecharOrdemDaFila(l, o.id, "refused", motivo);
+    const teamId = o.toTeamId;
+    // O time foi apagado entre o pedido e a ordem.
+    if (!teamId) return recusar("destino_invalido");
+    if (teamId === l.fila.teamId) return recusar("ja_esta_nesse_time");
+    let entrada: TimeParaAFila;
+    try {
+      entrada = await this.banco.timeParaAFila(l.org, teamId, new Date(this.agora()));
+    } catch (e) {
+      // Na entrada da fila a leitura que falha não para nada; aqui para: sem
+      // saber se o time atende, a ligação fica onde está.
+      this.log.warn("telefonia: situação do time de destino não lida — a ligação não é movida", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      return recusar("falha_ao_conferir");
+    }
+    // Fechado — ou arquivado, de outra organização, com a agenda ilegível: ninguém lá vai atender.
+    if (entrada.situacao !== "aberto") {
+      return recusar(entrada.situacao === "fora_do_horario" ? "time_fora_do_horario" : "destino_invalido");
+    }
+    // A ligação que tocava no ramal digitado na URA nunca passou pela entrada da
+    // fila, que é onde as falas gerais são lidas: movida sem elas, esperaria sem
+    // o "aguarde" e cairia no teto sem o "ninguém atendeu". Como lá, a leitura
+    // que falha não para nada.
+    if (l.fila.falasGerais === SEM_FALAS_GERAIS) {
+      try {
+        l.fila.falasGerais = await this.banco.falasGerais(l.org);
+      } catch (e) {
+        this.log.warn("telefonia: falas gerais não lidas — segue a fila sem elas", { voice_call: l.vcId, erro: mensagemDe(e, 160) });
+      }
+    }
+    if (l.fim) return;
+    const fora = this.foraDaFila(l);
+    if (fora) return recusar(fora);
+    try {
+      await this.banco.moverParaOTime(l.org, l.vcId, l.conversationId, teamId);
+    } catch (e) {
+      this.log.warn("telefonia: ligação não movida de time — segue no time em que estava", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      return recusar("falha_ao_mover");
+    }
+    if (l.fim) return;
+
+    // Daqui em diante a fila muda — e o que é memória muda de uma vez, antes de qualquer espera.
+    pararRelogio(l.fila.relogios, "reavaliar");
+    const deTime = l.fila.teamId;
+    l.fila.teamId = teamId;
+    l.fila.toque = ESTADO_INICIAL;
+    l.fila.direto = null;
+    l.fila.esperando = false;
+    l.fila.inicioDaEspera = null;
+    // O time está aberto (conferido acima): o teto é o dele, como na entrada da fila.
+    l.fila.tetoMs = esperaMaximaMs(entrada.esperaMaximaS);
+    await this.derrubarOToqueEmCurso(l);
+    // O "cai em" da tela era o do time antigo: some, e a espera no time novo o regrava.
+    await this.banco
+      .marcarPrazoDaFila(l.org, l.vcId, null)
+      .catch((e) => this.log.warn("telefonia: prazo da fila não gravado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
+    await this.fecharOrdemDaFila(l, o.id, "done", null);
+    this.log.info("telefonia: ligação movida de time na fila", { voice_call: l.vcId, ordem: o.id, de: deTime, para: teamId });
+    if (l.fim) return;
+    return this.tocarProximo(l);
+  }
+
+  /**
+   * O toque acabou sem ninguém atender — não atendeu, recusou, o ramal caiu, ou
+   * era o de quem puxou a ligação da fila: quem toca agora. O ramal digitado na
+   * URA (v3) que não atendeu leva à fila do time padrão do menu, INTEIRA — fora
+   * do horário, aviso de instabilidade, os ramais —, e o chamar para antes: a
+   * fila decide de novo o que o cliente ouve. Nos outros casos, o próximo da lista.
+   *
+   * Só com a ligação SEM ramal tocando — é assim que todo chamador chega aqui.
+   * Chega com um ramal tocando o relógio dos 2 s da puxada sem toque que
+   * disparou e esperou, na fila serial, atrás de outra ordem que já tocou
+   * alguém: seguir dali mandaria a ligação para a entrada da fila do time POR
+   * CIMA desse toque — fora do horário, o cliente ouviria a despedida e quem
+   * atendesse o ramal seria largado. Quem segue a fila é o fim do toque que
+   * está no ar, e o relógio dele existe (`tocarProximo` tem a mesma guarda).
+   */
+  private async seguirDepoisDoToque(l: Recebida): Promise<void> {
+    if (l.fim || l.fila.ramal) return;
+    if (l.fila.direto?.tentou) {
+      l.fila.direto = null;
+      await this.pararChamando(l);
+      return this.entrarNaFila(l);
+    }
+    return this.tocarProximo(l);
   }
 
   // ─── depois da fala (a mecânica está em `fala-no-ar.ts`) ─────────────────
@@ -1677,6 +2104,13 @@ export class ControladorDeChamadas {
         }),
       );
     }
+    // Puxada da fila (0296), e quem puxou atendeu: a ordem fecha — por último,
+    // depois da ponte e de tudo o que a ligação atendida precisa. Não gravar não muda nada nela.
+    const puxada = l.fila.puxada;
+    if (puxada) {
+      l.fila.puxada = null;
+      await this.fecharOrdemDaFila(l, puxada.ordemId, "done", null);
+    }
     this.log.info("telefonia: ligação atendida", { voice_call: vcId, atendente: l.atendidaPor });
   }
 
@@ -1698,6 +2132,13 @@ export class ControladorDeChamadas {
     }
     if (l.ponte) await this.ari.destruirPonte(l.ponte).catch(() => undefined);
     this.porId.delete(l.vcId);
+    // A ordem da fila que ficou aberta (o ramal de quem puxou ainda tocava, ou o
+    // evento nunca chegou aqui) morre com a ligação — DEPOIS de os canais caírem:
+    // o banco lento não segura ninguém na linha. Não fechar não impede o fim.
+    l.fila.puxada = null;
+    await this.banco
+      .cancelarOrdensDaLigacao(l.org, l.vcId, "ligacao_encerrada")
+      .catch((e) => this.log.warn("telefonia: ordens da fila não canceladas no fim da ligação", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
     await this.finalizar(l.org, l.vcId, l.atendidaPor ? "atendida" : "perdida", motivo, opcoes.ligarDeVolta);
   }
 
@@ -2071,18 +2512,7 @@ export class ControladorDeChamadas {
       if (l.fila.ramal?.canal === ev.channel.id) {
         if (l.atendidaPor) return this.encerrarRecebida(l, "atendente_desligou");
         // Não atendeu, recusou ou o ramal caiu: próximo da lista.
-        l.fila.ramal = null;
-        pararRelogio(l.fila.relogios, "reavaliar");
-        await this.marcarTocando(l, null);
-        // O ramal digitado na URA não atendeu (v3): a fila do time padrão do menu,
-        // inteira — fora do horário, aviso de instabilidade, os ramais. O chamar
-        // para antes: a fila decide de novo o que o cliente ouve.
-        if (l.fila.direto?.tentou) {
-          l.fila.direto = null;
-          await this.pararChamando(l);
-          return this.entrarNaFila(l);
-        }
-        return this.tocarProximo(l);
+        return this.aposToqueSemResposta(l);
       }
       return;
     }
@@ -2174,6 +2604,12 @@ export class ControladorDeChamadas {
       return 0;
     });
     if (canceladas > 0) this.log.info("telefonia: transferências abertas canceladas no reinício", { canceladas });
+    // As ordens da fila também (0296): o ramal de quem puxou não toca mais por elas.
+    const ordens = await this.banco.cancelarOrdensDaFilaAbertas("worker_reiniciou").catch((e) => {
+      this.log.warn("telefonia: ordens da fila abertas não canceladas na recuperação", { erro: mensagemDe(e, 160) });
+      return 0;
+    });
+    if (ordens > 0) this.log.info("telefonia: ordens da fila abertas canceladas no reinício", { canceladas: ordens });
     const [vivas, pontes, canais] = await Promise.all([
       this.banco.ligacoesVivas(),
       this.ari.pontes(),

@@ -39,6 +39,7 @@ function ligacao(fase: FaseDaLigacao, time_id: string | null, esperaS: number | 
     tocando_para: null,
     com: null,
     atendida_em: null,
+    ordem: null,
   };
 }
 

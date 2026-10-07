@@ -14,16 +14,25 @@
  * inteira, e não um por linha. Ele mede pelo relógio do BANCO: a resposta traz a
  * hora de lá, e a defasagem deste navegador entra na conta (um computador dois
  * minutos atrasado mostraria toda espera dois minutos menor).
+ *
+ * AGIR NA FILA (entrega 3; migration 0296). É aqui que se decide quem vê o quê,
+ * uma vez para a coluna inteira: "Atender" para quem tem ramal neste navegador;
+ * "Mover" para gerente e admin — a mesma régua das rotas (`agent` com ramal
+ * registrado, `manager`). A linha só desenha; o pedido e o acompanhamento dele
+ * são de `useAcoesDaFila`.
  */
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { BotaoLigar } from "@/components/telefonia/BotaoLigar";
+import { useTelefonia } from "@/components/telefonia/TelefoniaContext";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useT } from "@/hooks/i18n/useT";
 import type { FilaComRelogio } from "@/hooks/telefonia/useFilaDoTelefone";
+import { roleAtLeast } from "@/lib/auth/types";
 import { phoneForDisplay } from "@/lib/channels/phone-variants";
 import {
   FASES_QUE_ESPERAM,
@@ -38,6 +47,7 @@ import { cn } from "@/lib/utils";
 
 import { ChipsDaFila } from "./ChipsDaFila";
 import { LinhaDaFila } from "./LinhaDaFila";
+import { useAcoesDaFila } from "./useAcoesDaFila";
 
 /** Por que a ligação se perdeu, como a tela diz. A chave é o vocabulário de `lib/telefonia/fila.ts`. */
 const MOTIVO: Record<MotivoDaPerdida, string> = {
@@ -106,6 +116,11 @@ export function FilaDoTelefone({ consulta, selectedId, onSelect }: Props) {
   const relogioMs = useRelogioDaTela();
   const [timeEscolhido, setTimeEscolhido] = useState<string | undefined>(undefined);
   const [numeroEscolhido, setNumeroEscolhido] = useState<string | undefined>(undefined);
+  // Quem olha: o ramal (atender), o papel (mover) e o id (a que toca "para você").
+  const { user, activeOrg } = useAuth();
+  const { disponivel: temRamal } = useTelefonia();
+  const podeMover = roleAtLeast(activeOrg?.role, "manager");
+  const acoesDaFila = useAcoesDaFila({ reler: () => void consulta.refetch() });
 
   const { data } = consulta;
 
@@ -176,6 +191,18 @@ export function FilaDoTelefone({ consulta, selectedId, onSelect }: Props) {
         agoraMs={agoraMs}
         selecionada={conversa !== null && conversa === selectedId}
         onAbrir={conversa ? () => onSelect(conversa) : undefined}
+        euId={user.id}
+        nomeDoTimeDaOrdem={l.ordem?.para_time_id ? (nomeDoTime.get(l.ordem.para_time_id) ?? null) : null}
+        acoes={{
+          podeAtender: temRamal,
+          podeMover,
+          emCurso: acoesDaFila.emCurso[l.id] ?? null,
+          puxando: acoesDaFila.puxando,
+          // Os times ATIVOS que a fila trouxe: a linha tira o dela.
+          times: data.times,
+          onAtender: () => void acoesDaFila.atender(l.id),
+          onMover: (time) => void acoesDaFila.mover(l.id, time),
+        }}
       />
     );
   };

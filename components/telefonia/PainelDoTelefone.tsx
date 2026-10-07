@@ -7,6 +7,10 @@
  * E, no mesmo canto, POR QUE a ligação que ele fez acabou sem ninguém atender
  * (`ultimoEncerramento.aviso`): a operadora recusando em 0,2 s parecia, para
  * quem discou, um painel que some sem explicação.
+ *
+ * A ligação que ele PUXOU da fila (fase `atendendo`, entrega 3) não passa pelo
+ * aviso de ligação chegando: ele já pediu para atender, e o navegador já está
+ * atendendo. Ela nasce direto no painel do canto, com "Conectando…", sem som.
  */
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -93,6 +97,8 @@ export function PainelDoTelefone() {
   const setTeclado = (f: (v: boolean) => boolean) =>
     setTecladoDe(f(teclado) ? (ligacao?.id ?? "sem-id") : null);
 
+  // Só a recebida que ESPERA o clique toca. A puxada da fila (`atendendo`) já
+  // está sendo atendida: nem o som, nem o aviso de ligação chegando.
   const tocando = ligacao?.fase === "tocando";
   useToque(tocando);
   // O seletor da transferência é da LIGAÇÃO, como o teclado.
@@ -178,6 +184,8 @@ export function PainelDoTelefone() {
   const podeTransferir =
     ligacao.fase === "em_ligacao" && Boolean(ligacao.id) && !ligacao.transferencia && !ligacao.interna;
 
+  // `discando` (a que eu faço, ainda saindo) e `atendendo` (a que eu puxei da
+  // fila, sendo atendida) dizem o mesmo: está conectando.
   const situacao =
     ligacao.fase === "em_ligacao"
       ? duracao(ligacao.atendidaEm, agora)

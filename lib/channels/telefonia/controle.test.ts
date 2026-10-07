@@ -8,7 +8,9 @@ import {
   REPETIR_AGUARDE_MS,
 } from "./controle";
 import { ANA, AriFalso, BIA, BancoFalso, FalasFalsas, ORG, TIME, TRONCO, canal, falaDe, tronco } from "./dubles-de-teste";
+import { CABECALHO_DO_ATENDER, EVENTO_DA_FILA, TOQUE_DE_QUEM_PUXOU_MS } from "./ordens-da-fila";
 import { toqueDaSaidaSemResposta, type FalaDoBanco, type LigacaoDoBanco, type MenuDoBanco } from "./repositorio";
+import { VALIDADE_DA_ORDEM_DA_FILA_S } from "@/lib/telefonia/fila";
 
 const log = { info: () => undefined, warn: vi.fn(), error: vi.fn() };
 
@@ -1155,6 +1157,10 @@ describe("fila do time — as falas da fase 2 (§5.2)", () => {
       await terminou("fala-1");
       expect(ctl.falasNoAr).toBe(0);
       expect(vi.getTimerCount()).toBe(1); // sobra só a rede de segurança do toque do ramal
+      // A Ana atende: sem isto, os 65 s abaixo passariam com o ramal "tocando" sem fim de
+      // canal — mais que qualquer toque dura —, e a rede de segurança seguiria o rodízio.
+      await ramalAtende(ari.ultimoOriginado());
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(AVISO.duracaoMs + FOLGA_DO_FIM_DA_FALA_MS);
       expect(ari.nomes()).not.toContain("pararFala");
       expect(banco.tem("ouviu_aviso")).toHaveLength(1);
@@ -2351,13 +2357,18 @@ describe("o som de chamando na fila (DYD-52): com atendente livre, o chamar — 
     await vi.advanceTimersByTimeAsync(5_000); // t = 5 s: o ramal da Ana começa a tocar
     expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`]);
 
-    await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS); // t = 45 s: o ciclo passou com o ramal tocando
+    // Um toque dura 20 s: aos 25 s o da Ana acaba sem resposta, e a 2ª volta toca-a de novo —
+    // é esse toque que está no ar quando o ciclo do "aguarde" chega, aos 40 s.
+    await vi.advanceTimersByTimeAsync(20_000); // t = 25 s
+    await destruir("ramal-canal-1", 19);
+    expect(ari.originados()).toEqual([`PJSIP/ramal-${ANA}`, `PJSIP/ramal-${ANA}`]);
+    await vi.advanceTimersByTimeAsync(REPETIR_AGUARDE_MS - 20_000); // t = 45 s: o ciclo passou com o ramal tocando
     expect(ari.falas()).toEqual([SOM_MENU, SOM_AGUARDE]);
     expect(ari.nomes()).not.toContain("pararMusica"); // a música segue, sem soluço
     expect(ari.tons()).toEqual([]);
 
     banco.disponiveis = []; //              a Ana não atendeu, e ninguém mais está livre
-    await destruir("ramal-canal-1", 19);
+    await destruir("ramal-canal-2", 19);
     expect(ari.falas()).toEqual([SOM_MENU, SOM_AGUARDE]); // nada na hora: a música segue até o ciclo
 
     const n = ari.chamadas.length;
@@ -3107,5 +3118,1443 @@ describe("a fila visível (0295): ordem de chegada, teto por time e prazo", () =
     await vi.advanceTimersByTimeAsync(5_000);
     await ramalAtende(ari.ultimoOriginado());
     expect(banco.tem("atendida")).toHaveLength(1);
+  });
+});
+
+describe("as ordens da fila (0296): atender e mover a pedido da tela", () => {
+  const CAIO = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+  const OUTRO_TIME = "55555555-5555-5555-5555-555555555555";
+  const MENU = "66666666-6666-6666-6666-666666666666";
+  const O1 = "0f000000-0000-4000-8000-000000000001";
+  const O2 = "0f000000-0000-4000-8000-000000000002";
+  const O3 = "0f000000-0000-4000-8000-000000000003";
+  const cliente2 = canal("cli-2", `PJSIP/tronco-${TRONCO}-00000002`, { caller: { name: "", number: "61977776666" } });
+  const entrar2 = () => ctl.tratar({ type: "StasisStart", channel: cliente2, args: ["entrada"] });
+  const livre = (userId: string, atendidasHoje = 0) => ({ userId, atendidasHoje, ultimaAtendidaEm: null });
+  /** A ordem como a ARI a entrega: o evento de usuário com a ação e os dois ids. */
+  const ordemDaFila = (acao: string, ordemId = O1, vcId = "vc-1") =>
+    ctl.tratar({ type: "ChannelUserevent", eventname: EVENTO_DA_FILA, userevent: { acao, ordem_id: ordemId, voice_call_id: vcId } });
+  /** O pedido que a rota gravou: `quem` quer a ligação no próprio ramal. */
+  const pedirAtender = (quem = CAIO, id = O1, vcId = "vc-1") =>
+    banco.abrirOrdemDaFila({ id, vcId, kind: "pull", requestedBy: quem, toUserId: quem, toTeamId: null });
+  /** O pedido que a rota gravou: a ligação vai para a fila de `time`. */
+  const pedirMover = (time = OUTRO_TIME, id = O1, vcId = "vc-1") =>
+    banco.abrirOrdemDaFila({ id, vcId, kind: "move", requestedBy: ANA, toUserId: null, toTeamId: time });
+  const ordem = (id = O1) => banco.ordensDaFila.get(id)!;
+  /** Para quem cada ligação foi oferecida, na ordem: `[endpoint, appArgs]`. */
+  const ofertas = () => ari.chamadas.filter((c) => c[0] === "originar").map((c) => [c[1], c[2]]);
+  const ramalDe = (userId: string) => `PJSIP/ramal-${userId}`;
+  /** Os canais que o controlador mandou desligar, na ordem. */
+  const desligados = () => ari.chamadas.filter((c) => c[0] === "desligar").map((c) => c[1]);
+  const musicas = (canalId: string) => ari.chamadas.filter((c) => c[0] === "musicaDeEspera" && c[1] === canalId);
+  /** O toque do rodízio, como sempre foi: 20 s e só o cabeçalho da ligação. */
+  const TOQUE_DO_RODIZIO = { appArgs: "oferta,vc-1", prazoS: 20, variaveis: { "PJSIP_HEADER(add,X-Ligacao-Id)": "vc-1" } };
+  const menuComRamal: MenuDoBanco = {
+    id: MENU,
+    nome: "Atendimento",
+    defaultTeamId: TIME,
+    timePadraoAtivo: true,
+    fala: falaDe("menu", 4_000),
+    falaInvalida: null,
+    opcoes: [{ digito: "1", teamId: TIME }],
+    aceitaRamal: true,
+  };
+  /** O número aponta para o menu. `aceitaRamal: false` = a tecla escolhe na hora, sem esperar mais dígitos. */
+  const comMenu = (aceitaRamal = true) => {
+    banco.troncoAtual = { ...tronco, teamId: null, menuId: MENU };
+    banco.menus.set(MENU, { ...menuComRamal, aceitaRamal });
+  };
+
+  // ─── atender ───
+
+  it("atender uma que ESPERA: toca só para quem puxou, por 10 s e com o cabeçalho da ordem; atendeu → ponte, ordem feita e a conversa de quem puxou", async () => {
+    ari.online.add(CAIO);
+    await entrar(); // ninguém livre: música
+    expect(ofertas()).toEqual([]);
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(TOQUE_DE_QUEM_PUXOU_MS).toBe(10_000);
+    expect(ari.toques).toEqual([
+      {
+        endpoint: ramalDe(CAIO),
+        appArgs: "oferta,vc-1",
+        callerId: "+5561988887777",
+        prazoS: 10,
+        variaveis: { "PJSIP_HEADER(add,X-Ligacao-Id)": "vc-1", [`PJSIP_HEADER(add,${CABECALHO_DO_ATENDER})`]: O1 },
+      },
+    ]);
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", CAIO]);
+    // A ordem só fecha quando quem puxou atende — e o cliente segue com a música de quem espera.
+    expect(ordem().status).toBe("open");
+    expect(desligados()).toEqual([]);
+    expect(ari.chamadas).not.toContainEqual(["pararMusica", "cli-1"]);
+    expect(vi.getTimerCount()).toBe(1); // a rede de segurança do toque de quem puxou
+
+    await ramalAtende("ramal-canal-1");
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "cli-1"]);
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "ramal-canal-1"]);
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", CAIO]]);
+    expect(banco.tem("atribuida")).toEqual([["atribuida", "conversa-1", CAIO]]);
+    expect(banco.tem("cartao")).toEqual([["cartao", "vc-1", CAIO]]);
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done", motivo: null });
+
+    // O fim da ligação não reescreve a ordem que já aconteceu.
+    await destruir("cli-1");
+    expect(banco.tem("ordem_da_fila")).toEqual([["ordem_da_fila", O1, "done", null]]);
+    expect(banco.tem("registro")).toEqual([["registro", "vc-1", "atendida"]]);
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("atender uma que TOCA para outro: o toque do outro é derrubado antes, e o fim dele não origina toque novo nem aparece como recusa", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // a Ana toca (ramal-canal-1)
+    expect(ofertas()).toEqual([[ramalDe(ANA), "oferta,vc-1"]]);
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    expect(ofertas()).toEqual([
+      [ramalDe(ANA), "oferta,vc-1"],
+      [ramalDe(CAIO), "oferta,vc-1"],
+    ]);
+    expect(ari.indice("desligar", "ramal-canal-1")).toBeLessThan(ari.indice("originar", ramalDe(CAIO)));
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", CAIO]);
+    const tocandoAntes = banco.tem("tocando").length;
+
+    // O fim do canal da Ana — que NÓS derrubamos — chega depois: não é "não atendeu".
+    await destruir("ramal-canal-1", 16);
+    expect(ofertas()).toHaveLength(2);
+    expect(banco.tem("tocando")).toHaveLength(tocandoAntes);
+    expect(ordem().status).toBe("open");
+    expect(vi.getTimerCount()).toBe(1);
+
+    // A Ana atendeu no mesmo instante (o "alô" dela cruzou com o nosso desligar): é largada, e a ligação segue de quem puxou.
+    await ramalAtende("ramal-canal-1");
+    expect(banco.tem("atendida")).toEqual([]);
+    expect(desligados()).toEqual(["ramal-canal-1", "ramal-canal-1"]);
+
+    await ramalAtende("ramal-canal-2");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", CAIO]]);
+    expect(banco.tem("atribuida")).toEqual([["atribuida", "conversa-1", CAIO]]);
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+  });
+
+  it("quem puxou uma que tocava não atende: a ligação volta ao rodízio de ONDE ESTAVA — quem foi derrubado toca de novo, e a volta não andou nem recomeçou", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // 1ª volta: a Ana toca
+    pedirAtender();
+    await ordemDaFila("atender"); // a Ana é derrubada, o Caio toca
+    await destruir("ramal-canal-1", 16); // o fim do canal da Ana
+    await destruir("ramal-canal-2", 19); // o Caio não atende
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "no_answer", motivo: null });
+    // Volta para a Ana: o toque dela foi cortado pela puxada, e a puxada que não deu certo não gasta a vez de ninguém.
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(CAIO), ramalDe(ANA)]);
+    // O toque de volta é o do rodízio: 20 s, e sem o cabeçalho de quem puxa.
+    expect(ari.toques.at(-1)).toEqual({ endpoint: ramalDe(ANA), callerId: "+5561988887777", ...TOQUE_DO_RODIZIO });
+
+    await destruir("ramal-canal-3", 19); // a Ana não atende: a Bia, ainda na 1ª volta
+    await destruir("ramal-canal-4", 19); // a Bia não atende: 2ª volta, a Ana
+    await destruir("ramal-canal-5", 19); // a Ana
+    expect(banco.tem("encerrada")).toEqual([]);
+    await destruir("ramal-canal-6", 19); // a Bia — e a fila desiste, com as DUAS voltas de sempre
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(CAIO), ramalDe(ANA), ramalDe(BIA), ramalDe(ANA), ramalDe(BIA)]);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "ninguem_atendeu"]]);
+  });
+
+  it("quem puxou não atende em 10 s: ordem 'no_answer', e a ligação volta a esperar com a música, o relógio e o teto que tinha", async () => {
+    ari.online.add(CAIO);
+    await entrar(); // t=0: espera, com o teto padrão (2 min)
+    await vi.advanceTimersByTimeAsync(50_000);
+    pedirAtender();
+    await ordemDaFila("atender"); // t=50
+
+    // A rede de segurança: os 10 s do toque + 3 de folga. Antes disso ninguém é derrubado.
+    await vi.advanceTimersByTimeAsync(TOQUE_DE_QUEM_PUXOU_MS + 2_900);
+    expect(desligados()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(200); // t=63,1
+    expect(ari.chamadas).toContainEqual(["desligar", "ramal-canal-1", "no_answer"]);
+
+    await destruir("ramal-canal-1", 19);
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "no_answer", motivo: null });
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", null]);
+    expect(ctl.ativas).toBe(1);
+    expect(vi.getTimerCount()).toBe(1); // o relógio de reavaliar: a ligação não ficou parada
+    expect(musicas("cli-1")).toHaveLength(1); // a mesma música, nunca parada
+    expect(ari.chamadas).not.toContainEqual(["pararMusica", "cli-1"]);
+
+    // O teto conta do começo da espera (t=0), não de quando ela voltou: gravado uma vez, e a fila esgota aos 2 min.
+    expect(banco.tem("prazo_da_fila")).toEqual([["prazo_da_fila", "vc-1", 120_000]]);
+    await vi.advanceTimersByTimeAsync(50_000); // t=113
+    expect(banco.tem("encerrada")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(15_000); // t=128
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+  });
+
+  it("depois de quem puxou não atender, a ligação segue viva: quem fica livre toca, atende e fica com ela", async () => {
+    ari.online.add(CAIO).add(ANA);
+    await entrar();
+    pedirAtender();
+    await ordemDaFila("atender");
+    await destruir("ramal-canal-1", 19); // o Caio não atende
+    banco.disponiveis = [livre(ANA)];
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ofertas().at(-1)).toEqual([ramalDe(ANA), "oferta,vc-1"]);
+    await ramalAtende("ramal-canal-2");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+    // A ordem que ninguém atendeu não vira "feita" porque OUTRA pessoa atendeu depois.
+    expect(banco.tem("ordem_da_fila")).toEqual([["ordem_da_fila", O1, "no_answer", null]]);
+  });
+
+  it.each([
+    ["offline", "destino_offline"],
+    ["em outra ligação", "destino_em_ligacao"],
+    ["sem que o banco consiga conferir", "falha_ao_conferir"],
+  ] as const)("quem puxa está %s: a ordem é recusada (%s) e a ligação nem percebe", async (caso, motivo) => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA);
+    if (caso !== "offline") ari.online.add(CAIO);
+    if (caso === "em outra ligação") banco.ocupados.add(CAIO);
+    if (caso === "sem que o banco consiga conferir") {
+      banco.pessoaEmLigacao = async () => {
+        throw new Error("banco fora do ar");
+      };
+    }
+    await entrar(); // a Ana toca
+    const antes = { chamadas: [...ari.chamadas], eventos: banco.eventos.length, relogios: vi.getTimerCount() };
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo });
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(banco.eventos.slice(antes.eventos)).toEqual([["ordem_da_fila", O1, "refused", motivo]]);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+
+    // E a ligação segue como estava: a Ana, que tocava, atende.
+    await ramalAtende("ramal-canal-1");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("o toque de quem puxou não sai (o ramal sumiu), com a ligação tocando para outro: ordem recusada, e quem foi derrubado toca de novo 2 s depois — a tela não fica mostrando-o como tocando nesse meio", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // a Ana toca
+    ari.falharOriginar = 1;
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "destino_offline" });
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    // Na hora, ninguém toca: o navegador da Ana ainda fecha o toque que derrubamos, e o
+    // toque que chega com a sessão anterior aberta é recusado (486) — gastaria a vez dela.
+    expect(ari.originados()).toEqual([ramalDe(ANA)]);
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", null]);
+    expect(vi.getTimerCount()).toBe(1); // a ligação não ficou parada: o relógio que a traz de volta
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS - 100);
+    expect(ari.originados()).toEqual([ramalDe(ANA)]);
+
+    await vi.advanceTimersByTimeAsync(200);
+    // A vez é da Ana, não da Bia: o toque dela foi cortado por uma puxada que nem chegou a tocar.
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+    expect(ari.toques.at(-1)).toEqual({ endpoint: ramalDe(ANA), callerId: "+5561988887777", ...TOQUE_DO_RODIZIO });
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", ANA]);
+    expect(vi.getTimerCount()).toBe(1);
+    await ramalAtende(ari.ultimoOriginado());
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("o toque de quem puxou não sai, com a ligação esperando: ordem recusada, e ela volta a esperar COM relógio", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    ari.falharOriginar = 1;
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "destino_offline" });
+    expect(ctl.ativas).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(musicas("cli-1")).toHaveLength(1);
+    expect(banco.tem("prazo_da_fila")).toHaveLength(1);
+    // Não ficou marcada como puxada: a ordem seguinte entra.
+    pedirAtender(CAIO, O2);
+    await ordemDaFila("atender", O2);
+    expect(ofertas()).toEqual([[ramalDe(CAIO), "oferta,vc-1"]]);
+  });
+
+  it("uma segunda ordem com o ramal de quem puxou ainda tocando: recusada (ja_ha_ordem), e a primeira segue", async () => {
+    ari.online.add(CAIO).add(BIA);
+    await entrar();
+    pedirAtender(CAIO);
+    await ordemDaFila("atender");
+    pedirAtender(BIA, O2);
+    await ordemDaFila("atender", O2);
+    pedirMover(OUTRO_TIME, O3);
+    await ordemDaFila("mover", O3);
+
+    expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ja_ha_ordem" });
+    expect(ordem(O3)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ja_ha_ordem" });
+    expect(ofertas()).toEqual([[ramalDe(CAIO), "oferta,vc-1"]]);
+    expect(desligados()).toEqual([]);
+    expect(banco.tem("movida_para_o_time")).toEqual([]);
+    await ramalAtende("ramal-canal-1");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", CAIO]]);
+    expect(ordem(O1)).toMatchObject({ status: "ended", desfecho: "done" });
+  });
+
+  it("o MESMO evento chega duas vezes: o segundo é ignorado — não toca de novo, e não fecha como recusada a puxada que está em curso", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    pedirAtender();
+    await ordemDaFila("atender");
+    const antes = { chamadas: [...ari.chamadas], eventos: banco.eventos.length, relogios: vi.getTimerCount() };
+    await ordemDaFila("atender");
+
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(banco.eventos.slice(antes.eventos)).toEqual([]);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+    expect(ordem().status).toBe("open");
+    await ramalAtende("ramal-canal-1");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+  });
+
+  it("o cliente desliga com o ramal de quem puxou ainda tocando: a ordem fecha cancelada, e o ramal para de tocar", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    pedirAtender();
+    await ordemDaFila("atender");
+    await destruir("cli-1");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "ligacao_encerrada" });
+    expect(desligados()).toEqual(["cli-1", "ramal-canal-1"]);
+    expect(banco.tem("registro")).toEqual([["registro", "vc-1", "perdida"]]);
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    // O fim do ramal chega depois, e não acha mais nada.
+    await destruir("ramal-canal-1", 16);
+    expect(banco.tem("ordem_da_fila")).toEqual([["ordem_da_fila", O1, "cancelled", "ligacao_encerrada"]]);
+  });
+
+  it("a ordem cujo evento nunca chegou ao worker fecha cancelada quando a ligação acaba (não fica aberta para sempre)", async () => {
+    await entrar();
+    pedirAtender(); // a rota gravou, e o evento se perdeu
+    await destruir("cli-1");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "ligacao_encerrada" });
+  });
+
+  it("o cliente desliga enquanto o toque de quem puxou é originado: o ramal novo é largado na hora — não fica tocando para uma ligação que acabou", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    const originar = ari.originar;
+    ari.originar = async (p) => {
+      const c = await originar(p);
+      await destruir("cli-1");
+      return c;
+    };
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(desligados()).toEqual(["cli-1", "ramal-canal-1"]);
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", null]);
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "ligacao_encerrada" });
+    expect(ctl.ativas).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("o banco cai ao gravar o desfecho da ordem: a ponte se forma, a ligação segue e acaba normalmente", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    pedirAtender();
+    await ordemDaFila("atender");
+    banco.falharOrdensDaFila = true;
+    await ramalAtende("ramal-canal-1");
+
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "ramal-canal-1"]);
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", CAIO]]);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("desfecho da ordem da fila não gravado"), expect.anything());
+    await destruir("cli-1");
+    expect(banco.tem("registro")).toEqual([["registro", "vc-1", "atendida"]]);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("ordens da fila não canceladas"), expect.anything());
+    expect(ctl.ativas).toBe(0);
+  });
+
+  it("puxam a ligação que tocava no ramal DIGITADO no menu, e quem puxou não atende: o ramal digitado toca de novo, sozinho e inteiro — e só se ELE não atender vem a fila do time padrão", async () => {
+    comMenu();
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(CAIO);
+    await entrar(); // o menu
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    expect(ofertas()).toEqual([[ramalDe(ANA), "oferta,vc-1"]]); // o ramal digitado toca sozinho
+
+    pedirAtender();
+    await ordemDaFila("atender");
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    expect(ofertas().at(-1)).toEqual([ramalDe(CAIO), "oferta,vc-1"]);
+
+    banco.aviso = falaDe("aviso", 10_000);
+    banco.disponiveis = [livre(BIA)]; // há gente livre no time padrão — e mesmo assim a vez é de quem o cliente pediu
+    await destruir("ramal-canal-2", 19); // quem puxou não atende
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "no_answer" });
+    // O cliente digitou o ramal da Ana, e o toque dela foi cortado pela puxada: ela toca de novo, antes de qualquer fila.
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(CAIO), ramalDe(ANA)]);
+    expect(ari.toques.at(-1)).toEqual({ endpoint: ramalDe(ANA), callerId: "+5561988887777", ...TOQUE_DO_RODIZIO });
+    expect(ari.falas()).toEqual(["sound:/falas/menu"]);
+
+    await destruir("ramal-canal-3", 19); // agora sim ela não atendeu: a entrada da fila do time, com o aviso de instabilidade
+    expect(ari.falas().at(-1)).toBe("sound:/falas/aviso");
+    expect(ofertas()).toHaveLength(3);
+  });
+
+  it("puxam a que tocava no ramal DIGITADO e o toque de quem puxou não sai: o ramal digitado toca de novo 2 s depois — e nenhum relógio do toque derrubado fica para trás", async () => {
+    comMenu();
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(CAIO);
+    await entrar();
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    expect(vi.getTimerCount()).toBe(1); // a rede de segurança do toque direto
+
+    banco.aviso = falaDe("aviso", 10_000);
+    ari.falharOriginar = 1;
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "destino_offline" });
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    expect(ofertas()).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1); // só o relógio que traz a ligação de volta — o do toque derrubado não ficou
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+    expect(ari.falas()).toEqual(["sound:/falas/menu"]);
+    expect(vi.getTimerCount()).toBe(1); // a rede de segurança do toque novo
+
+    // Ela não atende: a fila do time padrão, inteira — o aviso, e depois quem está livre.
+    await destruir("ramal-canal-2", 19);
+    expect(ari.falas().at(-1)).toBe("sound:/falas/aviso");
+    banco.disponiveis = [livre(CAIO)];
+    await terminou(ari.ultimaFala());
+    expect(ofertas().at(-1)).toEqual([ramalDe(CAIO), "oferta,vc-1"]);
+  });
+
+  it("o relógio dos 2 s que JÁ disparou e espera, na fila serial, atrás de outra puxada sem toque: o ramal digitado voltou a tocar, e o relógio atrasado não manda a ligação para a fila do time por cima dele", async () => {
+    comMenu();
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(CAIO);
+    await entrar(); // o menu
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    expect(ari.originados()).toEqual([ramalDe(ANA)]); // o ramal digitado toca
+
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O1);
+    await ordemDaFila("atender", O1); // 1ª puxada: o toque não sai → os 2 s armados
+    // A fila do laço: o que entra espera a vez, e o teste decide quando roda.
+    const pendentes: Array<() => Promise<void>> = [];
+    ctl.usarFila(async (fn) => {
+      pendentes.push(fn);
+    });
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS + 10); // o relógio disparou, e espera a vez
+    expect(pendentes).toHaveLength(1);
+
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O2);
+    await ordemDaFila("atender", O2); // 2ª puxada, que estava na frente dele: o toque não sai → o ramal digitado toca JÁ
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+    expect(vi.getTimerCount()).toBe(1); // a rede de segurança do toque novo
+
+    // O time padrão fechou nesse meio: se a ligação entrasse na fila dele agora, o cliente ouviria a despedida.
+    banco.situacao = "fora_do_horario";
+    banco.gerais = { aguarde: null, ninguem: null, foraDoHorario: falaDe("fora") };
+    const antes = { chamadas: [...ari.chamadas], leiturasDoTime: banco.consultas.filter((c) => c[0] === "timeParaAFila").length };
+    await pendentes[0]!(); // o relógio atrasado
+
+    // Há um ramal tocando: o relógio não faz nada — nenhuma fala por cima do toque, o time nem é relido…
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(ari.falas()).toEqual(["sound:/falas/menu"]);
+    expect(banco.consultas.filter((c) => c[0] === "timeParaAFila")).toHaveLength(antes.leiturasDoTime);
+    // …o ramal digitado segue tocando (só o primeiro toque, o que a puxada derrubou, foi desligado), com a rede dele armada…
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    expect(vi.getTimerCount()).toBe(1);
+    // …e quem atende é conectado: a ligação não ficou "se despedindo".
+    await ramalAtende("ramal-canal-2");
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "cli-1"]);
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "ramal-canal-2"]);
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+    expect(banco.tem("encerrada")).toEqual([]);
+  });
+
+  it("o mesmo relógio atrasado, com a ligação no RODÍZIO (sem ramal digitado): quem recebeu a vez de volta já toca, e ele não toca outro por cima", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // a Ana toca
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O1);
+    await ordemDaFila("atender", O1); // o toque de quem puxou não sai → os 2 s armados
+    const pendentes: Array<() => Promise<void>> = [];
+    ctl.usarFila(async (fn) => {
+      pendentes.push(fn);
+    });
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS + 10);
+    expect(pendentes).toHaveLength(1);
+
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O2);
+    await ordemDaFila("atender", O2); // outra puxada sem toque: a Ana, que tinha a vez de volta, toca
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+    const chamadas = [...ari.chamadas];
+    await pendentes[0]!(); // o relógio atrasado
+
+    expect(ari.chamadas).toEqual(chamadas);
+    await ramalAtende("ramal-canal-2");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  // ─── a puxada que não dá certo devolve a vez de quem tocava ───
+
+  it("puxada no ÚLTIMO toque da ÚLTIMA volta e quem puxou não atende: a ligação NÃO é encerrada — quem tocava volta a tocar na mesma volta, com o toque inteiro, e atende", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar(); // 1ª volta: a Ana
+    await destruir("ramal-canal-1", 19); // não atendeu — 2ª (última) volta: a Ana toca de novo
+    await vi.advanceTimersByTimeAsync(2_000); // tocando há 2 s
+    pedirAtender();
+    await ordemDaFila("atender"); // o Caio puxa: a Ana é derrubada
+    expect(desligados()).toEqual(["ramal-canal-2"]);
+    await destruir("ramal-canal-2", 16); // o fim do canal dela
+    expect(banco.tem("encerrada")).toEqual([]);
+    await destruir("ramal-canal-3", 19); // o navegador do Caio não atendeu
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "no_answer" });
+    expect(banco.tem("encerrada")).toEqual([]);
+    expect(desligados()).not.toContain("cli-1");
+    expect(ctl.ativas).toBe(1);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA), ramalDe(CAIO), ramalDe(ANA)]);
+    expect(ari.toques.at(-1)).toEqual({ endpoint: ramalDe(ANA), callerId: "+5561988887777", ...TOQUE_DO_RODIZIO });
+
+    // O toque é INTEIRO: aos 19 s ela ainda toca, e atende.
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(banco.tem("encerrada")).toEqual([]);
+    expect(desligados()).toEqual(["ramal-canal-2"]);
+    await ramalAtende("ramal-canal-4");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("a vez devolvida é UMA, e a volta não recomeça: quem foi derrubado no último toque toca de novo, não atende — e só então a fila desiste", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar();
+    await destruir("ramal-canal-1", 19); // 2ª (última) volta: a Ana
+    pedirAtender();
+    await ordemDaFila("atender");
+    await destruir("ramal-canal-2", 16);
+    await destruir("ramal-canal-3", 19); // o Caio não atende: a Ana de novo
+    expect(banco.tem("encerrada")).toEqual([]);
+
+    await destruir("ramal-canal-4", 19); // a Ana não atende o toque devolvido: acabaram as voltas
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA), ramalDe(CAIO), ramalDe(ANA)]);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "ninguem_atendeu"]]);
+  });
+
+  it("puxada no último toque da última volta e o toque de quem puxou NÃO SAI: a ligação não é encerrada no clique — quem tocava volta a tocar", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar();
+    await destruir("ramal-canal-1", 19); // 2ª (última) volta: a Ana toca
+    await vi.advanceTimersByTimeAsync(2_000);
+    ari.falharOriginar = 1;
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "destino_offline" });
+    expect(banco.tem("encerrada")).toEqual([]);
+    expect(desligados()).toEqual(["ramal-canal-2"]);
+    expect(ctl.ativas).toBe(1);
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA), ramalDe(ANA)]);
+    expect(banco.tem("encerrada")).toEqual([]);
+    await ramalAtende(ari.ultimoOriginado());
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("duas puxadas que não dão certo, em pontos diferentes do rodízio: cada atendente ainda tem o toque inteiro em cada volta, e a fila só desiste depois do último", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // t=0: a Ana (1ª volta)
+    await vi.advanceTimersByTimeAsync(1_000);
+    pedirAtender(CAIO, O1);
+    await ordemDaFila("atender", O1); // t=1: o Caio puxa, a Ana cai
+    await destruir("ramal-canal-1", 16);
+    await destruir("ramal-canal-2", 19); // o Caio não atende → a Ana, de novo
+    await destruir("ramal-canal-3", 19); // a Ana não atende → a Bia (1ª volta)
+    await destruir("ramal-canal-4", 19); // a Bia não atende → a Ana (2ª volta)
+    await destruir("ramal-canal-5", 19); // a Ana não atende → a Bia: o ÚLTIMO toque da última volta
+    await vi.advanceTimersByTimeAsync(1_000);
+    pedirAtender(CAIO, O2);
+    await ordemDaFila("atender", O2); // o Caio puxa de novo, a Bia cai
+    await destruir("ramal-canal-6", 16);
+    await destruir("ramal-canal-7", 19); // e de novo não atende → a Bia, de novo
+
+    expect(ordem(O1)).toMatchObject({ status: "ended", desfecho: "no_answer" });
+    expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "no_answer" });
+    expect(banco.tem("encerrada")).toEqual([]);
+    expect(ari.originados()).toEqual([
+      ramalDe(ANA), // 1ª volta — cortado pela puxada
+      ramalDe(CAIO),
+      ramalDe(ANA), // 1ª volta, inteiro
+      ramalDe(BIA), // 1ª volta
+      ramalDe(ANA), // 2ª volta
+      ramalDe(BIA), // 2ª volta — cortado pela puxada
+      ramalDe(CAIO),
+      ramalDe(BIA), // 2ª volta, inteiro
+    ]);
+    await destruir("ramal-canal-8", 19); // a Bia não atende: agora sim acabaram as duas voltas
+    expect(ari.originados()).toHaveLength(8);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "ninguem_atendeu"]]);
+  });
+
+  it("ninguém tocava quando a ordem chegou (a ligação só esperava): a puxada que não dá certo não devolve vez nenhuma — as voltas ficam como estavam", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar(); // 1ª volta: a Ana toca
+    banco.disponiveis = []; // …e entra em pausa
+    await destruir("ramal-canal-1", 19); // não atendeu: ninguém livre, a ligação espera
+    expect(musicas("cli-1")).toHaveLength(1);
+
+    pedirAtender();
+    await ordemDaFila("atender"); // o Caio puxa a que esperava
+    expect(desligados()).toEqual([]);
+    await destruir("ramal-canal-2", 19); // e não atende
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "no_answer" });
+
+    // A Ana volta: a 1ª volta dela JÁ foi (ninguém a interrompeu) — toca a 2ª, e só.
+    banco.disponiveis = [livre(ANA)];
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(CAIO), ramalDe(ANA)]);
+    await destruir("ramal-canal-3", 19);
+    expect(ari.originados()).toHaveLength(3);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "ninguem_atendeu"]]);
+  });
+
+  it.each([
+    ["o banco já a mostra tocando (o caso de sempre)", true],
+    ["o banco não chegou a gravar o toque dela", false],
+  ] as const)("quem pede para atender É quem já está tocando por esta ligação (%s): recusada, e o toque que ela tem segue intacto", async (_caso, noBanco) => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA);
+    await entrar(); // a Ana toca
+    if (noBanco) banco.ocupados.add(ANA); // o banco de verdade: `ringing_user_id` é ela
+    const antes = { chamadas: [...ari.chamadas], relogios: vi.getTimerCount(), tocando: banco.tem("tocando").length };
+    pedirAtender(ANA);
+    await ordemDaFila("atender");
+
+    // Derrubar o toque dela para tocar de novo no MESMO navegador arriscaria o 486 — e ela só precisa atender.
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "destino_em_ligacao" });
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+    expect(banco.tem("tocando")).toHaveLength(antes.tocando);
+    await ramalAtende("ramal-canal-1");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  // ─── a rede de segurança do toque, quando o fim do canal se perde ───
+
+  /** O `desligar` do canal `canalId` lança (a ARI responde erro que não é o 404 do canal que já caiu). */
+  const desligarFalhaPara = (canalId: string) => {
+    const desligar = ari.desligar;
+    ari.desligar = async (c: string, m?: string) => {
+      const r = await desligar(c, m);
+      if (c === canalId) throw new ErroAri(500, "Internal Server Error", `/channels/${c}`);
+      return r;
+    };
+  };
+
+  it.each([
+    ["responde como sempre (o canal já não existe, e o cliente da ARI engole o 404)", false],
+    ["falha", true],
+  ] as const)(
+    "RODÍZIO: o fim do canal do ramal se perdeu (o WebSocket da ARI piscou) e o desligar da rede de segurança %s: a fila segue sozinha — toca o próximo",
+    async (_caso, falha) => {
+      banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+      ari.online.add(ANA).add(BIA);
+      await entrar(); // a Ana toca, e o fim do canal dela NUNCA chega
+      if (falha) desligarFalhaPara("ramal-canal-1");
+      await vi.advanceTimersByTimeAsync(22_900);
+      expect(ari.originados()).toEqual([ramalDe(ANA)]);
+      await vi.advanceTimersByTimeAsync(200); // t=23,1: os 20 s do toque + 3 de folga
+
+      expect(ari.chamadas).toContainEqual(["desligar", "ramal-canal-1", "no_answer"]);
+      expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(BIA)]);
+      expect(banco.tem("tocando").slice(-2)).toEqual([
+        ["tocando", "vc-1", null],
+        ["tocando", "vc-1", BIA],
+      ]);
+      expect(vi.getTimerCount()).toBe(1); // a rede de segurança do toque novo
+      if (falha) expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("toque vencido não desligado"), expect.anything());
+      await ramalAtende("ramal-canal-2");
+      expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", BIA]]);
+    },
+  );
+
+  it("RODÍZIO: o fim do canal se perdeu e não há mais ninguém livre: a ligação espera com relógio, e cai no teto do time como sempre — não fica na música para sempre", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA);
+    await entrar(); // t=0: a Ana toca
+    banco.disponiveis = []; // (o banco de verdade a tira da lista enquanto toca; depois ela entra em pausa)
+    await vi.advanceTimersByTimeAsync(23_100); // a rede de segurança: ninguém livre → espera, e o teto conta daqui
+
+    expect(ctl.ativas).toBe(1);
+    expect(musicas("cli-1")).toHaveLength(1);
+    expect(banco.tem("prazo_da_fila")).toEqual([["prazo_da_fila", "vc-1", 120_000]]);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(115_000);
+    expect(banco.tem("encerrada")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+    expect(ctl.ativas).toBe(0);
+  });
+
+  it.each([
+    ["responde como sempre", false],
+    ["falha", true],
+  ] as const)(
+    "PUXADA: o fim do canal de quem puxou se perdeu e o desligar da rede de segurança %s: a ordem fecha 'no_answer', a ligação volta a esperar COM relógio — e a ordem seguinte entra",
+    async (_caso, falha) => {
+      ari.online.add(CAIO).add(BIA);
+      await entrar(); // espera, com música
+      pedirAtender();
+      await ordemDaFila("atender"); // o Caio toca, e o fim do canal dele NUNCA chega
+      if (falha) desligarFalhaPara("ramal-canal-1");
+      await vi.advanceTimersByTimeAsync(TOQUE_DE_QUEM_PUXOU_MS + 3_100);
+
+      expect(ari.chamadas).toContainEqual(["desligar", "ramal-canal-1", "no_answer"]);
+      expect(ordem()).toMatchObject({ status: "ended", desfecho: "no_answer", motivo: null });
+      expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", null]);
+      expect(ctl.ativas).toBe(1);
+      expect(vi.getTimerCount()).toBe(1); // o relógio de reavaliar
+      expect(musicas("cli-1")).toHaveLength(1);
+
+      // A puxada não ficou "em curso": outra pessoa puxa, toca e atende.
+      pedirAtender(BIA, O2);
+      await ordemDaFila("atender", O2);
+      expect(ofertas().at(-1)).toEqual([ramalDe(BIA), "oferta,vc-1"]);
+      await ramalAtende("ramal-canal-2");
+      expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", BIA]]);
+      expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "done" });
+    },
+  );
+
+  it("PUXADA sobre um toque em curso, com o fim do canal de quem puxou perdido: a rede de segurança devolve a vez de quem foi derrubado, e ele toca de novo", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar();
+    await destruir("ramal-canal-1", 19); // 2ª (última) volta: a Ana
+    pedirAtender();
+    await ordemDaFila("atender"); // a Ana cai, o Caio toca — e o fim do canal dele se perde
+    await vi.advanceTimersByTimeAsync(TOQUE_DE_QUEM_PUXOU_MS + 3_100);
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "no_answer" });
+    expect(banco.tem("encerrada")).toEqual([]);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA), ramalDe(CAIO), ramalDe(ANA)]);
+  });
+
+  it("a rede de segurança derruba o toque vencido e o fim do canal chega LOGO DEPOIS: não é tratado duas vezes — nem toque a mais, nem volta a mais, nem ordem fechada de novo", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // a Ana toca
+    await vi.advanceTimersByTimeAsync(23_100); // a rede de segurança: a Bia toca
+    const antes = { originados: ari.originados().length, tocando: banco.tem("tocando").length, relogios: vi.getTimerCount() };
+    await destruir("ramal-canal-1", 19); // o fim do canal da Ana, atrasado
+
+    expect(ari.originados()).toHaveLength(antes.originados);
+    expect(banco.tem("tocando")).toHaveLength(antes.tocando);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+
+    // O mesmo na puxada: a ordem fecha UMA vez.
+    pedirAtender();
+    await ordemDaFila("atender"); // a Bia cai, o Caio toca (ramal-canal-3)
+    await destruir("ramal-canal-2", 16);
+    await vi.advanceTimersByTimeAsync(TOQUE_DE_QUEM_PUXOU_MS + 3_100); // a rede de segurança: a Bia toca de novo
+    const depois = ari.originados().length;
+    await destruir("ramal-canal-3", 19); // o fim do canal do Caio, atrasado
+    expect(banco.tem("ordem_da_fila")).toEqual([["ordem_da_fila", O1, "no_answer", null]]);
+    expect(ari.originados()).toHaveLength(depois);
+    expect(ari.originados().at(-1)).toBe(ramalDe(BIA));
+  });
+
+  it("o fim do canal chega ENQUANTO a rede de segurança espera o desligar: o toque vencido é tratado uma vez só — o próximo toca, e ninguém é pulado nem largado tocando", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA);
+    await entrar(); // a Ana toca
+    // O Asterisk publica o fim do canal antes de responder ao DELETE; sem a fila serial do laço (o controlador
+    // sozinho, como aqui), o evento é tratado no meio do pedido — o canal já tem de estar fora da ligação.
+    const desligar = ari.desligar;
+    ari.desligar = async (c: string, m?: string) => {
+      const r = await desligar(c, m);
+      if (c === "ramal-canal-1") await destruir("ramal-canal-1", 19);
+      return r;
+    };
+    await vi.advanceTimersByTimeAsync(23_100);
+
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(BIA)]);
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    expect(vi.getTimerCount()).toBe(1);
+    await ramalAtende("ramal-canal-2");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", BIA]]);
+  });
+
+  it("o fim do canal chega e a rede de segurança, que já tinha disparado, espera atrás dele na fila serial: ela não derruba nem pula o toque seguinte", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA);
+    await entrar(); // a Ana toca
+    const pendentes: Array<() => Promise<void>> = [];
+    ctl.usarFila(async (fn) => {
+      pendentes.push(fn);
+    });
+    await vi.advanceTimersByTimeAsync(23_100); // a rede de segurança disparou, e espera a vez
+    expect(pendentes).toHaveLength(1);
+    await destruir("ramal-canal-1", 19); // o fim do canal estava na frente: a Bia toca
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(BIA)]);
+
+    await pendentes[0]!(); // a rede de segurança do toque da Ana, atrasada
+    expect(desligados()).toEqual([]);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(BIA)]);
+    await ramalAtende("ramal-canal-2");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", BIA]]);
+  });
+
+  // ─── o toque derrubado não é recusa ───
+
+  it("o fim do toque derrubado chega ANTES de a ARI responder ao desligar: ainda assim não é recusa — ninguém mais toca", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // a Ana toca
+    // O Asterisk publica o fim do canal antes de responder ao DELETE. Aqui o controlador roda SEM a fila serial
+    // do laço, então o evento é tratado no meio do pedido: o canal já tem de estar fora da ligação nessa hora.
+    const desligar = ari.desligar;
+    ari.desligar = async (c: string, m?: string) => {
+      const r = await desligar(c, m);
+      if (c === "ramal-canal-1") await destruir("ramal-canal-1", 16);
+      return r;
+    };
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(CAIO)]); // a Bia NÃO tocou
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", CAIO]);
+    expect(ordem().status).toBe("open");
+    await ramalAtende("ramal-canal-2");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", CAIO]]);
+  });
+
+  it("o fim do canal derrubado não acha mais a ligação: o registro não o conta como canal dela", async () => {
+    const registros: Array<[string, Record<string, unknown> | undefined]> = [];
+    ctl = new ControladorDeChamadas(
+      ari,
+      banco,
+      { ...log, info: (m: string, c?: Record<string, unknown>) => void registros.push([m, c]) },
+      () => Date.now(),
+      falas,
+    );
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar(); // a Ana toca
+    pedirAtender();
+    await ordemDaFila("atender");
+    await destruir("ramal-canal-1", 16);
+    expect(registros.filter(([m]) => m === "telefonia: canal encerrado")).toEqual([]);
+
+    // Já o fim do canal de quem puxou É dela.
+    await destruir("ramal-canal-2", 19);
+    expect(registros.filter(([m]) => m === "telefonia: canal encerrado")).toHaveLength(1);
+  });
+
+  it("o relógio de 5 s e a passada que dispararam e esperam, na fila serial, ATRÁS da ordem não tocam outro ramal por cima de quem puxou", async () => {
+    await entrar(); // t=0: espera, e reavalia sozinha em t=5
+    await entrar2(); // a que vai desligar
+    await vi.advanceTimersByTimeAsync(2_900);
+    await destruir("cli-2"); // t=2,9: a passada fica para t=4,9 — 100 ms antes do relógio da primeira
+    banco.disponiveis = [livre(ANA), livre(BIA)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    // A fila do laço: o que entra espera a vez, e o teste decide quando roda.
+    const pendentes: Array<() => Promise<void>> = [];
+    ctl.usarFila(async (fn) => {
+      pendentes.push(fn);
+    });
+    await vi.advanceTimersByTimeAsync(2_200); // t=5,1: a passada e o relógio dispararam, e esperam a vez
+    expect(pendentes).toHaveLength(2);
+
+    // A ordem estava na frente deles na fila: roda primeiro, e o ramal de quem puxou toca.
+    pedirAtender();
+    await ordemDaFila("atender");
+    expect(ofertas()).toEqual([[ramalDe(CAIO), "oferta,vc-1"]]);
+    await pendentes[0]!(); // a passada
+    await pendentes[1]!(); // o relógio de 5 s
+    expect(ofertas()).toHaveLength(1);
+
+    await ramalAtende("ramal-canal-1");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", CAIO]]);
+  });
+
+  // ─── a ordem que não vale ───
+
+  it("ordem para ligação JÁ ATENDIDA: recusada — atender e mover —, e a ligação de quem atendeu não muda", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar();
+    await ramalAtende("ramal-canal-1");
+    const chamadas = [...ari.chamadas];
+    pedirAtender();
+    await ordemDaFila("atender");
+    pedirMover(OUTRO_TIME, O2);
+    await ordemDaFila("mover", O2);
+
+    expect(ordem(O1)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_ja_atendida" });
+    expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_ja_atendida" });
+    expect(ari.chamadas).toEqual(chamadas);
+    expect(banco.tem("movida_para_o_time")).toEqual([]);
+    expect(banco.tem("atribuida")).toEqual([["atribuida", "conversa-1", ANA]]);
+  });
+
+  it("ordem para ligação que ainda está NO MENU: recusada (fora da fila), e o menu segue valendo", async () => {
+    comMenu(false);
+    ari.online.add(CAIO);
+    await entrar(); // o menu toca
+    pedirAtender();
+    await ordemDaFila("atender");
+    pedirMover(OUTRO_TIME, O2);
+    await ordemDaFila("mover", O2);
+
+    expect(ordem(O1)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_fora_da_fila" });
+    expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_fora_da_fila" });
+    expect(ofertas()).toEqual([]);
+    expect(banco.tem("movida_para_o_time")).toEqual([]);
+    // A tecla do cliente ainda escolhe o time.
+    await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit: "1" });
+    expect(banco.tem("escolha")).toEqual([["escolha", ORG, "vc-1", "1", "chosen", TIME]]);
+  });
+
+  it("ordem para ligação no SILÊNCIO do menu (a fala acabou, o cliente ainda não escolheu): recusada — sem fala no ar, ela segue fora da fila", async () => {
+    comMenu(false);
+    ari.online.add(CAIO);
+    await entrar();
+    await terminou(ari.ultimaFala()); // o menu acabou: os 5 s de espera pela tecla
+    const chamadas = [...ari.chamadas];
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_fora_da_fila" });
+    expect(ari.chamadas).toEqual(chamadas);
+    await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit: "1" });
+    expect(banco.tem("escolha")).toEqual([["escolha", ORG, "vc-1", "1", "chosen", TIME]]);
+  });
+
+  it("ordem para ligação que ouve o aviso de instabilidade (ainda não espera por uma pessoa): recusada, e o aviso toca INTEIRO", async () => {
+    banco.aviso = falaDe("aviso", 10_000);
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar(); // o aviso no ar
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_fora_da_fila" });
+    expect(ofertas()).toEqual([]);
+    expect(ari.nomes()).not.toContain("pararFala");
+    await terminou(ari.ultimaFala());
+    expect(ofertas()).toEqual([[ramalDe(ANA), "oferta,vc-1"]]);
+  });
+
+  it("ordem para ligação que voltou do ramal digitado e ouve o aviso de instabilidade: recusada — já tem ordem de chegada, mas ainda não espera por uma pessoa", async () => {
+    comMenu();
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(CAIO);
+    await entrar();
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    banco.aviso = falaDe("aviso", 10_000);
+    await destruir("ramal-canal-1", 19); // o ramal digitado não atendeu: a entrada da fila, com o aviso
+    expect(banco.tem("na_fila")).toEqual([["na_fila", "vc-1"]]);
+    const chamadas = [...ari.chamadas];
+    pedirAtender();
+    await ordemDaFila("atender");
+    pedirMover(OUTRO_TIME, O2);
+    await ordemDaFila("mover", O2);
+
+    expect(ordem(O1)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_fora_da_fila" });
+    expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_fora_da_fila" });
+    expect(ari.chamadas).toEqual(chamadas);
+  });
+
+  it("ordem para ligação que se despede ('ninguém atendeu' no ar): recusada como encerrada, e a despedida não é cortada", async () => {
+    banco.gerais = { aguarde: null, ninguem: falaDe("ninguem", 5_000), foraDoHorario: null };
+    ari.online.add(CAIO);
+    await entrar();
+    await vi.advanceTimersByTimeAsync(121_000); // o teto esgotou: "ninguém atendeu" no ar
+    expect(ari.falas().at(-1)).toBe("sound:/falas/ninguem");
+    pedirAtender();
+    await ordemDaFila("atender");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_encerrada" });
+    expect(ofertas()).toEqual([]);
+    expect(ari.nomes()).not.toContain("pararFala");
+  });
+
+  it("ordem para ligação que este worker não acompanha: recusada pelo par (ordem, ligação) — e só com id de ligação que pode ir ao banco", async () => {
+    const vc = "0e000000-0000-4000-8000-00000000000f";
+    banco.abrirOrdemDaFila({ id: O1, vcId: vc, kind: "pull", requestedBy: CAIO, toUserId: CAIO, toTeamId: null });
+    await ordemDaFila("atender", O1, vc);
+    expect(banco.tem("ordem_da_fila_orfa")).toEqual([["ordem_da_fila_orfa", O1, "ligacao_desconhecida"]]);
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ligacao_desconhecida" });
+
+    // O id que não é uuid nunca chega ao banco.
+    await ordemDaFila("atender", O2, "vc-9");
+    expect(banco.tem("ordem_da_fila_orfa")).toHaveLength(1);
+    expect(ari.chamadas).toEqual([]);
+  });
+
+  it("ordem que chega depois de a ligação acabar: órfã — não toca ninguém", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    await destruir("cli-1");
+    const chamadas = [...ari.chamadas];
+    await ordemDaFila("atender");
+    expect(ari.chamadas).toEqual(chamadas);
+    expect(ctl.ativas).toBe(0);
+  });
+
+  it("sem ordem aberta no banco — id que não existe, de outra ligação ou de outra organização —, o evento é ignorado (ponteiro, não autoridade)", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    await entrar2();
+    const antes = { chamadas: [...ari.chamadas], eventos: banco.eventos.length, relogios: vi.getTimerCount() };
+
+    await ordemDaFila("atender"); // a ordem não existe
+    pedirAtender(CAIO, O2, "vc-2"); // é de OUTRA ligação
+    await ordemDaFila("atender", O2, "vc-1");
+    banco.abrirOrdemDaFila({ id: O3, vcId: "vc-1", org: "0000000b-0000-4000-8000-00000000000b", kind: "move", requestedBy: ANA, toUserId: null, toTeamId: OUTRO_TIME });
+    await ordemDaFila("mover", O3, "vc-1"); // é de OUTRA organização
+
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(banco.eventos.slice(antes.eventos)).toEqual([]);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+    // Nenhuma delas foi fechada por tabela: quem as fecha é a ligação delas.
+    expect(ordem(O2).status).toBe("open");
+    expect(ordem(O3).status).toBe("open");
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("sem ordem aberta no banco"), expect.anything());
+  });
+
+  // ─── a ordem que venceu (o evento atrasou na fila do laço) ───
+
+  it.each([
+    ["atender", "pull"],
+    ["mover", "move"],
+  ] as const)(
+    "ordem de %s com 31 s: cancelada como vencida — nada é originado, nenhum toque é derrubado, e a ligação segue como estava",
+    async (acao, kind) => {
+      banco.disponiveis = [livre(ANA)];
+      ari.online.add(ANA).add(CAIO);
+      await entrar(); // a Ana toca
+      const antes = { chamadas: [...ari.chamadas], eventos: banco.eventos.length, relogios: vi.getTimerCount() };
+      // Quem pediu já desistiu (o pedido do navegador dele vale 15 s): tocar agora seria uma ligação comum, e derrubaria a Ana à toa.
+      banco.abrirOrdemDaFila({
+        id: O1,
+        vcId: "vc-1",
+        kind,
+        requestedBy: CAIO,
+        toUserId: kind === "pull" ? CAIO : null,
+        toTeamId: kind === "move" ? OUTRO_TIME : null,
+        idadeMs: 31_000,
+      });
+      await ordemDaFila(acao);
+
+      expect(ordem()).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "ordem_vencida" });
+      expect(ari.chamadas).toEqual(antes.chamadas);
+      expect(banco.eventos.slice(antes.eventos)).toEqual([["ordem_da_fila", O1, "cancelled", "ordem_vencida"]]);
+      expect(banco.tem("movida_para_o_time")).toEqual([]);
+      expect(vi.getTimerCount()).toBe(antes.relogios);
+      await ramalAtende("ramal-canal-1");
+      expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+    },
+  );
+
+  it.each([
+    ["29 s", 29_000],
+    ["30 s cravados (o mesmo corte da rota e da tela: vence a que tem MAIS que a validade)", VALIDADE_DA_ORDEM_DA_FILA_S * 1000],
+  ] as const)("ordem com %s: ainda vale, e executa como sempre", async (_caso, idadeMs) => {
+    ari.online.add(CAIO);
+    await entrar();
+    banco.abrirOrdemDaFila({ id: O1, vcId: "vc-1", kind: "pull", requestedBy: CAIO, toUserId: CAIO, toTeamId: null, idadeMs });
+    await ordemDaFila("atender");
+
+    expect(ofertas()).toEqual([[ramalDe(CAIO), "oferta,vc-1"]]);
+    expect(ordem().status).toBe("open");
+    await ramalAtende("ramal-canal-1");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+  });
+
+  it("a validade é a MESMA constante da rota e da tela: um milissegundo depois dela a ordem já não vale", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    banco.abrirOrdemDaFila({
+      id: O1,
+      vcId: "vc-1",
+      kind: "pull",
+      requestedBy: CAIO,
+      toUserId: CAIO,
+      toTeamId: null,
+      idadeMs: VALIDADE_DA_ORDEM_DA_FILA_S * 1000 + 1,
+    });
+    await ordemDaFila("atender");
+    expect(ofertas()).toEqual([]);
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "ordem_vencida" });
+  });
+
+  it("ordem vencida para ligação JÁ ATENDIDA: fecha como vencida (não como recusa), e a ligação não muda", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(CAIO);
+    await entrar();
+    await ramalAtende("ramal-canal-1");
+    const chamadas = [...ari.chamadas];
+    banco.abrirOrdemDaFila({ id: O1, vcId: "vc-1", kind: "pull", requestedBy: CAIO, toUserId: CAIO, toTeamId: null, idadeMs: 45_000 });
+    await ordemDaFila("atender");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "ordem_vencida" });
+    expect(ari.chamadas).toEqual(chamadas);
+  });
+
+  it("o evento repetido de uma puxada EM CURSO que passou da validade: ignorado — a ordem cujo ramal está tocando não é cancelada como vencida", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    banco.abrirOrdemDaFila({ id: O1, vcId: "vc-1", kind: "pull", requestedBy: CAIO, toUserId: CAIO, toTeamId: null, idadeMs: 25_000 });
+    await ordemDaFila("atender"); // chegou com 25 s: vale, e o Caio toca
+    expect(ofertas()).toEqual([[ramalDe(CAIO), "oferta,vc-1"]]);
+    ordem().idadeMs = 31_000; // 6 s depois, com o ramal ainda tocando, o mesmo evento de novo
+    const eventos = banco.eventos.length;
+    await ordemDaFila("atender");
+
+    expect(banco.eventos.slice(eventos)).toEqual([]);
+    expect(ordem().status).toBe("open");
+    expect(ofertas()).toHaveLength(1);
+    await ramalAtende("ramal-canal-1");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+  });
+
+  it("o que o evento diz além dos ids não vale: a ação é a que está GRAVADA na ordem", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    pedirAtender();
+    await ordemDaFila("mover"); // o evento diz "mover"; a ordem gravada é "atender"
+    expect(ofertas()).toEqual([[ramalDe(CAIO), "oferta,vc-1"]]);
+    expect(banco.tem("movida_para_o_time")).toEqual([]);
+  });
+
+  it("a leitura da ordem falha: ignorada com aviso — a ligação segue, e o fim dela fecha a ordem", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    pedirAtender();
+    const ler = banco.ordemDaFilaAberta;
+    banco.ordemDaFilaAberta = async () => {
+      throw new Error("banco fora do ar");
+    };
+    await ordemDaFila("atender");
+    expect(ofertas()).toEqual([]);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("ordem da fila não lida"), expect.anything());
+    expect(vi.getTimerCount()).toBe(1);
+    banco.ordemDaFilaAberta = ler;
+    await destruir("cli-1");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "cancelled" });
+  });
+
+  it("evento da fila ilegível: ignorado com aviso (não vira transferência, não toca ninguém)", async () => {
+    ari.online.add(CAIO);
+    await entrar();
+    const chamadas = [...ari.chamadas];
+    await ctl.tratar({ type: "ChannelUserevent", eventname: EVENTO_DA_FILA, userevent: { acao: "atender", ordem_id: "x'; drop", voice_call_id: "vc-1" } });
+    expect(ari.chamadas).toEqual(chamadas);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("ordem da fila ilegível"));
+  });
+
+  // ─── mover ───
+
+  it("mover uma que TOCA: a ligação e a conversa vão para o time novo, o toque em curso é derrubado sem contar, as voltas ZERAM e toca quem está livre lá", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(BIA);
+    await entrar(); // 1ª volta: a Ana toca
+    await destruir("ramal-canal-1", 19); // não atende — 2ª (e última) volta: a Ana de novo
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+
+    banco.disponiveis = [livre(BIA)]; // quem está livre no OUTRO time
+    pedirMover();
+    await ordemDaFila("mover");
+
+    expect(desligados()).toEqual(["ramal-canal-2"]);
+    expect(banco.tem("movida_para_o_time")).toEqual([["movida_para_o_time", "vc-1", "conversa-1", OUTRO_TIME]]);
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done", motivo: null });
+    // O worker releu o time de DESTINO, e os livres são os dele.
+    expect(banco.consultas).toContainEqual(["timeParaAFila", ORG, OUTRO_TIME]);
+    expect(banco.timesLidos.at(-1)).toEqual([ORG, OUTRO_TIME]);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA), ramalDe(BIA)]);
+    // Um toque do rodízio: 20 s, e sem o cabeçalho de quem puxa.
+    expect(ari.toques.at(-1)).toEqual({ endpoint: ramalDe(BIA), callerId: "+5561988887777", ...TOQUE_DO_RODIZIO });
+    expect(banco.tem("tocando").at(-1)).toEqual(["tocando", "vc-1", BIA]);
+
+    // O fim do toque derrubado não toca mais ninguém.
+    await destruir("ramal-canal-2", 16);
+    expect(ari.originados()).toHaveLength(3);
+
+    // No time novo a ligação tem as DUAS voltas: a Bia toca de novo antes de a fila desistir.
+    await destruir("ramal-canal-3", 19);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA), ramalDe(BIA), ramalDe(BIA)]);
+    expect(banco.tem("encerrada")).toEqual([]);
+    await destruir("ramal-canal-4", 19);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "ninguem_atendeu"]]);
+    // E o "Ligar de volta" é do time para onde ela foi.
+    expect(banco.perdidas.map((l) => l.team_id)).toEqual([OUTRO_TIME]);
+  });
+
+  it("mover uma que ESPERA: o prazo antigo é limpo, e a espera recomeça com o teto do time NOVO — sem música nova e sem ordem de chegada nova", async () => {
+    await entrar(); // t=0: espera no TIME, com o teto padrão (2 min)
+    await vi.advanceTimersByTimeAsync(100_000);
+    banco.esperaMaximaS = 300; // o teto do OUTRO time
+    pedirMover();
+    await ordemDaFila("mover"); // t=100
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+    expect(banco.tem("prazo_da_fila")).toEqual([
+      ["prazo_da_fila", "vc-1", 120_000],
+      ["prazo_da_fila", "vc-1", null],
+      ["prazo_da_fila", "vc-1", 300_000],
+    ]);
+    expect(banco.tem("na_fila")).toEqual([["na_fila", "vc-1"]]);
+    expect(musicas("cli-1")).toHaveLength(1);
+    expect(ari.chamadas).not.toContainEqual(["pararMusica", "cli-1"]);
+    expect(desligados()).toEqual([]);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(25_000); // t=125: o teto ANTIGO já a teria derrubado
+    expect(banco.tem("encerrada")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(270_000); // t=395
+    expect(banco.tem("encerrada")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(10_000); // t=405: os 5 min do time novo, contados de quando ela chegou nele
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+    expect(banco.perdidas.map((l) => l.team_id)).toEqual([OUTRO_TIME]);
+  });
+
+  it("mover não muda a ORDEM DE CHEGADA: no time novo, a movida que chegou antes toca antes da que já esperava lá", async () => {
+    await entrar(); // t=0, na fila do TIME
+    await vi.advanceTimersByTimeAsync(2_000);
+    banco.troncoAtual = { ...tronco, teamId: OUTRO_TIME };
+    await entrar2(); // t=2, já na fila do OUTRO time: reavalia em t=7, t=12
+    await vi.advanceTimersByTimeAsync(1_000);
+    pedirMover();
+    await ordemDaFila("mover"); // t=3: a primeira vai para o OUTRO time, e reavalia em t=8
+    expect(banco.tem("na_fila")).toEqual([["na_fila", "vc-1"], ["na_fila", "vc-2"]]);
+    await vi.advanceTimersByTimeAsync(3_000); // t=6
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA);
+
+    await vi.advanceTimersByTimeAsync(1_500); // t=7,5: o relógio da SEGUNDA disparou — a movida, mais antiga, está na frente
+    expect(ofertas()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000); // t=8,5: o da movida dispara, e o livre é dela
+    expect(ofertas()).toEqual([[ramalDe(ANA), "oferta,vc-1"]]);
+  });
+
+  it("mover a que tocava no ramal DIGITADO no menu: o toque direto é derrubado, e a fila do time novo toca quem está livre lá — o ramal digitado não toca de novo", async () => {
+    comMenu();
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(BIA);
+    await entrar();
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    banco.disponiveis = [livre(BIA)];
+    pedirMover();
+    await ordemDaFila("mover");
+
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(BIA)]);
+    await destruir("ramal-canal-1", 16);
+    // A Bia não atende: segue o rodízio do time novo (a 2ª volta) — e NÃO a entrada da fila, como seria
+    // com o ramal digitado que não atende: nenhum aviso de instabilidade toca, e a situação do time não é relida.
+    banco.aviso = falaDe("aviso", 10_000);
+    const leiturasDoTime = banco.consultas.filter((c) => c[0] === "timeParaAFila").length;
+    await destruir("ramal-canal-2", 19);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(BIA), ramalDe(BIA)]);
+    expect(banco.timesLidos.at(-1)).toEqual([ORG, OUTRO_TIME]);
+    expect(ari.falas()).toEqual(["sound:/falas/menu"]);
+    expect(banco.consultas.filter((c) => c[0] === "timeParaAFila")).toHaveLength(leiturasDoTime);
+  });
+
+  it("mover no ÚLTIMO toque da ÚLTIMA volta, com quem tocava também no time novo: a ligação não é encerrada — lá ela tem as duas voltas, e ele toca nas duas", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA);
+    await entrar();
+    await destruir("ramal-canal-1", 19); // 2ª (última) volta: a Ana
+    pedirMover(); // a Ana também atende o OUTRO time
+    await ordemDaFila("mover");
+
+    expect(desligados()).toEqual(["ramal-canal-2"]);
+    expect(banco.tem("encerrada")).toEqual([]);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA), ramalDe(ANA)]);
+    await destruir("ramal-canal-2", 16);
+    await destruir("ramal-canal-3", 19); // 1ª volta no time novo: não atende
+    expect(banco.tem("encerrada")).toEqual([]);
+    expect(ari.originados()).toHaveLength(4); // 2ª volta no time novo
+    await destruir("ramal-canal-4", 19);
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "ninguem_atendeu"]]);
+  });
+
+  it("mover a que tocava no ramal DIGITADO, sem ninguém livre no time novo: as falas gerais são lidas na hora — ela espera com o 'aguarde' e cai com o 'ninguém atendeu'", async () => {
+    comMenu();
+    banco.gerais = { aguarde: falaDe("aguarde"), ninguem: falaDe("ninguem"), foraDoHorario: null };
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA);
+    await entrar(); // o menu
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    expect(ari.originados()).toEqual([ramalDe(ANA)]); // o ramal digitado toca
+    // O caminho do ramal digitado não passa pela entrada da fila: as falas gerais ainda não foram lidas.
+    expect(banco.consultas.filter((c) => c[0] === "falasGerais")).toEqual([]);
+
+    pedirMover();
+    await ordemDaFila("mover");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+    expect(banco.consultas.filter((c) => c[0] === "falasGerais")).toEqual([["falasGerais", ORG]]);
+    // Ninguém livre no time novo: o "aguarde", e a música no fim dele.
+    expect(ari.falas().at(-1)).toBe("sound:/falas/aguarde");
+    await terminou(ari.ultimaFala());
+    expect(musicas("cli-1")).toHaveLength(1);
+
+    // No teto (2 min) ela se despede com o "ninguém atendeu", em vez de cair muda.
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(ari.falas().at(-1)).toBe("sound:/falas/ninguem");
+    await terminou(ari.ultimaFala());
+    expect(banco.tem("encerrada")).toEqual([["encerrada", "vc-1", "fila_esgotada"]]);
+  });
+
+  it("mover a que tocava no ramal digitado com o banco fora do ar para as falas gerais: a ligação é movida e toca mesmo assim, sem elas", async () => {
+    comMenu();
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(BIA);
+    await entrar();
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    banco.falasGerais = async () => {
+      throw new Error("banco fora do ar");
+    };
+    banco.disponiveis = [livre(BIA)];
+    pedirMover();
+    await ordemDaFila("mover");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(BIA)]);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("falas gerais não lidas"), expect.anything());
+  });
+
+  it("mover a que JÁ passou pela entrada da fila não relê as falas gerais (o caso comum não ganha consulta)", async () => {
+    await entrar(); // a entrada da fila as leu
+    expect(banco.consultas.filter((c) => c[0] === "falasGerais")).toHaveLength(1);
+    banco.gerais = { aguarde: falaDe("aguarde"), ninguem: null, foraDoHorario: null };
+    pedirMover();
+    await ordemDaFila("mover");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "done" });
+    expect(banco.consultas.filter((c) => c[0] === "falasGerais")).toHaveLength(1);
+  });
+
+  it.each([
+    ["fora_do_horario", "time_fora_do_horario"],
+    ["indisponivel", "destino_invalido"],
+  ] as const)("mover para time %s: recusada (%s), e nada muda — quem tocava segue tocando e atende", async (situacao, motivo) => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA);
+    await entrar(); // a Ana toca
+    banco.situacao = situacao; // o time de destino, como o worker o relê
+    const antes = { chamadas: [...ari.chamadas], relogios: vi.getTimerCount() };
+    pedirMover();
+    await ordemDaFila("mover");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo });
+    expect(banco.consultas).toContainEqual(["timeParaAFila", ORG, OUTRO_TIME]);
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(banco.tem("movida_para_o_time")).toEqual([]);
+    expect(banco.tem("prazo_da_fila")).toEqual([]);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+    await ramalAtende("ramal-canal-1");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("mover para o time em que a ligação já está, ou sem conseguir ler o time de destino: recusada, e nada muda", async () => {
+    await entrar();
+    const antes = { chamadas: [...ari.chamadas], relogios: vi.getTimerCount() };
+    pedirMover(TIME);
+    await ordemDaFila("mover");
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "ja_esta_nesse_time" });
+
+    banco.falharFila = true;
+    pedirMover(OUTRO_TIME, O2);
+    await ordemDaFila("mover", O2);
+    expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "refused", motivo: "falha_ao_conferir" });
+
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(banco.tem("movida_para_o_time")).toEqual([]);
+    expect(banco.tem("prazo_da_fila")).toEqual([["prazo_da_fila", "vc-1", 120_000]]);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+  });
+
+  it("o banco cai ao mover: ordem recusada (falha_ao_mover), e a ligação segue no time em que estava — o toque em curso nem é derrubado", async () => {
+    banco.disponiveis = [livre(ANA)];
+    ari.online.add(ANA).add(BIA);
+    await entrar(); // a Ana toca
+    banco.moverParaOTime = async () => {
+      throw new Error("banco fora do ar");
+    };
+    const antes = { chamadas: [...ari.chamadas], relogios: vi.getTimerCount() };
+    pedirMover();
+    await ordemDaFila("mover");
+
+    expect(ordem()).toMatchObject({ status: "ended", desfecho: "refused", motivo: "falha_ao_mover" });
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(banco.tem("prazo_da_fila")).toEqual([]);
+    expect(vi.getTimerCount()).toBe(antes.relogios);
+    // Segue no TIME: a Ana não atende, e a 2ª volta é dela — não de quem está livre no outro time.
+    await destruir("ramal-canal-1", 19);
+    expect(banco.timesLidos.at(-1)).toEqual([ORG, TIME]);
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+    await ramalAtende(ari.ultimoOriginado());
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
+  it("o banco cai ao gravar o desfecho e o prazo de uma ordem de mover: a ligação muda de time e toca mesmo assim", async () => {
+    ari.online.add(BIA);
+    await entrar();
+    banco.falharOrdensDaFila = true;
+    banco.marcarPrazoDaFila = async () => {
+      throw new Error("banco fora do ar");
+    };
+    banco.disponiveis = [livre(BIA)];
+    pedirMover();
+    await ordemDaFila("mover");
+
+    expect(banco.tem("movida_para_o_time")).toHaveLength(1);
+    expect(ofertas()).toEqual([[ramalDe(BIA), "oferta,vc-1"]]);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("desfecho da ordem da fila não gravado"), expect.anything());
+    await ramalAtende("ramal-canal-1");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", BIA]]);
+  });
+
+  // ─── o reinício do worker ───
+
+  it("o reinício do worker cancela as ordens abertas (o ramal de quem puxou não toca mais por elas)", async () => {
+    pedirAtender();
+    pedirMover(OUTRO_TIME, O2, "vc-2");
+    await ctl.recuperar();
+    expect(ordem(O1)).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "worker_reiniciou" });
+    expect(ordem(O2)).toMatchObject({ status: "ended", desfecho: "cancelled", motivo: "worker_reiniciou" });
+  });
+
+  it("o banco cai ao cancelar as ordens no reinício: a recuperação segue, e o que só tocava vira perdida como sempre", async () => {
+    await banco.criarLigacao({
+      organizationId: ORG, troncoId: TRONCO, sipCallRef: "cli-b", direcao: "inbound",
+      numeroDoOutroLado: "+5561977776666", contactId: "contato-1", conversationId: "conversa-1",
+      teamId: TIME, status: "ringing",
+    });
+    banco.falharOrdensDaFila = true;
+    await ctl.recuperar();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("ordens da fila abertas não canceladas"), expect.anything());
+    expect(banco.tem("perdida")).toEqual([["perdida", "vc-1"]]);
   });
 });

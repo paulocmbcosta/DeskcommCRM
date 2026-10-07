@@ -144,6 +144,44 @@ export function transferenciasDaLigacao(bruto: unknown): TransferenciaDaLigacao[
 }
 
 /**
+ * O que se fez com a ligação enquanto ela esperava na fila (aba Telefone,
+ * entrega 3; migration 0296), como fica no registro da conversa
+ * (`messages.metadata.voice_call.fila`): alguém a puxou para o próprio ramal
+ * (`pull`) ou a mandou para a fila de outro time (`move`). Quem ESCREVE é o
+ * worker no fim da ligação (`registrarNaConversa`), e só as ordens que deram
+ * certo; quem LÊ é o cartão da ligação, sempre por `acoesNaFilaDaLigacao`. Os
+ * nomes são os daquela hora. O `tipo` é o de `TIPOS_DA_ORDEM_DA_FILA`, no fim
+ * deste arquivo.
+ */
+export interface AcaoNaFilaDaLigacao {
+  tipo: TipoDaOrdemDaFila;
+  /** Quem puxou ou moveu. */
+  por_nome: string | null;
+  /** O time em que a ligação esperava. */
+  de_time: string | null;
+  /** No mover, o time para onde ela foi; no puxar, nulo. */
+  para_time: string | null;
+}
+
+/** Lê as ações e NUNCA lança: a que não sustenta o que houve (tipo fora do vocabulário, lixo) é descartada. */
+export function acoesNaFilaDaLigacao(bruto: unknown): AcaoNaFilaDaLigacao[] {
+  if (!Array.isArray(bruto)) return [];
+  const acoes: AcaoNaFilaDaLigacao[] = [];
+  for (const item of bruto) {
+    if (!item || typeof item !== "object") continue;
+    const a = item as Record<string, unknown>;
+    if (!TIPOS_DA_ORDEM_DA_FILA.includes(a.tipo as TipoDaOrdemDaFila)) continue;
+    acoes.push({
+      tipo: a.tipo as TipoDaOrdemDaFila,
+      por_nome: textoOuNulo(a.por_nome),
+      de_time: textoOuNulo(a.de_time),
+      para_time: textoOuNulo(a.para_time),
+    });
+  }
+  return acoes;
+}
+
+/**
  * Por que uma transferência foi recusada ou cancelada (`voice_call_transfers.reason`,
  * vocabulário aberto): o texto que o painel mostra. Em português; a tela passa
  * por `t()`. Motivo desconhecido cai no genérico.
@@ -427,3 +465,30 @@ export interface AvisosNaResposta {
   /** A lista completa, só para gerente e admin; `null` para os outros papéis e na leitura da faixa (`?so=ligados`). */
   times: AvisoDoTimePublico[] | null;
 }
+
+// ─── as ordens da fila: atender e mover (migration 0296) ──────────────────
+//
+// Uma ORDEM é o pedido de agir sobre uma ligação que espera na fila do telefone
+// (`voice_call_queue_orders`): a rota grava a linha, o worker a relê e age, e o
+// desfecho volta pela mesma linha. As três listas abaixo são o espelho dos CHECKs
+// do banco — quem confere um contra o outro é
+// tests/invariants/vocabulario-banco-x-typescript.test.ts. Valor novo entra nos
+// dois lados, no mesmo commit (migration + apêndice do baseline).
+
+/** `voice_call_queue_orders.kind` — `pull` ("Atender": puxa para o próprio ramal) ou `move` ("Mover": manda para a fila de outro time). */
+export const TIPOS_DA_ORDEM_DA_FILA = ["pull", "move"] as const;
+export type TipoDaOrdemDaFila = (typeof TIPOS_DA_ORDEM_DA_FILA)[number];
+
+/** `voice_call_queue_orders.status` — `open` enquanto acontece (no máximo uma por ligação), `ended` quando acaba. */
+export const SITUACOES_DA_ORDEM_DA_FILA = ["open", "ended"] as const;
+export type SituacaoDaOrdemDaFila = (typeof SITUACOES_DA_ORDEM_DA_FILA)[number];
+
+/**
+ * `voice_call_queue_orders.outcome` — nulo enquanto a ordem está aberta. `done` (a
+ * pessoa atendeu, ou a ligação mudou de time), `refused` (a rota ou o worker
+ * recusou — o porquê em `reason`, de vocabulário aberto), `no_answer` (quem puxou
+ * não atendeu a tempo, e a ligação volta ao rodízio) ou `cancelled` (a ligação
+ * acabou antes, ou o worker reiniciou).
+ */
+export const DESFECHOS_DA_ORDEM_DA_FILA = ["done", "refused", "no_answer", "cancelled"] as const;
+export type DesfechoDaOrdemDaFila = (typeof DESFECHOS_DA_ORDEM_DA_FILA)[number];

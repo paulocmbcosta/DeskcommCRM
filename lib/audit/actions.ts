@@ -686,6 +686,13 @@ export const AUDIT_ACTIONS = [
   // máxima na fila do telefone de um time. `metadata`: `de` e `para`, em segundos
   // (`null` = o padrão).
   "phone.queue_wait_changed",
+  // Telefonia — agir na fila (migration 0296). O PEDIDO, gravado pela API; o
+  // desfecho fica em `voice_call_queue_orders` (o worker). Alguém pediu para
+  // atender uma ligação que esperava: `metadata` = a ordem e o time da fila.
+  "phone.queue_call_pulled",
+  // Gerente ou admin pediu para mover a ligação para a fila de outro time:
+  // `metadata` = a ordem, `de_time_id` e `para_time_id`.
+  "phone.queue_call_moved",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

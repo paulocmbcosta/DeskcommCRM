@@ -6,7 +6,7 @@
  * `lib/channels/telefonia/fila-da-tela.ts`.
  */
 import { esperaMaximaMs } from "./distribuicao";
-import { MOTIVO_FORA_DO_HORARIO } from "./vocabulario";
+import { MOTIVO_FORA_DO_HORARIO, type TipoDaOrdemDaFila } from "./vocabulario";
 
 /** Onde a ligação está AGORA. */
 export const FASES_DA_LIGACAO = ["menu", "avisos", "aguardando", "tocando", "em_ligacao", "transferencia_na_fila"] as const;
@@ -15,6 +15,15 @@ export type FaseDaLigacao = (typeof FASES_DA_LIGACAO)[number];
 /** As fases que contam como "esperando por alguém" — o selo do trilho e a contagem do chip. */
 export const FASES_QUE_ESPERAM: ReadonlySet<FaseDaLigacao> = new Set(["aguardando", "tocando", "transferencia_na_fila"]);
 
+/**
+ * As fases em que a tela oferece "Atender" e "Mover" (entrega 3): só quem espera
+ * por uma PESSOA e ainda não foi atendido. No menu e nos avisos não — quem não
+ * ouviu o aviso de gravação até o fim não é gravado. A transferida para a fila
+ * de um time também não: ela espera, mas já tem dono (quem transferiu). A rota
+ * confere de novo; isto é só o que a tela mostra.
+ */
+export const FASES_EM_QUE_SE_AGE: ReadonlySet<FaseDaLigacao> = new Set(["aguardando", "tocando"]);
+
 export const MOTIVOS_DA_PERDIDA = ["desligou_no_menu", "desistiu_na_fila", "fila_esgotada", "ninguem_atendeu", "fora_do_horario", "interrompida", "outro"] as const;
 export type MotivoDaPerdida = (typeof MOTIVOS_DA_PERDIDA)[number];
 
@@ -22,6 +31,40 @@ export interface PessoaDaFila {
   id: string;
   nome: string | null;
 }
+
+/**
+ * A ordem ABERTA sobre uma ligação da fila (`voice_call_queue_orders`, migration
+ * 0296): alguém pediu para atendê-la (`pull`) ou para mandá-la à fila de outro
+ * time (`move`), e o worker ainda não terminou. Enquanto ela existe, a linha diz
+ * quem está cuidando — no lugar dos botões.
+ */
+export interface OrdemNaFila {
+  tipo: TipoDaOrdemDaFila;
+  /** Quem pediu. */
+  por: PessoaDaFila | null;
+  /** No mover, o time de destino; no atender, `null`. */
+  para_time_id: string | null;
+}
+
+/**
+ * Por quanto tempo uma ordem ABERTA vale, em segundos. A puxada vive no máximo
+ * uns 13 s (o ramal de quem pediu toca por 10 — `TOQUE_DE_QUEM_PUXOU_MS` —, mais
+ * a rede de segurança do worker) e o mover é imediato: uma ordem aberta há mais
+ * de 30 s não está acontecendo. Ou a leitura dela falhou no worker, ou a rota
+ * morreu entre gravar e avisar, ou o fechamento de quem não achou o worker
+ * falhou calado.
+ *
+ * Sem o prazo ela travava a ligação até o fim — com o teto do time, até 30
+ * minutos —: a linha dizendo "Fulano está atendendo…" no lugar dos botões, e
+ * todo pedido novo recusado com "outra pessoa já está cuidando".
+ *
+ * As DUAS pontas leem esta constante, e têm de ler a mesma: a tela deixa de
+ * mostrar a ordem vencida (`lerFilaDoTelefone`, em fila-da-tela.ts), e o pedido
+ * seguinte a fecha como `cancelled`/`ordem_vencida` antes de gravar a dele
+ * (`gravarOrdem`, em pedido-da-fila.ts). O corte é pelo relógio do BANCO
+ * (`created_at` contra `now()`), nos dois lugares.
+ */
+export const VALIDADE_DA_ORDEM_DA_FILA_S = 30;
 
 export interface LigacaoNaFila {
   id: string;
@@ -47,6 +90,8 @@ export interface LigacaoNaFila {
   /** Com quem está falando (`em_ligacao`) — ou quem transferiu (`transferencia_na_fila`). */
   com: PessoaDaFila | null;
   atendida_em: string | null;
+  /** A ordem aberta sobre esta ligação (atender ou mover); `null` = ninguém pediu nada. */
+  ordem: OrdemNaFila | null;
 }
 
 export interface PerdidaRecente {

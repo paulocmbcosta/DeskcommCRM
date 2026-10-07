@@ -3679,7 +3679,7 @@ mapa em `docs/architecture/telefonia.architecture.json` (nós `rota_fila`, `aba_
 | J44.12 A mudança do teto vale para a PRÓXIMA ligação: quem já espera cai no teto que valia quando entrou | `[P0]` | unit (dublês): `controle.test.ts` (o teto é lido na entrada da fila; com 5 minutos a ligação não cai aos 2 e cai aos 5). Invariante contra Postgres real: `timeParaAFila` devolve o teto do time (e `null` para time de outra organização). **NÃO PROVADO: ligação real pelo tronco** |
 | J44.13 Quem não mexe em nada continua com os 2 minutos de antes | `[P0]` | unit: `esperaMaximaMs(null)` e os casos antigos dos 2 minutos, que seguem verdes; `controle.test.ts` (sem configuração, o prazo é gravado com o teto padrão e a fila esgota nele). Invariante contra Postgres real: a linha nova nasce sem teto, sem ordem e sem prazo |
 | J44.14 Uma organização nunca vê a fila da outra: a leitura, a escrita do worker e o `PUT` do teto só alcançam a organização da sessão ou da ligação | `[P0]` | Invariantes contra Postgres real, com duas organizações: a fila (ligações, perdidas, números e times), a escrita de `queued_at` e do prazo com a organização errada, e o teto de time de OUTRA organização. teste de rota: a organização da sessão é a que chega ao banco, e a leitura compartilhada por 1,5 s é separada por organização |
-| J44.15 A ligação transferida para a fila de um time (fase 2, v2) aparece na fila do time de DESTINO, com "Transferida por Ana" e sem posição; a aba desta entrega não tem ação nenhuma | `[P1]` | Invariante contra Postgres real: o time de destino, desde o pedido e quem transferiu. unit: ela conta no selo e não ocupa lugar na posição. teste de componente: a linha |
+| J44.15 A ligação transferida para a fila de um time (fase 2, v2) aparece na fila do time de DESTINO, com "Transferida por Ana" e sem posição; a aba desta entrega não tinha ação nenhuma, e as da entrega 3 (J45) não alcançam a transferida | `[P1]` | Invariante contra Postgres real: o time de destino, desde o pedido e quem transferiu. unit: ela conta no selo e não ocupa lugar na posição. teste de componente: a linha |
 | J44.16 A releitura falha: a fila de antes fica na tela e uma faixa diz "Sem atualização no momento", com "Tentar novamente"; sem o Realtime, a releitura de 15 s segue | `[P1]` | teste de componente: a faixa, a fila mantida e o botão. `useFilaDoTelefone.test.tsx`: relê a cada 15 s, uma rajada de avisos vira UMA releitura, sem telefonia não assina nada. **O canal do Realtime é dublê** |
 | J44.17 O banco falha ao gravar a ordem de chegada ou o prazo, ou o Asterisk não segura o cliente na linha: a ligação segue, é atendida, e nunca fica sem relógio | `[P0]` | unit (dublês): `controle.test.ts` (o banco fora na fila e no prazo; o `atender` da ARI que lança) |
 | J44.18 A migration 0295 chega a quem já instalou: o bloco do baseline cria colunas, CHECKs e índices e se cura sozinho (linha do WaCalls com a coluna preenchida, tempo fora de 30–1800), e a REST não escreve nenhuma das três | `[P0]` | Invariante contra Postgres real: `telefonia-fila-visivel-schema.test.ts` (reaplicar o bloco, a cadeia de migrations, o `agent` pela REST). `pnpm test:db` aplica o baseline em install e em update |
@@ -3707,3 +3707,125 @@ mapa em `docs/architecture/telefonia.architecture.json` (nós `rota_fila`, `aba_
 - **O BYE antes dos 2 s.** Que o navegador do atendente que acabou de desligar já tenha fechado a sessão
   quando a reavaliação o chama é leitura do código, não medida.
 - **O acesso pela visibilidade.** Clicar numa linha cuja conversa o membro não pode abrir (J44.9).
+
+## J45 — Atender e mover direto da fila do telefone `[P0]` (2026-10-07)
+
+A aba Telefone (J44) mostrava a fila, e quem coordena o atendimento ainda não fazia nada com ela: a
+ligação só chegava a alguém quando o rodízio escolhia. O pedido do dono, na mesma conversa da J44
+(como o desenho o registra): numa queda de internet, conseguir pôr mais gente para atender e mandar
+a ligação para outro setor.
+
+`[P0]` porque o gesto mexe na ligação de um cliente que está esperando na linha: um "Atender" que
+derruba a ligação, toca para duas pessoas ou abre o microfone de quem não pediu; um "Mover" que tira
+o cliente do lugar dele na fila ou o pendura sem ninguém tocando — qualquer um deles acontece na
+frente do cliente, no pico.
+
+Na ligação que espera por uma pessoa, a linha da fila ganha **Atender** — para quem tem ramal no
+navegador: o worker toca só o ramal de quem pediu, por 10 s, e o navegador que clicou atende sozinho
+— e o **botão de mover** — para gerente e admin: a ligação vai para a fila de outro time, sem perder
+a ordem de chegada. O pedido vira uma ORDEM em `voice_call_queue_orders` (migration 0296), que a rota
+grava e o worker relê e revalida; enquanto a ordem está aberta a linha diz quem está cuidando, e o
+cartão da ligação conta quem a puxou e quem a moveu. Desenho:
+`docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md` (§4.3 e a subseção "Emendas da
+implementação"); plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-3.md`; spec
+20 §4.2, §5, §7 e §9; mapa em `docs/architecture/telefonia.architecture.json` (nós `rota_atender`,
+`rota_mover`, `rota_ordem` e `t_ordens_da_fila`; arestas `aba_telefone → ramal_nav → rota_atender →
+t_ordens_da_fila`, `controle → t_ordens_da_fila` e `t_ordens_da_fila → inbox`); roteiro da prova com
+ligação real em `docs/runbooks/telefonia-fila-visivel.md` (§3).
+
+**Como é provado, e com que alcance.** As mesmas camadas da J44, e cada caso diz em quais está:
+
+- **unit (dublês):** o controlador com o banco e a ARI de mentira, em
+  `lib/channels/telefonia/controle.test.ts` (bloco "as ordens da fila (0296)"), e a leitura do evento em
+  `lib/channels/telefonia/ordens-da-fila.test.ts`. Provam a ORDEM das chamadas e as regras, nunca o SQL,
+  o Asterisk nem o tempo real.
+- **teste de rota:** `app/api/v1/telefonia/chamadas/[id]/atender/route.test.ts`,
+  `app/api/v1/telefonia/chamadas/[id]/mover/route.test.ts` e
+  `app/api/v1/telefonia/fila/ordens/[id]/route.test.ts`. O banco, a sessão e a ARI são dublês.
+- **teste de componente:** `components/telefonia/fila/LinhaDaFila.test.tsx`, `FilaDoTelefone.test.tsx` e
+  `useAcoesDaFila.test.tsx`; `components/telefonia/TelefoniaContext.fila.test.tsx` (o atendimento
+  automático — o JsSIP é dublê); `components/telefonia/CartaoDaLigacao.test.tsx`.
+- **invariante contra Postgres real:** `tests/invariants/telefonia-ordens-da-fila-schema.test.ts` (a
+  tabela, os CHECKs, as FKs, a RLS com JWT de membro, a REST, o default ACL, a autocura do baseline e a
+  cadeia de migrations), `tests/invariants/telefonia-pedido-da-fila.test.ts` (o SQL das rotas),
+  `tests/invariants/telefonia-ordens-da-fila-repositorio.test.ts` (o SQL do worker e o registro da
+  ligação) e `tests/invariants/telefonia-fila-da-tela.test.ts` (a ordem aberta na leitura da aba), sempre
+  com duas organizações (`pnpm test:db`, roda no job `invariants`). É onde está provado o SQL.
+- **e2e semeado:** `tests/e2e/telefonia-fila.spec.ts`, três casos novos (quem vê o quê; a ordem aberta
+  na linha; o cartão). As ligações, as ordens e o cartão são semeados por SQL — prova a TELA e a rota
+  da fila, não as rotas de atender e mover nem o worker. **Escrito e não executado por quem o
+  escreveu**: roda só no GitHub Actions (parte 3), e as capturas sobem no artefato
+  `evidencia-telefonia-fila`. Para saber se já rodou e como terminou:
+  `gh run list --workflow e2e.yml --limit 5`. Enquanto a resposta não for uma execução verde com
+  estes casos, leia "e2e semeado" na tabela abaixo como "há um caso escrito", não como "passou".
+- **ligação real pelo tronco:** **NÃO PROVADO** em nenhum caso.
+
+Quando esta jornada foi escrita, os testes de unidade, de rota e de componente acima foram rodados e
+passaram. Os invariantes NÃO foram rodados nessa hora — dependem do Postgres do `pnpm test:db` —, e
+o que vale para eles é o job `invariants` do PR (`gh pr checks`).
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J45.1 Os botões só existem na ligação que espera por uma pessoa (`aguardando` ou `tocando`) — nunca no menu, nos avisos, em ligação ou na transferida para a fila de um time. "Atender" é de quem tem ramal neste navegador; o de mover, de gerente e admin, e só havendo outro time ativo | `[P0]` | teste de componente: as fases, "quem vê o quê" (atendente com e sem ramal, gerente sem ramal, um time só). e2e semeado: a gerente tem o mover na que espera e na que toca, a que ouve os avisos não tem nada, o atendente não tem o mover. **NÃO PROVADO: o botão "Atender" numa tela de verdade — no e2e a rota do ramal não entrega credencial (nada escuta a ARI), e o caso mede a AUSÊNCIA dele nesse estado** |
+| J45.2 A ligação que toca para quem olha diz "Tocando para você" e não oferece "Atender" (ela se atende pelo aviso de toque); para os outros, o nome de quem toca | `[P1]` | teste de componente. e2e semeado: "Tocando para você" para a gerente e "Tocando para Carla Gerente" para o atendente, na mesma ligação |
+| J45.3 Pedir para atender: a rota confere a ligação (recebida, do telefone, viva, não atendida, já na fila), o ramal de quem pede registrado e a pessoa fora de outra ligação; grava a ordem, emite o evento e responde 202 com o id dela | `[P0]` | teste de rota: 202, o evento com a ação e os ids, a organização e a pessoa da SESSÃO, `viewer` barrado, suporte somente-leitura barrado, 404 e 409 de cada recusa, a frase em espanhol. Invariante contra Postgres real: `pedirAtender` (a que espera e a que toca para outro; offline; em outra ligação; ligação de OUTRA organização → inexistente, nada gravado) |
+| J45.4 Dois cliques em "Atender" na mesma ligação: uma ordem só; o segundo lê "{nome} já está atendendo esta ligação." | `[P0]` | Invariante contra Postgres real: a corrida de dois pedidos ao mesmo tempo (uma entra, a outra é `ja_ha_ordem`, fica UMA aberta), o índice único parcial, e o nome pela régua da fila (nunca o e-mail inteiro). teste de rota: a frase com o nome, e a geral sem ele |
+| J45.5 O worker puxa a ligação: toca SÓ o ramal de quem pediu, por 10 s, com o cabeçalho `X-Fila-Atender: <ordem>`; atendeu → ponte, ordem `done`, a conversa de quem puxou | `[P0]` | unit (dublês): atender uma que espera. **NÃO PROVADO: ligação real — o cabeçalho num INVITE de verdade nunca foi visto** |
+| J45.6 Puxar a ligação que tocava para outra pessoa: o toque dela é derrubado SEM contar como recusa — o fim daquele canal não origina toque novo, não gasta a vez de ninguém e não conta volta. Quem pede e já é quem toca por essa ligação é recusado sem perder o próprio toque | `[P0]` | unit (dublês): atender uma que toca para outro; o fim do toque derrubado chegando antes de a ARI responder; o relógio de 5 s e a passada que esperam atrás da ordem não tocam outro ramal por cima de quem puxou; quem já toca e pede para atender |
+| J45.7 A puxada que não dá certo DEVOLVE A VEZ: quem puxou não atende em 10 s (ordem `no_answer`) ou o toque dele nem sai (`destino_offline`), e a ligação volta ao ponto em que estava — a volta não andou nem recomeçou, o teto e a música são os que ela tinha, e quem tocava quando a ordem chegou toca de novo, com o toque inteiro (o ramal digitado no menu, sozinho, antes da fila do time padrão). No último toque da última volta a ligação NÃO é encerrada por causa da puxada. Quem pediu lê "Seu telefone não atendeu. A ligação voltou para a fila." | `[P0]` | unit (dublês): quem foi derrubado toca de novo na mesma volta; o último toque da última volta, com quem puxou não atendendo e com o toque dele não saindo; a vez devolvida é UMA (a fila ainda desiste depois); duas puxadas que não dão certo em pontos diferentes do rodízio; ninguém tocava → nenhuma vez devolvida; o ramal digitado no menu. teste de componente: o aviso. **Antes do conserto (`git log --grep 'devolve a vez'`), a revisão independente reproduziu a ligação do cliente sendo encerrada nesse caso** |
+| J45.8 O navegador de quem clicou atende sozinho, sem tela de toque e sem som — e NENHUM outro toque é atendido sem clique: o cabeçalho de outra ordem, o toque sem cabeçalho, o pedido vencido (15 s do clique), o recusado, a mesma ordem pela segunda vez, o clique feito em outra aba, e o toque que chega com a pessoa já em ligação (recusado com 486) | `[P0]` | teste de componente: `TelefoniaContext.fila.test.tsx`, nos dois sentidos — inclusive o toque que chega ANTES de a rota responder (vale a ligação clicada, com o cabeçalho presente) e o pedido novo que substitui o anterior. **O JsSIP é dublê. NÃO PROVADO: o JsSIP de verdade atendendo de dentro do `newRTCSession`, e o cabeçalho chegando a `request.getHeader`** |
+| J45.9 Mover: a ligação e a conversa vão para o time novo; o toque em curso cai sem contar como recusa; as voltas zeram; o teto é o do time novo, contado de quando ela chega; a ORDEM DE CHEGADA não muda; toca quem está livre lá; o cliente não ouve de novo "fora do horário" nem o aviso de instabilidade | `[P0]` | unit (dublês): mover uma que toca, uma que espera, a ordem de chegada no time novo (a movida que chegou antes toca antes), a que tocava no ramal digitado. teste de rota: 202, o evento, a auditoria de/para. Invariante contra Postgres real: `pedirMover` (a ordem leva de onde e para onde; a ligação sem time). **NÃO PROVADO: ligação real** |
+| J45.10 Mover para onde não dá: time fora do horário, arquivado, de outra organização ou o mesmo time → recusado com o motivo, e nada muda na ligação; o worker confere de novo (o expediente pode acabar entre o clique e a ordem) | `[P0]` | teste de rota: 409 e 422 de cada um, e o corpo que não leva a outra organização a lugar nenhum. Invariante contra Postgres real: o time de B pedido por A, o horário pelo relógio de quem chama. unit (dublês): o worker recusa time fechado, o mesmo time e o time que não pôde ser lido |
+| J45.11 Ordem para ligação que não espera por uma pessoa — no menu, no silêncio do menu, ouvindo o aviso de instabilidade, já atendida, se despedindo ("ninguém atendeu" no ar), ou que o worker não acompanha — é recusada, e a ligação nem percebe: o menu segue valendo, o aviso toca inteiro, a despedida não é cortada | `[P0]` | unit (dublês): um caso para cada. Invariante contra Postgres real: as recusas de estado na rota |
+| J45.12 O evento é ponteiro, não autoridade: sem ordem aberta no banco — id que não existe, de outra ligação ou de outra organização — nada acontece; a ação que vale é a GRAVADA na ordem, não a do evento; o mesmo evento duas vezes não toca de novo nem fecha a puxada em curso; evento ilegível é ignorado | `[P0]` | unit: `ordens-da-fila.test.ts` (o leitor do evento) e `controle.test.ts`. Invariante contra Postgres real: a ordem aberta só volta com a organização e a ligação certas; a órfã exige o par (ordem, ligação). **NÃO PROVADO: o formato do `ChannelUserevent` deste evento na ARI de verdade — o leitor o assume igual ao da transferência** |
+| J45.13 Enquanto a ordem está aberta, a linha diz quem está cuidando — "Ana está atendendo…", "Movendo para Financeiro…" — no lugar dos botões, para todo mundo que olha; quando ela acaba sem a ligação mudar de mãos, os botões voltam | `[P1]` | teste de componente: as duas frases, "alguém" e "outro time" quando falta o nome. Invariante contra Postgres real: a ordem aberta vem na leitura da aba. e2e semeado: as duas frases, o controle (a ligação sem ordem tem o botão) e a volta dos botões sem recarregar |
+| J45.14 Depois do 202 a tela acompanha a ordem — a cada 1 s, por até 15 s — e avisa o que houve: a frase do motivo, ou "Ligação movida para {time}."; sem resposta no prazo não afirma nada, só relê a fila. Pela rota, só quem pediu a ordem (ou gerente e admin) a lê — conveniência da tela, não segredo: pela REST, todo membro lê as ordens da própria organização | `[P1]` | teste de componente: `useAcoesDaFila.test.tsx` (o intervalo e o prazo, a leitura que falha, a tela que saiu no meio ainda avisa, um clique = um pedido, só se puxa uma por vez). teste de rota: `GET …/fila/ordens/[id]` (quem pediu, outro atendente → 404, gerente e admin, outra organização → 404, `viewer` → 403, sem auditoria) |
+| J45.15 O cartão da ligação conta o que se fez com ela na fila, uma linha por ação que ACONTECEU, antes da corrente de transferências: "Puxada da fila por Ana", "Movida de Suporte para Financeiro por Carla" — com os nomes daquela hora (o nome cadastrado ou o começo do e-mail, nunca o endereço inteiro), gravadas no fim da ligação; a recusada, a que ninguém atendeu e a cancelada ficam de fora | `[P1]` | teste de componente: as duas linhas, "alguém" e "outro time", o que o registro não sustenta é descartado, em espanhol. Invariante contra Postgres real: o registro leva só as ordens `done`, na ordem dos pedidos, com o nome pela régua `fn_nome_do_usuario`; a ligação perdida também as leva; a leitura que falha não impede o registro. e2e semeado: as duas linhas no cartão, e o cartão da ligação comum sem linha nenhuma |
+| J45.16 Nada do que a ordem faz derruba ou pendura a ligação: o banco que cai ao conferir quem puxa, ao mover ou ao gravar o desfecho; o toque de quem puxou que não sai; o cliente que desliga com o ramal de quem puxou tocando, ou enquanto o toque é originado; e o fim do canal que se perde (a rede de segurança do toque segue sozinha, sem esperar o evento) | `[P0]` | unit (dublês): um caso para cada — a conferência que falha RECUSA a ordem em vez de seguir (`falha_ao_conferir`), mover grava o banco antes de derrubar o toque (`falha_ao_mover`: a ligação segue no time em que estava), a ligação nunca fica sem ramal e sem relógio (no rodízio e na puxada, com o fim do canal perdido, chegando logo depois ou no meio), e mover a que tocava no ramal digitado lê as falas gerais (o "aguarde" e o "ninguém atendeu" valem no time novo) |
+| J45.17 Ordem aberta não fica para sempre nem trava a ligação: ela VENCE em 30 s — a aba deixa de mostrá-la, o pedido seguinte a fecha (`ordem_vencida`) antes de gravar o dele, e o worker cancela sem agir a que chega a ele já vencida —; a ligação que acaba a cancela (`ligacao_encerrada`); a reconexão do worker cancela todas (`worker_reiniciou`); e a que não chega ao worker (ARI fora) é fechada pela rota, que responde 503 | `[P0]` | unit: a validade é de 30 s e tem folga sobre os 10 s do toque de quem puxou (`lib/telefonia/fila.test.ts`). unit (dublês): o cliente que desliga, a ordem cujo evento nunca chegou, o reinício, a ordem que chega vencida (cancelada, não recusada; a ligação não muda) e o evento repetido de uma puxada em curso (ignorado, não cancelado). Invariante contra Postgres real: a aberta há mais de 30 s não vem na linha (e a de 5 s vem); aberta há 31 s + pedido novo de atender ou de mover → a velha fecha e a nova entra; a recente não é tocada; só a vencida DAQUELA ligação fecha; dois cliques sobre uma vencida → uma ordem nova; o fim da ligação cancela só as dela e libera a próxima; o reinício cancela as das duas organizações sem reescrever as encerradas; `recusarOrdemSemWorker`. teste de rota: 503, a linha fechada, sem auditoria. e2e semeado: a linha com uma ordem aberta há 40 s tem o botão, e não a frase |
+| J45.18 Uma organização nunca vê nem alcança a ordem da outra, e a REST só lê: `authenticated` e `service_role` não inserem, não alteram, não apagam e não truncam; `anon` não lê | `[P0]` | Invariante contra Postgres real: a RLS com JWT de membro das duas organizações, as FKs compostas (a ordem de A não aponta para a ligação nem para o time de B), o default ACL de tabelas do Supabase com controle (sem o `revoke`, a service key gravaria e apagaria a ordem de qualquer organização), e os pedidos de A sobre a ligação de B |
+| J45.19 A migration 0296 chega a quem já instalou: o bloco do baseline cria a tabela, os CHECKs, os índices e a policy, e se cura sozinho; num banco na 0295, a migration chega ao mesmo lugar | `[P0]` | Invariante contra Postgres real: `telefonia-ordens-da-fila-schema.test.ts` (reaplicar não reconstrói nada; derrubados os CHECKs, os índices, a policy, a RLS e o `revoke`, tudo volta; linha fora da regra vira aviso, não erro). `pnpm test:db` aplica o baseline em install e em update |
+| J45.20 O pedido é auditado — `phone.queue_call_pulled`, `phone.queue_call_moved` (de e para que time) — só quando aceito; a recusa e o 503 não auditam | `[P1]` | teste de rota |
+| J45.21 A faixa das ações fica EMBAIXO do texto da linha (a coluna é estreita, e botão dentro de botão não existe): a área principal segue abrindo a conversa, a linha cresce em vez de vazar, e a coluna não rola para o lado | `[P1]` | teste de componente: o clique no botão não abre a conversa, e não há botão dentro de botão. e2e semeado: medido por `getBoundingClientRect` — a faixa abaixo da área principal, a linha com ações mais alta que a sem, `scrollWidth <= clientWidth` na coluna (as medidas vão no artefato, em `medidas-das-acoes.json`) |
+| J45.22 Ligação real pelo tronco da operadora, com duas contas `agent` e uma `manager` (nunca só a do dono): os nove casos do §3 do roteiro — atender com um clique, dois clicando juntos, mover, mover para time fechado, em outra ligação, fechar a aba, a que ainda está no menu, e o mesmo atendente com duas abas | `[P0]` | **NÃO PROVADO** — pendente, prova na VPS (`docs/runbooks/telefonia-fila-visivel.md`) |
+
+### O que NÃO foi provado
+
+- **Ligação real pelo tronco.** Nenhuma ligação foi puxada nem movida de verdade. O que está provado é
+  o controlador com dublês, o SQL no Postgres real e a tela em teste de componente.
+- **O atendimento automático de ponta a ponta.** Três elos nunca foram medidos: que o Asterisk ponha o
+  cabeçalho `X-Fila-Atender` no INVITE do ramal WebRTC (ele é pedido por `PJSIP_HEADER(add,…)` no
+  `originate`); que o JsSIP o entregue em `request.getHeader`; e que `answer()` chamado de dentro do
+  `newRTCSession` atenda de fato. Se algum falhar, o telefone TOCA em vez de atender sozinho — a
+  ligação ainda pode ser atendida à mão —, e é o caso 3.2 do roteiro que mostra.
+- **O formato do evento.** O leitor de `telefonia_fila` assume o `ChannelUserevent` com as variáveis
+  em `userevent`, igual ao da transferência. O evento DESTA entrega nunca passou por uma ARI de verdade.
+- **O botão "Atender" na tela.** Fora dos testes de componente, ninguém o viu: ele depende da
+  credencial do ramal, que a rota só entrega com o Asterisk respondendo, e o e2e mede a ausência dele.
+- **O e2e desta entrega.** Escrito sem ser executado (acima). E, executado, ele prova a tela sobre
+  dados SEMEADOS: o clique em "Atender" e num time do menu de mover não entra — a rota entregaria a
+  ordem a um worker que no CI não existe.
+- **Os 10 s e os 15 s numa rede de verdade.** O toque de quem puxou dura 10 s e o navegador reconhece
+  o pedido por 15 s do clique; quanto passa entre o clique e a ligação conectada, com um navegador
+  lento ou uma rede ruim, não foi medido.
+- **O mesmo atendente com duas abas.** O ramal é um só, registrado pelas duas: o Asterisk pode fazer
+  tocar só um dos registros, e pode ser o da aba que NÃO clicou — onde o toque é o de sempre e pede o
+  clique. Em nenhum dos dois o cliente cai (se ninguém atender, a ligação volta ao rodízio em 10 s),
+  mas qual dos dois acontece ninguém viu: é o caso 3.9 do roteiro.
+
+### Limites conhecidos, não consertados
+
+Lidos no código (e, onde há teste, provados com dublês). Nenhum foi visto numa ligação real.
+
+- **Quem atende no mesmo instante em que alguém puxa ou move perde a ligação.** O ramal que tocava sai
+  da ligação antes de ser desligado; se o atendente atendeu nessa janela de milissegundos, o worker
+  não reconhece mais o canal e o larga. O cliente segue com quem puxou, ou na fila do time novo.
+- **Reconexão da ARI com uma puxada em curso.** A reconexão cancela no banco toda ordem aberta. Se
+  quem puxou atende depois, a ligação conecta, mas o cartão não diz "Puxada da fila por".
+- **A ordem que fica aberta sem ninguém para fechá-la** (a escrita do desfecho falhou, ou o worker
+  nem chegou a lê-la) segura a ligação por até 30 s: nesse intervalo a linha diz quem "está cuidando"
+  e um novo "Atender" ou "Mover" é recusado. Depois ela vence (J45.17). Não há passada que feche
+  ordem aberta: sem pedido novo, a linha do banco fica `open` até o fim da ligação.
+- **Com a ARI fora do ar, um clique em "mover" pode gravar até três ordens recusadas**: o cliente HTTP
+  do navegador repete o 503 até três vezes, e cada repetição é um pedido novo. Nenhuma fica aberta.
+  Lido no código (`lib/api/client.ts`), não medido.

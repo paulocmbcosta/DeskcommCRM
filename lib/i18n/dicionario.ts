@@ -10080,6 +10080,26 @@ export const DICIONARIO: Traducoes = {
   "Nenhuma ligação agora.": { es: "Ninguna llamada ahora." },
   // A releitura da fila falhou e a tela ficou com a leitura de antes.
   "Sem atualização no momento. A fila abaixo pode estar atrasada.": { es: "Sin actualización por ahora. La cola de abajo puede estar atrasada." },
+  // A aba Telefone, entrega 3 (0296): atender e mover direto da fila — a linha, o
+  // menu de mover, os avisos do desfecho da ordem e as linhas do cartão da ligação.
+  // "Atender", "Conectando…", "{n} disponíveis" e "Fora do horário" já existem acima;
+  // "Você está em outra ligação." e "Outra pessoa já está cuidando desta ligação." estão
+  // com as recusas das rotas, mais abaixo.
+  "Tocando para você": { es: "Sonando para ti" },
+  "Mover para outro time": { es: "Mover a otro equipo" },
+  // `{nome}` é quem pediu para atender; `{time}`, o time de destino. Trocados por `trocarMarcador`.
+  "{nome} está atendendo…": { es: "{nome} está atendiendo…" },
+  "Movendo para {time}…": { es: "Moviendo a {time}…" },
+  "outro time": { es: "otro equipo" },
+  "Ligação movida para {time}.": { es: "Llamada movida a {time}." },
+  "Seu telefone não está conectado.": { es: "Tu teléfono no está conectado." },
+  "A ligação acabou antes.": { es: "La llamada terminó antes." },
+  "Outra pessoa atendeu antes.": { es: "Otra persona contestó antes." },
+  "Seu telefone não atendeu. A ligação voltou para a fila.": { es: "Tu teléfono no contestó. La llamada volvió a la cola." },
+  "Não foi possível concluir. Tente de novo.": { es: "No se pudo completar. Inténtalo de nuevo." },
+  // No cartão da ligação: `{quem}`, `{de}` e `{para}` entram numa passada só (`oQueSeFezNaFila`).
+  "Puxada da fila por {quem}": { es: "Tomada de la cola por {quem}" },
+  "Movida de {de} para {para} por {quem}": { es: "Movida de {de} a {para} por {quem}" },
   // Telefonia — gravação das ligações (0289, DYD-53).
   "A gravação de uma ligação não foi salva": { es: "La grabación de una llamada no se guardó" },
   "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.": { es: "Verifica que el servicio de telefonía esté funcionando. Las próximas llamadas se siguen grabando; esta grabación se perdió." },
@@ -10140,6 +10160,19 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível carregar a espera da fila do telefone. Recarregue a página.": {
     es: "No se pudo cargar la espera de la cola del teléfono. Recarga la página.",
   },
+  // Telefonia — agir na fila (0296): as recusas das rotas de atender e de mover, e a leitura da ordem.
+  "Esta ligação já acabou.": { es: "Esta llamada ya terminó." },
+  "Esta ligação já foi atendida.": { es: "Esta llamada ya fue contestada." },
+  "Esta ligação ainda está no menu. Espere ela entrar na fila.": { es: "Esta llamada todavía está en el menú. Espera a que entre en la cola." },
+  "Seu telefone não está conectado. Recarregue a página e tente de novo.": { es: "Tu teléfono no está conectado. Recarga la página e inténtalo de nuevo." },
+  "Você está em outra ligação.": { es: "Estás en otra llamada." },
+  "Outra pessoa já está cuidando desta ligação.": { es: "Otra persona ya se está ocupando de esta llamada." },
+  // `{nome}` é quem já pediu para atender; trocado por `trocarMarcador`.
+  "{nome} já está atendendo esta ligação.": { es: "{nome} ya está atendiendo esta llamada." },
+  "Esse time não é desta organização.": { es: "Ese equipo no es de esta organización." },
+  "A ligação já está na fila desse time.": { es: "La llamada ya está en la cola de ese equipo." },
+  "Escolha para qual time mover.": { es: "Elige a qué equipo mover." },
+  "Pedido não encontrado.": { es: "Solicitud no encontrada." },
   // Janela de encerramento: assunto por time e resumo do atendimento (migration 0293).
   "Encerra o atendimento e registra o assunto e o resumo.": { es: "Cierra la atención y registra el asunto y el resumen." },
   "Encerrar conversa": { es: "Cerrar conversación" },
