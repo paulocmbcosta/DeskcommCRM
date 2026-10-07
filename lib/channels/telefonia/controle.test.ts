@@ -3538,6 +3538,78 @@ describe("as ordens da fila (0296): atender e mover a pedido da tela", () => {
     expect(ofertas().at(-1)).toEqual([ramalDe(CAIO), "oferta,vc-1"]);
   });
 
+  it("o relógio dos 2 s que JÁ disparou e espera, na fila serial, atrás de outra puxada sem toque: o ramal digitado voltou a tocar, e o relógio atrasado não manda a ligação para a fila do time por cima dele", async () => {
+    comMenu();
+    banco.ramais.set("201", ANA);
+    ari.online.add(ANA).add(CAIO);
+    await entrar(); // o menu
+    for (const digit of ["2", "0", "1", "#"]) await ctl.tratar({ type: "ChannelDtmfReceived", channel: cliente, digit });
+    expect(ari.originados()).toEqual([ramalDe(ANA)]); // o ramal digitado toca
+
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O1);
+    await ordemDaFila("atender", O1); // 1ª puxada: o toque não sai → os 2 s armados
+    // A fila do laço: o que entra espera a vez, e o teste decide quando roda.
+    const pendentes: Array<() => Promise<void>> = [];
+    ctl.usarFila(async (fn) => {
+      pendentes.push(fn);
+    });
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS + 10); // o relógio disparou, e espera a vez
+    expect(pendentes).toHaveLength(1);
+
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O2);
+    await ordemDaFila("atender", O2); // 2ª puxada, que estava na frente dele: o toque não sai → o ramal digitado toca JÁ
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+    expect(vi.getTimerCount()).toBe(1); // a rede de segurança do toque novo
+
+    // O time padrão fechou nesse meio: se a ligação entrasse na fila dele agora, o cliente ouviria a despedida.
+    banco.situacao = "fora_do_horario";
+    banco.gerais = { aguarde: null, ninguem: null, foraDoHorario: falaDe("fora") };
+    const antes = { chamadas: [...ari.chamadas], leiturasDoTime: banco.consultas.filter((c) => c[0] === "timeParaAFila").length };
+    await pendentes[0]!(); // o relógio atrasado
+
+    // Há um ramal tocando: o relógio não faz nada — nenhuma fala por cima do toque, o time nem é relido…
+    expect(ari.chamadas).toEqual(antes.chamadas);
+    expect(ari.falas()).toEqual(["sound:/falas/menu"]);
+    expect(banco.consultas.filter((c) => c[0] === "timeParaAFila")).toHaveLength(antes.leiturasDoTime);
+    // …o ramal digitado segue tocando (só o primeiro toque, o que a puxada derrubou, foi desligado), com a rede dele armada…
+    expect(desligados()).toEqual(["ramal-canal-1"]);
+    expect(vi.getTimerCount()).toBe(1);
+    // …e quem atende é conectado: a ligação não ficou "se despedindo".
+    await ramalAtende("ramal-canal-2");
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "cli-1"]);
+    expect(ari.chamadas).toContainEqual(["porNaPonte", "p-vc-1", "ramal-canal-2"]);
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+    expect(banco.tem("encerrada")).toEqual([]);
+  });
+
+  it("o mesmo relógio atrasado, com a ligação no RODÍZIO (sem ramal digitado): quem recebeu a vez de volta já toca, e ele não toca outro por cima", async () => {
+    banco.disponiveis = [livre(ANA), livre(BIA, 1)];
+    ari.online.add(ANA).add(BIA).add(CAIO);
+    await entrar(); // a Ana toca
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O1);
+    await ordemDaFila("atender", O1); // o toque de quem puxou não sai → os 2 s armados
+    const pendentes: Array<() => Promise<void>> = [];
+    ctl.usarFila(async (fn) => {
+      pendentes.push(fn);
+    });
+    await vi.advanceTimersByTimeAsync(REAVALIAR_APOS_O_FIM_MS + 10);
+    expect(pendentes).toHaveLength(1);
+
+    ari.falharOriginar = 1;
+    pedirAtender(CAIO, O2);
+    await ordemDaFila("atender", O2); // outra puxada sem toque: a Ana, que tinha a vez de volta, toca
+    expect(ari.originados()).toEqual([ramalDe(ANA), ramalDe(ANA)]);
+    const chamadas = [...ari.chamadas];
+    await pendentes[0]!(); // o relógio atrasado
+
+    expect(ari.chamadas).toEqual(chamadas);
+    await ramalAtende("ramal-canal-2");
+    expect(banco.tem("atendida")).toEqual([["atendida", "vc-1", ANA]]);
+  });
+
   // ─── a puxada que não dá certo devolve a vez de quem tocava ───
 
   it("puxada no ÚLTIMO toque da ÚLTIMA volta e quem puxou não atende: a ligação NÃO é encerrada — quem tocava volta a tocar na mesma volta, com o toque inteiro, e atende", async () => {

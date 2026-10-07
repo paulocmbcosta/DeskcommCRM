@@ -1696,8 +1696,17 @@ export class ControladorDeChamadas {
    * URA (v3) que não atendeu leva à fila do time padrão do menu, INTEIRA — fora
    * do horário, aviso de instabilidade, os ramais —, e o chamar para antes: a
    * fila decide de novo o que o cliente ouve. Nos outros casos, o próximo da lista.
+   *
+   * Só com a ligação SEM ramal tocando — é assim que todo chamador chega aqui.
+   * Chega com um ramal tocando o relógio dos 2 s da puxada sem toque que
+   * disparou e esperou, na fila serial, atrás de outra ordem que já tocou
+   * alguém: seguir dali mandaria a ligação para a entrada da fila do time POR
+   * CIMA desse toque — fora do horário, o cliente ouviria a despedida e quem
+   * atendesse o ramal seria largado. Quem segue a fila é o fim do toque que
+   * está no ar, e o relógio dele existe (`tocarProximo` tem a mesma guarda).
    */
   private async seguirDepoisDoToque(l: Recebida): Promise<void> {
+    if (l.fim || l.fila.ramal) return;
     if (l.fila.direto?.tentou) {
       l.fila.direto = null;
       await this.pararChamando(l);
