@@ -8,6 +8,31 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.57.0] — 2026-10-07
+
+### Adicionado
+
+- **Telefone — atender e mover ligações direto da fila** A aba "Telefone" do Inbox mostrava quem esperava, mas não deixava fazer nada a respeito: a
+  ligação só chegava a alguém quando o rodízio escolhia. Agora, para quem tem ramal, cada ligação
+  que espera na fila tem o botão "Atender": quem clica recebe a ligação no próprio ramal, e o
+  telefone do navegador atende sozinho, sem precisar de um segundo clique. Serve para quem está
+  livre e vê a fila crescer, e para o gerente que resolve atender junto com o time num pico.
+
+  Gerente e admin ganharam também o botão "Mover": mandar a ligação que
+  espera para a fila de outro time, quando o cliente escolheu a opção errada no menu ou quando um
+  time está sem ninguém livre. O cliente continua na linha e não ouve de novo os avisos; só não dá
+  para mover para um time que está fora do horário.
+
+  As duas ações só existem para quem já espera por uma pessoa. Quem ainda ouve o menu ou os avisos
+  não pode ser puxado nem movido, e a ligação transferida que espera na fila de um time fica como
+  era, sem botões. Se duas pessoas clicam em "Atender" na mesma ligação, uma atende
+  e a outra é avisada. Se quem clicou não atende em 10 segundos (fechou a página, por exemplo), a
+  ligação volta para a fila de onde estava. O cartão da ligação na conversa registra quem puxou e
+  de qual time para qual ela foi movida.
+
+  Nada a fazer na atualização. Quem está com o CRM aberto precisa recarregar a página para ver os
+  botões.
+
 ## [1.56.0] — 2026-10-07
 
 ### Adicionado
@@ -6068,7 +6093,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.56.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.0...HEAD
+[1.57.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.56.0...v1.57.0
 [1.56.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.55.0...v1.56.0
 [1.55.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.54.0...v1.55.0
 [1.54.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.53.0...v1.54.0
