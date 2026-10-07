@@ -107,6 +107,27 @@ isso. Se você editou `WAHA_API_KEY` à mão, rode o instalador de novo para reg
 **A mesma pessoa vira vários chats / meu envio aparece como "Contato NNN".** Bug antigo de unificação;
 o baseline de hoje deduplica sozinho ao atualizar (`update.sh`), depois reinicie o app.
 
+## Telefone (telefonia SIP)
+
+**Depois de atualizar, os números ficam "registro recusado" em Conexões › Telefone e a ligação não
+chega.** Recriar o Asterisk troca o IP dele; a porta 5060 fica presa ao IP antigo na tabela de
+conexões do servidor, o Asterisk novo sai por outra porta e a operadora recusa — sem voltar
+sozinho. O `update.sh` conserta isso depois de subir a versão ("Conferindo a telefonia"). Dois
+casos não passam por ele: a primeira atualização que TRAZ o conserto (quem roda ainda é o script
+antigo) e um `up -d` do Asterisk feito à mão. Nos dois:
+
+```bash
+bash hostgator-setup-kit/religar-telefonia.sh
+```
+
+Ele mede antes de agir e não reinicia o worker com ligação em curso (aí diz para rodar de novo com
+`--reenviar` quando a ligação acabar). Não use `pjsip send register` no Asterisk: ele registra
+pela porta errada, a tela passa a dizer "Conectado" e a ligação recebida continua sem chegar.
+Runbook: `docs/runbooks/telefonia-fila-visivel.md` §4.
+
+**"só N de M número(s) registraram" com a porta certa.** Aí não é a porta: é a operadora fora do
+ar ou a senha do número. O motivo aparece no cartão do número, em Conexões › Telefone.
+
 ## Instalação e atualização
 
 **Instalador exigia chave de IA "válida" e parava** (issue #670, **resolvida**): a documentação

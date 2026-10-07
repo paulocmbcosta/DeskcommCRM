@@ -80,6 +80,18 @@
 #      daemon de verdade (29.5.3), com imagens de mentira num namespace de teste;
 #      e o rótulo de versão que `versao_no_ar` lê, nos contêineres da VPS de
 #      produção (29.8.0).
+#  10. Com a telefonia ligada, o update.sh confere a porta SIP 5060 depois do
+#      `up -d` e antes da saúde do app, e essa conferência nunca falha a
+#      atualização (caso 16). A REGRA do conserto é de
+#      tests/shell/telefonia-porta-sip.test.sh; aqui está só o encaixe, com o
+#      update.sh inteiro rodando. Seis sabotagens no update.sh, medidas em
+#      2026-10-07 numa cópia da árvore:
+#        sem o `|| true` de quem chama ............ 14a×1 14d×1 16b×2 16c×2
+#        confere DEPOIS da saúde do app ........... 16a×1
+#        sem a guarda de telefonia ligada ......... 16d×1
+#        lê os registrados DEPOIS do up -d ........ 16a×1
+#        sem a chamada no update.sh ............... 16a×5 16b×1 16c×1
+#        confere ANTES do up -d ................... 16a×1
 set -uo pipefail
 
 # O namespace das imagens publicadas, lido da FONTE (hostgator-setup-kit/_common.sh)
@@ -204,6 +216,19 @@ case " $* " in
     else
       printf '%s\n' "${DUBLE_VERSAO_NO_AR:-}"
     fi ;;
+  # `docker inspect <asterisk> --format '{{.State.Running}} {{.Image}} <IP>/<bits>'`:
+  # o que `religar_troncos_sip` pergunta DEPOIS do `up -d` (caso 16). Calado por
+  # padrão — "o Asterisk não está no ar" —, e é esse silêncio que faz dos casos 1
+  # a 15 um controle: com a telefonia ligada eles passam pelo aviso e seguem.
+  *"State.Running"*)
+    [ -n "${DUBLE_ASTERISK_NO_AR:-}" ] && printf 'true sha256:c806ecd5fd3d 172.19.0.6/16 \n' ;;
+  # O `conntrack` da imagem do Asterisk, num contêiner efêmero na rede do host:
+  # `docker run --rm --network host --cap-add NET_ADMIN --entrypoint conntrack <imagem> -L …`.
+  # Devolve a tabela que o caso declarar. A regra inteira (limpar, ocupar,
+  # reenviar) é provada em tests/shell/telefonia-porta-sip.test.sh, com um dublê
+  # que tem estado; aqui só se prova o ENCAIXE no update.sh.
+  *"--entrypoint conntrack"*)
+    case " $* " in *" -L "*) printf '%s\n' "${DUBLE_CONNTRACK:-}" ;; esac ;;
   *"Config.Image"*)
     # Docker fora do ar / sem permissão no socket: o comando SAI != 0. É um
     # estado real numa VPS, e o update.sh roda sob `set -euo pipefail`.
@@ -273,7 +298,21 @@ if [ "\${FORCE_UNSHALLOW_FAIL:-0}" = "1" ]; then
 fi
 exec "$REAL_GIT" "\$@"
 STUB
-chmod +x "$WORK/bin/docker" "$WORK/bin/crontab" "$WORK/bin/flock" "$WORK/bin/curl" "$WORK/bin/git"
+# `religar_troncos_sip` (caso 16) usa o `conntrack` do SERVIDOR quando quem roda é
+# root e o programa existe. Rodada como root numa máquina que o tem, esta suíte
+# leria — e poderia limpar — a tabela de conexões de verdade de quem está
+# testando. Aqui ninguém é root, e o `conntrack` do PATH só deixa rastro.
+cat > "$WORK/bin/id" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = "-u" ] && { echo 1000; exit 0; }
+exit 1
+STUB
+cat > "$WORK/bin/conntrack" <<'STUB'
+#!/usr/bin/env bash
+printf 'CONNTRACK-DO-SERVIDOR %s\n' "$*" >> "$DOCKER_LOG"
+exit 1
+STUB
+chmod +x "$WORK/bin/docker" "$WORK/bin/crontab" "$WORK/bin/flock" "$WORK/bin/curl" "$WORK/bin/git" "$WORK/bin/id" "$WORK/bin/conntrack"
 export DOCKER_LOG="$WORK/docker.log" CURL_LOG="$WORK/curl.log"
 export FAKE_CRONTAB="$WORK/crontab.txt"
 export PATH="$WORK/bin:$PATH"
@@ -1176,6 +1215,77 @@ check "saiu a 1.0.0" apagou_as_quatro 1.0.0
 check "a instalada (1.2.0) segue intocada" nenhum_rmi_da 1.2.0
 
 unset DUBLE_NO_DISCO
+
+echo "── 16. Telefonia: a porta SIP é conferida depois do up -d, e nunca falha a atualização"
+# Recriar o Asterisk deixa a porta 5060 presa ao IP do contêiner anterior, e os
+# números ficam em "registro recusado" sem voltar sozinhos — aconteceu em toda
+# atualização com a telefonia ligada (1.52.2 a 1.57.0). O conserto é
+# `religar_troncos_sip`, e a regra dela é provada em
+# tests/shell/telefonia-porta-sip.test.sh. Aqui se prova o que só o update.sh
+# INTEIRO mostra: que ele chama, na hora certa, e que não cai junto.
+CERTA_16="udp      17 118 src=172.19.0.6 dst=198.51.100.58 sport=5060 dport=5060 src=198.51.100.58 dst=203.0.113.10 sport=5060 dport=5060 [ASSURED] mark=0 use=1"
+conferiu_a_telefonia() { grep -q "Conferindo a telefonia" "$OUTFILE"; }
+concluiu() { grep -q "Atualização concluída" "$OUTFILE"; }
+tocou_na_tabela() { grep -q -- '--entrypoint conntrack' "$DOCKER_LOG"; }
+
+echo "   16a. telefonia ligada, Asterisk no ar e porta certa → confere, e não mexe em nada"
+env_da_telefonia "telefonia" "${NS}/deskcomm-asterisk:1.1.0" 1
+em_execucao "${TRES_NO_ALVO[@]}" "${NS}/deskcomm-asterisk:1.1.0"
+export DUBLE_ASTERISK_NO_AR=1 DUBLE_CONNTRACK="$CERTA_16"
+: > "$DOCKER_LOG"
+run_update
+check "a atualização termina com sucesso" test "$RC" -eq 0
+check "conferiu a telefonia" conferiu_a_telefonia
+check "leu a tabela com o conntrack da imagem do PRÓPRIO Asterisk, só UDP de origem 5060" \
+  grep -q -- '--network host --cap-add NET_ADMIN --entrypoint conntrack sha256:c806ecd5fd3d -L -p udp --orig-port-src 5060$' "$DOCKER_LOG"
+check "diz que a porta não ficou presa" grep -q "a porta 5060 não ficou presa" "$OUTFILE"
+check "DEPOIS do up -d (antes dele o Asterisk ainda é o antigo)" \
+  test "$(linha_do_primeiro 'State\.Running')" -gt "$(linha_do_primeiro ' up -d$')"
+check "e ANTES de perguntar ao app se ele voltou (o rollback não volta o Asterisk)" \
+  test "$(linha_do_primeiro 'State\.Running')" -lt "$(linha_do_ultimo ' exec -T app ')"
+check "os números registrados foram lidos ANTES do up -d" \
+  test "$(linha_do_primeiro 'pjsip show registrations')" -lt "$(linha_do_primeiro ' up -d$')"
+check "com a porta certa: não limpou a tabela nem reiniciou o worker" \
+  test -z "$(grep -E '^restart | -D ' "$DOCKER_LOG" || true)"
+check "nunca tocou no conntrack do servidor de quem roda o teste" \
+  test -z "$(grep '^CONNTRACK-DO-SERVIDOR' "$DOCKER_LOG" || true)"
+
+echo "   16b. Asterisk fora do ar depois do up -d → avisa, e a atualização que deu certo sai com 0"
+# A função devolve 1 ("não ficou bom"). O update.sh roda sob `set -euo pipefail`:
+# sem o `|| true` de quem chama, o agent.sh desfaria uma atualização saudável.
+unset DUBLE_ASTERISK_NO_AR DUBLE_CONNTRACK
+env_da_telefonia "telefonia" "${NS}/deskcomm-asterisk:1.1.0" 1
+em_execucao "${TRES_NO_ALVO[@]}" "${NS}/deskcomm-asterisk:1.1.0"
+: > "$DOCKER_LOG"
+run_update
+check "avisa que o Asterisk não está no ar" grep -q "o Asterisk não está no ar" "$OUTFILE"
+check "não tentou ler a tabela de um Asterisk que não existe" bash -c "! grep -q -- '--entrypoint conntrack' '$DOCKER_LOG'"
+check "a atualização sai com 0" test "$RC" -eq 0
+check "e chegou ao fim" concluiu
+
+echo "   16c. mesmo se a conferência FALHAR por inteiro, a atualização que deu certo sai com 0"
+cp hostgator-setup-kit/_common.sh "$WORK/_common.sh.inteiro"
+printf '\nreligar_troncos_sip() { return 1; }\n' >> hostgator-setup-kit/_common.sh
+env_da_telefonia "telefonia" "${NS}/deskcomm-asterisk:1.1.0" 1
+em_execucao "${TRES_NO_ALVO[@]}" "${NS}/deskcomm-asterisk:1.1.0"
+: > "$DOCKER_LOG"
+run_update
+cp "$WORK/_common.sh.inteiro" hostgator-setup-kit/_common.sh
+check "fixture: o update chegou à telefonia" conferiu_a_telefonia
+check "a atualização sai com 0" test "$RC" -eq 0
+check "e chegou ao fim" concluiu
+
+echo "   16d. telefonia DESLIGADA → nem confere (nada muda para quem não usa)"
+env_das_tres "${NS}/deskcommcrm:1.1.0" "${NS}/deskcomm-worker:1.1.0" "${NS}/deskcomm-scheduler:1.1.0"
+export DUBLE_ASTERISK_NO_AR=1 DUBLE_CONNTRACK="$CERTA_16"   # mesmo com tudo respondendo
+: > "$DOCKER_LOG"
+run_update
+unset DUBLE_ASTERISK_NO_AR DUBLE_CONNTRACK
+check "fixture: a atualização rodou" concluiu
+check "não há o bloco da telefonia na saída" bash -c "! grep -q 'Conferindo a telefonia' '$OUTFILE'"
+check "nenhuma leitura da tabela de conexões" bash -c "! grep -q -- '--entrypoint conntrack' '$DOCKER_LOG'"
+check "nenhuma pergunta ao Asterisk" bash -c "! grep -q 'asterisk -rx' '$DOCKER_LOG'"
+
 unset DUBLE_DIGESTS
 
 if [ "$FAILS" -eq 0 ]; then echo "OK — todas as provas passaram."; else echo "FALHOU — $FAILS prova(s)."; fi

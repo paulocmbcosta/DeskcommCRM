@@ -18,7 +18,14 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION \
     TZ=UTC
 
-RUN apk add --no-cache asterisk asterisk-srtp asterisk-opus asterisk-sounds-moh curl tzdata \
+# `conntrack-tools` não é do Asterisk: é do KIT. Depois de recriar este contêiner,
+# o `update.sh` precisa ler e limpar a tabela de conexões do HOST (a porta SIP
+# 5060 fica presa ao contêiner anterior — `religar_troncos_sip`, em
+# hostgator-setup-kit/_common.sh). Ele roda o binário DESTA imagem num contêiner
+# efêmero na rede do host, em vez de instalar pacote na VPS ou baixar um a cada
+# atualização: a imagem já está no disco, na mesma versão do resto.
+# Vigiado em tests/shell/telefonia-porta-sip.test.sh.
+RUN apk add --no-cache asterisk asterisk-srtp asterisk-opus asterisk-sounds-moh conntrack-tools curl tzdata \
  && rm -rf /etc/asterisk/* \
  && mkdir -p /var/spool/asterisk /var/run/asterisk /var/log/asterisk /var/lib/asterisk \
  && chown -R asterisk:asterisk /var/spool/asterisk /var/run/asterisk /var/log/asterisk /var/lib/asterisk /etc/asterisk

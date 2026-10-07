@@ -146,6 +146,7 @@ declare `REVERSE_PROXY=traefik` no `.env` — aí a escolha é sua e ele segue s
 | `reset-password.sh` | Redefine senha de um usuário |
 | `reset-mfa.sh` | Remove o MFA de um usuário travado |
 | `healthcheck.sh` | Diagnóstico dos serviços |
+| `religar-telefonia.sh` | Religa os números de telefone na operadora quando ficam em "registro recusado" depois de recriar o Asterisk (o `update.sh` já faz sozinho) |
 
 ## Automações e webhooks
 

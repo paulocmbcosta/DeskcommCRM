@@ -84,6 +84,7 @@ discordarem, vale o guia; quando o guia e `install.sh` discordarem, vale o insta
 | "Network unreachable" no banco | trocar a connection string pela **Session pooler** |
 | "esqueci minha senha" com link para `localhost:3000` | `export SUPABASE_ACCESS_TOKEN=sbp_... && bash hostgator-setup-kit/marca-emails.sh` |
 | esqueci a senha / perdi o autenticador | `bash hostgator-setup-kit/reset-password.sh <email>` / `bash hostgator-setup-kit/reset-mfa.sh <email>` |
+| telefone em "registro recusado" depois de atualizar ou de recriar o Asterisk | `bash hostgator-setup-kit/religar-telefonia.sh` (mede antes de agir; não derruba ligação) |
 | está tudo no ar? | `bash hostgator-setup-kit/healthcheck.sh` |
 
 O catálogo inteiro (proxy da hospedagem, Cloudflare, WAHA 401, QR, "usuário já existe", `update.sh`

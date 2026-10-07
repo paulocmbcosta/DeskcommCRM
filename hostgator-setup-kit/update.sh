@@ -286,6 +286,10 @@ PIN_FALTANDO_ANTES="$(pin_incompleto .env)"
 # versão que rodava até aqui deixa de poder ser lida. É ela a reserva que a
 # limpeza do bloco 8 guarda no disco.
 VERSAO_QUE_RODAVA="$(versao_no_ar)" || VERSAO_QUE_RODAVA=""
+# E os números de telefone registrados AGORA, pelo mesmo motivo: é a régua de
+# "voltaram" do bloco 5.5, e depois do `up -d` quem responde é o Asterisk novo,
+# vazio. Sem telefonia, ou sem dar para saber, fica vazio e a régua vira "todos".
+TRONCOS_ANTES="$(troncos_registrados_agora .env)" || TRONCOS_ANTES=""
 
 VERSAO_ALVO="${TARGET_TAG#v}"
 export APP_IMAGE="${IMG_APP}:${VERSAO_ALVO}"
@@ -377,6 +381,30 @@ traefik|npm)
     || c_ylw "⚠ não consegui recriar o proxy — rode: docker compose $(dc_files) up -d --force-recreate caddy"
   ;;
 esac
+
+# ── 5.5 Telefonia: a porta SIP depois de recriar o Asterisk ─────────────────
+# O `up -d` acima recriou o Asterisk, e ele costuma nascer com outro IP. A porta
+# 5060 continua presa ao IP antigo na tabela de conexões do servidor, o Asterisk
+# novo sai por outra, a operadora recusa — e não volta sozinho. Aconteceu em
+# TODA atualização com a telefonia ligada (1.52.2, 1.52.6, 1.55.0, 1.56.0,
+# 1.57.0), e só voltava se alguém soubesse o comando. O mecanismo, medido, está
+# no cabeçalho de `religar_troncos_sip` (_common.sh).
+#
+# ANTES da conferência de saúde do app, de propósito: se o app novo não subir, o
+# bloco 6 sai com 1 e o `agent.sh` volta as imagens de app, worker e scheduler —
+# mas não a do Asterisk, que continua sendo o novo. Deixar a porta para depois
+# seria deixar o telefone mudo justamente na atualização que falhou.
+#
+# A função mede antes de agir: com a porta certa ela não toca em nada; e com
+# ligação em curso não reinicia o worker. O `|| true` é a mesma tranca do bloco
+# 8: telefonia é conserto de bordo, e nenhuma versão futura dela pode transformar
+# uma atualização que deu certo em rollback. Quem vigia o encaixe (a ordem e a
+# tranca) é o caso 16 de tests/shell/update-guard.test.sh; a regra do conserto,
+# tests/shell/telefonia-porta-sip.test.sh.
+if telefonia_ligada .env; then
+  step "Conferindo a telefonia"
+  religar_troncos_sip atualizacao "$TRONCOS_ANTES" || true
+fi
 
 # ── 6. O app voltou no ar? ───────────────────────────────────────────────────
 step "Conferindo se o app voltou no ar"
