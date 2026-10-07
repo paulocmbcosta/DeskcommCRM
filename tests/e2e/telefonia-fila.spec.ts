@@ -31,8 +31,9 @@
  *     no elemento);
  *  5. com uma ORDEM ABERTA sobre a ligação (alguém pediu para atender, ou para
  *     mover), a linha diz quem está cuidando — "Bruno Atendente está atendendo…",
- *     "Movendo para <time>…" — no lugar dos botões; e, quando a ordem acaba sem a
- *     ligação mudar de mãos, os botões voltam, sem recarregar a página;
+ *     "Movendo para <time>…" — no lugar dos botões; quando a ordem acaba sem a
+ *     ligação mudar de mãos, os botões voltam, sem recarregar a página; e a
+ *     ordem que ficou aberta há mais de 30 s (vencida) não tira os botões;
  *  6. o CARTÃO da ligação, na conversa, conta o que se fez com ela na fila:
  *     "Movida de <time> para <time> por <quem>" e "Puxada da fila por <quem>" — e
  *     o cartão da ligação em que ninguém agiu não ganha linha nenhuma.
@@ -272,6 +273,11 @@ async function garantirOOutroTime(): Promise<void> {
  * pediu; no mover, `to_team_id` é o destino; nos dois, `from_team_id` é o time em
  * que a ligação esperava. Pela conexão direta: pela REST esta tabela é só-leitura
  * até para a service key (o `revoke all` da 0296).
+ *
+ * `created_at` é o `now()` do BANCO, como na rota — ou, com `abertaHaS`, esse
+ * tanto de segundos ANTES (a ordem que ficou para trás). Nunca depois: a ordem
+ * aberta vale 30 s (`VALIDADE_DA_ORDEM_DA_FILA_S`), contados desse instante pelo
+ * relógio do banco, e datar no futuro para "ganhar tempo" mediria outra coisa.
  */
 async function semearOrdemAberta(o: {
   ligacaoId: string;
@@ -279,11 +285,13 @@ async function semearOrdemAberta(o: {
   quemPediu: string;
   /** Só no mover: o time de destino. */
   paraOTime?: string;
+  /** Há quantos segundos a ordem foi aberta. Sem isto, agora. */
+  abertaHaS?: number;
 }): Promise<string> {
   const [ordem] = await sql<{ id: string }>(
     `insert into public.voice_call_queue_orders
-       (organization_id, voice_call_id, kind, requested_by, to_user_id, to_team_id, from_team_id)
-     values ($1, $2, $3, $4, $5, $6, $7)
+       (organization_id, voice_call_id, kind, requested_by, to_user_id, to_team_id, from_team_id, created_at)
+     values ($1, $2, $3, $4, $5, $6, $7, now() - make_interval(secs => $8::double precision))
      returning id`,
     [
       orgId,
@@ -293,6 +301,7 @@ async function semearOrdemAberta(o: {
       o.tipo === "pull" ? o.quemPediu : null,
       o.tipo === "move" ? (o.paraOTime ?? null) : null,
       TIME.id,
+      Math.max(0, o.abertaHaS ?? 0),
     ],
   );
   return ordem!.id;
@@ -1022,30 +1031,37 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
     test.setTimeout(180_000);
     await esvaziarAFila();
     await garantirOOutroTime();
-    // Três ligações esperando na MESMA fase e no MESMO time: uma que alguém vai
-    // pedir para atender, uma que alguém vai pedir para mover, e uma em que
-    // ninguém pede nada (o controle).
+    // Quatro ligações esperando na MESMA fase e no MESMO time: uma que alguém vai
+    // pedir para atender, uma que alguém vai pedir para mover, uma em que
+    // ninguém pede nada (o controle) e uma com uma ordem ESQUECIDA — aberta há
+    // 40 s, mais que os 30 s que uma ordem vale.
     const marcaDoCaso = randomUUID().slice(0, 6);
     const puxada = { id: randomUUID(), telefone: `+55619914${QUATRO_DIGITOS}` };
     const movida = { id: randomUUID(), telefone: `+55619915${QUATRO_DIGITOS}` };
     const livre = { id: randomUUID(), telefone: `+55619916${QUATRO_DIGITOS}` };
-    for (const [i, l] of [puxada, movida, livre].entries()) {
+    const esquecida = { id: randomUUID(), telefone: `+55619918${QUATRO_DIGITOS}` };
+    for (const [i, l] of [puxada, movida, livre, esquecida].entries()) {
       await semearLigacao({
         id: l.id,
         ref: `canal-ordem-${marcaDoCaso}-${i}`,
         telefone: l.telefone,
         status: "ringing",
-        comecouHaS: 100 - i * 20,
-        naFilaHaS: 90 - i * 20,
+        // A mais nova (a da ordem esquecida) espera há 90 s: a ordem dela, de 40 s atrás, nasceu com ela já na fila.
+        comecouHaS: 160 - i * 20,
+        naFilaHaS: 150 - i * 20,
         caiEmS: 200,
       });
     }
+    // A ordem que ficou para trás (o worker não a fechou): aberta há 40 s. É a
+    // única semeada ANTES de a página abrir — ela já nasce vencida.
+    const ordemEsquecida = await semearOrdemAberta({ ligacaoId: esquecida.id, tipo: "pull", quemPediu: atendente.id, abertaHaS: 40 });
 
     await entrar(page, gerente.email, gerente.senha);
     const coluna = await abrirAbaTelefone(page);
     const daPuxada = linhaInteira(coluna, puxada.id);
     const daMovida = linhaInteira(coluna, movida.id);
     const daLivre = linhaInteira(coluna, livre.id);
+    const daEsquecida = linhaInteira(coluna, esquecida.id);
     const ordemNaPuxada = daPuxada.locator("[data-fila-ordem]");
     const ordemNaMovida = daMovida.locator("[data-fila-ordem]");
     const botoes = "[data-fila-acoes], [data-fila-atender], [data-fila-mover]";
@@ -1053,24 +1069,38 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
     const marca = randomUUID();
     let ordemDeAtender = "";
 
-    await test.step("antes de alguém pedir: as três ligações têm o botão, e nenhuma tem frase de ordem", async () => {
+    await test.step("antes de alguém pedir: toda ligação tem o botão — inclusive a da ordem vencida — e nenhuma tem frase de ordem", async () => {
       for (const [l, daLinha] of [
         [puxada, daPuxada],
         [movida, daMovida],
         [livre, daLivre],
+        [esquecida, daEsquecida],
       ] as const) {
         await expect(daLinha.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando", { timeout: 20_000 });
         await expect(daLinha.locator(`[data-fila-mover="${l.id}"]`)).toBeVisible();
         await expect(daLinha.locator("[data-fila-ordem]")).toHaveCount(0);
       }
+      // A ordem esquecida segue ABERTA no banco: o que tirou a frase da linha foi
+      // a validade (aberta há mais de 30 s), não alguém tê-la fechado. Sem o
+      // prazo, esta linha diria "Bruno Atendente está atendendo…", sem os botões,
+      // até a ligação acabar.
+      const [aindaAberta] = await sql<{ status: string; idade: number }>(
+        `select status, extract(epoch from now() - created_at)::int as idade
+           from public.voice_call_queue_orders where id = $1 and organization_id = $2`,
+        [ordemEsquecida, orgId],
+      );
+      expect(aindaAberta?.status, "a ordem esquecida tem de estar aberta no banco para este passo medir a validade").toBe("open");
+      expect(aindaAberta?.idade, "a ordem esquecida tem de ser mais velha que a validade (30 s)").toBeGreaterThan(30);
       await page.evaluate((m) => {
         (window as unknown as { __paginaDaOrdem?: string }).__paginaDaOrdem = m;
       }, marca);
     });
 
     await test.step("a ordem aberta troca os botões pela frase de quem está cuidando", async () => {
-      // As ordens são semeadas com a página JÁ aberta: ordem aberta é estado de
-      // segundos (o ramal de quem pediu toca por 10 s), e o caso a lê enquanto é nova.
+      // As ordens são semeadas com a página JÁ aberta, e afirmadas logo em
+      // seguida — antes de qualquer medida ou captura: a ordem aberta vale 30 s
+      // do `created_at` (`VALIDADE_DA_ORDEM_DA_FILA_S`), e depois disso a fila
+      // deixa de mostrá-la.
       ordemDeAtender = await semearOrdemAberta({ ligacaoId: puxada.id, tipo: "pull", quemPediu: atendente.id });
       await semearOrdemAberta({ ligacaoId: movida.id, tipo: "move", quemPediu: gerente.id, paraOTime: OUTRO_TIME.id });
       // O que o worker faz em seguida com a de atender: o ramal de quem pediu
