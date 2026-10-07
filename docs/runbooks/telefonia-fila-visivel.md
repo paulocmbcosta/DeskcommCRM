@@ -116,24 +116,59 @@ atender sozinho, a ligação ainda pode ser atendida à mão — anote e veja o 
 
 ## 4. Depois de cada atualização: os troncos
 
-Recriar o contêiner do Asterisk pode deixar a porta 5060 presa a uma entrada antiga da tabela de
-conexões da VPS. O sintoma: em **Conexões › Telefone** os números ficam "registro recusado", e
-no Asterisk os registros aparecem como `No response`, `Rejected` ou `Unregistered`.
+Recriar o contêiner do Asterisk deixa a porta 5060 presa a uma entrada antiga da tabela de
+conexões da VPS: o Asterisk novo nasce com outro IP, sai por outra porta e a operadora recusa o
+registro. O sintoma: em **Conexões › Telefone** os números ficam "registro recusado", e no
+Asterisk os registros aparecem como `Rejected` ou `Unregistered`. Não volta sozinho — quando a
+entrada antiga expira, a nova já está de pé na porta errada, e o Asterisk a renova a cada 25 s.
+
+**O `update.sh` conserta isto sozinho**, logo depois de subir a versão nova (bloco "Conferindo a
+telefonia"). Ele mede antes de agir: com a porta certa não mexe em nada, e com ligação em curso
+— ou sem conseguir saber se há — não reinicia o worker. O que esperar na saída da atualização:
+
+| A saída diz | O que aconteceu |
+|---|---|
+| `✓ telefonia: a porta 5060 não ficou presa — N de M número(s) registrado(s)` | o Asterisk voltou com o mesmo IP; os números que estavam registrados antes voltaram sozinhos |
+| `✓ telefonia: a porta 5060 não ficou presa — nada a corrigir` | idem, e não havia número registrado antes (ou não deu para saber): nada a esperar |
+| `✓ telefonia: porta 5060 recuperada — N de M número(s) registrado(s)` | estava presa; foi limpa, o worker reenviou os números e eles registraram |
+| `… NÃO reiniciei o worker` (há ligação em curso, ou o Asterisk não respondeu se há) | a porta foi consertada, mas os números só voltam sozinhos em até 5 minutos — ou na hora, com o comando abaixo e `--reenviar`, sem ligação em curso |
+| `⚠ … só N de M número(s) registraram` | a porta está certa; o que falta é com a operadora ou a senha (veja o motivo na tela) |
+| `⚠ … o Asterisk só recebeu M número(s) do worker … havia A` | a porta está certa, mas o worker não reenviou todos: veja o log dele |
+
+**A primeira atualização que TRAZ este conserto ainda não o usa**: quem roda é o `update.sh` da
+versão anterior, que já estava carregado. Nessa, e sempre que o Asterisk for recriado à mão (um
+`docker compose up -d` que o inclua, um reinício do Docker), rode:
+
+```bash
+bash hostgator-setup-kit/religar-telefonia.sh
+```
+
+É a mesma função do `update.sh`. Pode rodar com o CRM no ar e quantas vezes quiser: com tudo
+certo ela só confere. Para conferir por conta própria:
 
 ```bash
 docker exec deskcommcrm-asterisk-1 asterisk -rx "pjsip show registrations"
 ```
 
-Se não estiverem `Registered`:
+**Não** use `pjsip send register`: sozinho ele registra pela porta errada, a tela passa a dizer
+"Conectado" e a ligação recebida não chega. E "Registered" na listagem acima não basta como
+prova, pelo mesmo motivo — numa operadora que aceita qualquer porta o número fica registrado
+pela porta errada. O que o kit confere é a porta, na tabela de conexões.
+
+Se o script disser que não conseguiu ler a tabela (imagem do Asterisk anterior a este conserto),
+o caminho de último recurso é o de antes, à mão:
 
 ```bash
 docker run --rm --net=host --cap-add=NET_ADMIN alpine:3.22 sh -c \
-  "apk add -q --no-cache conntrack-tools; conntrack -D -p udp --orig-port-src 5060 --orig-port-dst 5060"
+  "apk add -q --no-cache conntrack-tools; conntrack -D -p udp --orig-port-src 5060"
 docker restart deskcommcrm-worker-1
 ```
 
-**Não** use `pjsip send register`: ele registra pela porta errada e mascara o defeito. Isto se
-repetiu em todas as atualizações recentes que mexeram no Asterisk e ainda não está no kit.
+Este comando funcionou nas cinco vezes em que foi usado na VPS, mas tem um limite medido em
+laboratório: se a operadora mandar um pacote para o servidor entre a limpeza e o registro, é ela
+que fica com a 5060 e o Asterisk sai desviado de novo. O script não tem esse limite — ele manda
+o Asterisk falar com a operadora logo depois de limpar. O mecanismo inteiro, com as medidas,
+está no cabeçalho de `religar_troncos_sip`, em `hostgator-setup-kit/_common.sh`.
 
 ## 5. Se algo sair diferente do esperado
 

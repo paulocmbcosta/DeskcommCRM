@@ -435,6 +435,37 @@ e revalida contra o estado dele antes de mexer na ligação.
   correção).
 - **Nenhuma porta SIP publicada.** Só troncos com registro, cuja sinalização entra pelo
   mapeamento de NAT do próprio registro. Tronco por IP (sem registro) fica fora desta versão.
+- **Esse mapeamento pertence ao IP do contêiner, e recriar o Asterisk o quebra.** Medido na VPS
+  em cinco atualizações (1.52.2 a 1.57.0) e reproduzido em laboratório em 2026-10-07 (dockerd
+  29.8.0, Asterisk 20.11 nos dois lados): uma atualização recria vários contêineres de uma vez,
+  o Docker redistribui os IPs, e o Asterisk novo nasce com outro. A linha do IP antigo continua
+  na tabela de conexões do servidor segurando a 5060 — remover o contêiner não a apaga —, o
+  Asterisk novo sai por outra porta e a operadora recusa o registro. **Não
+  volta sozinho:** quando a linha antiga expira, a nova já está de pé na porta errada e o
+  `qualify` de 25 s a renova. O `update.sh` conserta depois do `up -d`
+  (`religar_troncos_sip`, em `hostgator-setup-kit/_common.sh`, que tem o mecanismo e as medidas
+  no cabeçalho): lê a tabela, e só se a porta estiver presa ou desviada limpa as entradas UDP
+  de origem 5060, manda o Asterisk reocupar a porta com um OPTIONS e reinicia o worker — nunca
+  com ligação em curso. À mão: `bash hostgator-setup-kit/religar-telefonia.sh`. Vigiado por
+  `tests/shell/telefonia-porta-sip.test.sh`.
+
+  **Por que consertar em vez de evitar na origem** (as três saídas pelo compose foram pesadas
+  e recusadas):
+  - *publicar a 5060/udp* evita o defeito — medido no mesmo laboratório: quatro recriações com
+    troca de IP, quatro registros pela 5060 sem o kit fazer nada. Mas abre a porta de
+    sinalização para a internet inteira, que é exatamente o que o item acima decidiu não
+    fazer: todo robô que varre a 5060 passa a falar direto com o Asterisk, antes de qualquer
+    senha. É troca de postura de segurança por conveniência de operação, e essa decisão é do
+    dono do produto, não de um conserto de kit;
+  - *`network_mode: host`* tira o NAT do caminho, mas põe a ARI (8088) e a AMI (5038) nas
+    interfaces do servidor, quebra o nome `asterisk` que o app, o worker e o Caddy usam, e
+    pede trocar `TELEFONIA_ARI_URL` no `.env` de quem já instalou — o que a doutrina de
+    packaging proíbe;
+  - *IP fixo para o Asterisk* resolve de fato (medido: recriado com o MESMO IP, o Asterisk
+    reaproveita a linha e segue na 5060), mas exige declarar a sub-rede da rede `internal`.
+    Numa instalação existente isso recria a rede com tudo dentro, e uma sub-rede fixa pode
+    colidir com outra rede Docker da VPS do cliente — aí o `up -d` da atualização falha para
+    todo mundo.
 - **Faixa RTP publicada**: `TELEFONIA_RTP_INICIO`–`TELEFONIA_RTP_FIM`, padrão
   `20000-20039/udp`, só IPv4. Com rtcp-mux no ramal, dá ~10 ligações simultâneas. A porta
   publicada pelo Docker não passa pelo UFW, como a 7881 do WaCalls.
@@ -816,7 +847,8 @@ e revalida contra o estado dele antes de mexer na ligação.
 - ~~Chamada RECEBIDA de fora (a infraestrutura).~~ Provado em 2026-09-28 na VPS de produção,
   com um Asterisk de teste descartável: a recebida chegou e teve áudio nos dois sentidos (o
   NAT do Docker preserva a 5060 do registro — a operadora vê `rport=5060` —, e a faixa UDP
-  20000–20039 passa o firewall). Atrás do NAT duplo do Mac de desenvolvimento a operadora não
+  20000–20039 passa o firewall; a 5060 só é preservada enquanto está LIVRE na tabela de
+  conexões, e recriar o Asterisk a deixa presa: §4.3). Atrás do NAT duplo do Mac de desenvolvimento a operadora não
   entregava a INVITE.
 - **O fluxo do PRODUTO na recebida** — o Stasis escolhe quem toca, o atendente atende no
   navegador — segue sem prova em produção.

@@ -42,6 +42,19 @@ cita `telefonia`). Serviço de profile nomeado no comando SOBE mesmo com o profi
 numa instalação sem telefonia, o comando acima ligaria um Asterisk que ninguém configurou.
 Sem telefonia, é `up -d app worker`.
 
+**Recriou o Asterisk à mão? Religue os números em seguida.** O contêiner novo costuma nascer
+com outro IP, a porta 5060 fica presa ao antigo na tabela de conexões da VPS e a operadora
+passa a recusar o registro — sem voltar sozinho. O `update.sh` cuida disso depois do `up -d`
+dele; um `up -d` seu, não:
+
+```bash
+bash hostgator-setup-kit/religar-telefonia.sh
+```
+
+Ele mede antes de agir (com a porta certa só confere) e não reinicia o worker com ligação em
+curso. O que cada saída quer dizer está em
+[`telefonia-fila-visivel.md` §4](telefonia-fila-visivel.md#4-depois-de-cada-atualização-os-troncos).
+
 Na dúvida sobre o que a versão mexe, use o `update.sh`.
 
 ### Os DOIS `-f` são obrigatórios. Sempre.
