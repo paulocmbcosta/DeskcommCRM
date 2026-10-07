@@ -20,9 +20,10 @@
  *             operadora, na ligação ainda não atendida; o tom `ring` da zona
  *             `br`, em banda, na já atendida (URA, aviso, ou a régua dos 45 s).
  *             Sem ninguém livre, e só então: "aguarde", música, e o "aguarde"
- *             de novo a cada ~40 s, até 2 min contados da entrada na fila.
- *             Esgotou: "ninguém atendeu" e desliga, e a ligação vira "Ligar de
- *             volta" na Central.
+ *             de novo a cada ~40 s, até o teto de espera do TIME (0295; 2 min
+ *             se ele não configurou outro). Esgotou: "ninguém atendeu" e
+ *             desliga, e a ligação vira "Ligar de volta" na Central. Com mais
+ *             de uma esperando no mesmo time, quem toca é a que chegou primeiro.
  *   FEITA     o ramal disca `c-<voice_call_id>` → confere que a API criou essa
  *             ligação para ESTE atendente há menos de 60 s → cria a perna da
  *             operadora, põe as duas numa ponte e disca.
@@ -50,10 +51,11 @@
  * três por dublês e exercita a máquina de estados inteira sem Asterisk nem Postgres.
  */
 import {
-  ESPERA_NA_FILA_MS,
   ESTADO_INICIAL,
   REAVALIAR_FILA_MS,
   TOQUE_POR_ATENDENTE_MS,
+  eAVezDela,
+  esperaMaximaMs,
   proximoToque,
   type CandidatoAoToque,
   type EstadoDoToque,
@@ -227,8 +229,15 @@ interface FilaDaLigacao {
   segurando: boolean;
   /** Sem ninguém disponível, esperando a vez. */
   esperando: boolean;
-  /** Início dos 2 min de espera sem ninguém disponível (fase 1). */
+  /** Início da espera sem ninguém disponível — a régua do teto do time (`tetoMs`; 2 min por padrão). */
   inicioDaEspera: number | null;
+  /**
+   * Quando a ligação passou a esperar por uma pessoa (o começo dos toques) — a
+   * ORDEM DE CHEGADA da fila (0295). `null` enquanto está no menu ou nos avisos.
+   */
+  entrouEm: number | null;
+  /** A espera máxima sem ninguém livre, do TIME (0295); o padrão até a fila do time ser lida. */
+  tetoMs: number;
   /**
    * `reavaliar`: reavaliar a fila, ou a rede de segurança do toque do ramal;
    * `aguarde`: a repetição do "aguarde" (~40 s de música entre um e outro).
@@ -365,6 +374,17 @@ const OCUPADO_DA_INTERNA_MS = 4_000;
 const VALIDADE_DO_PEDIDO_DE_SAIDA_MS = 60_000;
 /** Música entre um "aguarde" e o próximo (desenho §5.2.4: ~40 s). */
 export const REPETIR_AGUARDE_MS = 40_000;
+/**
+ * Quanto depois do fim de uma ligação quem espera na fila é reavaliado (0295).
+ * Não é na hora, por dois motivos: dá tempo de o BYE chegar ao navegador do
+ * atendente que acabou de desligar — ele recusa com 486 o toque que chega com a
+ * sessão anterior ainda aberta, e a recusa gasta a vez dele na volta —; e junta
+ * numa passada só as ligações que acabam em rajada (o pico de uma queda de
+ * internet), em vez de reler os disponíveis a cada uma delas dentro da fila serial.
+ */
+export const REAVALIAR_APOS_O_FIM_MS = 2_000;
+/** A espera sem ninguém livre de quem não tem teto do time: o padrão de sempre (2 min). */
+const TETO_PADRAO_DA_ESPERA_MS = esperaMaximaMs(null);
 
 /**
  * O chamar que acaba `done` sozinho em menos que isto não chegou a tocar de
@@ -393,6 +413,8 @@ export class ControladorDeChamadas {
   private readonly chamandoPorReproducao = new Map<string, Recebida>();
   /** O aviso de gravação no ar de cada ligação FEITA, pelo playback (F3). */
   private readonly avisoDaFeitaPorReproducao = new Map<string, Feita>();
+  /** A reavaliação da fila agendada pelo fim de uma ligação — UMA por organização (`agendarReavaliacao`). */
+  private readonly reavaliacoes = new Map<string, Relogio>();
   /**
    * Por onde os relógios (toque vencido, reavaliar a fila, repetir o "aguarde")
    * entram. O laço do worker troca por sua fila serial, para um relógio nunca
@@ -665,6 +687,8 @@ export class ControladorDeChamadas {
         segurando: false,
         esperando: false,
         inicioDaEspera: null,
+        entrouEm: null,
+        tetoMs: TETO_PADRAO_DA_ESPERA_MS,
         relogios: { reavaliar: null, aguarde: null },
       },
       fala: semFalaNoAr(),
@@ -759,12 +783,13 @@ export class ControladorDeChamadas {
    * A FILA DO TIME (desenho §5.2), nesta ordem:
    *  1. fora do horário, com a fala pronta: "fora do horário" e desliga;
    *  2. aviso de instabilidade vigente: toca INTEIRO;
-   *  3. os ramais, pela regra da fase 1 (rodízio, 20 s, 2 voltas, 2 min).
+   *  3. os ramais, pela regra da fase 1 (rodízio, 20 s, 2 voltas), e a espera
+   *     sem ninguém livre até o teto do TIME (0295; 2 min por padrão).
    * A leitura que falha não trava nada: sem ela, a fila é a da fase 1.
    */
   private async entrarNaFila(l: Recebida): Promise<void> {
     if (l.fim) return;
-    let entrada: TimeParaAFila = { situacao: "aberto", aviso: null };
+    let entrada: TimeParaAFila = { situacao: "aberto", aviso: null, esperaMaximaS: null };
     if (l.fila.teamId) {
       try {
         entrada = await this.banco.timeParaAFila(l.org, l.fila.teamId, new Date(this.agora()));
@@ -782,6 +807,11 @@ export class ControladorDeChamadas {
     }
     if (l.fim) return;
     l.fila.avisoPendente = entrada.aviso;
+    // O teto de espera do time (0295), lido AQUI: mudar a configuração não altera quem já está esperando.
+    // Só com o time ABERTO: fora do horário sem a fala pronta, arquivado ou com a
+    // agenda ilegível, ninguém vai atender — e esperar o teto longo de um time
+    // que não atende (30 min de música) é pior que os 2 min de sempre.
+    l.fila.tetoMs = entrada.situacao === "aberto" ? esperaMaximaMs(entrada.esperaMaximaS) : TETO_PADRAO_DA_ESPERA_MS;
 
     // Fora do horário SÓ com a fala pronta e tocando. Sem ela (ou se ela não
     // toca), a fase 1: fila e "Ligar de volta" — desligar calado seria um beco
@@ -815,6 +845,15 @@ export class ControladorDeChamadas {
   private async comecarOsToques(l: Recebida): Promise<void> {
     if (l.fim) return;
     l.fila.inicioDosToques = this.agora();
+    // A ordem de chegada (0295): a PRIMEIRA vez que os toques começam. Não
+    // gravar não pode parar a fila — a tela perde a posição, a ligação não.
+    if (l.fila.entrouEm === null) {
+      l.fila.entrouEm = this.agora();
+      await this.banco
+        .marcarNaFila(l.org, l.vcId)
+        .catch((e) => this.log.warn("telefonia: entrada na fila não gravada", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
+      if (l.fim) return;
+    }
     return this.tocarProximo(l);
   }
 
@@ -825,10 +864,178 @@ export class ControladorDeChamadas {
     return todos.filter((_, i) => online[i]);
   }
 
+  /**
+   * As recebidas que ESPERAM por uma pessoa (sem ramal tocando) na fila de um
+   * time, da mais antiga para a mais nova (0295). Só o que este worker tem em
+   * memória — que é tudo: a fila só existe aqui.
+   *
+   * Só quem está PRONTA para tocar: a que voltou do ramal digitado no menu e
+   * ainda ouve o aviso de instabilidade (ou o de gravação) já tem a ordem de
+   * chegada, mas não toca ninguém até a fala acabar — contá-la deixaria um
+   * atendente livre parado com outra ligação esperando atrás dela. O "aguarde"
+   * é a exceção: quem o ouve está esperando de verdade, com o relógio armado.
+   */
+  private esperandoNoTime(org: string, teamId: string | null): Recebida[] {
+    const fila: Recebida[] = [];
+    for (const l of this.porId.values()) {
+      if (l.tipo !== "recebida" || l.fim || l.atendidaPor || l.encerrando || l.ura) continue;
+      if (l.org !== org || l.fila.teamId !== teamId || l.fila.entrouEm === null || l.fila.ramal) continue;
+      if (this.ouvindoUmaFalaInteira(l)) continue;
+      fila.push(l);
+    }
+    return fila.sort((a, b) => a.fila.entrouEm! - b.fila.entrouEm! || (a.vcId < b.vcId ? -1 : 1));
+  }
+
+  /**
+   * A ligação ouve uma fala que toca INTEIRA antes dos ramais — o aviso de
+   * instabilidade ou o de gravação, de quem voltou à entrada da fila. O
+   * "aguarde" não conta: é a fala de quem já está esperando.
+   */
+  private ouvindoUmaFalaInteira(l: Recebida): boolean {
+    return l.fala.atual !== null && l.fala.atual.papel !== "espera";
+  }
+
+  /** Quem a passada reavalia: as que esperam sem ninguém livre nesta organização, da mais antiga para a mais nova. */
+  private quemEspera(org: string): Recebida[] {
+    const esperando: Recebida[] = [];
+    for (const l of this.porId.values()) {
+      if (l.tipo === "recebida" && l.org === org && l.fila.esperando && l.fila.entrouEm !== null && !l.fila.ramal) esperando.push(l);
+    }
+    return esperando.sort((a, b) => a.fila.entrouEm! - b.fila.entrouEm! || (a.vcId < b.vcId ? -1 : 1));
+  }
+
+  /**
+   * Uma ligação acabou — alguém pode ter ficado livre. Daqui a
+   * `REAVALIAR_APOS_O_FIM_MS`, quem espera nesta organização reavalia, em vez
+   * de aguardar o próprio relógio de 5 s (que segue igual, como rede de
+   * segurança para o que não gera evento: alguém saiu da pausa).
+   *
+   * UMA passada por organização: com uma já agendada, o fim de outra ligação
+   * não agenda outra — a que vem já vai ler quem ficou livre nas duas. Sem
+   * ninguém esperando agora, não há o que agendar: quem chegar depois avalia
+   * sozinha ao entrar na fila. O disparo entra pela fila serial, como os outros
+   * relógios; e, por ser agendado, o fim de uma ligação que a própria passada
+   * encerra não reentra nela — agenda a seguinte.
+   */
+  private agendarReavaliacao(org: string) {
+    if (this.reavaliacoes.has(org) || this.quemEspera(org).length === 0) return;
+    this.reavaliacoes.set(
+      org,
+      setTimeout(() => {
+        this.reavaliacoes.delete(org);
+        void this.emFila(() => this.reavaliarQuemEspera(org)).catch((e) =>
+          this.log.error("telefonia: relógio da reavaliação da fila falhou", { erro: String(e) }),
+        );
+      }, REAVALIAR_APOS_O_FIM_MS),
+    );
+  }
+
+  /**
+   * A passada: quem espera reavalia, da mais antiga para a mais nova. Nunca
+   * lança — o que falha numa ligação não tira a vez das outras, e o relógio de
+   * 5 s dela tenta de novo.
+   *
+   * Corta por TIME: se a ligação avaliada CONTINUOU esperando (não acabou, não
+   * foi atendida, não tem ramal tocando), não há quem tocar na fila daquele
+   * time agora — e a lista de livres é a mesma para as mais novas dele. Elas
+   * são puladas nesta passada (e seguem com o relógio delas), em vez de cada
+   * uma reler os disponíveis para chegar à mesma resposta. Times diferentes
+   * seguem independentes.
+   *
+   * Pula quem ouve o aviso de instabilidade (ou o de gravação): a ligação que
+   * já esperou e voltou à entrada da fila segue marcada como esperando, e tocar
+   * um ramal no MEIO do aviso faria a fila tocar outro por cima quando ele
+   * acabasse. Os ramais dela tocam no fim da fala, como sempre.
+   */
+  private async reavaliarQuemEspera(org: string): Promise<void> {
+    const semQuemTocar = new Set<string | null>();
+    for (const l of this.quemEspera(org)) {
+      if (l.fim || l.atendidaPor || l.encerrando || l.ura || l.fila.ramal) continue;
+      if (this.ouvindoUmaFalaInteira(l)) continue;
+      if (semQuemTocar.has(l.fila.teamId)) continue;
+      await this.tocarProximo(l).catch((e) =>
+        this.log.warn("telefonia: reavaliação da fila falhou — o relógio de 5 s tenta de novo", { voice_call: l.vcId, erro: mensagemDe(e, 160) }),
+      );
+      if (!l.fim && !l.atendidaPor && !l.encerrando && !l.fila.ramal) semQuemTocar.add(l.fila.teamId);
+    }
+  }
+
   private async garantirAtendida(l: Recebida) {
     if (l.atendidaPelaRede) return;
     l.atendidaPelaRede = true;
-    await this.ari.atender(l.cliente);
+    try {
+      await this.ari.atender(l.cliente);
+    } catch (e) {
+      // Não atendeu: a marca volta. Presa em `true`, quem atendesse depois
+      // entraria na ponte com o cliente ainda CHAMANDO — `ramalAtendeu` só
+      // atende a ligação que a marca diz não ter sido atendida.
+      l.atendidaPelaRede = false;
+      throw e;
+    }
+  }
+
+  /**
+   * Segurar na linha, sem que a falha pare a fila: se o Asterisk não atende o
+   * cliente, a ligação segue reavaliando e esgota no teto — parada, só o
+   * cliente desligando a tirava da memória, e ela seguraria a vez na fila do
+   * time. A marca `segurando` volta: a avaliação seguinte tenta de novo, em vez
+   * de deixar o cliente só com o toque da operadora (que, num teto longo, a
+   * rede derruba).
+   */
+  private async segurarSemParar(l: Recebida): Promise<void> {
+    await this.segurarNaLinha(l).catch((e) => {
+      l.fila.segurando = false;
+      this.log.warn("telefonia: não consegui segurar o cliente na linha — a fila segue e reavalia", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+    });
+  }
+
+  /**
+   * O teto LONGO do time só vale enquanto o time pode atender (0295). A ligação
+   * que espera com um teto maior que o padrão relê a situação do time a cada
+   * avaliação; se ele deixou de estar aberto (o expediente acabou, foi
+   * arquivado), o teto volta ao padrão, contado do começo da espera — e o
+   * prazo da tela é regravado pelo que resta. Só com teto longo: o caso comum
+   * não ganha uma consulta a cada 5 s. A leitura que falha não muda nada.
+   */
+  private async rebaixarOTetoSeOTimeFechou(l: Recebida): Promise<void> {
+    if (!l.fila.teamId || l.fila.tetoMs <= TETO_PADRAO_DA_ESPERA_MS) return;
+    let aberto: boolean;
+    try {
+      aberto = (await this.banco.timeParaAFila(l.org, l.fila.teamId, new Date(this.agora()))).situacao === "aberto";
+    } catch (e) {
+      this.log.warn("telefonia: situação do time não relida — a espera segue com o teto que tinha", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      });
+      return;
+    }
+    if (aberto || l.fim) return;
+    l.fila.tetoMs = TETO_PADRAO_DA_ESPERA_MS;
+    const restante = Math.max(0, TETO_PADRAO_DA_ESPERA_MS - (this.agora() - (l.fila.inicioDaEspera ?? this.agora())));
+    this.log.info("telefonia: o time deixou de atender com a ligação na fila — a espera volta ao teto padrão", {
+      voice_call: l.vcId,
+      time: l.fila.teamId,
+    });
+    await this.banco
+      .marcarPrazoDaFila(l.org, l.vcId, restante)
+      .catch((e) => this.log.warn("telefonia: prazo da fila não gravado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
+  }
+
+  /**
+   * O som de chamando, sem que a falha dele pare a fila: se o Asterisk não
+   * atende o cliente para tocá-lo, o ramal toca mesmo assim — e quem atender
+   * atende o cliente. Lançar daqui deixava a ligação sem ramal e sem relógio.
+   */
+  private async chamarSemParar(l: Recebida): Promise<void> {
+    await this.chamarNaLinha(l).catch((e) =>
+      this.log.warn("telefonia: não consegui tocar o som de chamando — o ramal toca mesmo assim", {
+        voice_call: l.vcId,
+        erro: mensagemDe(e, 160),
+      }),
+    );
   }
 
   /**
@@ -945,11 +1152,17 @@ export class ControladorDeChamadas {
 
   private async tocarProximo(l: Recebida): Promise<void> {
     if (l.fim || l.atendidaPor || l.encerrando) return;
+    // Há um ramal tocando para esta ligação: outro toque por cima derrubaria
+    // quem atendesse o primeiro (`ramalAtendeu` larga o canal que não é o da
+    // vez). Quem segue a fila é o fim desse toque — atendeu, recusou ou venceu.
+    // Chega aqui o relógio de 5 s que disparou e esperou, na fila serial, atrás
+    // da passada que tocou alguém.
+    if (l.fila.ramal) return;
     // O ramal digitado na URA (v3) toca primeiro, sozinho.
     const direto = l.fila.direto;
     if (direto && !direto.tentou) {
       direto.tentou = true;
-      await this.chamarNaLinha(l);
+      await this.chamarSemParar(l);
       if (l.fim) return;
       return this.tocarRamal(l, direto.userId);
     }
@@ -958,13 +1171,22 @@ export class ControladorDeChamadas {
       disponiveis = await this.disponiveisComRamal(l);
     } catch (e) {
       // Sem a lista, ninguém toca AGORA: a fila espera e pergunta de novo em 5 s
-      // (e esgota em 2 min, como sempre). Lançar daqui deixava a ligação parada
-      // sem relógio nenhum — logo depois do aviso, o cliente em silêncio.
+      // (e esgota no teto do time, como sempre). Lançar daqui deixava a ligação
+      // parada sem relógio nenhum — logo depois do aviso, o cliente em silêncio.
       this.log.warn("telefonia: disponíveis do time não lidos — a fila espera e pergunta de novo", {
         voice_call: l.vcId,
         erro: mensagemDe(e, 160),
       });
       disponiveis = [];
+    }
+    // A VEZ (ordem de chegada, 0295): com N livres, só as N mais antigas que
+    // esperam podem tocar. Quem não está entre elas espera como se ninguém
+    // estivesse livre — música, e o teto do time.
+    if (disponiveis.length > 0 && l.fila.entrouEm !== null) {
+      // A posição desta ligação na fila ordenada = quantas estão na frente dela.
+      // `-1` (ela não está na lista, por algum motivo) não segura ninguém.
+      const naFrente = this.esperandoNoTime(l.org, l.fila.teamId).findIndex((o) => o === l);
+      if (naFrente > 0 && !eAVezDela(naFrente, disponiveis.length)) disponiveis = [];
     }
     const p = proximoToque(disponiveis, l.fila.toque);
 
@@ -974,11 +1196,22 @@ export class ControladorDeChamadas {
       if (!l.fila.esperando) {
         l.fila.esperando = true;
         l.fila.inicioDaEspera = this.agora();
-        await this.segurarNaLinha(l);
+        // O "cai em" da tela (0295). Não gravar não muda a espera.
+        await this.banco
+          .marcarPrazoDaFila(l.org, l.vcId, l.fila.tetoMs)
+          .catch((e) => this.log.warn("telefonia: prazo da fila não gravado", { voice_call: l.vcId, erro: mensagemDe(e, 160) }));
+        if (l.fim) return;
+        await this.segurarSemParar(l);
         if (l.fim) return;
         await this.marcarTocando(l, null);
+      } else if (!l.fila.segurando) {
+        // Segurar na linha falhou numa avaliação anterior: tenta de novo.
+        await this.segurarSemParar(l);
+        if (l.fim) return;
       }
-      if (this.agora() - (l.fila.inicioDaEspera ?? this.agora()) >= ESPERA_NA_FILA_MS) {
+      await this.rebaixarOTetoSeOTimeFechou(l);
+      if (l.fim) return;
+      if (this.agora() - (l.fila.inicioDaEspera ?? this.agora()) >= l.fila.tetoMs) {
         return this.encerrarComFala(l, "fila_esgotada");
       }
       this.armar(l, REAVALIAR_FILA_MS, () => this.tocarProximo(l));
@@ -992,7 +1225,7 @@ export class ControladorDeChamadas {
     // costuma derrubar ligação que só chama, então atende e passa ao chamar em
     // banda. A ligação já atendida (pelo aviso, pela URA) o ouve desde o 1º ramal.
     if (l.atendidaPelaRede || p.estado.volta > 1 || this.agora() - l.fila.inicioDosToques >= ATENDER_E_CHAMAR_APOS_MS) {
-      await this.chamarNaLinha(l);
+      await this.chamarSemParar(l);
       // O chamar pode ter encontrado o canal do cliente já fechado: não toca ramal para ninguém.
       if (l.fim) return;
     }
@@ -1286,7 +1519,8 @@ export class ControladorDeChamadas {
    * enxergá-la e o "Ligar de volta" ter quem a abra) e a ligação entra na fila
    * dele (§5.2), com tudo o que a fila faz — fora
    * do horário, aviso de instabilidade, "aguarde", os ramais e "ninguém
-   * atendeu". Os 2 min da fila contam daqui, da entrada nela (§5.1.3).
+   * atendeu". A espera da fila (o teto do time; 2 min por padrão) conta daqui,
+   * da entrada nela (§5.1.3).
    *
    * Time padrão ARQUIVADO: a ligação segue o mesmo caminho (a fila de um time
    * que não atende ninguém, e perdida com "Ligar de volta"), mas antes a Central
@@ -1920,6 +2154,8 @@ export class ControladorDeChamadas {
       }
     }
     this.log.info("telefonia: ligação encerrada", { voice_call: vcId, desfecho, motivo });
+    // Alguém pode ter ficado livre: quem espera reavalia daqui a pouco (0295), numa passada só.
+    this.agendarReavaliacao(org);
   }
 
   // ─── reinício do worker ──────────────────────────────────────────────────

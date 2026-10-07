@@ -119,6 +119,27 @@ describe("visibleInboxTabs (lógica pura de visões)", () => {
     const tabs = visibleInboxTabs("manager", "own_and_unassigned");
     expect(tabs).toEqual(expect.arrayContaining(["mine", "unassigned", "all"]));
   });
+
+  // A aba Telefone (migration 0295) lista LIGAÇÕES, e só existe onde há telefone.
+  const PAPEIS = ["viewer", "agent", "manager", "admin"] as const;
+
+  it.each(PAPEIS)("sem telefonia na organização, %s NÃO vê 'phone'", (papel) => {
+    // Sem a opção e com ela desligada: os dois são "não há telefone aqui".
+    expect(visibleInboxTabs(papel, "all")).not.toContain("phone");
+    expect(visibleInboxTabs(papel, "all", { telefone: false })).not.toContain("phone");
+  });
+
+  it.each(PAPEIS)("com telefonia, %s VÊ 'phone' — inclusive quem não tem ramal", (papel) => {
+    expect(visibleInboxTabs(papel, "own", { telefone: true })).toContain("phone");
+  });
+
+  it("a aba Telefone não muda a regra de 'Todas', e entra por último", () => {
+    expect(visibleInboxTabs("agent", "own", { telefone: true })).not.toContain("all");
+    expect(visibleInboxTabs("manager", "own", { telefone: true })).toEqual([
+      ...visibleInboxTabs("manager", "own"),
+      "phone",
+    ]);
+  });
 });
 
 describe("InboxAbas render — 3 visões + escopo", () => {
@@ -142,6 +163,33 @@ describe("InboxAbas render — 3 visões + escopo", () => {
     expect(screen.getByRole("tab", { name: /Fila/ })).toHaveTextContent("3");
     expect(screen.getByRole("tab", { name: /Minhas/ })).toHaveTextContent("2");
     expect(screen.getByRole("tab", { name: /Todas/ })).toHaveTextContent("5");
+  });
+
+  it("com a telefonia ligada, o trilho ganha a aba Telefone com o selo de quem espera", () => {
+    setOrg("agent", "own_and_unassigned");
+    render(<InboxAbas value={VALUE} onChange={() => {}} telefone={{ ativa: true, esperando: 3 }} />);
+    expect(screen.getByRole("tab", { name: "Telefone" })).toHaveTextContent("3");
+    // As outras seguem como estavam: a aba nova não desloca nem esconde nenhuma.
+    expect(screen.getByRole("tab", { name: /Fila/ })).toHaveTextContent("3");
+    expect(screen.getByRole("tab", { name: /Minhas/ })).toHaveTextContent("2");
+    expect(screen.queryByRole("tab", { name: /Todas/ })).not.toBeInTheDocument();
+  });
+
+  it("ninguém esperando: a aba Telefone aparece sem selo", () => {
+    setOrg("manager", "all");
+    render(<InboxAbas value={VALUE} onChange={() => {}} telefone={{ ativa: true, esperando: 0 }} />);
+    expect(screen.getByRole("tab", { name: "Telefone" })).toHaveTextContent("");
+  });
+
+  it("sem a prop, ou com a telefonia desligada, a aba Telefone NÃO aparece", () => {
+    setOrg("manager", "all");
+    render(<InboxAbas value={VALUE} onChange={() => {}} />);
+    expect(screen.queryByRole("tab", { name: "Telefone" })).not.toBeInTheDocument();
+    cleanup();
+    // `esperando` com a telefonia desligada não desenha aba nenhuma: o selo é
+    // da aba, e sem aba não há onde ele aparecer.
+    render(<InboxAbas value={VALUE} onChange={() => {}} telefone={{ ativa: false, esperando: 2 }} />);
+    expect(screen.queryByRole("tab", { name: "Telefone" })).not.toBeInTheDocument();
   });
 });
 

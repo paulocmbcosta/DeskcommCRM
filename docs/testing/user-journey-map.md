@@ -3570,15 +3570,17 @@ mapa em `docs/architecture/telefonia.architecture.json` (arestas `controle → r
   verdade da conversa e do atendimento. É onde está provado o SQL.
 - **e2e semeado:** um caso novo em `tests/e2e/telefonia-gravacao.spec.ts`. A ligação e o cartão são
   semeados por SQL, como o worker os deixaria — o e2e prova a TELA (cartão, nota, troca no fim sem
-  recarregar), não que o worker o escreva. Roda só no GitHub Actions (`Run workflow` na branch) e
-  **ainda não foi executado**.
+  recarregar), não que o worker o escreva. Roda só no GitHub Actions (`Run workflow` na branch).
+  **Executado em 2026-10-06 e verde** (run 37535999166, parte 3: o caso passou em 7,4 s; as duas
+  falhas daquela execução — `card-pelo-classificador.spec.ts:354` e
+  `inbox-rotulo-de-origem.spec.ts:224` — são as que já falham na `main`).
 - **ligação real pelo tronco:** **NÃO PROVADO** em nenhum caso.
 
 | Caso | Prioridade | Resultado |
 |---|---|---|
-| J43.1 O atendente atende a recebida: a conversa ganha o cartão "Ligação em andamento · com Ana · desde 14:32", com a prévia "Ligação em andamento com Ana" e a posição que a lista usa | `[P0]` | unit (dublês): o cartão entra DEPOIS da atribuição e com quem atendeu; o texto e o desenho do cartão, sem cor de perdida e sem duração. Invariante contra Postgres real: a mensagem, `last_message_at` e a prévia. e2e semeado (ainda não executado). **O topo de Minhas não é assertado por teste nenhum** — é a ordenação por `last_message_at`, que já existia. **NÃO PROVADO: ligação real pelo tronco** |
-| J43.2 Durante a ligação o atendente escreve uma nota interna e ela aparece na conversa, abaixo do cartão | `[P0]` | e2e semeado (ainda não executado). Invariante contra Postgres real: no caso de quem já ligou antes, o cartão nasce depois do início do atendimento novo (`service_started_at`). **NÃO PROVADO: ligação real pelo tronco** |
-| J43.3 A ligação acaba: o MESMO cartão (uma mensagem só) vira "Ligação recebida · atendida por Ana", com a duração, sem recarregar a página | `[P0]` | Invariante contra Postgres real: uma mensagem só, sem `em_andamento`, duração gravada, o que outro escritor pôs no metadado continua, o fim reenviado não reescreve. unit (dublês): o mesmo registro desenhado como "Ligação recebida" com `1:05`. e2e semeado (a troca sem recarregar, pelo Realtime; ainda não executado). **NÃO PROVADO: ligação real pelo tronco** |
+| J43.1 O atendente atende a recebida: a conversa ganha o cartão "Ligação em andamento · com Ana · desde 14:32", com a prévia "Ligação em andamento com Ana" e a posição que a lista usa | `[P0]` | unit (dublês): o cartão entra DEPOIS da atribuição e com quem atendeu; o texto e o desenho do cartão, sem cor de perdida e sem duração. Invariante contra Postgres real: a mensagem, `last_message_at` e a prévia. e2e semeado (verde no GitHub Actions em 2026-10-06, run 37535999166). **O topo de Minhas não é assertado por teste nenhum** — é a ordenação por `last_message_at`, que já existia. **NÃO PROVADO: ligação real pelo tronco** |
+| J43.2 Durante a ligação o atendente escreve uma nota interna e ela aparece na conversa, abaixo do cartão | `[P0]` | e2e semeado (verde no GitHub Actions em 2026-10-06, run 37535999166). Invariante contra Postgres real: no caso de quem já ligou antes, o cartão nasce depois do início do atendimento novo (`service_started_at`). **NÃO PROVADO: ligação real pelo tronco** |
+| J43.3 A ligação acaba: o MESMO cartão (uma mensagem só) vira "Ligação recebida · atendida por Ana", com a duração, sem recarregar a página | `[P0]` | Invariante contra Postgres real: uma mensagem só, sem `em_andamento`, duração gravada, o que outro escritor pôs no metadado continua, o fim reenviado não reescreve. unit (dublês): o mesmo registro desenhado como "Ligação recebida" com `1:05`. e2e semeado (a troca sem recarregar, pelo Realtime; verde no GitHub Actions em 2026-10-06, run 37535999166). **NÃO PROVADO: ligação real pelo tronco** |
 | J43.4 Quem já ligou antes e teve a conversa encerrada: ao atender, a conversa reabre com atendimento e protocolo novos, o dono é quem atendeu, e o cartão nasce dentro do atendimento novo. O time da conversa NÃO muda (fica o do atendimento anterior), e nenhum evento de troca de time é gravado | `[P0]` | Invariante contra Postgres real (a atribuição e a abertura do cartão chamadas na ordem do controlador). unit (dublês): a ordem das duas chamadas. **NÃO PROVADO: ligação real pelo tronco** |
 | J43.5 A ligação que ninguém atende continua como era: nenhum cartão em andamento, o registro "não atendida" entra no fim | `[P0]` | unit (dublês): sem cartão enquanto ninguém atende, e só o registro de perdida. Invariante contra Postgres real: a perdida é INSERIDA no fim. O aviso "Ligar de volta" na Central não foi tocado e não ganhou caso novo |
 | J43.6 O cartão que ficou "em andamento" com a ligação já encerrada (o banco falhou entre fechar a ligação e completar o cartão) é fechado pela passada de 60 s | `[P1]` | Invariante contra Postgres real: fecha o de mais de um minuto em cada organização, deixa o recém-encerrado para o fim normal, e a segunda passada não acha nada. unit (dublês): a etapa roda e diz quantos; a que lança não derruba as outras |
@@ -3595,8 +3597,8 @@ mapa em `docs/architecture/telefonia.architecture.json` (arestas `controle → r
   conversa suba na lista de quem atendeu e que o fim complete o mesmo cartão não foi visto numa
   chamada de verdade, com contas `agent` (nunca só a do dono). Esta entrega ainda não está na `main`
 nem foi publicada.
-- **O e2e.** O caso novo de `telefonia-gravacao.spec.ts` ainda não foi executado; e, mesmo verde,
-  ele semeia o cartão por SQL: prova a tela, não o worker.
+- **O worker pela tela.** O e2e (`telefonia-gravacao.spec.ts`) passou, mas ele semeia o cartão por
+  SQL: prova a tela, não o worker.
 - **A imagem da tela.** Nenhuma captura foi vista; o que se mediu foi texto, atributo e classe.
 - **O topo de Minhas.** Nenhum teste olha a posição da conversa na lista com uma ligação em curso.
 - **Ligação gravada.** O fim completa o cartão pelo mesmo `registrarNaConversa` que põe a projeção
@@ -3607,3 +3609,101 @@ nem foi publicada.
   mais nova na conversa (só reescreve a prévia enquanto ela ainda é a do cartão) estão no código
   (`consertarCartoesOrfaos` e `abrirCartaoDaLigacao`, em `lib/channels/telefonia/repositorio.ts`),
   mas nenhum caso os exercita.
+
+## J44 — A fila do telefone aparece no Inbox `[P0]` (2026-10-06)
+
+Pedido do dono, na mesma conversa em que descreveu a fila do telefone: numa queda de internet muita
+gente liga ao mesmo tempo, e quem coordena o atendimento não via quantos clientes esperavam, de que
+time, nem por qual número — a fila só existia na memória do worker. A espera tinha um teto fixo de
+2 minutos para todos os times, e a fila não seguia a ordem de chegada: quem pegava o atendente que
+desocupava era a ligação cujo relógio de 5 s disparasse primeiro, não a que esperava há mais tempo
+(o desenho leu isso no código; não foi medido numa ligação real).
+
+`[P0]` porque a aba é a única janela para a fila do telefone e o teto é o que decide quem cai: uma
+fila que a tela mostra errada, um "cai em" que mente, ou uma ligação mais nova passando na frente de
+uma mais antiga aparece para todo atendente e para todo cliente que liga, no pico.
+
+A aba "Telefone" entra no trilho do Inbox quando o telefone está ligado e a organização tem número:
+quem espera (por ordem de chegada, com a posição e o "cai em"), quem ouve o menu, quem está em
+ligação e as perdidas dos últimos 30 minutos. A fila do worker passa a atender por ordem de chegada,
+e cada time ganha a sua espera máxima em Configurações › Times (padrão 2 minutos). Migration 0295
+(`voice_calls.queued_at`, `voice_calls.queue_deadline_at`, `attendance_teams.phone_queue_max_wait_seconds`).
+Desenho: `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md` (§4.2, com as emendas);
+plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-2.md`; spec 20 §4.2, §5, §7 e §9;
+mapa em `docs/architecture/telefonia.architecture.json` (nós `rota_fila`, `aba_telefone`, `rota_espera` e
+`cartao_espera`; arestas `t_voice_calls → rota_fila → aba_telefone` e `rota_espera → t_times`).
+
+**Como é provado, e com que alcance.** São cinco camadas, e cada caso abaixo diz em quais está:
+
+- **unit (dublês):** o controlador com o banco e a ARI de mentira, em
+  `lib/channels/telefonia/controle.test.ts` (bloco "a fila visível (0295)"); as funções puras em
+  `lib/telefonia/distribuicao.test.ts` (`esperaMaximaMs`, `eAVezDela`) e `lib/telefonia/fila.test.ts`
+  (fase, motivo, posição, resumo, relógio, urgência). Provam a ORDEM das chamadas e as regras, nunca o SQL
+  nem o tempo real.
+- **teste de rota:** `app/api/v1/telefonia/fila/route.test.ts` (papel, telefonia desligada, organização da
+  sessão, a leitura compartilhada em voo único — quem chega durante uma leitura recebe a próxima —, a que falha) e
+  `app/api/v1/telefonia/fila/times/route.test.ts` e `app/api/v1/telefonia/fila/times/[teamId]/route.test.ts`
+  (papel `manager`, suporte somente-leitura, cada recusa, a auditoria). O banco e a sessão são dublês.
+- **teste de componente:** `components/telefonia/fila/FilaDoTelefone.test.tsx`, `LinhaDaFila.test.tsx` e
+  `ChipsDaFila.test.tsx`; `components/inbox/InboxLayout.telefone.test.tsx`;
+  `tests/unit/inbox-filters-scope.test.tsx` (o trilho e `visibleInboxTabs`);
+  `hooks/telefonia/useFilaDoTelefone.test.tsx` (o canal do Realtime é dublê);
+  `components/telefonia/EsperaMaximaDoTime.test.tsx`. Medem texto, atributo e classe, com relógio falso.
+- **invariante contra Postgres real:** `tests/invariants/telefonia-fila-visivel-schema.test.ts` (colunas,
+  CHECKs, índices, a REST que não escreve, a autocura do bloco do baseline e a cadeia de migrations),
+  `tests/invariants/telefonia-fila-visivel-repositorio.test.ts` (o SQL do worker),
+  `tests/invariants/telefonia-fila-da-tela.test.ts` (a leitura da aba) e
+  `tests/invariants/telefonia-espera-do-time.test.ts` (o SQL do teto), sempre com duas organizações
+  (`pnpm test:db`, roda no job `invariants`). É onde está provado o SQL.
+- **e2e semeado:** `tests/e2e/telefonia-fila.spec.ts` (três casos: a aba com a fila cheia, por ordem
+  de chegada, que anda sem recarregar; o gerente trocando a espera máxima do time; a organização sem
+  número, sem a aba). As ligações são semeadas por SQL, como o worker as deixaria — prova a TELA e a
+  rota, não o worker. Roda só no GitHub Actions (parte 3), e as capturas sobem no artefato
+  `evidencia-telefonia-fila`. Para saber se já rodou e como terminou:
+  `gh run list --workflow e2e.yml --branch main --limit 3`.
+- **ligação real pelo tronco:** **NÃO PROVADO** em nenhum caso.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J44.1 A aba "Telefone" aparece no trilho quando o telefone está ligado e a organização tem número — para `viewer`, `agent`, `manager` e `admin`, inclusive quem não tem ramal — e some sem telefone | `[P0]` | teste de componente: `visibleInboxTabs` por papel, com e sem `telefone`, e o trilho com e sem a prop; `?filter=phone` numa organização sem telefone diz o porquê e o trilho não tem a aba. teste de rota: instalação sem telefonia → `ativa: false`, sem ler o banco. Invariante contra Postgres real: organização sem número SIP ativo (arquivado ou de outro provider não conta) → `ativa: false`. **NÃO PROVADO: a aba na tela de uma instalação real** |
+| J44.2 O selo da aba conta quem ESPERA por uma pessoa (aguardando, tocando e transferida para a fila de um time) — e não conta quem ouve o menu nem quem está em ligação | `[P0]` | unit: `quantasEsperam`. teste de componente: o trilho com o selo 3 e sem selo com 0; no `InboxLayout`, quem está em ligação não entra na conta |
+| J44.3 A aba tem quatro seções — "Na fila, por ordem de chegada", "No menu", "Em ligação" e "Perdidas nos últimos 30 minutos" — e só desenha a que tem linha | `[P0]` | teste de componente: as quatro seções, a seção sem linha sem título, a coluna vazia. Invariante contra Postgres real: cada fase com a ligação certa; a recebida viva há 5 h, a FEITA e a do WaCalls não entram |
+| J44.4 A ordem de chegada na TELA: a que espera há mais tempo fica em cima, com a posição `1º`, `2º`…; só quem espera por uma pessoa tem posição | `[P0]` | unit: `posicoesNaFila` (por time, empate pelo id, menu e em ligação de fora). teste de componente: a fila por ordem de chegada. Invariante contra Postgres real: posições 1, 2 e 3 pela ordem de `queued_at`, `null` nas outras |
+| J44.5 A ordem de chegada no WORKER: com um atendente livre toca a ligação que chegou primeiro, e não a cujo relógio de 5 s disparou antes; com dois livres, as duas mais antigas; a vez é por time | `[P0]` | unit (dublês): `controle.test.ts` (duas e três esperando, um e dois livres, a fila de outro time não segura esta) e `eAVezDela`. Invariante contra Postgres real: `queued_at` gravado com o `now()` do banco, uma vez só — a segunda chamada não o move —, e nada gravado com a organização errada ou na ligação encerrada. **NÃO PROVADO: ligação real pelo tronco** |
+| J44.6 Quando uma ligação acaba, quem espera é reavaliado 2 s depois — numa passada só por organização, da mais antiga para a mais nova, pulando as mais novas do time que continuou sem ninguém livre — e o relógio de 5 s segue como rede de segurança | `[P1]` | unit (dublês): `controle.test.ts` (2 s depois e não na hora; três ligações que acabam em 1 s = uma passada; sem ninguém esperando não agenda nada; 5 esperando e ninguém livre = uma leitura dos disponíveis; o corte por time; a que esgotou durante a passada encerra uma vez). **NÃO PROVADO: que o BYE chegue ao navegador do atendente antes dos 2 s, numa ligação real** |
+| J44.7 A linha diz "Aguardando há 3:42 · cai em 1:18"; passada a metade do teto DO TIME fica em atenção, faltando menos de 20% fica crítica, e o prazo vencido não vira contagem negativa | `[P0]` | unit: `urgenciaDaEspera` e `relogio`. teste de componente: a linha e o peso pelo teto do time (os mesmos 78 s são normais num time de 2 minutos); o relógio anda sozinho a cada segundo e mede pelo relógio do banco. Invariante contra Postgres real: `cai_em` só na fase `aguardando`; `queue_deadline_at` é o `now()` do banco mais o que falta no relógio do worker, e atender o apaga |
+| J44.8 Filtro por time (chips com quantas esperam e há quanto a mais antiga espera) e por número da empresa (só com mais de um): vale para as quatro seções e para as contagens dos chips | `[P1]` | teste de componente: `FilaDoTelefone.test.tsx` e `ChipsDaFila.test.tsx` (escolher, desfazer, o filtro que esvazia tudo mantém o chip para desfazê-lo) |
+| J44.9 Clicar numa ligação com conversa a abre à direita, pelo caminho de sempre; a de número oculto (sem conversa) não é botão | `[P0]` | teste de componente: `LinhaDaFila.test.tsx`, `FilaDoTelefone.test.tsx` e `InboxLayout.telefone.test.tsx`. **NÃO PROVADO: o painel de conversa quando quem clica não tem acesso a ela pela visibilidade (o desenho manda mostrar o estado de "conversa não encontrada"); nenhum caso o exercita** |
+| J44.10 As perdidas dos últimos 30 minutos dizem quem, de qual time, o motivo, quanto esperou e há quanto tempo, e trazem o botão de ligar de volta onde há contato | `[P0]` | unit: `motivoDaPerdida` (os sete motivos). teste de componente: a linha da perdida, e o botão só com contato — o `BotaoLigar` é dublê. Invariante contra Postgres real: as de 40 min e a atendida ficam fora, da mais recente para a mais antiga, com o motivo certo e `esperou_s` batendo (±1). **NÃO PROVADO: o botão numa tela real (ele some sozinho para quem não tem ramal)** |
+| J44.11 Configurações › Times › "Fila do telefone": 2 minutos (padrão), 5, 10, 15, 20 ou 30; trocar grava na hora, escolher o padrão grava `null`, só gerente e admin, e a mudança é auditada com o antes e o depois | `[P0]` | teste de componente: `EsperaMaximaDoTime.test.tsx` (o valor em vigor, o `PUT` com 600 e com `null`, sem telefonia nada na tela). teste de rota: papel abaixo de gerente barrado, suporte somente-leitura barrado, 404, 409 (arquivado, telefonia desligada), 422 (fora de 30–1800 e `organization_id` no corpo), auditoria só no sucesso. Invariante contra Postgres real: gravar 600 e `null`, o antes devolvido; CHECK que aceita 30, 120, 1800 e nulo e recusa 29, 1801, 0 e -5 |
+| J44.12 A mudança do teto vale para a PRÓXIMA ligação: quem já espera cai no teto que valia quando entrou | `[P0]` | unit (dublês): `controle.test.ts` (o teto é lido na entrada da fila; com 5 minutos a ligação não cai aos 2 e cai aos 5). Invariante contra Postgres real: `timeParaAFila` devolve o teto do time (e `null` para time de outra organização). **NÃO PROVADO: ligação real pelo tronco** |
+| J44.13 Quem não mexe em nada continua com os 2 minutos de antes | `[P0]` | unit: `esperaMaximaMs(null)` e os casos antigos dos 2 minutos, que seguem verdes; `controle.test.ts` (sem configuração, o prazo é gravado com o teto padrão e a fila esgota nele). Invariante contra Postgres real: a linha nova nasce sem teto, sem ordem e sem prazo |
+| J44.14 Uma organização nunca vê a fila da outra: a leitura, a escrita do worker e o `PUT` do teto só alcançam a organização da sessão ou da ligação | `[P0]` | Invariantes contra Postgres real, com duas organizações: a fila (ligações, perdidas, números e times), a escrita de `queued_at` e do prazo com a organização errada, e o teto de time de OUTRA organização. teste de rota: a organização da sessão é a que chega ao banco, e a leitura compartilhada por 1,5 s é separada por organização |
+| J44.15 A ligação transferida para a fila de um time (fase 2, v2) aparece na fila do time de DESTINO, com "Transferida por Ana" e sem posição; a aba desta entrega não tem ação nenhuma | `[P1]` | Invariante contra Postgres real: o time de destino, desde o pedido e quem transferiu. unit: ela conta no selo e não ocupa lugar na posição. teste de componente: a linha |
+| J44.16 A releitura falha: a fila de antes fica na tela e uma faixa diz "Sem atualização no momento", com "Tentar novamente"; sem o Realtime, a releitura de 15 s segue | `[P1]` | teste de componente: a faixa, a fila mantida e o botão. `useFilaDoTelefone.test.tsx`: relê a cada 15 s, uma rajada de avisos vira UMA releitura, sem telefonia não assina nada. **O canal do Realtime é dublê** |
+| J44.17 O banco falha ao gravar a ordem de chegada ou o prazo, ou o Asterisk não segura o cliente na linha: a ligação segue, é atendida, e nunca fica sem relógio | `[P0]` | unit (dublês): `controle.test.ts` (o banco fora na fila e no prazo; o `atender` da ARI que lança) |
+| J44.18 A migration 0295 chega a quem já instalou: o bloco do baseline cria colunas, CHECKs e índices e se cura sozinho (linha do WaCalls com a coluna preenchida, tempo fora de 30–1800), e a REST não escreve nenhuma das três | `[P0]` | Invariante contra Postgres real: `telefonia-fila-visivel-schema.test.ts` (reaplicar o bloco, a cadeia de migrations, o `agent` pela REST). `pnpm test:db` aplica o baseline em install e em update |
+| J44.19 Ligação real pelo tronco da operadora: duas ou três ligações esperando, com contas `agent` (nunca só a do dono) — a ordem na tela é a ordem em que tocam, o "cai em" bate com a hora em que a ligação cai, e o teto do time vale | `[P0]` | **NÃO PROVADO** — pendente, prova na VPS |
+
+### O que NÃO foi provado
+
+- **Ligação real pelo tronco.** A ordem de chegada no worker, o teto por time, o "cai em" e a
+  reavaliação 2 s depois do fim de uma ligação não foram vistos numa chamada de verdade. O que está
+  provado é o controlador com dublês e o SQL no Postgres real. Esta entrega ainda não está na `main`
+  nem foi publicada.
+- **O worker pela tela.** O e2e (`telefonia-fila.spec.ts`) abre a aba num navegador com as ligações
+  SEMEADAS por SQL: prova a tela, a rota e o Realtime, não que o worker grave a fila assim numa ligação
+  de verdade.
+- **A capacidade de áudio da instalação.** Cada ligação na fila ocupa uma perna de áudio, e uma em
+  andamento ocupa duas; a faixa publicada (`20000-20039/udp`, 40 portas) dá cerca de 20 pernas
+  simultâneas — lido na configuração, não medido. Com o teto chegando a 30 minutos, a fila de um pico
+  pode bater nesse limite, e o que o cliente ouve então não foi visto.
+- **A carga da rota com a fila cheia.** Dezenas de ligações na fila e muitos navegadores abertos não
+  foram medidos; o que está provado é a lógica da leitura compartilhada (uma em curso e uma na fila), não o tempo nem o
+  custo de cada consulta.
+- **O Realtime de `voice_calls` chegando ao navegador de cada papel.** A tabela tem RLS, e o teste do
+  hook dubla o canal. Se o aviso não chegar a um `viewer` ou a um `agent`, a fila se atualiza a cada 15 s,
+  não em tempo real — e isso ninguém viu.
+- **O BYE antes dos 2 s.** Que o navegador do atendente que acabou de desligar já tenha fechado a sessão
+  quando a reavaliação o chama é leitura do código, não medida.
+- **O acesso pela visibilidade.** Clicar numa linha cuja conversa o membro não pode abrir (J44.9).

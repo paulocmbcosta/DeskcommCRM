@@ -139,27 +139,51 @@ consertar cartão "em andamento" cuja `voice_calls` já está `ended`.
 
 - `voice_calls.queued_at timestamptz` — D10.
 - `voice_calls.queue_deadline_at timestamptz` — quando a espera sem ninguém livre
-  esgota. É o que a linha mostra como "cai em 1:18". Nulo enquanto há alguém tocando
-  ou a ligação ainda não esperou.
+  esgota. É o que a linha mostra como "cai em 1:18". Nulo até a ligação esperar sem
+  ninguém livre. (Emenda do plano: este desenho dizia "nulo enquanto há alguém
+  tocando". O worker o grava uma vez, quando essa espera começa, e só atender o
+  apaga; a rota o devolve como `cai_em` apenas na fase `aguardando`, então o valor
+  guardado não aparece com alguém tocando. Quem derruba a ligação no teto é o relógio
+  do worker; a coluna só alimenta a tela.)
 - `attendance_teams.phone_queue_max_wait_seconds integer`, `check` entre 30 e 1800.
 - Índices parciais: ligações vivas por organização
   (`where status <> 'ended' and direction = 'inbound'`) e perdidas recentes
   (`(organization_id, ended_at desc) where direction = 'inbound' and answered_at is null`).
 - Migration + apêndice idempotente no `baseline.sql` + linha no MANIFEST.
+- **Emenda do plano:** as duas colunas de `voice_calls` ganham um `CHECK`
+  (`voice_calls_fila_so_no_telefone_check`) que só deixa a linha do telefone
+  (`provider = 'sip_trunk'`) tê-las preenchidas, como a 0288, a 0289 e a 0294 fizeram:
+  a linha do WaCalls a REST escreve com o JWT do atendente, e ninguém deve forjar por
+  ela uma ligação "na fila". O `check` do teto do time (30 a 1800) é à parte.
 
 **Worker:**
 
 - `queued_at` gravado em `comecarOsToques`, uma vez.
-- O teto vem do time: `timeParaAFila` passa a devolvê-lo; é lido quando a espera
-  começa e de novo quando a ligação muda de time. Mudar a configuração não altera
-  quem já está esperando. `queue_deadline_at` é gravado no mesmo momento.
+- O teto vem do time: `timeParaAFila` passa a devolvê-lo; é lido na ENTRADA da fila do
+  time — a leitura que já existe —, e reler ao mudar de time é da entrega 3. Mudar a
+  configuração não altera quem já está esperando. `queue_deadline_at` é gravado quando
+  a espera sem ninguém livre começa. (Emenda do plano: este desenho o lia "quando a
+  espera começa"; na entrada reaproveita a leitura que já se faz, e o teto de quem
+  entrou é o que valia quando ele entrou.)
 - **Ordem de chegada.** Função pura nova em `lib/telefonia/distribuicao.ts`: com `n`
   atendentes livres, só as `n` ligações mais antigas do time que não estão tocando
   para ninguém podem tocar; as outras esperam. Em `tocarProximo`, a ligação que não
-  está entre elas cai no ramo `esperar` de sempre (música, teto).
-- Quando qualquer ligação acaba, o controlador reavalia na hora as ligações em espera,
-  da mais antiga para a mais nova. O relógio de 5 s continua, como rede de segurança
-  para o que não gera evento (alguém saiu da pausa).
+  está entre elas cai no ramo `esperar` de sempre (música, teto). (Emenda do commit de
+  `fix`: a ligação que voltou do ramal digitado no menu e ainda ouve o aviso de
+  instabilidade ou o de gravação já tem a hora de chegada, mas não conta na vez até a
+  fala acabar — senão um atendente livre ficaria parado com outra ligação esperando
+  atrás dela. Quem ouve o "aguarde" conta: está esperando de verdade.)
+- Quando qualquer ligação acaba, o controlador reavalia as ligações em espera, da mais
+  antiga para a mais nova, **2 s depois** (`REAVALIAR_APOS_O_FIM_MS`), numa passada só
+  por organização que junta as que acabam em rajada. O relógio de 5 s continua, como
+  rede de segurança para o que não gera evento (alguém saiu da pausa). (Emenda do
+  commit de `fix`: este desenho dizia "na hora". Esperar 2 s dá tempo de o BYE chegar
+  ao navegador do atendente que acabou de desligar — ele recusa com 486 o toque que
+  chega com a sessão anterior ainda aberta, e a recusa gasta a vez dele na volta —, e
+  uma passada só não relê os disponíveis a cada ligação que acaba, dentro da fila
+  serial, no pico de uma queda de internet. Dentro da passada, se a ligação avaliada
+  continua esperando, as mais novas do mesmo time são puladas: a lista de livres é a
+  mesma, e cada uma releria o mesmo vazio.)
 - **O que não muda:** a fila da transferência para um time (v2, `transferencia.ts`)
   mantém os 2 minutos fixos e a mecânica própria.
 
@@ -167,7 +191,12 @@ consertar cartão "em andamento" cuja `voice_calls` já está `ended`.
 
 - `GET /api/v1/telefonia/fila` — `viewer`+, organização da sessão, leitura pela
   conexão da API com filtro explícito de `organization_id`. Devolve, num corpo só:
-  - `times`: id, nome, teto, quantas na fila, espera mais antiga, quantos livres, situação;
+  - `times`: id, nome e a espera máxima em vigor (a tela tira de `ligacoes` quantas
+    esperam e há quanto a mais antiga espera). (Emenda do plano: este desenho trazia
+    também "quantos livres" e a situação de cada time, e nenhum dos dois entrou.
+    Contar livres pede uma leitura da ARI e do diretório inteiro a cada pedido, e esta
+    rota é lida por todo navegador com o Inbox aberto, justamente no pico; "quantos
+    livres" entra na entrega 3, no menu de mover, pelo diretório que já existe.)
   - `numeros`: os números da empresa (para o filtro);
   - `ligacoes`: id, fase (`menu`, `avisos`, `aguardando`, `tocando`, `em_ligacao`,
     `transferencia_na_fila`), contato, número de quem liga, time, número da empresa,
@@ -176,15 +205,32 @@ consertar cartão "em andamento" cuja `voice_calls` já está `ended`.
 
   Os filtros (time, número) são aplicados na tela sobre esse corpo: o chip e a lista
   saem da mesma resposta, e o selo nunca conta o que a lista não mostra.
+
+  Emendas do plano. (a) A resposta ganha `ativa` (a instalação tem telefonia E a
+  organização tem número) e `agora` (o relógio do banco), para a aba saber se existe e
+  a tela medir a defasagem do relógio dela. (b) A leitura é compartilhada por
+  organização, em memória da instância, em voo único com fila de um (no máximo uma em
+  curso e uma na fila, 500 ms entre os inícios): no pico, todo navegador com o Inbox
+  aberto pede ao mesmo tempo — o Realtime avisa todos juntos —, e uma leitura do banco
+  serve a todos. O plano previa um cache de 1,5 s; a revisão independente mostrou que ele
+  entregava a fila de ANTES da mudança a quem relia logo depois do aviso, e ninguém relia
+  de novo até o próximo evento. Agora nenhum pedido recebe uma leitura que começou antes
+  de ele chegar.
 - `PUT /api/v1/telefonia/fila/times/[teamId]` — a espera máxima do time. `manager`+
   (o mesmo papel do aviso de instabilidade, `telefonia/emergencias/[teamId]`), Zod,
   time desta organização e não arquivado, auditoria `phone.queue_wait_changed`.
-  Corpo `{ espera_maxima_s: number | null }`; nulo volta ao padrão.
+  Corpo `{ espera_maxima_s: number | null }`; nulo volta ao padrão. (Emenda do plano: a
+  rota ganha um irmão, `GET /api/v1/telefonia/fila/times` — `manager`+ —, que devolve o
+  que está gravado e o que vale de cada time ativo; o seletor de Configurações › Times
+  precisa mostrar o valor em vigor, e a rota do desenho só gravava.)
 
 **Tela:**
 
 - `lib/inbox/abas.ts`: aba `phone` ("Telefone"), depois de Automático, visível só com
-  a telefonia ligada na organização. `InboxAbas` mostra o selo com as ligações em
+  a telefonia ligada na organização. (Emenda do plano: "visível" é a rota dizer
+  `ativa: true` — instalação com telefonia E organização com número —, e não o ramal de
+  quem olha; o `viewer` não tem ramal e vê a aba, porque a fila é para ser vista por
+  quem cobra, não só por quem atende.) `InboxAbas` mostra o selo com as ligações em
   `aguardando`, `tocando` e `transferencia_na_fila`, e ele cobra ação (cor de destaque).
 - `InboxLayout`: com a aba Telefone, a coluna da lista troca `ConversationList` por
   `FilaDoTelefone`, e a faixa de busca e filtros de conversa dá lugar aos chips de

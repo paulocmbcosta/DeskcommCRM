@@ -52,7 +52,8 @@ Recomendações do §8 da DYD-10, aprovadas pelo dono em 2026-09-28, mais o que 
    para quem está há mais tempo sem atender.
 3. **Toque de 20 s por atendente e 2 voltas** pela lista de disponíveis.
 4. **Ninguém disponível dentro do horário:** fila com música, conferindo a disponibilidade de
-   novo a cada poucos segundos, por até 2 min. Esgotado o prazo, a ligação é encerrada e vira
+   novo a cada poucos segundos, por até 2 min (o padrão: desde a migration 0295 a espera
+   máxima é de cada time, de 30 s a 30 min — §4.2). Esgotado o prazo, a ligação é encerrada e vira
    chamada perdida na Central. A mensagem falada apontando o WhatsApp entra com a URA (F2),
    porque exige áudio em português configurado pela organização.
 5. **Uma conversa de telefone por contato e por número.** Cada ligação é um registro dentro
@@ -137,7 +138,8 @@ Navegador do atendente (JsSIP) ────────────────�
 4. Toca um ramal por vez (`POST /channels` para `PJSIP/ramal-<userId>`, 20 s). Se o
    atendente atende, entra numa ponte com a perna da operadora. Se não atende, recusa ou cai,
    passa para o próximo. São 2 voltas.
-5. Ninguém disponível: `answer` + música em espera, reavaliando a cada 5 s, até 2 min.
+5. Ninguém disponível: `answer` + música em espera, reavaliando a cada 5 s, até a espera
+   máxima do time (2 min por padrão; ver "fila visível, entrega 2" abaixo).
 6. Fim: `ended`, duração, registro na conversa (na recebida ATENDIDA o registro já nasceu ao
    atender, "em andamento", e o fim o completa — §5), atividade no lead. Perdida vira
    `agent_inbox_items` `voice_call_missed`, cujo texto nomeia o time que ficou com a ligação
@@ -176,6 +178,55 @@ Navegador do atendente (JsSIP) ────────────────�
   só a prévia da tela sintetiza (D15, vigiado por
   `tests/unit/ligacao-nunca-chama-elevenlabs.test.ts`). Fala sem arquivo é pulada e vira
   `phone_prompt_unplayable` na Central.
+
+**Recebida com a fila visível, entrega 2 (migration 0295).** Desenho:
+[`docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md`](../superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md)
+(§4.2, com as emendas); plano:
+`docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-2.md`. A fila deixa de
+viver só na memória do worker: o que a tela precisa ver vai para `voice_calls`, e a fila
+passa a seguir a ordem de chegada. O que muda nos passos acima:
+- **A ordem de chegada** é `voice_calls.queued_at`: o instante em que a ligação passou a
+  esperar por uma PESSOA — a primeira vez que os toques começam (`comecarOsToques`), depois
+  do menu, do aviso de instabilidade e do aviso de gravação. `marcarNaFila` usa `coalesce`:
+  chamada de novo, não move o instante. O worker guarda o mesmo instante em memória
+  (`entrouEm`), e a rota ordena por ele. Gravar não pode parar a fila: se o banco falha, a
+  ligação segue e só perde a posição na tela (aviso no log).
+- **A vez.** Função pura `eAVezDela(naFrente, livres)` em `lib/telefonia/distribuicao.ts`:
+  com `n` atendentes livres, só as `n` ligações mais antigas DO TIME que esperam — sem ramal
+  tocando — podem tocar; as outras seguem no ramo `esperar` de `tocarProximo` (música e
+  teto). É o bloco "A VEZ" de `tocarProximo`, que conta quem espera por
+  `esperandoNoTime`. Antes, quem pegava o atendente que desocupava era a ligação cujo relógio
+  de 5 s disparasse primeiro, não a que esperava há mais tempo. A ligação que voltou do ramal
+  digitado no menu e ainda ouve o aviso de instabilidade ou o de gravação já tem a hora de
+  chegada, mas não conta na vez até a fala acabar (o "aguarde" conta: ela está esperando de
+  verdade); sem isso, um atendente livre ficaria parado com outra ligação esperando atrás dela.
+- **A reavaliação ao fim de uma ligação.** Quando uma ligação acaba (`finalizar`), quem espera
+  na organização é reavaliado 2 s depois (`REAVALIAR_APOS_O_FIM_MS`), da mais antiga para a
+  mais nova, em UMA passada por organização — com uma já agendada, o fim de outra ligação
+  não agenda outra, e sem ninguém esperando não se agenda nada. O disparo entra pela fila
+  serial do laço, como os outros relógios. Não é "na hora" de propósito: 2 s dá tempo de o
+  BYE chegar ao navegador do atendente que acabou de desligar (ele recusa com 486 o toque que
+  chega com a sessão anterior ainda aberta, e a recusa gasta a vez dele na volta) e junta as
+  ligações que acabam em rajada, o pico de uma queda de internet, em vez de reler os
+  disponíveis a cada uma delas. Dentro da passada há um corte por time: se a ligação avaliada
+  continuou esperando, as mais novas do MESMO time são puladas, porque a lista de livres é a
+  mesma. O relógio de 5 s de cada ligação continua, como rede de segurança para o que não
+  gera evento (alguém saiu da pausa). E a ligação nunca fica sem relógio: se o Asterisk não
+  atender o cliente para segurá-lo na linha, ou não tocar o som de chamando, o worker avisa no
+  log e a fila segue — sem isso a ligação ficava parada, só o cliente desligando a tirava da
+  memória, e ela seguraria a vez do time.
+- **O teto por time.** `attendance_teams.phone_queue_max_wait_seconds` (30 a 1800 s; nulo =
+  120 s, o de sempre) é a espera máxima SEM NINGUÉM LIVRE daquele time. É lido na ENTRADA da
+  fila (`timeParaAFila` devolve `esperaMaximaS`) e vira `tetoMs` da ligação, por
+  `esperaMaximaMs` (que prende o valor aos limites e trata dado ruim como o padrão): mudar a
+  configuração vale para a próxima ligação, nunca para quem já espera. Número sem time não
+  tem teto configurável: valem os 120 s. A fila da transferência para um time
+  (`transferencia.ts`) NÃO mudou: segue com os 120 s fixos (`ESPERA_NA_FILA_MS`).
+- **O "cai em".** `marcarPrazoDaFila` grava `voice_calls.queue_deadline_at` quando a espera
+  sem ninguém livre começa: o `now()` do BANCO mais o que falta no relógio do worker (o
+  desenho da 0294, para a conta não depender de os dois relógios baterem). Só `marcarAtendida`
+  o apaga; a rota o devolve (`cai_em`) apenas na fase `aguardando`. Quem derruba a ligação no
+  teto é o relógio do worker, não a coluna: ela só alimenta a tela.
 
 **Feita**
 1. `POST /api/v1/telefonia/chamadas` com `{ contact_id | numero, numero_da_empresa_id? }`. A
@@ -349,6 +400,32 @@ Navegador do atendente (JsSIP) ────────────────�
   como sempre —, e a feita não ganha cartão em andamento. Desenho:
   `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md` (§4.1); plano:
   `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-1.md`.
+- **A fila visível (fila visível, entrega 2; migration 0295).** Três colunas, todas nulas e sem
+  default, sem backfill — ligação anterior não tem ordem de chegada, e time sem configuração
+  segue no padrão:
+  - `voice_calls.queued_at` (`timestamptz`): quando a recebida passou a esperar por uma
+    pessoa, a ORDEM DE CHEGADA da fila (§4.2). Nulo no menu e nos avisos.
+  - `voice_calls.queue_deadline_at` (`timestamptz`): quando a espera sem ninguém livre
+    esgota — o "cai em" da aba —, gravado como o `now()` do banco mais o que falta no relógio
+    do worker. Só a tela o lê; quem derruba a ligação é o relógio do worker.
+  - `attendance_teams.phone_queue_max_wait_seconds` (`integer`): a espera máxima na fila do
+    telefone DESTE time, em segundos. Nulo = o padrão, 120. Quem grava é a rota de
+    Configurações › Times, pela conexão do app (a tabela só tem GRANT de leitura para
+    `authenticated`); quem lê é o worker, na entrada da fila do time.
+
+  CHECK `voice_calls_fila_so_no_telefone_check`: só a linha `sip_trunk` pode ter as duas
+  primeiras (a mesma regra da 0288, da 0289 e da 0294: a linha do WaCalls a REST escreve com
+  o JWT do atendente, e ninguém forja por ela uma ligação "na fila"). CHECK
+  `attendance_teams_phone_queue_max_wait_check`: nulo ou entre 30 e 1800. Dois índices
+  parciais para a leitura da aba: `idx_voice_calls_recebidas_vivas` (`organization_id,
+  started_at`, recebida não encerrada) e `idx_voice_calls_perdidas_recentes`
+  (`organization_id, ended_at desc`, recebida encerrada sem ser atendida). O bloco do
+  `baseline.sql` é idempotente e se cura sozinho (linha do WaCalls com a coluna preenchida e
+  tempo fora de 30–1800 são corrigidos ANTES de o CHECK ser criado). Cobrado em
+  `tests/invariants/telefonia-fila-visivel-schema.test.ts` (colunas, CHECKs, índices, a REST
+  que não escreve, a autocura e a cadeia de migrations),
+  `tests/invariants/telefonia-fila-visivel-repositorio.test.ts` (o SQL do worker, com duas
+  organizações) e `tests/invariants/telefonia-espera-do-time.test.ts` (o SQL do teto).
 - **Fase 2, versão 1 (migration 0288):** `phone_prompts` e `phone_settings` (as falas e a
   voz), `phone_menus` e `phone_menu_options`, `channel_sessions.sip_menu_id`,
   `attendance_teams.phone_emergency_*`, `voice_calls.menu_id` / `menu_digit` / `menu_outcome`
@@ -416,6 +493,63 @@ Navegador do atendente (JsSIP) ────────────────�
   "Desligada por quem ligou após 40 s". O registro de antes da 0294 não tem tempo nenhum: diz
   só "Desligada por quem ligou", quando foi o caso. A linha é da feita SEM RESPOSTA; a não
   completada, a atendida e a recebida ficam como eram.
+- **A aba Telefone do Inbox** (fila visível, entrega 2; migration 0295; J44 do mapa de
+  jornadas). Aba nova no trilho, depois de Automático (`phone`, "Telefone", em
+  `lib/inbox/abas.ts`), que não lista conversas: lista LIGAÇÕES. Ela só existe quando a rota
+  da fila diz `ativa: true` — a instalação tem telefonia E a organização tem número —, e não
+  pelo ramal de quem olha: o `viewer` não tem ramal e a vê. Todo membro que entra no Inbox vê a
+  fila de TODOS os times (D4 do desenho), só com nome, número, time e espera; abrir a conversa
+  segue a visibilidade que já valia (RLS). O selo do trilho conta quem espera por uma pessoa —
+  aguardando, tocando e transferida para a fila de um time — e cobra ação, como Fila e Minhas.
+  A coluna (`FilaDoTelefone`, em `components/telefonia/fila/`) toma o lugar da lista de
+  conversas, da busca e dos filtros de conversa: chips por time (quantas ligações esperam e há
+  quanto a mais antiga espera), o seletor de número da empresa (só com mais de um) e quatro
+  seções, cada uma só quando tem linha — "Na fila, por ordem de chegada" (aguardando, tocando e
+  a transferida), "No menu" (menu e avisos), "Em ligação" e "Perdidas nos últimos 30 minutos".
+  A linha diz a posição (`1º`, `2º`…), o nome ou o número, o time, "pelo <número da empresa>" e o
+  estado: "Aguardando há 3:42 · cai em 1:18" — em atenção quando passou da metade do teto DO
+  TIME, em crítico quando falta menos de 20% —, "Tocando para Ana", "Ouvindo as opções", "Com
+  Bruno há 4:12", "Transferida por Ana". Clicar numa linha com conversa a abre à direita, pelo
+  caminho de sempre; a perdida traz o motivo, quanto esperou e há quanto tempo, e o botão de
+  ligar (`BotaoLigar`, que some para quem não tem ramal). A transferida para a fila de um time
+  (v2) aparece na fila do time de DESTINO, com quem transferiu, sem posição e sem ação. A
+  leitura é uma só (`useFilaDoTelefone`, chamado uma vez no `InboxLayout`: o selo e a coluna saem
+  da mesma resposta): relê quando o Realtime de `voice_calls` avisa — uma rajada vira UMA
+  releitura — e, de segurança, a cada 15 s; os relógios andam sozinhos, medidos pelo relógio do
+  banco que a resposta traz. A releitura que falha mantém a fila antiga e acende uma faixa "Sem
+  atualização no momento", com "Tentar novamente". Telefonia desligada: nada é lido nem assinado,
+  e as outras abas ficam como sempre foram.
+- **`GET /api/v1/telefonia/fila`** (`viewer`+; a leitura da aba). A organização sai da sessão e
+  entra em toda consulta — a conexão é a do app, fora da RLS (`lerFilaDoTelefone`,
+  `lib/channels/telefonia/fila-da-tela.ts`). Devolve `ativa`; `agora` (o relógio do banco, para a
+  tela medir a defasagem do relógio dela); `times` (id, nome e a espera máxima em vigor, só os
+  ativos); `numeros` (os números SIP ativos da organização, para o filtro); `ligacoes` e
+  `perdidas`. `ligacoes` são as recebidas pelo telefone ainda vivas (`status <> 'ended'`, iniciadas
+  há menos de 4 h): `fase` (`menu`, `avisos`, `aguardando`, `tocando`, `em_ligacao`,
+  `transferencia_na_fila`, por `faseDaLigacao`, em `lib/telefonia/fila.ts`), contato, número de
+  quem liga, time, número da empresa, conversa, `entrou_em`, `na_fila_desde`, `posicao` (1 = a
+  próxima do time; só em `aguardando` e `tocando`), `cai_em` (só em `aguardando`),
+  `tocando_para`, `com` (quem atende, ou quem transferiu) e `atendida_em`. `perdidas` são as
+  recebidas encerradas sem atender nos últimos 30 minutos (até 100, da mais recente), com o motivo
+  — `desligou_no_menu`, `desistiu_na_fila`, `fila_esgotada`, `ninguem_atendeu`,
+  `fora_do_horario`, `interrompida` ou `outro` — e quanto esperaram. Sem telefonia na instalação
+  (a ARI não configurada) ou sem número SIP ativo na organização: `ativa: false` e listas vazias —
+  no primeiro caso sem tocar o banco. A leitura é compartilhada por organização, em memória da
+  instância, em voo único com fila de um: no máximo uma leitura em curso e uma na fila, com 500 ms
+  entre os inícios; quem chega durante uma leitura recebe a PRÓXIMA, nunca a que começou antes do
+  pedido (um cache por tempo entregava a fila de antes da mudança a quem relia logo depois do aviso
+  do Realtime). A que falha não fica guardada: responde 500 e a seguinte lê de novo. A rota NÃO diz quantos
+  atendentes estão livres — isso pede a ARI e o diretório a cada pedido (entrega 3). Leitura não
+  audita.
+- **Configurações › Times › "Fila do telefone"** (fila visível, entrega 2;
+  `EsperaMaximaDoTime.tsx`, depois do aviso de instabilidade): a espera máxima na fila daquele
+  time — 2 minutos (o padrão), 5, 10, 15, 20 ou 30. Trocar grava na hora, por
+  `PUT /api/v1/telefonia/fila/times/[teamId]` (`manager`+; suporte somente-leitura barrado; Zod
+  `.strict()`, então um `organization_id` no corpo é 422; audita `phone.queue_wait_changed` com o
+  antes e o depois), e o padrão grava `null`, para o time seguir o padrão do produto se ele mudar.
+  O que vale vem de `GET /api/v1/telefonia/fila/times` (`manager`+). O cartão só aparece com
+  telefonia na instalação e para o time que veio nessa leitura (os ativos). Vale para a próxima
+  ligação: quem já espera não muda.
 - **Fase 2, versão 1** (nenhuma rota de tela nova; §6 do desenho): em Conexões › Telefone, as
   sub-abas **Menus** e **Voz e falas** (`?aba=telefone&sub=menus|falas`) e, em Números,
   "Quando ligarem": tocar no time ou tocar o menu; em Credenciais de IA, o cartão
@@ -438,7 +572,8 @@ Navegador do atendente (JsSIP) ────────────────�
 | F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada. Desenho (com as decisões D1–D8, tomadas na ausência do dono): `docs/superpowers/specs/2026-09-29-telefonia-gravacao-das-ligacoes-design.md`; plano: `docs/superpowers/plans/2026-09-29-telefonia-gravacao-das-ligacoes.md`; migration 0289; DYD-53 | implementada — publicada? `grep -n 'Gravação das ligações do telefone' CHANGELOG.md`; prova com ligação real depende de o dono ligar a gravação (J37 do mapa de jornadas) |
 | F4 | Transcrição em português dentro da conversa | a fazer |
 | F5 | Relatórios por time | a fazer |
-| Fila visível, entrega 1 | Conversa viva ao atender: o cartão "Ligação em andamento" entra na conversa quando a recebida é atendida e é completado no fim; a passada de 60 s fecha o órfão. As entregas 2 (aba Telefone, ordem de chegada e teto por time) e 3 (atender e mover pela fila) do mesmo desenho não foram feitas. Desenho: `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md`; plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-1.md`; sem migration | implementada, sem prova com ligação real (J43 do mapa de jornadas) — publicada? `grep -n 'a conversa aparece enquanto a ligação acontece' CHANGELOG.md` |
+| Fila visível, entrega 1 | Conversa viva ao atender: o cartão "Ligação em andamento" entra na conversa quando a recebida é atendida e é completado no fim; a passada de 60 s fecha o órfão. A entrega 2 é a linha seguinte; a 3 (atender e mover pela fila) do mesmo desenho não foi feita. Desenho: `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md`; plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-1.md`; sem migration | implementada, sem prova com ligação real (J43 do mapa de jornadas) — publicada? `grep -n 'a conversa aparece enquanto a ligação acontece' CHANGELOG.md` |
+| Fila visível, entrega 2 | Aba Telefone no Inbox (a fila ao vivo por ordem de chegada, o menu, as ligações em curso e as perdidas dos últimos 30 minutos, com filtro por time e por número), a fila do worker passa a atender por ordem de chegada e a espera máxima na fila é de cada time (Configurações › Times; padrão 2 min). Desenho: `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md`; plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-2.md`; migration 0295 | implementada, sem prova com ligação real (J44 do mapa de jornadas) — publicada? `grep -n 'a fila de ligações aparece no Inbox' CHANGELOG.md` |
 
 ## 9. O que não foi medido
 
@@ -474,6 +609,33 @@ Navegador do atendente (JsSIP) ────────────────�
   passou por ele: que o cartão entre na conversa no instante em que o atendente atende, que a
   conversa suba para o topo de Minhas na tela de quem atendeu e que o fim complete o mesmo
   cartão não foi visto assim.
+- **A ordem de chegada e o teto por time numa ligação real** (fila visível, entrega 2). O
+  controlador está provado com dublês (`controle.test.ts`, bloco "a fila visível (0295)": duas e
+  três esperando com um e dois livres, a vez por time, a reavaliação 2 s depois e em uma passada
+  só, o teto de 5 minutos) e o SQL no Postgres real (`tests/invariants/telefonia-fila-visivel-*`),
+  mas nenhuma ligação real pelo tronco da operadora esperou numa fila: que quem chegou primeiro
+  seja de fato quem toca primeiro quando um atendente fica livre, que a ligação caia no teto do
+  time e não antes, e que a reavaliação 2 s depois do fim de uma ligação ache o ramal já solto
+  (o BYE chegar ao navegador a tempo é leitura do código, não medida) não foram vistos assim.
+- **A capacidade de áudio da instalação** (fila visível, entrega 2). Cada ligação esperando na
+  fila ocupa uma perna de áudio, e uma em andamento ocupa duas; a faixa publicada
+  (`TELEFONIA_RTP_INICIO`–`TELEFONIA_RTP_FIM`, padrão `20000-20039/udp`, 40 portas) dá cerca de 20
+  pernas simultâneas — lido na configuração, **não medido**. Com o teto por time chegando a 30
+  minutos, a fila de um pico pode bater nesse limite: o que o Asterisk faz com a vigésima primeira
+  perna, e o que o cliente ouve, não foi visto. Nada aqui muda a faixa de portas; o ajuste, se
+  preciso, é proposta à parte. Para ver a faixa em vigor numa instalação:
+  `grep -E '^TELEFONIA_RTP_(INICIO|FIM)=' .env` (ausentes = os padrões).
+- **A carga da rota da fila com a fila cheia** (fila visível, entrega 2). A rota é lida por todo
+  navegador com o Inbox aberto, a cada aviso do Realtime (juntado em 800 ms, no máximo uma
+  releitura a cada 4 s, e nenhuma em aba escondida) e a cada 15 s, e a leitura compartilhada (uma
+  em curso e uma na fila por organização) existe para que o pico não vire uma consulta por navegador.
+  Nada disso foi medido com dezenas de ligações na fila e muitos navegadores abertos: o que está
+  provado é a lógica (quem chega durante uma leitura recebe a próxima, organizações separadas, a
+  que falha não fica presa), não o tempo nem o custo.
+- **O aviso do Realtime de `voice_calls` chegando ao navegador de cada papel.** A aba relê quando
+  esse aviso chega e, de segurança, a cada 15 s; o teste do hook dubla o canal. Que o aviso chegue
+  de fato a um `viewer` ou a um `agent` — a tabela tem RLS — não foi visto; sem ele, a fila se
+  atualiza a cada 15 s, não em tempo real.
 - **Fase 2, versão 1** (a prova na VPS é a Task 29 do plano; casos na J36 do mapa de
   jornadas): a URA numa ligação real (tecla, repetição, time padrão, desligar no menu); as
   falas tocadas pelo Asterisk de produção a partir do volume; o fim da fala quando o cliente
@@ -554,8 +716,9 @@ existe ainda**, é dívida declarada — não ausência de defeito.
   cita telefone, e a busca ⌘K varre rótulo e descrição — procurar "telefone" não acha a aba.
 
 **Qual meu mecanismo anti-morte?**
-- Recebida sem ninguém disponível: fila com música por até 2 min, reavaliada a cada 5 s;
-  esgotada (ou esgotadas as 2 voltas), vira `voice_call_missed` na Central, atividade
+- Recebida sem ninguém disponível: fila com música por até a espera máxima do time (2 min por
+  padrão; Configurações › Times), reavaliada a cada 5 s e 2 s depois do fim de qualquer outra
+  ligação; esgotada (ou esgotadas as 2 voltas), vira `voice_call_missed` na Central, atividade
   `voice_call_missed` no negócio e a conversa `phone` aberta no time do número.
 - Worker reiniciado no meio: `recuperar()` retoma a ponte viva e encerra o resto como perdido,
   e a recebida perdida também vira aviso.
@@ -563,12 +726,15 @@ existe ainda**, é dívida declarada — não ausência de defeito.
 - **Não existe ainda:** o aviso de perdida não fecha sozinho quando alguém retorna a ligação, e
   nada lembra ninguém se ninguém retornar. Ligação com a bina oculta vira aviso sem contato e
   sem conversa (só o número, ou "desconhecido", no corpo). Número sem time faz toda recebida
-  virar perdida depois de 2 min — a aba mostra, nada impede.
+  virar perdida depois de 2 min (sem time não há espera máxima a configurar: valem os 2 min do
+  padrão) — a aba mostra, nada impede.
 
 **Onde se CONFIGURA o que eu uso?**
 - Conexões › Telefone: servidor, porta, transporte, usuário, senha (só escrita), número e time
   que recebe — ver e mudar na mesma tela.
-- Times: membros e horário; `StatusDoAtendente`: pausa e disponível; o fuso da organização.
+- Times: membros e horário; `StatusDoAtendente`: pausa e disponível; o fuso da organização; e,
+  desde a 0295, a espera máxima na fila do telefone de cada time (Configurações › Times › "Fila
+  do telefone": 2, 5, 10, 15, 20 ou 30 minutos; o padrão é 2) — ver e mudar na mesma tela.
 - Instalação (`.env`, não organização): `COMPOSE_PROFILES=telefonia`, `TELEFONIA_ARI_URL`,
   `TELEFONIA_ARI_PASSWORD` (o kit gera), `TELEFONIA_IP_PUBLICO`, faixa RTP. Desligada, a aba
   Telefone diz como ligar; sem número, o ramal não registra e os botões não aparecem.
@@ -580,8 +746,11 @@ existe ainda**, é dívida declarada — não ausência de defeito.
   `PROVIDERS_DE_MENSAGEM`. E, pelo código, com a ARI fora do ar o worker para de ler os
   registros: o último estado gravado (inclusive "Conectado") fica na tela. Não medido.
 - **Constantes sem tela** (decisões do §2, não estado configurável, mas nenhuma tela as mostra):
-  20 s de toque, 2 voltas, 2 min de fila, reavaliação a cada 5 s
-  (`lib/telefonia/distribuicao.ts`); atender e passar ao chamar em banda após 45 s, prazo de 60 s da saída
+  20 s de toque, 2 voltas, reavaliação a cada 5 s (`lib/telefonia/distribuicao.ts`), e a
+  reavaliação 2 s depois do fim de uma ligação (`REAVALIAR_APOS_O_FIM_MS`, `controle.ts`). Os 2 min
+  de fila deixaram de ser constante da fila de entrada: são o padrão da espera máxima de cada time
+  (`ESPERA_NA_FILA_MS`), que a tela mostra e muda; só a fila da transferência para um time segue
+  com os 2 min fixos. Atender e passar ao chamar em banda após 45 s, prazo de 60 s da saída
   (`controle.ts`); 5 saídas simultâneas (`saida.ts`); a lista de números bloqueados
   (`lib/telefonia/numero.ts`).
 

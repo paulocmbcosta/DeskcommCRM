@@ -10,7 +10,7 @@
  */
 import type { Role, VisibilityMode } from "@/lib/auth/types";
 
-export type InboxTab = "unassigned" | "mine" | "all" | "closed" | "ai";
+export type InboxTab = "unassigned" | "mine" | "all" | "closed" | "ai" | "phone";
 
 export const INBOX_TABS: { value: InboxTab; label: string }[] = [
   { value: "unassigned", label: "Fila" },
@@ -24,6 +24,12 @@ export const INBOX_TABS: { value: InboxTab; label: string }[] = [
   // passou a perguntar a régua do motor), então o rótulo velho descreveria outra
   // coisa.
   { value: "ai", label: "Automático" },
+  // A única aba que NÃO lista conversas: lista LIGAÇÕES — quem está na fila do
+  // telefone, no menu, em ligação, e as perdidas de há pouco (migration 0295).
+  // Só existe onde há telefone (ver `visibleInboxTabs`): numa instalação sem
+  // telefonia seria uma porta para uma sala vazia. Por último, para a ordem das
+  // outras não mudar para quem já as conhece de cor.
+  { value: "phone", label: "Telefone" },
 ];
 
 /**
@@ -32,9 +38,20 @@ export const INBOX_TABS: { value: InboxTab; label: string }[] = [
  * `own_and_team` (0281) — sem a aba, a conversa do colega de time só existiria
  * na busca. viewer/manager/admin sempre veem.
  * É apenas cosmético — a RLS (G4-01) é quem garante o escopo mesmo via ?filter=all.
+ *
+ * 'Telefone' depende da ORGANIZAÇÃO, e não do papel nem do ramal de quem olha:
+ * aparece quando a rota da fila diz que há telefonia e número (`telefone: true`).
+ * `viewer` não tem ramal e vê a aba — a fila é para ser vista por quem cobra,
+ * não só por quem atende. Quem não diz nada (`opcoes` ausente) não a recebe.
  */
-export function visibleInboxTabs(role: Role, mode: VisibilityMode | undefined): InboxTab[] {
+export function visibleInboxTabs(
+  role: Role,
+  mode: VisibilityMode | undefined,
+  opcoes: { telefone?: boolean } = {},
+): InboxTab[] {
   const hideAll = role === "agent" && mode !== "all" && mode !== "own_and_team";
-  return INBOX_TABS.filter((t) => !(t.value === "all" && hideAll)).map((t) => t.value);
+  return INBOX_TABS.filter((t) => !(t.value === "all" && hideAll))
+    .filter((t) => t.value !== "phone" || opcoes.telefone === true)
+    .map((t) => t.value);
 }
 

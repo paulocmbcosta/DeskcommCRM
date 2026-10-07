@@ -682,6 +682,10 @@ export const AUDIT_ACTIONS = [
   // Telefonia — ramais (v3, migration 0291): o admin trocou o número do ramal
   // de alguém. `metadata`: antes e depois.
   "phone.extension_changed",
+  // Telefonia — a fila visível (migration 0295): gerente ou admin mudou a espera
+  // máxima na fila do telefone de um time. `metadata`: `de` e `para`, em segundos
+  // (`null` = o padrão).
+  "phone.queue_wait_changed",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

@@ -6,7 +6,7 @@ import { useAuth } from "@/hooks/auth/AuthProvider";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Archive, Inbox, Robot, User, UsersThree } from "@/lib/ui/icons";
+import { Archive, Inbox, Phone, Robot, User, UsersThree } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
 import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 
@@ -39,17 +39,31 @@ const ICONE_DA_ABA: Record<InboxTab, ComponentType<{ size?: number; weight?: "re
   all: UsersThree,
   closed: Archive,
   ai: Robot,
+  phone: Phone,
 };
 
-/** Só estas pedem AÇÃO de quem olha; nas outras o número informa, não cobra. */
-const ABAS_QUE_COBRAM: ReadonlySet<InboxTab> = new Set(["unassigned", "mine"]);
+/**
+ * Só estas pedem AÇÃO de quem olha; nas outras o número informa, não cobra.
+ * A do telefone cobra: o selo dela é gente NA LINHA, esperando alguém atender.
+ */
+const ABAS_QUE_COBRAM: ReadonlySet<InboxTab> = new Set(["unassigned", "mine", "phone"]);
 
 interface Props {
   value: InboxFiltersValue;
   onChange: (next: InboxFiltersValue) => void;
+  /**
+   * A fila do TELEFONE, já lida por quem monta o trilho (`useFilaDoTelefone`,
+   * uma vez, no `InboxLayout`). Vem por prop e não por hook: a coluna da aba lê
+   * a mesma resposta, e duas leituras seriam duas assinaturas do tempo real — e
+   * um selo capaz de discordar da lista ao lado.
+   *
+   * `ativa` decide se a aba existe (a organização tem telefone); `esperando` é
+   * o selo. Ausente = sem telefone: o trilho fica como sempre foi.
+   */
+  telefone?: { ativa: boolean; esperando: number };
 }
 
-export function InboxAbas({ value, onChange }: Props) {
+export function InboxAbas({ value, onChange, telefone }: Props) {
   const t = useT();
   const { activeOrg } = useAuth();
   const { data: counts } = useConversationCounts(activeOrg?.orgId ?? null, {
@@ -62,8 +76,9 @@ export function InboxAbas({ value, onChange }: Props) {
   });
 
   const tabs = activeOrg
-    ? visibleInboxTabs(activeOrg.role, activeOrg.visibility_mode)
-    : INBOX_TABS.map((tab) => tab.value);
+    ? visibleInboxTabs(activeOrg.role, activeOrg.visibility_mode, { telefone: telefone?.ativa })
+    : // Sem organização não há fila de telefone para ler: a aba não entra.
+      INBOX_TABS.map((tab) => tab.value).filter((tab) => tab !== "phone");
   const countFor: Partial<Record<InboxTab, number>> = {
     // `fila` é o nome novo; `unassigned` é o alias que a rota versionada mantém.
     unassigned: counts?.fila ?? counts?.unassigned,
@@ -71,6 +86,8 @@ export function InboxAbas({ value, onChange }: Props) {
     mine: counts?.mine,
     all: counts?.all,
     closed: counts?.closed,
+    // Não vem das contagens de conversa: é quem espera na fila do telefone.
+    phone: telefone?.esperando,
   };
 
   return (

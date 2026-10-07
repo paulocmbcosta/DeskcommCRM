@@ -68,10 +68,26 @@ export class AriFalso implements PortaAri {
     this.chamadas.push([nome, ...args]);
     return Promise.resolve(undefined);
   }
-  atender = (c: string) => this.reg("atender", c);
+  /** Quantas vezes o `atender` ainda lança (a ARI recusou ou não respondeu, com o canal vivo). */
+  falharAtender = 0;
+  atender = async (c: string) => {
+    await this.reg("atender", c);
+    if (this.falharAtender > 0) {
+      this.falharAtender--;
+      throw new ErroAri(500, "Internal Server Error", `/channels/${c}/answer`);
+    }
+  };
   indicarChamando = (c: string) => this.reg("indicarChamando", c);
   desligar = (c: string, m?: string) => this.reg("desligar", c, m);
+  /** Quantas vezes o `originar` ainda lança (o ramal sumiu entre a pergunta e o toque). */
+  falharOriginar = 0;
   originar = async (p: { endpoint: string; appArgs: string }) => {
+    if (this.falharOriginar > 0) {
+      this.falharOriginar--;
+      // Fora de "originar": `originados()` e `ultimoOriginado()` contam só os toques que saíram.
+      await this.reg("originar_recusado", p.endpoint, p.appArgs);
+      throw new ErroAri(500, "Internal Server Error", "/channels");
+    }
     await this.reg("originar", p.endpoint, p.appArgs);
     return { id: `ramal-canal-${++this.seq}` };
   };
@@ -145,6 +161,8 @@ export class BancoFalso implements PortaBanco {
   /** O que `timeParaAFila` devolve; `falharFila` simula o banco fora do ar. */
   situacao: SituacaoDoTime = "aberto";
   aviso: FalaDoBanco | null = null;
+  /** O teto do time que `timeParaAFila` devolve, em segundos (`null` = o padrão). */
+  esperaMaximaS: number | null = null;
   falharFila = false;
   gerais: FalasGerais = { aguarde: null, ninguem: null, foraDoHorario: null };
   menus = new Map<string, MenuDoBanco>();
@@ -156,7 +174,10 @@ export class BancoFalso implements PortaBanco {
   troncoPorId = async (id: string) => (id === TRONCO ? this.troncoAtual : null);
   /** Quantas leituras de `disponiveisNoTime` ainda falham (banco fora do ar). */
   falharDisponiveis = 0;
+  /** Quantas vezes os disponíveis foram lidos — cada avaliação da fila de uma ligação lê uma vez. */
+  leiturasDeDisponiveis = 0;
   disponiveisNoTime = async () => {
+    this.leiturasDeDisponiveis++;
     if (this.falharDisponiveis > 0) {
       this.falharDisponiveis--;
       throw new Error("banco fora do ar");
@@ -168,7 +189,7 @@ export class BancoFalso implements PortaBanco {
     // Também na linha do tempo dos efeitos: é a ENTRADA na fila, e há teste que mede o que vem antes dela.
     this.eventos.push(["entrou_na_fila", org, teamId]);
     if (this.falharFila) throw new Error("banco fora do ar");
-    return { situacao: this.situacao, aviso: this.aviso };
+    return { situacao: this.situacao, aviso: this.aviso, esperaMaximaS: this.esperaMaximaS };
   };
   falasGerais = async (org: string) => {
     this.consultas.push(["falasGerais", org]);
@@ -251,6 +272,14 @@ export class BancoFalso implements PortaBanco {
   };
   /** `marcarTocando` lança (o banco caiu no meio da ligação). */
   falharTocando = false;
+  marcarNaFila = async (org: string, id: string) => {
+    if (!this.daOrg(org, id, "marcarNaFila")) return;
+    this.eventos.push(["na_fila", id]);
+  };
+  marcarPrazoDaFila = async (org: string, id: string, restanteMs: number | null) => {
+    if (!this.daOrg(org, id, "marcarPrazoDaFila")) return;
+    this.eventos.push(["prazo_da_fila", id, restanteMs]);
+  };
   marcarAtendida = async (org: string, id: string, u: string) => {
     if (!this.daOrg(org, id, "marcarAtendida")) return;
     const l = this.ligacoes.get(id)!;

@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { ESTADO_INICIAL, ordemDeToque, proximoToque, type CandidatoAoToque } from "./distribuicao";
+import {
+  ESPERA_NA_FILA_MAX_S,
+  ESPERA_NA_FILA_MIN_S,
+  ESPERA_NA_FILA_MS,
+  ESTADO_INICIAL,
+  OPCOES_DE_ESPERA_NA_FILA_S,
+  eAVezDela,
+  esperaMaximaMs,
+  ordemDeToque,
+  proximoToque,
+  type CandidatoAoToque,
+} from "./distribuicao";
 
 const c = (userId: string, atendidasHoje: number, ultima: string | null = null): CandidatoAoToque => ({
   userId,
@@ -66,5 +77,40 @@ describe("proximoToque — um por vez, duas voltas", () => {
     if (p.tipo !== "tocar") throw new Error();
     p = proximoToque([c("ana", 0), c("bia", 1, "2026-09-28T10:00:00Z")], p.estado);
     expect(p.tipo === "tocar" && p.userId).toBe("bia");
+  });
+});
+
+describe("a espera máxima na fila, por time (0295)", () => {
+  it("sem configuração vale o padrão de sempre", () => {
+    expect(esperaMaximaMs(null)).toBe(ESPERA_NA_FILA_MS);
+    expect(esperaMaximaMs(undefined)).toBe(ESPERA_NA_FILA_MS);
+    expect(esperaMaximaMs(Number.NaN)).toBe(ESPERA_NA_FILA_MS);
+  });
+  it("o configurado vale em milissegundos, preso aos limites", () => {
+    expect(esperaMaximaMs(600)).toBe(600_000);
+    expect(esperaMaximaMs(5)).toBe(ESPERA_NA_FILA_MIN_S * 1000);
+    expect(esperaMaximaMs(99_999)).toBe(ESPERA_NA_FILA_MAX_S * 1000);
+  });
+  it("as opções da tela cabem nos limites e começam pelo padrão", () => {
+    expect(OPCOES_DE_ESPERA_NA_FILA_S[0] * 1000).toBe(ESPERA_NA_FILA_MS);
+    for (const s of OPCOES_DE_ESPERA_NA_FILA_S) {
+      expect(s).toBeGreaterThanOrEqual(ESPERA_NA_FILA_MIN_S);
+      expect(s).toBeLessThanOrEqual(ESPERA_NA_FILA_MAX_S);
+    }
+  });
+});
+
+describe("a vez na fila: ordem de chegada", () => {
+  it("com um atendente livre, só a primeira da fila toca", () => {
+    expect(eAVezDela(0, 1)).toBe(true);
+    expect(eAVezDela(1, 1)).toBe(false);
+  });
+  it("com dois livres, as duas primeiras tocam; a terceira espera", () => {
+    expect(eAVezDela(0, 2)).toBe(true);
+    expect(eAVezDela(1, 2)).toBe(true);
+    expect(eAVezDela(2, 2)).toBe(false);
+  });
+  it("sem ninguém livre, ninguém toca", () => {
+    expect(eAVezDela(0, 0)).toBe(false);
   });
 });

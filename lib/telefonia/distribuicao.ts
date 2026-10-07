@@ -92,3 +92,35 @@ export function proximoToque(
     estado: { volta: estado.volta + 1, tocaramNestaVolta: new Set([primeiro]) },
   };
 }
+
+// ─── a espera máxima, por time (migration 0295) ───────────────────────────
+
+/** Os limites de `attendance_teams.phone_queue_max_wait_seconds` (o CHECK do banco é o mesmo). */
+export const ESPERA_NA_FILA_MIN_S = 30;
+export const ESPERA_NA_FILA_MAX_S = 1800;
+/** O que a tela oferece (Configurações › Times): 2, 5, 10, 15, 20 e 30 minutos. O primeiro é o padrão. */
+export const OPCOES_DE_ESPERA_NA_FILA_S = [120, 300, 600, 900, 1200, 1800] as const;
+
+/**
+ * A espera máxima de um time, em ms. Sem configuração (ou com um valor que não
+ * é número), o padrão de sempre — a fila nunca fica sem teto por causa de um
+ * dado ruim. Preso aos limites: o banco já recusa fora deles, e o worker não
+ * depende disso.
+ */
+export function esperaMaximaMs(segundos: number | null | undefined): number {
+  if (typeof segundos !== "number" || !Number.isFinite(segundos)) return ESPERA_NA_FILA_MS;
+  return Math.min(Math.max(Math.round(segundos), ESPERA_NA_FILA_MIN_S), ESPERA_NA_FILA_MAX_S) * 1000;
+}
+
+// ─── a vez na fila (ordem de chegada) ─────────────────────────────────────
+
+/**
+ * É a vez desta ligação tocar? Com `livres` atendentes livres, só as `livres`
+ * ligações mais ANTIGAS que esperam (sem ramal tocando) podem tocar; as outras
+ * esperam. `naFrente` = quantas, do mesmo time, chegaram antes desta e ainda
+ * esperam. Sem isto, quem pegava o atendente que desocupou era a ligação cujo
+ * relógio de 5 s disparasse primeiro — não a que esperava há mais tempo.
+ */
+export function eAVezDela(naFrente: number, livres: number): boolean {
+  return naFrente < livres;
+}

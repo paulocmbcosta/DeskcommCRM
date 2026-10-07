@@ -73,6 +73,14 @@ describe("tabToFilter — o que cada aba significa", () => {
     expect(tabToFilter("unassigned").exclude_finished).toBeUndefined();
     expect(tabToFilter("ai").exclude_finished).toBeUndefined();
   });
+
+  it("Telefone não lista conversas: a consulta de fundo é a de Minhas, a mais barata", () => {
+    // A aba mostra LIGAÇÕES (migration 0295). A lista de conversas segue viva por
+    // baixo — é dela que as outras abas e o deep-link dependem —, e pedir o
+    // mesmo que Minhas divide o cache com ela em vez de abrir uma consulta nova.
+    expect(tabToFilter("phone")).toEqual(tabToFilter("mine"));
+    expect(tabToFilter("phone")).toEqual({ assigned_to: "me", exclude_finished: true });
+  });
 });
 
 // ---------------------------------------------------------------------------

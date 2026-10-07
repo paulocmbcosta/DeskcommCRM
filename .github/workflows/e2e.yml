@@ -698,6 +698,7 @@ jobs:
         devolver-ao-proprio-time.spec.ts
         telefonia-ura-e-falas.spec.ts
         telefonia-gravacao.spec.ts
+        telefonia-fila.spec.ts
       # `telefonia-ura-e-falas` (fase 2 da telefonia, 2026-09-29) cria a PRÓPRIA
       # organização, com admin e atendente sem MFA, e não toca a organização
       # compartilhada — a vizinhança desta parte não muda por ela. Sobe a
@@ -708,6 +709,11 @@ jobs:
       # `telefonia-gravacao` (F3, DYD-53) segue o mesmo desenho: organização
       # própria, admin e atendente sem MFA, e a ligação gravada SEMEADA (nada
       # escuta a ARI); sobe um MP3 de 1 s no Storage local para o player tocar.
+      # `telefonia-fila` (fila visível, entrega 2; migration 0295) idem:
+      # organização própria (e uma segunda, sem número), gerente e atendente sem
+      # MFA, e as ligações da fila SEMEADAS em `voice_calls`. Sem
+      # `E2E_TELEFONIA=1` a rota da fila responde `ativa: false` e a aba
+      # Telefone do Inbox nem aparece.
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts
@@ -1015,6 +1021,17 @@ jobs:
           path: |
             playwright-report/
             test-results/
+          retention-days: 7
+
+      # A evidência visual da fila do telefone sobe SEMPRE, e não só na falha:
+      # a aba Telefone é tela nova, e a doutrina de QA visual pede a imagem dela
+      # mesmo no run verde — que é justamente quando o relatório de cima não sobe.
+      - uses: actions/upload-artifact@v7
+        if: always() && matrix.parte == 3
+        with:
+          name: evidencia-telefonia-fila
+          path: .superpowers/evidence/telefonia-fila/
+          if-no-files-found: ignore
           retention-days: 7
 
   # O NOME DESTE JOB É O CHECK OBRIGATÓRIO, e é por isso que ele existe.

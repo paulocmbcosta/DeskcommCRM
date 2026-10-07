@@ -44,10 +44,12 @@ interface Props {
   motivos?: FilaDoTime[];
 }
 
-const CHIP =
+// Exportadas: os chips da fila do TELEFONE (`components/telefonia/fila/ChipsDaFila`)
+// são o mesmo chip, na mesma coluna — duas cópias das medidas divergiriam.
+export const CHIP =
   "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] font-medium transition-colors";
-const CHIP_LIGADO = "border-accent bg-accent-soft text-accent";
-const CHIP_DESLIGADO =
+export const CHIP_LIGADO = "border-accent bg-accent-soft text-accent";
+export const CHIP_DESLIGADO =
   "border-border bg-surface text-text-muted hover:bg-surface-elevated hover:text-text";
 
 export function ChipsDosTimes({

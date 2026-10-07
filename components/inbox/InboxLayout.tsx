@@ -28,6 +28,7 @@ import { INBOX_TABS, type InboxTab } from "@/lib/inbox/abas";
 import { InboxAbas } from "./InboxAbas";
 import { ChatThread } from "./ChatThread";
 import { BotaoLigar } from "@/components/telefonia/BotaoLigar";
+import { FilaDoTelefone } from "@/components/telefonia/fila/FilaDoTelefone";
 import { Composer, type ComposerHandle } from "./Composer";
 import { ConversationHeader } from "./ConversationHeader";
 import { FaixaDaEspera } from "./FaixaDaEspera";
@@ -51,6 +52,8 @@ import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import { useFilaDosTimes } from "@/hooks/inbox/useFilaDosTimes";
+import { useFilaDoTelefone } from "@/hooks/telefonia/useFilaDoTelefone";
+import { quantasEsperam } from "@/lib/telefonia/fila";
 import { AlternanciasDaLista, ChipsDosTimes } from "./ChipsDosTimes";
 import { ALTURA_ABAIXO_DA_TOPBAR } from "@/lib/ui/faixas-do-topo";
 
@@ -115,12 +118,22 @@ export function tabToFilter(
       return { comando: ["automatico"] };
     case "all":
       return { exclude_finished: true };
+    case "phone":
+      // A aba Telefone não lista conversas — lista ligações, e quem a desenha é
+      // `FilaDoTelefone`. A consulta de fundo é a mais barata que existe (as
+      // minhas, a MESMA de "Minhas", que divide o cache com ela) e mantém viva a
+      // assinatura da lista: é dela que as outras abas e a conversa aberta à
+      // direita dependem.
+      return { assigned_to: "me", exclude_finished: true };
     default:
       return {};
   }
 }
 
-const FILTER_TABS: InboxTab[] = ["unassigned", "mine", "all", "closed", "ai"];
+const FILTER_TABS: InboxTab[] = ["unassigned", "mine", "all", "closed", "ai", "phone"];
+
+/** O que os atalhos de teclado recebem quando a coluna não mostra conversa nenhuma. */
+const SEM_CONVERSAS_VISIVEIS: string[] = [];
 
 /**
  * Lê ?filter= (G4-02, deep-link). ?filter=all é HONRADO mesmo para agent — a
@@ -284,6 +297,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // POR QUE a fila de cada time não anda — só pergunta quando há fila.
   const haFilaDeTime = (contagensQ.data?.by_team ?? []).some((g) => (g.na_fila ?? 0) > 0);
   const filaDosTimesQ = useFilaDosTimes(tab === "all" && haFilaDeTime);
+  // A FILA DO TELEFONE (migration 0295), lida UMA vez: o selo do trilho e a
+  // coluna da aba saem da mesma resposta. Sem telefonia na organização o hook
+  // não assina nem relê nada, e o trilho fica como sempre foi.
+  const filaDoTelefoneQ = useFilaDoTelefone();
   const inList = useMemo(() => {
     const all = listQ.data?.pages.flatMap((p) => p.data) ?? [];
     return all.find((c) => c.id === selectedId) ?? null;
@@ -651,7 +668,14 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       >
         {/* O TRILHO das abas, em pé: devolve à lista a altura que a faixa
             horizontal de abas tomava. Ver `InboxAbas`. */}
-        <InboxAbas value={filterValue} onChange={setFilterValue} />
+        <InboxAbas
+          value={filterValue}
+          onChange={setFilterValue}
+          telefone={{
+            ativa: filaDoTelefoneQ.data?.ativa === true,
+            esperando: quantasEsperam(filaDoTelefoneQ.data?.ligacoes ?? []),
+          }}
+        />
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
           {/* O NOME da aba, por extenso. No trilho só cabe o ícone, e dica de
               mouse não existe em tela de toque — sem esta linha, quem atende do
@@ -680,20 +704,27 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
               />
             )}
           </div>
-          <InboxFilters
-            value={filterValue}
-            onChange={setFilterValue}
-            aberto={filtrosAbertos}
-            onAbertoChange={setFiltrosAbertos}
-          />
+          {/* TELEFONE: a busca, os filtros e o protocolo são de CONVERSA, e a
+              aba mostra ligações. Os filtros dela (time e número da empresa)
+              vivem dentro de `FilaDoTelefone`. Nas outras abas, nada muda. */}
+          {tab !== "phone" && (
+            <InboxFilters
+              value={filterValue}
+              onChange={setFilterValue}
+              aberto={filtrosAbertos}
+              onAbertoChange={setFiltrosAbertos}
+            />
+          )}
           {/* Na aba Fechadas a própria lista já responde pelo protocolo dos
               ENCERRADOS; aqui em cima ficam só os que ela não mostra (o
               atendimento em andamento), senão o mesmo número sairia duas vezes. */}
-          <ResultadosPorProtocolo
-            termo={filterValue.search}
-            onAbrir={abrirAtendimento}
-            ocultarEncerrados={tab === "closed"}
-          />
+          {tab !== "phone" && (
+            <ResultadosPorProtocolo
+              termo={filterValue.search}
+              onAbrir={abrirAtendimento}
+              ocultarEncerrados={tab === "closed"}
+            />
+          )}
           {/* TODAS: os times viram chips com o total (e "N na fila"), no lugar
               dos grupos que empurravam o último time para o fim da lista. O
               trilho de abas não muda. */}
@@ -708,7 +739,12 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             />
           )}
           <div className="min-h-0 flex-1 overflow-hidden">
-            {tab === "closed" ? (
+            {tab === "phone" ? (
+              // A unidade desta aba é a LIGAÇÃO: quem está na fila do telefone,
+              // no menu, em ligação, e as perdidas de há pouco. Clicar numa
+              // linha abre a conversa dela à direita, como em qualquer aba.
+              <FilaDoTelefone consulta={filaDoTelefoneQ} selectedId={selectedId} onSelect={handleSelect} />
+            ) : tab === "closed" ? (
               // A unidade desta aba é o ATENDIMENTO, não a conversa: o que foi
               // encerrado continua aqui mesmo depois que o cliente volta e a
               // conversa reabre (ver `AtendimentosFechadosList`).
@@ -929,7 +965,11 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       </div>
 
       <InboxKeyboardShortcuts
-        visibleIds={visibleIds}
+        // Na aba Telefone não há lista de conversas na tela — e quem informa os
+        // ids visíveis é a lista. Sem isto, `j`/`k` seguiriam trocando de
+        // conversa pelas da aba ANTERIOR, que ninguém está vendo. Ao voltar, a
+        // lista remonta e informa as dela.
+        visibleIds={tab === "phone" ? SEM_CONVERSAS_VISIVEIS : visibleIds}
         selectedId={selectedId}
         onSelect={handleSelect}
         onFocusReply={handleFocusReply}
