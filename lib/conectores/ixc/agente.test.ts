@@ -27,7 +27,7 @@ type Linha = Record<string, string>;
 const MARIA: Linha = { id: "10", razao: "Maria Aparecida Souza", cnpj_cpf: "529.982.247-25", tipo_pessoa: "F", ativo: "S", telefone_celular: "(61) 99304-0271", data_nascimento: "1985-03-12", senha: "segredo" };
 const JOSE: Linha = { id: "20", razao: "José Souza", cnpj_cpf: "111.444.777-35", tipo_pessoa: "F", ativo: "S", telefone_celular: "(61) 99304-0271", data_nascimento: "1980-01-01", senha: "x" };
 const CONTRATO: Linha = { id: "700", id_cliente: "10", contrato: "Fibra 500 Mega", status: "A", status_internet: "FA", data_ativacao: "2024-03-10", endereco: "Rua das Flores", numero: "120", bairro: "Centro" };
-const fatura = (id: string, venc: string, extra: Linha = {}): Linha => ({ id, id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: venc, valor: "129.90", valor_aberto: "129.90", linha_digitavel: "", pix_txid: "", ...extra });
+const fatura = (id: string, venc: string, extra: Linha = {}): Linha => ({ id, id_cliente: "10", id_contrato: "700", status: "A", liberado: "S", data_vencimento: venc, valor: "129.90", valor_aberto: "129.90", linha_digitavel: "", pix_txid: "", ...extra });
 const LOGIN: Linha = { id: "5", id_cliente: "10", id_contrato: "700", login: "maria", ativo: "S", online: "N", ip: "100.64.10.27", mac: "AA:BB:CC:DD:EE:FF" };
 
 /** IXC de mentira: filtra pelo que o conector pediu e PROJETA nos campos pedidos, como `http.ts`. Uma tabela pode vir como `Error` — simula seção que falha. */
@@ -215,6 +215,22 @@ describe("consultar — o mesmo furo do crítico 1, um turno depois (vínculo j�
   });
 });
 
+describe("consultar — título que o IXC não liberou", () => {
+  it("o que a IA anuncia não inclui título não liberado: nem nas vencidas, nem no total, nem como a da vez", async () => {
+    listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]);
+    ixc({
+      cliente: [MARIA],
+      cliente_contrato: [CONTRATO],
+      fn_areceber: [fatura("7001", "2024-04-13", { valor: "159.80", valor_aberto: "159.80", liberado: "N" }), fatura("901", "2026-09-06"), fatura("950", "2026-10-12")],
+    });
+    const r = await agenteIxc.consultar({ ...BASE, identidadeDoTelefone: "sim" });
+    if (r.estado !== "identificado") throw new Error("inalcançável");
+    expect(r.financeiro?.vencidas).toEqual([{ vencimento: "2026-09-06", valorCents: 12990, diasDeAtraso: 16 }]);
+    expect(r.financeiro?.totalVencidoCents).toBe(12990);
+    expect(r.financeiro?.daVez?.vencimento).toBe("2026-09-06");
+  });
+});
+
 describe("clienteDe — status_internet desconhecido não é 'Liberado' com confiança (crítico 2)", () => {
   beforeEach(() => listarVinculos.mockResolvedValue([{ external_id: "10", verificado_por: "documento", created_at: "" }]));
 
@@ -360,6 +376,29 @@ describe("enviarCobranca — UMA fatura por vez (D2), limite (D5), Pix padrão (
     expect(r).toMatchObject({ resultado: "enviada", forma: "pix", enviadas: 2, previstas: 2, pixIndisponivel: false, auditoria: { faturaId: "901" } });
     expect(enviadas.map((m) => m.type)).toEqual(["image", "text"]);
     expect(buscarPix.mock.calls.map((c) => c[1])).toEqual(["901"]);
+  });
+
+  // O caso de produção (2026-10-07): título de uma venda nunca finalizada —
+  // `status = A`, `liberado = N`, vencido em 2024. Sem o filtro ele era "a mais
+  // atrasada", passava do limite, e a cliente ouvia que estava na Cobrança em vez
+  // de receber a fatura de 16 dias que devia de verdade.
+  const NAO_LIBERADA = fatura("7001", "2024-04-13", { id_contrato: "0", valor: "159.80", valor_aberto: "159.80", liberado: "N" });
+
+  it("título não liberado não é a fatura da vez: sai a que o cliente deve, e ninguém vai para a Cobrança", async () => {
+    ixc({ fn_areceber: [NAO_LIBERADA, fatura("901", "2026-09-06"), fatura("950", "2026-10-12")] });
+    const { portas: p } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toMatchObject({ resultado: "enviada", fatura: { vencimento: "2026-09-06", diasDeAtraso: 16 }, auditoria: { faturaId: "901" } });
+    expect(buscarPix.mock.calls.map((c) => c[1])).toEqual(["901"]);
+  });
+
+  it("só o título não liberado em aberto: não há fatura para cobrar — e nenhum Pix é gerado", async () => {
+    ixc({ fn_areceber: [NAO_LIBERADA] });
+    const { portas: p } = portas();
+    const r = await agenteIxc.enviarCobranca({ ...COBRAR, portas: p });
+    expect(r).toEqual({ resultado: "sem_fatura_em_aberto" });
+    expect(buscarPix).not.toHaveBeenCalled();
+    expect(p.enviar).not.toHaveBeenCalled();
   });
 
   it("acima do limite: NADA sai e o resultado é encaminhar_para_cobranca", async () => {

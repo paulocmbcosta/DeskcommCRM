@@ -17,14 +17,13 @@
 import type { CredencialDeConector, MotivoDeFalha } from "../tipos";
 import { FalhaDoConector } from "../tipos";
 import {
-  CAMPOS_DA_FATURA,
   CAMPOS_DA_FIBRA,
   CAMPOS_DA_OS,
   CAMPOS_DO_CONTRATO,
   CAMPOS_DO_LOGIN,
   CAMPOS_DO_TICKET,
 } from "./campos";
-import { hojeEmSaoPaulo, recortarFaturas, type RecorteDeFaturas } from "./faturas";
+import { hojeEmSaoPaulo, pedidoDeFaturasAbertas, recortarFaturas, type RecorteDeFaturas } from "./faturas";
 import { listarNoIxc, type Listagem } from "./http";
 import { clientePorId, type ClienteIxc } from "./identificar";
 import {
@@ -201,15 +200,7 @@ export async function montarResumo(
       campos: CAMPOS_DO_CONTRATO,
       limite: 20,
     }),
-    listarNoIxc(credencial, {
-      tabela: "fn_areceber",
-      filtro: porCliente("fn_areceber"),
-      tambem: [{ campo: "fn_areceber.status", operador: "=", valor: "A" }],
-      campos: CAMPOS_DA_FATURA,
-      limite: 50,
-      ordenarPor: "fn_areceber.data_vencimento",
-      ordem: "asc",
-    }),
+    listarNoIxc(credencial, pedidoDeFaturasAbertas(idDoCliente)),
     listarNoIxc(credencial, {
       tabela: "radusuarios",
       filtro: porCliente("radusuarios"),

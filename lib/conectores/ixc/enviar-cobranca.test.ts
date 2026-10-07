@@ -23,6 +23,7 @@ const FATURA = {
   id_cliente: "10",
   id_contrato: "1",
   status: "A",
+  liberado: "S",
   data_vencimento: "2026-09-10",
   valor: "129.90",
   valor_aberto: "129.90",
@@ -77,6 +78,23 @@ describe("enviarCobrancaIxc — boleto", () => {
     expect(JSON.stringify(enviadas)).not.toMatch(/https?:\/\//);
     expect(enviadas[1]).toEqual({ type: "text", body: FATURA.linha_digitavel, corpoImutavel: true });
     expect(buscarPix).not.toHaveBeenCalled();
+  });
+});
+
+describe("enviarCobrancaIxc — título que o IXC não liberou", () => {
+  // Uma aba aberta antes do conserto, ou um POST direto na rota, ainda pode pedir o
+  // id de um título `liberado = N`. Pedir `get_pix` faria o IXC GERAR uma cobrança
+  // de verdade para uma venda que nunca foi finalizada — e mandá-la ao cliente.
+  it.each(["pix", "boleto"] as const)("%s: recusa como fatura não encontrada, e não pede cobrança nenhuma ao IXC", async (forma) => {
+    listar.mockResolvedValue({ total: 1, registros: [{ ...FATURA, liberado: "N" }] });
+
+    const r = await pedido(forma);
+
+    expect(r).toEqual({ ok: false, motivo: "fatura_nao_encontrada" });
+    expect(buscarPix).not.toHaveBeenCalled();
+    expect(baixarBoleto).not.toHaveBeenCalled();
+    expect(guardados).toEqual([]);
+    expect(enviadas).toEqual([]);
   });
 });
 

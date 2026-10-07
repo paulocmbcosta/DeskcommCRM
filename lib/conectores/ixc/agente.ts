@@ -32,9 +32,8 @@ import type {
   ResultadoDaConsulta,
 } from "../tipos";
 import { listarVinculos, vincular } from "../vinculos";
-import { CAMPOS_DA_FATURA } from "./campos";
 import { enviarCobrancaIxc, type MotivoDaRecusa, type ResultadoDoEnvio } from "./enviar-cobranca";
-import { faturaDaVez, hojeEmSaoPaulo, recortarFaturas, type Fatura, type RecorteDeFaturas } from "./faturas";
+import { faturaDaVez, hojeEmSaoPaulo, pedidoDeFaturasAbertas, recortarFaturas, type Fatura, type RecorteDeFaturas } from "./faturas";
 import { listarNoIxc } from "./http";
 import { TETO_DE_CANDIDATOS, cadastrosQueConferem, clientePorId, clientesPorTelefone, dataInformada, type ClienteIxc } from "./identificar";
 import { documentoNaMascara, soDigitos } from "./mascara";
@@ -87,21 +86,9 @@ function paraAgente(f: Fatura): FaturaParaAgente {
   return { vencimento: f.vencimento, valorCents: f.valorCents, diasDeAtraso: f.diasDeAtraso };
 }
 
-/** As faturas ABERTAS de todos os cadastros: "a mais atrasada de todas" olha para todos. */
+/** As faturas ABERTAS (e liberadas) de todos os cadastros: "a mais atrasada de todas" olha para todos. */
 async function recorteDe(credencial: CredencialDeConector, cadastros: readonly string[], agora?: Date): Promise<RecorteDeFaturas> {
-  const listas = await Promise.all(
-    cadastros.map((id) =>
-      listarNoIxc(credencial, {
-        tabela: "fn_areceber",
-        filtro: { campo: "fn_areceber.id_cliente", operador: "=", valor: id },
-        tambem: [{ campo: "fn_areceber.status", operador: "=", valor: "A" }],
-        campos: CAMPOS_DA_FATURA,
-        limite: 50,
-        ordenarPor: "fn_areceber.data_vencimento",
-        ordem: "asc",
-      }),
-    ),
-  );
+  const listas = await Promise.all(cadastros.map((id) => listarNoIxc(credencial, pedidoDeFaturasAbertas(id))));
   return recortarFaturas(listas.flatMap((l) => l.registros), hojeEmSaoPaulo(agora));
 }
 

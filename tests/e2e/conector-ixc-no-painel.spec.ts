@@ -78,17 +78,24 @@ const TABELAS: Record<string, Linha[]> = {
     // é o caso MEDIDO EM PRODUÇÃO (2026-09-22), em que o IXC ainda não gerou o Pix e
     // o gera quando `get_pix` é chamado. `gateway_link` continua vindo do IXC, como
     // na instância real: o conector é que não o pede mais.
-    ...[-70, -40, -9].map((d, i) => ({ id: String(900 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: `00190.00009 01234.567890 12345.678901 2 9999000001299${i}`, pix_txid: i === 2 ? "" : `txid0271${i}`, gateway_link: `https://download.exemplo.com.br/boleto/${900 + i}`, gerencianet_token: "tok-secreto" })),
-    ...[20, 50, 80, 110, 140].map((d, i) => ({ id: String(950 + i), id_cliente: "10", id_contrato: "700", status: "A", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: i === 0 ? "00190.00009 01234.567890 12345.678901 2 99990000012999" : "", pix_txid: i === 0 ? "txid0271a" : "", gateway_link: "" })),
-    { id: "990", id_cliente: "10", id_contrato: "700", status: "R", data_vencimento: dia(-100), valor: "129.90", valor_aberto: "0.00", linha_digitavel: "", pix_txid: "", gateway_link: "" },
+    ...[-70, -40, -9].map((d, i) => ({ id: String(900 + i), id_cliente: "10", id_contrato: "700", status: "A", liberado: "S", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: `00190.00009 01234.567890 12345.678901 2 9999000001299${i}`, pix_txid: i === 2 ? "" : `txid0271${i}`, gateway_link: `https://download.exemplo.com.br/boleto/${900 + i}`, gerencianet_token: "tok-secreto" })),
+    ...[20, 50, 80, 110, 140].map((d, i) => ({ id: String(950 + i), id_cliente: "10", id_contrato: "700", status: "A", liberado: "S", data_vencimento: dia(d), valor: "129.90", valor_aberto: "129.90", linha_digitavel: i === 0 ? "00190.00009 01234.567890 12345.678901 2 99990000012999" : "", pix_txid: i === 0 ? "txid0271a" : "", gateway_link: "" })),
+    { id: "990", id_cliente: "10", id_contrato: "700", status: "R", liberado: "S", data_vencimento: dia(-100), valor: "129.90", valor_aberto: "0.00", linha_digitavel: "", pix_txid: "", gateway_link: "" },
     // A Bruna (60): uma vencida há 12 dias — dentro do limite de 70 —, sem Pix
     // gerado ainda (o fake gera sob demanda) e com boleto registrado; e uma a
     // vencer, que a fatura da vez nunca deveria escolher.
-    { id: "960", id_cliente: "60", id_contrato: "760", status: "A", data_vencimento: dia(-12), valor: "129.90", valor_aberto: "129.90", linha_digitavel: "00190.00009 01234.567890 12345.678901 2 99990000012996", pix_txid: "", gateway_link: "" },
-    { id: "961", id_cliente: "60", id_contrato: "760", status: "A", data_vencimento: dia(18), valor: "129.90", valor_aberto: "129.90", linha_digitavel: "", pix_txid: "", gateway_link: "" },
+    { id: "960", id_cliente: "60", id_contrato: "760", status: "A", liberado: "S", data_vencimento: dia(-12), valor: "129.90", valor_aberto: "129.90", linha_digitavel: "00190.00009 01234.567890 12345.678901 2 99990000012996", pix_txid: "", gateway_link: "" },
+    { id: "961", id_cliente: "60", id_contrato: "760", status: "A", liberado: "S", data_vencimento: dia(18), valor: "129.90", valor_aberto: "129.90", linha_digitavel: "", pix_txid: "", gateway_link: "" },
     // O Caio (70): vencida há 75 dias — ACIMA do limite de 70 que a tela vai
     // gravar — então a IA nunca deveria sequer pedir boleto/Pix desta fatura.
-    { id: "970", id_cliente: "70", id_contrato: "770", status: "A", data_vencimento: dia(-75), valor: "129.90", valor_aberto: "129.90", linha_digitavel: "00190.00009 01234.567890 12345.678901 2 99990000012997", pix_txid: "", gateway_link: "" },
+    { id: "970", id_cliente: "70", id_contrato: "770", status: "A", liberado: "S", data_vencimento: dia(-75), valor: "129.90", valor_aberto: "129.90", linha_digitavel: "00190.00009 01234.567890 12345.678901 2 99990000012997", pix_txid: "", gateway_link: "" },
+      // TÍTULO NÃO LIBERADO — o caso medido em produção em 2026-10-07: uma venda aberta
+    // e nunca finalizada deixa no IXC um título `status = A`, `liberado = N`, que as
+    // telas do IXC não mostram. Um para a Maria (o painel tem de continuar com TRÊS
+    // vencidas e R$ 389,70) e um para a Bruna (a IA tem de continuar enviando a
+    // fatura de 12 dias, em vez de mandá-la para a Cobrança por causa de 900).
+    { id: "998", id_cliente: "10", id_contrato: "0", status: "A", liberado: "N", data_vencimento: dia(-900), valor: "159.80", valor_aberto: "159.80", linha_digitavel: "", pix_txid: "", gateway_link: "" },
+    { id: "999", id_cliente: "60", id_contrato: "0", status: "A", liberado: "N", data_vencimento: dia(-900), valor: "159.80", valor_aberto: "159.80", linha_digitavel: "", pix_txid: "", gateway_link: "" },
   ],
   radusuarios: [
     { id: "5", id_cliente: "10", id_contrato: "700", login: "maria.conector", ativo: "S", online: "S", ip: "100.64.10.27", mac: "AA:BB:CC:DD:EE:FF", ultima_conexao_inicial: "2026-09-18 07:12:00", ultima_conexao_final: "2026-09-18 07:10:00", motivo_desconexao: "Lost-Carrier", senha: SENHAS[1]!, senha_rede_sem_fio: SENHAS[2]! },
@@ -436,6 +443,9 @@ test("conector IXC: o admin liga pela tela e o atendente vê contrato, bloqueio,
     await expect(painel.getByTestId("ixc-fatura-a-vencer")).toHaveCount(2);
     await expect(painel.getByTestId("ixc-outras-a-vencer")).toContainText("3");
     await expect(painel.getByTestId("ixc-total-vencido")).toContainText("389,70");
+    // O título NÃO LIBERADO (id 998, R$ 159,80, 900 dias) existe no IXC falso e não
+    // é cobrança: não soma no total, não conta como vencida, não aparece em lugar nenhum.
+    await expect(painel).not.toContainText("159,80");
 
     await expect(painel.getByTestId("ixc-conexao")).toContainText("Online");
     await expect(painel.getByTestId("ixc-conexao")).toContainText("100.64.10.27");

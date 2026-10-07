@@ -117,7 +117,7 @@ describe("estadoDoPainelIxc — já vinculado", () => {
   it("uma seção que falha NÃO apaga as outras: OS fora do escopo do token, financeiro de pé", async () => {
     ixcFalso({
       cliente: [MARIA],
-      fn_areceber: [{ id: "900", id_cliente: "10", status: "A", data_vencimento: "2026-09-01", valor: "99.90", valor_aberto: "99.90" }],
+      fn_areceber: [{ id: "900", id_cliente: "10", status: "A", liberado: "S", data_vencimento: "2026-09-01", valor: "99.90", valor_aberto: "99.90" }],
       su_oss_chamado: new FalhaDoConector("recurso_indisponivel", "ixc_su_oss_chamado_indisponivel"),
     });
     const estado = await estadoDoPainelIxc(BASE);
