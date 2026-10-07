@@ -416,20 +416,24 @@ export class BancoFalso implements PortaBanco {
     return this.ligacoes.get(id)!.team_id ?? this.timeDaConversa;
   };
   // ── as ordens da fila (0296) ──
-  /** As ordens do banco, pelo id. `abrirOrdemDaFila` põe uma aberta, como a API faria. */
+  /**
+   * As ordens do banco, pelo id. `abrirOrdemDaFila` põe uma aberta, como a API
+   * faria — recém-gravada (`idadeMs` 0), a não ser que o teste diga há quanto
+   * tempo ela espera o worker (o evento que atrasou na fila do laço).
+   */
   ordensDaFila = new Map<
     string,
     OrdemDaFilaDoBanco & { vcId: string; org: string; status: "open" | "ended"; desfecho?: DesfechoDaOrdemDaFila; motivo?: string | null }
   >();
-  abrirOrdemDaFila(o: OrdemDaFilaDoBanco & { vcId: string; org?: string }) {
-    this.ordensDaFila.set(o.id, { ...o, org: o.org ?? ORG, status: "open" });
+  abrirOrdemDaFila(o: Omit<OrdemDaFilaDoBanco, "idadeMs"> & { vcId: string; org?: string; idadeMs?: number }) {
+    this.ordensDaFila.set(o.id, { ...o, idadeMs: o.idadeMs ?? 0, org: o.org ?? ORG, status: "open" });
   }
   /** As escritas das ordens lançam (o banco caiu com a ordem em curso). */
   falharOrdensDaFila = false;
   ordemDaFilaAberta = async (org: string, vcId: string, id: string) => {
     const o = this.ordensDaFila.get(id);
     if (!o || o.org !== org || o.vcId !== vcId || o.status !== "open") return null;
-    return { id: o.id, kind: o.kind, requestedBy: o.requestedBy, toUserId: o.toUserId, toTeamId: o.toTeamId };
+    return { id: o.id, kind: o.kind, requestedBy: o.requestedBy, toUserId: o.toUserId, toTeamId: o.toTeamId, idadeMs: o.idadeMs };
   };
   encerrarOrdemDaFila = async (org: string, id: string, fim: { desfecho: DesfechoDaOrdemDaFila; motivo: string | null }) => {
     if (this.falharOrdensDaFila) throw new Error("banco fora do ar");

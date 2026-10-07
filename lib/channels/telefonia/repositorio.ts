@@ -1143,6 +1143,13 @@ export interface OrdemDaFilaDoBanco {
   requestedBy: string | null;
   toUserId: string | null;
   toTeamId: string | null;
+  /**
+   * Há quanto tempo a ordem foi gravada, em ms, no relógio do BANCO (`now()`
+   * contra o `created_at` que ele mesmo carimbou). É por ela que o worker não
+   * executa a ordem que venceu (`VALIDADE_DA_ORDEM_DA_FILA_S`) — a conta não
+   * depende de o relógio do worker bater com o do banco.
+   */
+  idadeMs: number;
 }
 
 /** A ordem ABERTA `id` desta ligação, nesta organização — ou `null`. */
@@ -1158,14 +1165,25 @@ export async function ordemDaFilaAberta(
     requested_by: string | null;
     to_user_id: string | null;
     to_team_id: string | null;
+    idade_ms: number | string;
   }>(
-    `select id, kind, requested_by, to_user_id, to_team_id
+    // `double precision`: `extract(epoch …)` é `numeric`, que o `pg` devolve como texto.
+    `select id, kind, requested_by, to_user_id, to_team_id,
+            (extract(epoch from (now() - created_at)) * 1000)::double precision as idade_ms
        from voice_call_queue_orders
       where id = $1 and organization_id = $2 and voice_call_id = $3 and status = 'open'`,
     [id, organizationId, voiceCallId],
   );
   const r = rows[0];
-  return r ? { id: r.id, kind: r.kind, requestedBy: r.requested_by, toUserId: r.to_user_id, toTeamId: r.to_team_id } : null;
+  if (!r) return null;
+  return {
+    id: r.id,
+    kind: r.kind,
+    requestedBy: r.requested_by,
+    toUserId: r.to_user_id,
+    toTeamId: r.to_team_id,
+    idadeMs: Number(r.idade_ms),
+  };
 }
 
 /** Fecha a ordem com o desfecho. Idempotente: a que já fechou não muda. */
@@ -1360,9 +1378,12 @@ interface AcaoNaFilaDoRegistro {
  * As ordens da fila que ACONTECERAM nesta ligação (`done`): quem a puxou, quem
  * a moveu e entre que times — na ordem em que foram pedidas. A recusada, a que
  * ninguém atendeu e a cancelada não mudaram a ligação e ficam fora do cartão.
- * Os nomes são os desta hora, e os times lidos DESTA organização. NUNCA lança,
- * pelo mesmo motivo de `menuDoRegistro`: é cosmético, e quem chama ainda tem o
- * "Ligar de volta".
+ * Os nomes são os desta hora, e os times lidos DESTA organização. O de quem
+ * pediu sai da régua única do banco (`fn_nome_do_usuario`, a mesma da leitura
+ * da fila em `fila-da-tela.ts`): o nome cadastrado e, sem ele, o que vem antes
+ * do `@` — NUNCA o e-mail inteiro, que ficaria gravado na conversa para todo
+ * mundo que a lê. NUNCA lança, pelo mesmo motivo de `menuDoRegistro`: é
+ * cosmético, e quem chama ainda tem o "Ligar de volta".
  */
 async function acoesNaFilaDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<AcaoNaFilaDoRegistro[]> {
   try {
@@ -1373,7 +1394,7 @@ async function acoesNaFilaDoRegistro(db: Queryable, l: LigacaoDoBanco): Promise<
       para_time: string | null;
     }>(
       `select o.kind,
-              (select coalesce(u.raw_user_meta_data->>'full_name', u.email) from auth.users u where u.id = o.requested_by) as por_nome,
+              public.fn_nome_do_usuario(o.requested_by) as por_nome,
               (select tm.name from attendance_teams tm where tm.id = o.from_team_id and tm.organization_id = o.organization_id) as de_time,
               (select tm.name from attendance_teams tm where tm.id = o.to_team_id and tm.organization_id = o.organization_id) as para_time
          from voice_call_queue_orders o

@@ -8,7 +8,8 @@
  * o id da ligação) de cada leitura e de cada escrita.
  *
  *  1. `ordemDaFilaAberta` só devolve a aberta DESTA organização e DESTA ligação
- *     (o evento da ARI é ponteiro: o id de outra organização não volta);
+ *     (o evento da ARI é ponteiro: o id de outra organização não volta) — e a
+ *     IDADE dela, medida no relógio do banco (o worker não executa a que venceu);
  *  2. `encerrarOrdemDaFila` fecha uma vez só, com cada desfecho do vocabulário,
  *     e não fecha a de outra organização;
  *  3. `recusarOrdemDaFilaOrfa` exige o PAR (ordem, ligação);
@@ -19,7 +20,9 @@
  *  6. `registrarNaConversa` leva ao cartão, em `fila`, as ordens que ACONTECERAM
  *     (`done`), com os nomes — na ligação perdida e na que tinha o cartão "em
  *     andamento"; sem ordem nenhuma a chave não existe; e a leitura que falha
- *     não derruba o registro.
+ *     não derruba o registro. O nome é o da régua única do banco
+ *     (`fn_nome_do_usuario`): de quem não cadastrou nome, o que vem antes do
+ *     `@` — o e-mail inteiro do colega nunca vai para a conversa.
  */
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -40,6 +43,9 @@ const OUTRA = "c0de0299-0000-4000-8000-00000000000b";
 const ANA = "c0de0299-1111-4000-8000-000000000001";
 const CAIO = "c0de0299-1111-4000-8000-000000000002";
 const ZE = "c0de0299-1111-4000-8000-000000000003";
+/** Membro de A que nunca cadastrou o nome: só tem o e-mail. */
+const SEM_NOME = "c0de0299-1111-4000-8000-000000000004";
+const EMAIL_SEM_NOME = "duda.pereira-0299@invariant.test";
 const SUPORTE = "c0de0299-2222-4000-8000-000000000001";
 const FINANCEIRO = "c0de0299-2222-4000-8000-000000000002";
 const TIME_OUTRA = "c0de0299-2222-4000-8000-000000000003";
@@ -107,9 +113,10 @@ beforeAll(async () => {
     `insert into auth.users (id, email, raw_user_meta_data) values
        ($1, 'ana-0299@invariant.test', '{"full_name":"Ana"}'),
        ($2, 'caio-0299@invariant.test', '{"full_name":"Caio"}'),
-       ($3, 'ze-0299@invariant.test', '{"full_name":"Zé de B"}')
+       ($3, 'ze-0299@invariant.test', '{"full_name":"Zé de B"}'),
+       ($4, $5, '{}')
      on conflict (id) do nothing`,
-    [ANA, CAIO, ZE],
+    [ANA, CAIO, ZE, SEM_NOME, EMAIL_SEM_NOME],
   );
   await pool.query(
     `insert into public.organizations (id, slug, legal_name, display_name) values
@@ -119,9 +126,9 @@ beforeAll(async () => {
   );
   await pool.query(
     `insert into public.user_organizations (user_id, organization_id, role, accepted_at) values
-       ($1, $4, 'manager', now()), ($2, $4, 'agent', now()), ($3, $5, 'agent', now())
+       ($1, $4, 'manager', now()), ($2, $4, 'agent', now()), ($3, $5, 'agent', now()), ($6, $4, 'agent', now())
      on conflict do nothing`,
-    [ANA, CAIO, ZE, ORG, OUTRA],
+    [ANA, CAIO, ZE, ORG, OUTRA, SEM_NOME],
   );
   await pool.query(
     `insert into public.attendance_teams (id, organization_id, name, slug) values
@@ -173,6 +180,7 @@ describe("a ordem aberta (o evento é ponteiro)", () => {
       requestedBy: CAIO,
       toUserId: CAIO,
       toTeamId: null,
+      idadeMs: expect.any(Number),
     });
     expect(await repo.ordemDaFilaAberta(pool, ORG, outraLigacao, mover)).toEqual({
       id: mover,
@@ -180,6 +188,7 @@ describe("a ordem aberta (o evento é ponteiro)", () => {
       requestedBy: ANA,
       toUserId: null,
       toTeamId: FINANCEIRO,
+      idadeMs: expect.any(Number),
     });
     // A organização errada, a ligação errada, e a ordem de outra organização: nada.
     expect(await repo.ordemDaFilaAberta(pool, OUTRA, vc, puxar)).toBeNull();
@@ -188,6 +197,23 @@ describe("a ordem aberta (o evento é ponteiro)", () => {
     expect(await repo.ordemDaFilaAberta(pool, ORG, vcDeB, deB)).toBeNull();
     // A própria organização de B a lê.
     expect((await repo.ordemDaFilaAberta(pool, OUTRA, vcDeB, deB))?.id).toBe(deB);
+  });
+
+  it("a idade da ordem vem do relógio do BANCO: a recém-gravada tem quase zero, e a de 31 s atrás, 31 s", async () => {
+    const vc = await novaLigacao(ORG);
+    const outraLigacao = await novaLigacao(ORG);
+    const nova = await novaOrdem({ org: ORG, vc, kind: "pull", quem: CAIO });
+    const velha = await novaOrdem({ org: ORG, vc: outraLigacao, kind: "pull", quem: CAIO });
+    await pool.query(`update public.voice_call_queue_orders set created_at = now() - interval '31 seconds' where id = $1`, [velha]);
+
+    const idadeDaNova = (await repo.ordemDaFilaAberta(pool, ORG, vc, nova))!.idadeMs;
+    const idadeDaVelha = (await repo.ordemDaFilaAberta(pool, ORG, outraLigacao, velha))!.idadeMs;
+    // Número (e não o texto que o `pg` devolve para `numeric`), em milissegundos.
+    expect(typeof idadeDaNova).toBe("number");
+    expect(idadeDaNova).toBeGreaterThanOrEqual(0);
+    expect(idadeDaNova).toBeLessThan(10_000);
+    expect(idadeDaVelha).toBeGreaterThanOrEqual(31_000);
+    expect(idadeDaVelha).toBeLessThan(41_000);
   });
 
   it("encerrar fecha uma vez só, e não alcança a de outra organização", async () => {
@@ -354,6 +380,22 @@ describe("as ordens no cartão da ligação", () => {
       { tipo: "pull", por_nome: "Caio", de_time: "Suporte", para_time: null },
       { tipo: "pull", por_nome: null, de_time: null, para_time: null },
     ]);
+  });
+
+  it("quem puxou ou moveu sem nome cadastrado aparece pelo que vem antes do @ — o e-mail do colega NÃO vai para a conversa", async () => {
+    const vc = await novaLigacao(ORG);
+    await ordemAcabada({ vc, kind: "pull", quem: SEM_NOME, desfecho: "done", deTime: SUPORTE, segundos: 1 });
+    await ordemAcabada({ vc, kind: "move", quem: SEM_NOME, desfecho: "done", deTime: SUPORTE, paraTime: FINANCEIRO, segundos: 2 });
+    const l = (await repo.encerrarLigacao(pool, ORG, vc, "cliente_desligou"))!;
+    await repo.registrarNaConversa(pool, l, "perdida", null);
+
+    const registro = await filaDoCartao(vc);
+    expect(registro.fila).toEqual([
+      { tipo: "pull", por_nome: "duda.pereira-0299", de_time: "Suporte", para_time: null },
+      { tipo: "move", por_nome: "duda.pereira-0299", de_time: "Suporte", para_time: "Financeiro" },
+    ]);
+    expect(JSON.stringify(registro.fila)).not.toContain("@");
+    expect(JSON.stringify(registro.fila)).not.toContain(EMAIL_SEM_NOME);
   });
 
   it("sem ordem que tenha acontecido, o registro não leva a chave `fila`", async () => {
