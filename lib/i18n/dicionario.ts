@@ -10140,6 +10140,19 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível carregar a espera da fila do telefone. Recarregue a página.": {
     es: "No se pudo cargar la espera de la cola del teléfono. Recarga la página.",
   },
+  // Telefonia — agir na fila (0296): as recusas das rotas de atender e de mover, e a leitura da ordem.
+  "Esta ligação já acabou.": { es: "Esta llamada ya terminó." },
+  "Esta ligação já foi atendida.": { es: "Esta llamada ya fue contestada." },
+  "Esta ligação ainda está no menu. Espere ela entrar na fila.": { es: "Esta llamada todavía está en el menú. Espera a que entre en la cola." },
+  "Seu telefone não está conectado. Recarregue a página e tente de novo.": { es: "Tu teléfono no está conectado. Recarga la página e inténtalo de nuevo." },
+  "Você está em outra ligação.": { es: "Estás en otra llamada." },
+  "Outra pessoa já está cuidando desta ligação.": { es: "Otra persona ya se está ocupando de esta llamada." },
+  // `{nome}` é quem já pediu para atender; trocado por `trocarMarcador`.
+  "{nome} já está atendendo esta ligação.": { es: "{nome} ya está atendiendo esta llamada." },
+  "Esse time não é desta organização.": { es: "Ese equipo no es de esta organización." },
+  "A ligação já está na fila desse time.": { es: "La llamada ya está en la cola de ese equipo." },
+  "Escolha para qual time mover.": { es: "Elige a qué equipo mover." },
+  "Pedido não encontrado.": { es: "Solicitud no encontrada." },
   // Janela de encerramento: assunto por time e resumo do atendimento (migration 0293).
   "Encerra o atendimento e registra o assunto e o resumo.": { es: "Cierra la atención y registra el asunto y el resumen." },
   "Encerrar conversa": { es: "Cerrar conversación" },
