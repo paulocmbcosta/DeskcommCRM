@@ -3798,12 +3798,14 @@ o que vale para eles é o job `invariants` do PR (`gh pr checks`).
   `originate`); que o JsSIP o entregue em `request.getHeader`; e que `answer()` chamado de dentro do
   `newRTCSession` atenda de fato. Se algum falhar, o telefone TOCA em vez de atender sozinho — a
   ligação ainda pode ser atendida à mão —, e é o caso 3.2 do roteiro que mostra.
-- **O formato do evento.** O leitor de `telefonia_fila` assume o `ChannelUserevent` com as variáveis
-  em `userevent`, igual ao da transferência. O evento DESTA entrega nunca passou por uma ARI de verdade.
+- **O formato do evento: MEDIDO depois do deploy** (2026-10-07, sonda na VPS com um aplicativo Stasis de
+  outro nome, sem ligação nenhuma): `POST /ari/events/user/telefonia_fila` responde `204` e o Asterisk
+  entrega `ChannelUserevent` com `eventname` e as variáveis em `userevent` — o que `lerOrdemDaFila` lê.
+  O que segue sem prova é o caminho inteiro: a rota de verdade emitindo e o worker agindo numa ligação.
 - **O botão "Atender" na tela.** Fora dos testes de componente, ninguém o viu: ele depende da
   credencial do ramal, que a rota só entrega com o Asterisk respondendo, e o e2e mede a ausência dele.
-- **O e2e desta entrega.** Escrito sem ser executado (acima). E, executado, ele prova a tela sobre
-  dados SEMEADOS: o clique em "Atender" e num time do menu de mover não entra — a rota entregaria a
+- **O e2e desta entrega.** Executado no GitHub Actions e verde (os três casos novos, runs 37556283135 e
+  37560031052). Ele prova a tela sobre dados SEMEADOS: o clique em "Atender" e num time do menu de mover não entra — a rota entregaria a
   ordem a um worker que no CI não existe.
 - **Os 10 s e os 15 s numa rede de verdade.** O toque de quem puxou dura 10 s e o navegador reconhece
   o pedido por 15 s do clique; quanto passa entre o clique e a ligação conectada, com um navegador
