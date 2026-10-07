@@ -427,3 +427,30 @@ export interface AvisosNaResposta {
   /** A lista completa, só para gerente e admin; `null` para os outros papéis e na leitura da faixa (`?so=ligados`). */
   times: AvisoDoTimePublico[] | null;
 }
+
+// ─── as ordens da fila: atender e mover (migration 0296) ──────────────────
+//
+// Uma ORDEM é o pedido de agir sobre uma ligação que espera na fila do telefone
+// (`voice_call_queue_orders`): a rota grava a linha, o worker a relê e age, e o
+// desfecho volta pela mesma linha. As três listas abaixo são o espelho dos CHECKs
+// do banco — quem confere um contra o outro é
+// tests/invariants/vocabulario-banco-x-typescript.test.ts. Valor novo entra nos
+// dois lados, no mesmo commit (migration + apêndice do baseline).
+
+/** `voice_call_queue_orders.kind` — `pull` ("Atender": puxa para o próprio ramal) ou `move` ("Mover": manda para a fila de outro time). */
+export const TIPOS_DA_ORDEM_DA_FILA = ["pull", "move"] as const;
+export type TipoDaOrdemDaFila = (typeof TIPOS_DA_ORDEM_DA_FILA)[number];
+
+/** `voice_call_queue_orders.status` — `open` enquanto acontece (no máximo uma por ligação), `ended` quando acaba. */
+export const SITUACOES_DA_ORDEM_DA_FILA = ["open", "ended"] as const;
+export type SituacaoDaOrdemDaFila = (typeof SITUACOES_DA_ORDEM_DA_FILA)[number];
+
+/**
+ * `voice_call_queue_orders.outcome` — nulo enquanto a ordem está aberta. `done` (a
+ * pessoa atendeu, ou a ligação mudou de time), `refused` (a rota ou o worker
+ * recusou — o porquê em `reason`, de vocabulário aberto), `no_answer` (quem puxou
+ * não atendeu a tempo, e a ligação volta ao rodízio) ou `cancelled` (a ligação
+ * acabou antes, ou o worker reiniciou).
+ */
+export const DESFECHOS_DA_ORDEM_DA_FILA = ["done", "refused", "no_answer", "cancelled"] as const;
+export type DesfechoDaOrdemDaFila = (typeof DESFECHOS_DA_ORDEM_DA_FILA)[number];

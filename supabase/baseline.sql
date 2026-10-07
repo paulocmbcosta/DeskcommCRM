@@ -30870,6 +30870,132 @@ comment on column public.attendance_teams.phone_queue_max_wait_seconds is
 
 notify pgrst, 'reload schema';
 
+-- ---- telefonia: as ordens da fila — atender e mover (migration 0296) ----
+-- Racional no cabeçalho de
+-- supabase/migrations/20261007020000_0296_telefonia_ordens_da_fila.sql e no
+-- desenho docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md §4.3.
+-- Uma linha por ORDEM sobre uma ligação que espera na fila: `pull` (o atendente
+-- a puxa para o próprio ramal) ou `move` (gerente/admin a manda para a fila de
+-- outro time). Quem escreve é a API (o pedido: `POST
+-- /api/v1/telefonia/chamadas/[id]/atender` e `…/mover`, com a organização da
+-- SESSÃO) e o worker da telefonia (o desfecho), os dois pela conexão direta;
+-- quem lê é a aba Telefone do Inbox. Cobrado em
+-- tests/invariants/telefonia-ordens-da-fila-schema.test.ts.
+--
+-- O `revoke all` é o que protege, e não o `grant select`: tabela nova de
+-- `public` nasce com TUDO concedido a anon, authenticated e service_role (o
+-- `ALTER DEFAULT PRIVILEGES … ON TABLES` do corpo deste arquivo, que é o default
+-- ACL de todo projeto Supabase), e GRANT só acrescenta.
+--
+-- Os CHECKs só quando faltam, NOT VALID, e validados enquanto estiverem assim: a
+-- tabela nasce com os quatro, então linha fora da regra só existe se alguém
+-- derrubou um à mão — e aí o CHECK volta valendo para toda linha nova e o
+-- update.sh avisa, em vez de quebrar. Sem cura de dado: não se inventa o tipo
+-- nem o desfecho de um pedido. Nenhuma função nova.
+
+-- 1. voice_call_queue_orders -------------------------------------------------------
+create table if not exists public.voice_call_queue_orders (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  voice_call_id   uuid not null,
+  kind            text not null,
+  requested_by    uuid references auth.users(id) on delete set null,
+  to_user_id      uuid references auth.users(id) on delete set null,
+  to_team_id      uuid,
+  from_team_id    uuid,
+  status          text not null default 'open',
+  outcome         text,
+  reason          text,
+  created_at      timestamptz not null default now(),
+  ended_at        timestamptz,
+  unique (organization_id, id),
+  foreign key (organization_id, voice_call_id) references public.voice_calls (organization_id, id) on delete cascade,
+  -- set null só da coluna: apagar o time não apaga a história da ordem.
+  foreign key (organization_id, to_team_id) references public.attendance_teams (organization_id, id)
+    on delete set null (to_team_id),
+  foreign key (organization_id, from_team_id) references public.attendance_teams (organization_id, id)
+    on delete set null (from_team_id)
+);
+
+do $chk_ordens_0296$
+declare
+  pendente text;
+begin
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_queue_orders'::regclass
+                    and conname = 'voice_call_queue_orders_kind_check') then
+    alter table public.voice_call_queue_orders add constraint voice_call_queue_orders_kind_check
+      check (kind in ('pull', 'move')) not valid;
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_queue_orders'::regclass
+                    and conname = 'voice_call_queue_orders_status_check') then
+    alter table public.voice_call_queue_orders add constraint voice_call_queue_orders_status_check
+      check (status in ('open', 'ended')) not valid;
+  end if;
+
+  -- Nulo enquanto a ordem não acaba; preenchido, só do vocabulário.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_queue_orders'::regclass
+                    and conname = 'voice_call_queue_orders_outcome_check') then
+    alter table public.voice_call_queue_orders add constraint voice_call_queue_orders_outcome_check
+      check (outcome is null or outcome in ('done', 'refused', 'no_answer', 'cancelled')) not valid;
+  end if;
+
+  -- Aberta não tem fim; encerrada tem.
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'public.voice_call_queue_orders'::regclass
+                    and conname = 'voice_call_queue_orders_fim_check') then
+    alter table public.voice_call_queue_orders add constraint voice_call_queue_orders_fim_check
+      check ((status = 'open') = (ended_at is null)) not valid;
+  end if;
+
+  -- A validação só do que ainda está NOT VALID: no banco são, a reaplicação não
+  -- varre a tabela de novo.
+  for pendente in
+    select k.conname from pg_constraint k
+     where k.conrelid = 'public.voice_call_queue_orders'::regclass and k.contype = 'c' and not k.convalidated
+       and k.conname in ('voice_call_queue_orders_kind_check', 'voice_call_queue_orders_status_check',
+                         'voice_call_queue_orders_outcome_check', 'voice_call_queue_orders_fim_check')
+     order by k.conname
+  loop
+    begin
+      execute format('alter table public.voice_call_queue_orders validate constraint %I', pendente);
+    exception when check_violation then
+      raise warning '0296: voice_call_queue_orders tem linha que viola % — o CHECK vale para toda linha nova (NOT VALID); corrija a linha e o próximo update.sh o valida', pendente;
+    end;
+  end loop;
+end $chk_ordens_0296$;
+
+create unique index if not exists voice_call_queue_orders_uma_aberta
+  on public.voice_call_queue_orders (voice_call_id) where status = 'open';
+create index if not exists voice_call_queue_orders_da_ligacao
+  on public.voice_call_queue_orders (organization_id, voice_call_id, created_at);
+
+-- 2. RLS, GRANT e policy -----------------------------------------------------------
+alter table public.voice_call_queue_orders enable row level security;
+
+revoke all on public.voice_call_queue_orders from public, anon, authenticated, service_role;
+grant select on public.voice_call_queue_orders to authenticated, service_role;
+
+drop policy if exists tenant_isolation_voice_call_queue_orders_all on public.voice_call_queue_orders;
+drop policy if exists tenant_isolation_voice_call_queue_orders_select on public.voice_call_queue_orders;
+create policy tenant_isolation_voice_call_queue_orders_select on public.voice_call_queue_orders for select to authenticated
+  using (organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin());
+
+-- 3. Comentários -------------------------------------------------------------------
+comment on table public.voice_call_queue_orders is
+  'Ordens sobre uma ligação que espera na fila do telefone: pull (um atendente a puxa para o próprio ramal) ou move (gerente/admin a manda para a fila de outro time). Aberta (status open) enquanto acontece — no máximo uma por ligação (índice voice_call_queue_orders_uma_aberta) —, encerrada com outcome. Escrita só pela API (o pedido) e pelo worker (o desfecho); pela REST é só leitura.';
+comment on column public.voice_call_queue_orders.kind is
+  'pull = "Atender": toca o ramal de quem pediu (to_user_id). move = "Mover": a ligação vai para a fila de to_team_id. Nos dois, from_team_id é o time em que ela esperava.';
+comment on column public.voice_call_queue_orders.outcome is
+  'done (a pessoa atendeu, ou a ligação mudou de time), no_answer (quem puxou não atendeu a tempo: a ligação volta ao rodízio), refused (a rota ou o worker recusou; o porquê em reason), cancelled (a ligação acabou antes, ou o worker reiniciou). NULL enquanto aberta.';
+comment on column public.voice_call_queue_orders.reason is
+  'Vocabulário aberto, sem CHECK: o motivo de refused/cancelled (telefonia_indisponivel, worker_reiniciou…). Lido pela tela e pelo log.';
+
+notify pgrst, 'reload schema';
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES

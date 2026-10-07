@@ -336,6 +336,30 @@ const PARES: Array<{
     arquivo: "lib/telefonia/vocabulario.ts",
     simbolo: "ESTADOS_DA_TRANSFERENCIA",
   },
+  {
+    tabela: "voice_call_queue_orders",
+    coluna: "kind",
+    // migration 0296 — as ordens da fila do telefone (atender e mover). Nasce com
+    // os três pares no mesmo commit.
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "TIPOS_DA_ORDEM_DA_FILA",
+  },
+  {
+    tabela: "voice_call_queue_orders",
+    coluna: "status",
+    // `status` também aparece em `…_fim_check` (aberta não tem fim), que só o
+    // MENCIONA: quem define o vocabulário é `…_status_check`, e o extrator separa.
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "SITUACOES_DA_ORDEM_DA_FILA",
+  },
+  {
+    tabela: "voice_call_queue_orders",
+    coluna: "outcome",
+    // Aqui `outcome` ENTRA (o da transferência fica fora): o CHECK é só
+    // "nulo ou um destes", sem cruzar com `status`, e o espelho mecânico o lê.
+    arquivo: "lib/telefonia/vocabulario.ts",
+    simbolo: "DESFECHOS_DA_ORDEM_DA_FILA",
+  },
 ];
 
 /** Tira um nível de parênteses externos, se ele envolver a expressão inteira. */
