@@ -95,6 +95,17 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     restart: unless-stopped
+    # Quanto o Docker espera entre o SIGTERM e o SIGKILL. O padrão é 10 s, e o
+    # worker precisa de mais: ele drena os jobs em curso por até SHUTDOWN_GRACE_MS
+    # (30 s) e, se o prazo acabar, devolve à fila os que não terminaram (até 8 s —
+    # `lib/agent-engine/queue/parada.ts`). Com 10 s o SIGKILL chegava ANTES: o
+    # worker morria com os jobs ainda marcados como dele, e eles ficavam
+    # invisíveis até o reaper, 10 minutos depois — medido em produção em
+    # 2026-10-05, um cliente esperou mais de 20 minutos pela resposta.
+    #
+    # É TETO, não espera: worker sem trabalho em curso sai em menos de 1 s.
+    # Quem confere a conta: tests/unit/parada-do-worker-cabe-no-prazo-do-docker.test.ts.
+    stop_grace_period: 45s
     env_file: .env
     environment:
       # dentro da rede do compose, o WAHA é o serviço 'waha' na porta interna 3000

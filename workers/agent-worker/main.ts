@@ -16,8 +16,10 @@ import { StaleServiceBoundaryError } from "@/lib/atendimento/fronteira";
  * loops (worker, drain, cron, holds, saúde do número).
  *
  * Graceful shutdown: SIGTERM/SIGINT → para de claimar, drena jobs em curso até
- * SHUTDOWN_GRACE_MS, fecha healthz e pool, sai 0. Morte súbita é o caso do
- * reaper — lease expira e o job volta.
+ * SHUTDOWN_GRACE_MS, fecha healthz e pool, sai 0. Acabando o prazo com trabalho
+ * em curso, DEVOLVE os jobs à fila antes de sair 1 (`queue/parada.ts`) — o
+ * worker novo os retoma no primeiro claim. Morte súbita é o caso do reaper —
+ * lease expira e o job volta.
  *
  * Rodar: `pnpm worker` (tsx) — dev com --env-file=.env.local; container via
  * Dockerfile.worker (serviço `worker` do docker-compose).
@@ -106,6 +108,7 @@ import {
   type CacheAlertKnobs,
 } from "@/lib/agent-engine/obs/metrics";
 import { rodarLoopDaFila } from "@/lib/agent-engine/queue/loop";
+import { devolverPorConexaoPropria, drenarOuDevolver } from "@/lib/agent-engine/queue/parada";
 import {
   cancelJob,
   claimJobs,
@@ -515,8 +518,9 @@ export async function startWorker(
     },
     // O `{ signal }` é o que faz o `docker stop` não esperar a espera inteira —
     // e é por isso que `rodarLoopDaFila` trata a rejeição em vez de propagá-la:
-    // `sleep` abortado REJEITA, e essa rejeição chegaria ao `await workerLoop`
-    // logo abaixo, matando o processo antes do drain dos jobs em voo.
+    // `sleep` abortado REJEITA, e um loop que rejeita no desligamento é ruído no
+    // log de toda parada (a espera da parada, em `queue/parada.ts`, hoje aguenta
+    // a rejeição — mas a regra do loop é resolver, e ela continua valendo).
     dormir: (ms) => sleep(ms, undefined, { signal: loopsAbort.signal }),
     deveParar: () => shuttingDown,
     intervalos: {
@@ -543,33 +547,31 @@ export async function startWorker(
     server.close();
     server.closeIdleConnections();
     loopsAbort.abort();
-    await Promise.all([
-      drainLoop,
-      eventLogLoop,
-      healthLoop,
-      cronLoop,
-      sessionWatchdogLoop,
-      flywheelLoop,
-      voiceCallsBridgeLoop,
-      telefoniaLoop,
-    ]);
-    await workerLoop;
-    let graceTimer: NodeJS.Timeout | undefined;
-    const grace = new Promise<"grace">((resolve) => {
-      graceTimer = setTimeout(() => resolve("grace"), env.SHUTDOWN_GRACE_MS);
+    // O prazo cobre loops E jobs, contado daqui — e não só os jobs, depois de os
+    // loops pararem. Com o banco travado, um loop de fundo tem consulta na fila
+    // atrás da mesma trava que prendeu o job: esperar por ele sem prazo entregava
+    // a hora de morrer ao SIGKILL do Docker, com os jobs ainda marcados como
+    // deste processo por 10 minutos. Ver `queue/parada.ts`.
+    const desfecho = await drenarOuDevolver({
+      loops: [
+        drainLoop,
+        eventLogLoop,
+        healthLoop,
+        cronLoop,
+        sessionWatchdogLoop,
+        flywheelLoop,
+        voiceCallsBridgeLoop,
+        telefoniaLoop,
+        workerLoop,
+      ],
+      emVoo: () => inFlight,
+      prazoMs: env.SHUTDOWN_GRACE_MS,
+      // Conexão PRÓPRIA, nunca o `pool`: quando o prazo acaba, o pool é
+      // justamente o que os jobs presos estão segurando.
+      devolver: () => devolverPorConexaoPropria(env.SUPABASE_DB_URL, workerId),
+      log,
     });
-    const outcome = await Promise.race([
-      Promise.all([...inFlight]).then(() => "drained" as const),
-      grace,
-    ]);
-    clearTimeout(graceTimer);
-    if (outcome === "grace") {
-      log.error("shutdown: jobs em curso não drenaram no prazo — saindo sem esperar", {
-        grace_ms: env.SHUTDOWN_GRACE_MS,
-        in_flight: inFlight.size,
-      });
-      process.exit(1);
-    }
+    if (desfecho === "prazo") process.exit(1);
     await pool.end();
     log.info("worker encerrado limpo", {});
     resolveStopped();

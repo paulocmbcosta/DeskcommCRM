@@ -134,7 +134,11 @@ function chamaCadeiaReal(args: { body: string; armado: boolean }): {
   inserts: ReturnType<typeof vi.fn>;
 } {
   const client = { query: vi.fn().mockResolvedValue({ rows: [] }), release: vi.fn() };
-  const inserts = vi.fn().mockResolvedValue({ rows: [{ id: "trace-1" }] });
+  // As leituras de estado vão pelo pool (ver o ⚠️ do cabeçalho de before-send.ts):
+  // elas voltam vazias, e só as ESCRITAS autônomas devolvem linha.
+  const inserts = vi.fn(async (sql: string, _params?: unknown[]) =>
+    /^\s*insert\b/i.test(String(sql)) ? { rows: [{ id: "trace-1" }] } : { rows: [] },
+  );
   const pool = { connect: vi.fn().mockResolvedValue(client), query: inserts } as unknown as pg.Pool;
   const log: Logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return {
@@ -176,9 +180,11 @@ describe("a cadeia REAL barra o vazamento — e só quando armada", () => {
       detail: { leaked_count: 1, leaked_kinds: "snake_case,tool" },
     });
     // E a medição sobrevive ao rollback do veto: escrita autônoma em before_send_traces.
-    const sql = String(inserts.mock.calls[0]?.[0] ?? "");
-    expect(sql).toMatch(/insert into before_send_traces/);
-    expect(inserts.mock.calls[0]?.[1]).toContain("internal_vocabulary_leak");
+    // Procurado pelo SQL, não pela posição: o pool também responde as leituras de
+    // estado, que vêm antes.
+    const doTrace = inserts.mock.calls.find(([q]) => /insert into before_send_traces/.test(String(q)));
+    expect(doTrace, "o insert em before_send_traces aconteceu").toBeDefined();
+    expect(doTrace![1]).toContain("internal_vocabulary_leak");
   });
 
   it("DESARMADA: o MESMO corpo é enviado — o flag é o que decide, e ele chega", async () => {

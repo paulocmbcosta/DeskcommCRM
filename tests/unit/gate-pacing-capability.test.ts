@@ -109,7 +109,12 @@ describe('o skipped do gate chega em before_send_traces', () => {
       evaluate: (ctx) => pacingGate.evaluate({ ...ctx, provider: 'meta_cloud' }),
     };
     const client = { query: vi.fn().mockResolvedValue({ rows: [] }), release: vi.fn() };
-    const persisted = vi.fn().mockResolvedValue({ rows: [{ id: 'trace-1' }] });
+    // O pool responde DUAS coisas: as leituras de estado (que não passam mais pelo
+    // client da transação — ver o ⚠️ do cabeçalho de before-send.ts) e o insert do
+    // trace, que é a linha sob prova aqui.
+    const persisted = vi.fn(async (sql: string, _params?: unknown[]) =>
+      String(sql).includes('insert into before_send_traces') ? { rows: [{ id: 'trace-1' }] } : { rows: [] },
+    );
     const pool = { connect: vi.fn().mockResolvedValue(client), query: persisted } as unknown as pg.Pool;
     const log: Logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -135,7 +140,7 @@ describe('o skipped do gate chega em before_send_traces', () => {
     const insert = persisted.mock.calls.find(([sql]) => String(sql).includes('before_send_traces'));
     expect(insert).toBeDefined();
     // params[4] = jsonb do trace: é ESTA linha que o auditor lê depois.
-    expect(JSON.parse(insert![1][4])).toEqual([
+    expect(JSON.parse(String(insert![1]![4]))).toEqual([
       { gate: 'pacing', verdict: 'skipped', code: 'not_applicable' },
     ]);
   });
@@ -155,16 +160,17 @@ describe('o skipped do gate chega em before_send_traces', () => {
     // anti-ban veta; em 'meta_cloud' ele desarma e o envio passa. Dentro da janela
     // comercial, para que a cortesia (que vale nos dois canais) não decida o
     // desfecho e mascare a diferença.
-    const client = {
-      query: vi.fn(async (sql: string) => {
-        const q = String(sql);
-        if (q.includes('from channel_sessions')) return { rows: [{ provider }] };
-        if (q.includes('from pacing_ledger')) return { rows: [{ last_sent_at: null, sent_today: '999' }] };
-        return { rows: [] };
-      }),
-      release: vi.fn(),
-    };
-    const persisted = vi.fn().mockResolvedValue({ rows: [{ id: 'trace-1' }] });
+    // "O banco" é o POOL: as leituras de estado não passam pelo client da
+    // transação (ver o ⚠️ do cabeçalho de before-send.ts). O client fica com o
+    // que é dele — begin, advisory lock, as escritas do fim.
+    const client = { query: vi.fn().mockResolvedValue({ rows: [] }), release: vi.fn() };
+    const persisted = vi.fn(async (sql: string) => {
+      const q = String(sql);
+      if (q.includes('insert into before_send_traces')) return { rows: [{ id: 'trace-1' }] };
+      if (q.includes('from channel_sessions')) return { rows: [{ provider }] };
+      if (q.includes('from pacing_ledger')) return { rows: [{ last_sent_at: null, sent_today: '999' }] };
+      return { rows: [] };
+    });
     const pool = { connect: vi.fn().mockResolvedValue(client), query: persisted } as unknown as pg.Pool;
     const log: Logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 

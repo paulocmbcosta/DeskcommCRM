@@ -57,7 +57,15 @@ describe("conteudoDoSistema", () => {
 
   it("no runner: a legenda do sistema NÃO entra na janela de cópias que julga os outros", async () => {
     const client = { query: vi.fn(async (_sql: string) => ({ rows: [] })), release: vi.fn() };
-    const pool = { connect: vi.fn().mockResolvedValue(client), query: vi.fn().mockResolvedValue({ rows: [{ id: "t" }] }) } as unknown as pg.Pool;
+    // As leituras de estado vão pelo pool (ver o ⚠️ do cabeçalho de before-send.ts);
+    // só o insert do trace devolve linha. As ESCRITAS do fim — entre elas a de
+    // `outbound_copies`, que é o que este caso mede — continuam no client.
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+      query: vi.fn(async (sql: string) =>
+        String(sql).includes("insert into before_send_traces") ? { rows: [{ id: "t" }] } : { rows: [] },
+      ),
+    } as unknown as pg.Pool;
     const log: Logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const r = await runBeforeSend({
       pool, log,
