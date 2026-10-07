@@ -53,6 +53,10 @@ export const CAMPOS_DA_FATURA = [
   "id_cliente",
   "id_contrato",
   "status",
+  // `S`/`N`. Título `N` é financeiro que o IXC ainda NÃO liberou (venda aberta e
+  // nunca finalizada, por exemplo): fica com `status = A` para sempre e não é
+  // cobrança — ver `tituloLiberado` em `faturas.ts`.
+  "liberado",
   "data_vencimento",
   "valor",
   "valor_aberto",

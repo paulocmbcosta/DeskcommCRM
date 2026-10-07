@@ -110,6 +110,7 @@ const FATURA = {
   id_cliente: "10",
   id_contrato: "1",
   status: "A",
+  liberado: "S",
   data_vencimento: "2026-09-01",
   valor: "129.90",
   valor_aberto: "129.90",

@@ -67,6 +67,13 @@ HTTP do conector recebe a lista de campos permitidos por tabela e descarta o res
 - Fatura "aberta" (`status=A`) ≠ vencida: a maioria é parcela futura. 91% das vencidas
   já trazem `linha_digitavel` e `gateway_link` (PDF na Efí) na listagem — **enviar
   fatura é leitura pura**.
+- **"Em aberto" também não basta: o título tem de estar liberado (`liberado=S`).**
+  Medido em 2026-10-07: título `status=A` com `liberado=N` é financeiro que o IXC não
+  liberou — as telas do IXC o escondem e `listar` o devolve. No caso que revelou isso,
+  era o título de uma venda (`vd_saida`) aberta e nunca finalizada; a venda finalizada
+  do mesmo dia tinha o título liberado. Eram 72 na base (66 cadastros, 13 com contrato
+  ativo; 60 vindos de venda), todos vencidos, nenhum com boleto. A pergunta ao IXC é uma
+  só — `pedidoDeFaturasAbertas`, em `ixc/faturas.ts` — e pede as duas coisas.
 - OS = `su_oss_chamado` (aberta = status ≠ `F`). Atendimento = `su_ticket` (aberto =
   `su_status` ≠ `S`). Conexão = `radusuarios`. Sinal = `radpop_radio_cliente_fibra`
   (`sinal_rx/tx` + `data_sinal` — leitura guardada, não medição ao vivo).

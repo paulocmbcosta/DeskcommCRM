@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { faturaDaVez, hojeEmSaoPaulo, lerFatura, reaisParaCents, recortarFaturas } from "./faturas";
+import { CAMPOS_DA_FATURA } from "./campos";
+import { faturaDaVez, hojeEmSaoPaulo, lerFatura, pedidoDeFaturasAbertas, reaisParaCents, recortarFaturas } from "./faturas";
 
 const HOJE = "2026-09-19";
 
@@ -9,6 +10,7 @@ function fatura(id: string, vencimento: string, extra: Record<string, string> = 
     id,
     id_contrato: "1",
     status: "A",
+    liberado: "S",
     data_vencimento: vencimento,
     valor: "99.90",
     valor_aberto: "99.90",
@@ -97,6 +99,59 @@ describe("lerFatura", () => {
   });
 });
 
+describe("título NÃO LIBERADO não é cobrança (medido em produção em 2026-10-07)", () => {
+  // O caso real: em 14/03/2024 abriram uma venda de R$ 159,80 e não a finalizaram —
+  // refizeram outra, de R$ 79,90, paga no mesmo dia. A primeira ficou no IXC com um
+  // título `status = A` e `liberado = N`. As telas do IXC não o mostram; o painel o
+  // mostrava como "vencida há 906 dias", na frente da fatura que a cliente devia.
+  const HOJE = "2026-10-07";
+  const FANTASMA = fatura("7001", "2024-04-13", { valor: "159.80", valor_aberto: "159.80", linha_digitavel: "", pix_txid: "", liberado: "N" });
+  const CARNE = [fatura("9102", "2026-10-20"), fatura("9103", "2026-11-20"), fatura("9104", "2026-12-21")];
+
+  it("não entra nas vencidas, no total, nem na contagem das que vão vencer", () => {
+    const r = recortarFaturas([FANTASMA, ...CARNE], HOJE);
+    expect(r.vencidas).toEqual([]);
+    expect(r.totalVencidoCents).toBe(0);
+    expect(r.proximas.map((f) => f.id)).toEqual(["9102", "9103"]);
+    expect(r.outrasAVencer).toBe(1);
+  });
+
+  it("não vira a fatura da vez na frente da que o cliente deve de verdade", () => {
+    const r = recortarFaturas([FANTASMA, fatura("9101", "2026-09-21"), ...CARNE], HOJE);
+    expect(faturaDaVez([...r.vencidas, ...r.proximas])).toMatchObject({ id: "9101", diasDeAtraso: 16 });
+  });
+
+  it("só `S` libera: campo vazio ou código que este conector nunca viu também não é cobrança", () => {
+    expect(lerFatura(fatura("1", "2026-09-01", { liberado: "" }), HOJE)).toBeNull();
+    expect(lerFatura(fatura("1", "2026-09-01", { liberado: "X" }), HOJE)).toBeNull();
+  });
+
+  it("controle: a mesma linha, liberada, é lida", () => {
+    expect(lerFatura({ ...FANTASMA, liberado: "S" }, HOJE)).toMatchObject({ id: "7001", valorCents: 15980, situacao: "vencida" });
+  });
+});
+
+describe("pedidoDeFaturasAbertas — a pergunta que o painel e a IA fazem ao IXC", () => {
+  it("pede as abertas E liberadas do cadastro, pela lista branca, da mais antiga para a mais nova", () => {
+    expect(pedidoDeFaturasAbertas("10")).toEqual({
+      tabela: "fn_areceber",
+      filtro: { campo: "fn_areceber.id_cliente", operador: "=", valor: "10" },
+      tambem: [
+        { campo: "fn_areceber.status", operador: "=", valor: "A" },
+        { campo: "fn_areceber.liberado", operador: "=", valor: "S" },
+      ],
+      campos: CAMPOS_DA_FATURA,
+      limite: 50,
+      ordenarPor: "fn_areceber.data_vencimento",
+      ordem: "asc",
+    });
+  });
+
+  it("o campo que decide a liberação vem na resposta — sem ele a releitura do envio não teria como conferir", () => {
+    expect(CAMPOS_DA_FATURA).toContain("liberado");
+  });
+});
+
 describe("reaisParaCents — dinheiro é inteiro", () => {
   it.each([
     ["129.90", 12990],
@@ -123,7 +178,7 @@ describe("hojeEmSaoPaulo", () => {
 describe("faturaDaVez — UMA fatura por vez (regra do dono, 22/09)", () => {
   const HOJE = "2026-09-22";
   const f = (id: string, venc: string) =>
-    lerFatura({ id, id_cliente: "10", status: "A", data_vencimento: venc, valor: "100.00", valor_aberto: "100.00" }, HOJE)!;
+    lerFatura({ id, id_cliente: "10", status: "A", liberado: "S", data_vencimento: venc, valor: "100.00", valor_aberto: "100.00" }, HOJE)!;
 
   it("a vencida MAIS ANTIGA vence qualquer outra", () => {
     const escolhida = faturaDaVez([f("3", "2026-09-10"), f("1", "2026-07-14"), f("9", "2026-10-12"), f("2", "2026-08-13")]);

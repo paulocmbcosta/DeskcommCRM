@@ -13,7 +13,21 @@
  * "Hoje" é a data em São Paulo, não em UTC: às 22h de um dia 10, em UTC já é dia
  * 11, e a fatura que vence dia 10 apareceria como vencida para quem ainda tem
  * duas horas para pagar.
+ *
+ * E "EM ABERTO" NÃO BASTA: o título tem de estar LIBERADO (`liberado = S`). Um
+ * título `status = A` com `liberado = N` é financeiro que o IXC ainda não
+ * liberou: as telas do IXC não o mostram e ninguém o cobra — mas `listar` o
+ * devolve como qualquer outro. Medido em produção em 2026-10-07: uma venda
+ * (`vd_saida`) de R$ 159,80 aberta em 14/03/2024 e nunca finalizada (refeita no
+ * mesmo dia por R$ 79,90 — essa, finalizada, liberada e paga) aparecia no painel
+ * como "vencida há 906 dias", na frente da fatura que a cliente devia de verdade
+ * e muito acima do limite de dias que faz a IA mandar a pessoa para a Cobrança.
+ * Na base inteira eram 72 títulos assim, de 66 cadastros — 60 vindos de venda —,
+ * todos já vencidos e NENHUM com boleto registrado.
  */
+import { CAMPOS_DA_FATURA } from "./campos";
+import type { PedidoDeListagem } from "./http";
+
 export const PROXIMAS_A_MOSTRAR = 2;
 
 export type SituacaoDaFatura = "vencida" | "a_vencer";
@@ -85,7 +99,42 @@ function diasEntre(deYmd: string, ateYmd: string): number {
   return Math.round((ate - de) / 86_400_000);
 }
 
+/**
+ * O título é cobrança? Só quando o IXC diz que SIM (`S`). Campo vazio ou código
+ * que este conector nunca viu não libera nada: "não sei" não vira dívida na tela
+ * de um atendente nem na boca da IA.
+ */
+export function tituloLiberado(registro: Record<string, string>): boolean {
+  return registro.liberado === "S";
+}
+
+/**
+ * A PERGUNTA que se faz ao IXC por "as faturas em aberto deste cadastro" — uma
+ * só, para o painel (`resumo.ts`) e para a IA (`agente.ts`). Enquanto eram duas
+ * cópias do mesmo filtro, consertar uma deixaria a outra cobrando o que a tela
+ * já não mostra.
+ */
+export function pedidoDeFaturasAbertas(idDoCliente: string): PedidoDeListagem {
+  return {
+    tabela: "fn_areceber",
+    filtro: { campo: "fn_areceber.id_cliente", operador: "=", valor: idDoCliente },
+    tambem: [
+      { campo: "fn_areceber.status", operador: "=", valor: "A" },
+      { campo: "fn_areceber.liberado", operador: "=", valor: "S" },
+    ],
+    campos: CAMPOS_DA_FATURA,
+    limite: 50,
+    ordenarPor: "fn_areceber.data_vencimento",
+    ordem: "asc",
+  };
+}
+
 export function lerFatura(registro: Record<string, string>, hoje: string): Fatura | null {
+  // A segunda catraca: o filtro de `pedidoDeFaturasAbertas` já pede só as
+  // liberadas, mas quem relê UMA fatura pelo id (`enviar-cobranca.ts`) não passa
+  // por ele — e pedir `get_pix` de um título não liberado faria o IXC gerar uma
+  // cobrança de verdade para uma venda que nunca existiu.
+  if (!tituloLiberado(registro)) return null;
   const vencimento = (registro.data_vencimento ?? "").slice(0, 10);
   // `0000-00-00` é o "nunca" do IXC: tem forma de data, ordena antes de qualquer
   // hoje, e viraria "vencida há 0 dias" na tela.
@@ -111,7 +160,7 @@ export function lerFatura(registro: Record<string, string>, hoje: string): Fatur
   };
 }
 
-/** Recebe as faturas ABERTAS do cliente (qualquer ordem) e aplica a regra. */
+/** Recebe as faturas ABERTAS do cliente (qualquer ordem) e aplica a regra. Título não liberado fica de fora (`lerFatura`). */
 export function recortarFaturas(registros: Record<string, string>[], hoje: string): RecorteDeFaturas {
   const lidas = registros
     .map((r) => lerFatura(r, hoje))
