@@ -874,7 +874,7 @@ rede_de_saida_do_asterisk() {  # rede_de_saida_do_asterisk <contêiner> "<IP>/<b
   for r in $redes; do n=$((n + 1)); done
   if [ "$n" -le 1 ]; then printf '%s' "$redes"; return 0; fi
   # 192.0.2.1 é endereço de documentação: nada é enviado, só se pergunta a rota.
-  origem="$(com_prazo 15 docker exec "$ast" ip -4 route get 192.0.2.1 2>/dev/null | sed -n 's/.* src \([0-9][0-9.]*\).*/\1/p' | head -1)" || origem=""
+  origem="$(com_prazo 20 docker exec "$ast" timeout 10 ip -4 route get 192.0.2.1 2>/dev/null | sed -n 's/.* src \([0-9][0-9.]*\).*/\1/p' | head -1)" || origem=""
   for r in $redes; do
     if [ "${r%/*}" = "$origem" ]; then printf '%s' "$r"; return 0; fi
   done
@@ -890,17 +890,30 @@ medir_porta_sip() {  # medir_porta_sip <imagem> "<IP>/<bits> …"  → "<certas>
   printf '%s\n' "$tabela" | veredito_da_porta_sip "$2"
 }
 
+# Uma pergunta ao Asterisk, com DOIS prazos. O de fora (`com_prazo`) solta o
+# kit; o de dentro mata o cliente `asterisk -rx` no contêiner — sem ele, cada
+# pergunta a um Asterisk travado deixaria um processo pendurado lá dentro, e a
+# função pergunta várias vezes. O `timeout` de dentro é o do busybox da imagem.
+perguntar_ao_asterisk() {  # perguntar_ao_asterisk <contêiner> <comando do CLI>
+  com_prazo 20 docker exec "$1" timeout 10 asterisk -rx "$2" 2>/dev/null
+}
+
 # Os números (troncos) que o Asterisk tem, um por linha: "<nome> <estado>".
-# Sai != 0 se o Asterisk não respondeu — de novo, "não sei" não é "nenhum".
+# Sai != 0 se o Asterisk não respondeu — "não sei" não é "nenhum".
+#
+# O formato é o do Asterisk 20.11, medido com nome curto e com o de produção
+# (`tronco-<uuid>`, que estoura a primeira coluna e corta a URI em `sip:172.20`):
+# o nome é o que vem antes da barra, e o estado é a terceira palavra.
 registros_sip() {  # registros_sip <contêiner do Asterisk>
   local saida
-  saida="$(com_prazo 15 docker exec "$1" asterisk -rx 'pjsip show registrations' 2>/dev/null)" || return 1
+  saida="$(perguntar_ao_asterisk "$1" 'pjsip show registrations')" || return 1
   printf '%s\n' "$saida" | awk '$1 ~ /^[^<=\/]+\/sips?:/ { n = $1; sub(/\/.*/, "", n); print n, $3 }'
 }
 
 # Quantos números estão registrados agora, para o `update.sh` guardar ANTES de
-# recriar o Asterisk: é a régua de "voltaram". Vazio quando não deu para saber
-# (telefonia desligada, Asterisk fora do ar) — e aí a régua passa a ser "todos".
+# recriar o Asterisk: é a régua de "voltaram". VAZIO quando não deu para saber
+# (telefonia desligada, Asterisk fora do ar), e aí a régua passa a ser "todos";
+# `0` quando deu para saber e não havia nenhum — e aí não se espera nenhum.
 troncos_registrados_agora() {  # troncos_registrados_agora [envfile]
   local lista
   telefonia_ligada "${1:-.env}" || return 0
@@ -915,12 +928,12 @@ troncos_registrados_agora() {  # troncos_registrados_agora [envfile]
 # retoma a que já tem duas pontas conversando).
 canais_do_asterisk() {  # canais_do_asterisk <contêiner>  → o número; sai != 0 se não deu para saber
   local saida
-  saida="$(com_prazo 15 docker exec "$1" asterisk -rx 'core show channels count' 2>/dev/null)" || return 1
+  saida="$(perguntar_ao_asterisk "$1" 'core show channels count')" || return 1
   printf '%s\n' "$saida" | awk '/active channel/ { print $1; ok = 1; exit } END { if (!ok) exit 1 }'
 }
 
 # O comando de quem precisa resolver à mão — o mesmo do runbook, com o nome do
-# projeto DESTA instalação. Impresso sempre que o kit não conseguiu sozinho.
+# projeto DESTA instalação. Impresso quando o kit não conseguiu nem LER a tabela.
 conserto_manual_da_porta_sip() {
   local proj; proj="$(nome_do_projeto_atual)"
   c_ylw "  Para resolver à mão (pode rodar com o CRM no ar):"
@@ -932,12 +945,28 @@ conserto_manual_da_porta_sip() {
 # Reenvia os números ao Asterisk: reinicia o worker, que ao reconectar empurra
 # todos os troncos de novo (`sincronizar(true)`, lib/channels/telefonia/laco.ts)
 # — a não ser que haja ligação em curso.
-# Sai 0 = reiniciou · 2 = adiou, há ligação · 1 = não conseguiu reiniciar.
+#
+# A guarda FALHA FECHADA: se o Asterisk não diz quantos canais tem, não se
+# reinicia. "Não respondeu" não é "não há ligação" — um Asterisk no teto de
+# memória, com gente na linha, é exatamente o que demora a responder. Pergunta
+# três vezes antes de desistir, porque logo depois do `up -d` ele ainda está
+# subindo e o silêncio dura um ou dois segundos.
+#
+# Sai 0 = reiniciou · 2 = adiou (há ligação, ou não deu para saber) · 1 = não
+# conseguiu reiniciar. Quem chama diz o que falta; aqui se diz o porquê.
 reenviar_numeros_sip() {  # reenviar_numeros_sip <contêiner do Asterisk> <contêiner do worker>
-  local canais
-  # Asterisk que não responde não tem ligação para derrubar: "não sei" vira 0.
-  canais="$(canais_do_asterisk "$1")" || canais=0
-  case "$canais" in ""|*[!0-9]*) canais=0 ;; esac
+  local canais="" tentativa=0
+  while [ "$tentativa" -lt 3 ]; do
+    if canais="$(canais_do_asterisk "$1")"; then break; fi
+    canais=""
+    tentativa=$((tentativa + 1))
+    if [ "$tentativa" -lt 3 ]; then sleep "$TELEFONIA_PAUSA"; fi
+  done
+  case "$canais" in
+    ""|*[!0-9]*)
+      c_ylw "  O Asterisk não respondeu se há ligação em curso: NÃO reiniciei o worker, que derrubaria quem estivesse na linha."
+      return 2 ;;
+  esac
   if [ "$canais" -gt 0 ]; then
     c_ylw "  Há ligação em curso (${canais} canal(is) no Asterisk): NÃO reiniciei o worker, para não derrubá-la."
     return 2
@@ -958,8 +987,10 @@ reenviar_numeros_sip() {  # reenviar_numeros_sip <contêiner do Asterisk> <cont�
 # refazer — e, se o worker não subisse, ninguém ficaria sabendo.
 #
 # A prova é a linha que o próprio worker escreve a cada tronco empurrado
-# (lib/channels/telefonia/sincronizacao.ts). O texto é contrato entre os dois
-# arquivos: tests/shell/telefonia-porta-sip.test.sh reprova se um mudar sozinho.
+# (lib/channels/telefonia/sincronizacao.ts), e só a escrita DEPOIS do reinício:
+# no log dele sempre há uma anterior, a de quando subiu com a atualização. O
+# texto é contrato entre os dois arquivos: tests/shell/telefonia-porta-sip.test.sh
+# reprova se um mudar sozinho.
 MARCA_DE_TRONCO_ENVIADO="tronco enviado ao Asterisk"
 worker_reenviou_desde() {  # worker_reenviou_desde <contêiner do worker> <instante, em segundos desde 1970>
   local saida
@@ -973,8 +1004,10 @@ worker_reenviou_desde() {  # worker_reenviou_desde <contêiner do worker> <insta
 # Confere a porta SIP e, se ela ficou presa ou desviada, conserta e espera os
 # números voltarem. Três modos:
 #
-#   atualizacao → o do `update.sh`, logo depois do `up -d`. Porta certa = uma
-#                 linha e segue; não espera nem reinicia nada.
+#   atualizacao → o do `update.sh`, logo depois do `up -d`. Com a porta certa
+#                 não reinicia nada; se havia número registrado antes, espera
+#                 eles voltarem (quem os reenvia é o worker que acabou de subir)
+#                 e diz quantos voltaram.
 #   manual      → o do `religar-telefonia.sh`. Além da porta, cobra os números:
 #                 com a porta certa e algum número fora, reenvia uma vez.
 #   reenviar    → o do `religar-telefonia.sh --reenviar`. Reenvia SEMPRE, mesmo
@@ -987,9 +1020,10 @@ worker_reenviou_desde() {  # worker_reenviou_desde <contêiner do worker> <insta
 #   - agir com a telefonia desligada ou com o Asterisk fora do ar;
 #   - mexer na tabela quando a medida diz que está tudo certo — limpar uma
 #     conexão saudável é exatamente o que abre a corrida do cabeçalho;
-#   - reiniciar o worker com ligação em curso. A atualização já derrubou as que
-#     havia ao recriar o Asterisk; uma que começou DEPOIS não é dela para
-#     derrubar. Sem o reinício os números voltam sozinhos, só mais devagar;
+#   - reiniciar o worker com ligação em curso, ou sem conseguir saber se há. A
+#     atualização já derrubou as que havia ao recriar o Asterisk; uma que
+#     começou DEPOIS não é dela para derrubar. Sem o reinício os números voltam
+#     sozinhos, só mais devagar;
 #   - falhar a atualização: quem chama põe `|| true`, e ela só devolve 1 para
 #     dizer "não ficou bom" a quem perguntou (o script manual).
 #
@@ -998,7 +1032,7 @@ worker_reenviou_desde() {  # worker_reenviou_desde <contêiner do worker> <insta
 religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [números registrados antes]
   local modo="${1:-manual}" antes="${2:-}" envfile=".env"
   local proj ast worker dados rodando imagem redes rede
-  local medida certas desviadas presas lista total reg alvo nome rc
+  local medida certas desviadas presas lista lida total reg alvo nome rc
   local rodada=0 reenvio="" pendente="" refazer="" inicio=0 desde=0
 
   telefonia_ligada "$envfile" || return 0
@@ -1006,6 +1040,7 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
   proj="$(nome_do_projeto_atual)"
   ast="${proj}-asterisk-1"
   worker="${proj}-worker-1"
+  case "$antes" in *[!0-9]*) antes="" ;; esac
 
   dados="$(com_prazo 30 docker inspect "$ast" --format '{{.State.Running}} {{.Image}} {{range .NetworkSettings.Networks}}{{.IPAddress}}/{{.IPPrefixLen}} {{end}}' 2>/dev/null)" || dados=""
   # O último nome do `read` fica com o resto da linha: todas as redes.
@@ -1022,7 +1057,7 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
     # leitura enxerga já deixou a sua linha na tabela que a medida vai ler. Na
     # ordem inversa, um registro feito entre as duas passaria por "voltou" sem
     # ninguém ter olhado por que porta.
-    lista="$(registros_sip "$ast")" || lista=""
+    if lista="$(registros_sip "$ast")"; then lida=1; else lista=""; lida=""; fi
     medida="$(medir_porta_sip "$imagem" "$rede")" || medida=""
     if [ -z "$medida" ]; then
       c_ylw "⚠ Telefonia: não consegui ler a tabela de conexões do servidor, então não sei se a"
@@ -1032,6 +1067,11 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
       return 1
     fi
     read -r certas desviadas presas <<<"$medida" || true
+    # Linha de Asterisk antigo não volta depois de apagada: o contêiner dela não
+    # existe mais. "Presa" que reaparece depois da limpeza é outro programa VIVO
+    # falando pela 5060 na mesma rede (a do proxy é compartilhada) — não
+    # é nossa, e limpá-la de novo a cada volta só atrapalharia o vizinho.
+    if [ "$rodada" -ge 1 ]; then presas=0; fi
 
     if [ $((desviadas + presas)) -gt 0 ]; then
       if [ "$rodada" -ge "$TELEFONIA_RODADAS" ]; then
@@ -1059,7 +1099,7 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
       # numa linha de comando: só passa o que tem cara de nome de objeto.
       while read -r nome _; do
         case "$nome" in ""|*[!A-Za-z0-9_.-]*) continue ;; esac
-        com_prazo 15 docker exec "$ast" asterisk -rx "pjsip qualify $nome" >/dev/null 2>&1 || true
+        perguntar_ao_asterisk "$ast" "pjsip qualify $nome" >/dev/null 2>&1 || true
       done <<<"$lista"
       c_dim "  limpei a tabela de conexões (só UDP, porta ${PORTA_SIP}): ${presas} presa(s), ${desviadas} desviada(s)"
       # Se o Asterisk novo JÁ falou pela porta errada, o registro pode ter sido
@@ -1072,7 +1112,13 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
     fi
 
     # Daqui para baixo a porta está certa.
-    if [ "$rodada" -eq 0 ] && [ "$modo" = atualizacao ]; then
+    #
+    # Na atualização, com a porta certa de primeira e sem número nenhum para
+    # esperar (não havia registrado antes, ou não deu para saber): uma linha e
+    # segue. Havendo, cai na espera abaixo — sem reiniciar nada: quem reenvia é
+    # o worker que acabou de subir, e "a porta não ficou presa" lido uma vez,
+    # antes de o Asterisk novo ter falado, ainda não é "os números voltaram".
+    if [ "$rodada" -eq 0 ] && [ "$modo" = atualizacao ] && [ "${antes:-0}" -eq 0 ]; then
       c_grn "✓ telefonia: a porta ${PORTA_SIP} não ficou presa — nada a corrigir"
       return 0
     fi
@@ -1089,34 +1135,47 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
       desde="$(date +%s)"
       rc=0; reenviar_numeros_sip "$ast" "$worker" || rc=$?
       case "$rc" in 0) reenvio=feito ;; 2) reenvio=adiado ;; *) reenvio=falhou ;; esac
-      # O worker leva alguns segundos para subir e empurrar: a lista lida no
-      # topo desta volta é a de ANTES do reinício.
-      [ "$reenvio" = feito ] && { sleep "$TELEFONIA_PAUSA"; continue; }
+      # O prazo de espera conta do reinício, não da primeira limpeza: só o
+      # `docker restart` pode levar dez segundos, e o worker ainda tem de subir.
+      # E a lista lida no topo desta volta é a de ANTES dele.
+      if [ "$reenvio" = feito ]; then inicio="$desde"; sleep "$TELEFONIA_PAUSA"; continue; fi
     fi
 
     total="$(printf '%s\n' "$lista" | awk 'NF { n++ } END { printf "%d", n }')"
     reg="$(printf '%s\n' "$lista" | awk '$2 == "Registered" { n++ } END { printf "%d", n }')"
-    # A régua de "voltaram": os que estavam registrados antes; sem saber, todos.
-    alvo="$total"
-    case "$antes" in
-      ""|*[!0-9]*) ;;
-      *) if [ "$antes" -gt 0 ] && [ "$antes" -lt "$total" ]; then alvo="$antes"; fi ;;
-    esac
+    # A régua de "voltaram": os que estavam registrados antes — inclusive ZERO
+    # (um número que já era recusado antes não vira motivo de espera) e inclusive
+    # MAIS do que o Asterisk tem agora (aí falta o worker enviar algum). Sem
+    # saber quantos eram, a régua é todos.
+    alvo="${antes:-$total}"
+
+    # À mão, com a porta certa e o Asterisk sem número nenhum: não há o que
+    # religar, e reiniciar o worker de quem só veio conferir seria mexer sem
+    # motivo. Se há número cadastrado e ele não chegou aqui, o `--reenviar` é que
+    # faz o worker empurrar.
+    if [ "$modo" = manual ] && [ "$rodada" -eq 0 ] && [ -n "$lida" ] && [ "$total" -eq 0 ]; then
+      c_grn "✓ telefonia: a porta ${PORTA_SIP} está certa, e o Asterisk não tem número nenhum para registrar."
+      c_dim "  (se há número cadastrado em Conexões › Telefone, o worker não o enviou: rode com --reenviar)"
+      return 0
+    fi
+
     # "Registrado" só vale como prova quando o registro é NOVO:
     #   - se o Asterisk chegou a falar pela porta errada (`refazer`), o que está
     #     na lista pode ser o registro feito por ela — só conta depois de reenviado;
     #   - depois de um reinício, só conta com o worker tendo reenviado de fato.
-    if [ "$total" -gt 0 ] && [ "$reg" -ge "$alvo" ] \
+    if [ -n "$lida" ] && [ "$total" -gt 0 ] && [ "$reg" -ge "$alvo" ] \
        && { [ -z "$refazer" ] || [ "$reenvio" = feito ]; } \
        && { [ "$reenvio" != feito ] || worker_reenviou_desde "$worker" "$desde"; }; then
-      if [ "$rodada" -eq 0 ] && [ -z "$reenvio" ]; then
+      if [ "$rodada" -gt 0 ]; then
+        c_grn "✓ telefonia: porta ${PORTA_SIP} recuperada — ${reg} de ${total} número(s) registrado(s) na operadora"
+      elif [ "$reenvio" = feito ]; then
+        c_grn "✓ telefonia: números reenviados — ${reg} de ${total} registrado(s) na operadora, pela porta ${PORTA_SIP}"
+      elif [ "$modo" = atualizacao ]; then
+        c_grn "✓ telefonia: a porta ${PORTA_SIP} não ficou presa — ${reg} de ${total} número(s) registrado(s) na operadora"
+      else
         # "Constam", e não "estão": sem ter reenviado, o que se leu foi a lista
         # do Asterisk — ver o modo `reenviar` no cabeçalho.
         c_grn "✓ telefonia: a porta ${PORTA_SIP} está certa e ${reg} de ${total} número(s) constam como registrados — nada a corrigir"
-      elif [ "$rodada" -eq 0 ]; then
-        c_grn "✓ telefonia: números reenviados — ${reg} de ${total} registrado(s) na operadora, pela porta ${PORTA_SIP}"
-      else
-        c_grn "✓ telefonia: porta ${PORTA_SIP} recuperada — ${reg} de ${total} número(s) registrado(s) na operadora"
       fi
       if [ "$reg" -lt "$total" ]; then
         c_dim "  ($((total - reg)) já não estava(m) registrado(s) antes — o motivo está em Conexões › Telefone)"
@@ -1129,13 +1188,13 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
     if [ "$modo" != atualizacao ] && [ -z "$reenvio" ]; then
       desde="$(date +%s)"
       rc=0; reenviar_numeros_sip "$ast" "$worker" || rc=$?
-      case "$rc" in 0) reenvio=feito ;; 2) reenvio=adiado ;; *) reenvio=falhou ;; esac
+      case "$rc" in 0) reenvio=feito; inicio="$desde" ;; 2) reenvio=adiado ;; *) reenvio=falhou ;; esac
     fi
 
     if [ "$reenvio" = adiado ]; then
-      c_ylw "⚠ Telefonia: a porta ${PORTA_SIP} está certa, mas falta o worker reenviar os números — e ele não foi"
-      c_ylw "  reiniciado por causa da ligação em curso. Eles se registram sozinhos em até 5 minutos."
-      c_ylw "  Para adiantar, quando a ligação acabar: bash hostgator-setup-kit/religar-telefonia.sh --reenviar"
+      c_ylw "⚠ Telefonia: a porta ${PORTA_SIP} está certa, mas falta o worker reenviar os números, e ele não foi"
+      c_ylw "  reiniciado (o motivo está na linha acima). Eles se registram sozinhos em até 5 minutos."
+      c_ylw "  Para adiantar, sem ligação em curso: bash hostgator-setup-kit/religar-telefonia.sh --reenviar"
       return 1
     fi
     if [ "$reenvio" = falhou ]; then
@@ -1148,12 +1207,20 @@ religar_troncos_sip() {  # religar_troncos_sip <atualizacao|manual|reenviar> [n�
         c_ylw "⚠ Telefonia: a porta ${PORTA_SIP} está certa e reiniciei o worker, mas em ${TELEFONIA_PRAZO_DOS_REGISTROS} s não o vi"
         c_ylw "  reenviar os números ao Asterisk. Veja se ele subiu:"
         c_ylw "    docker compose $(dc_files) logs --tail=50 worker | grep -i telefonia"
+      elif [ -z "$lida" ]; then
+        c_ylw "⚠ Telefonia: a porta ${PORTA_SIP} está certa, mas o Asterisk não respondeu quais números tem —"
+        c_ylw "  não sei se registraram. Veja: docker compose $(dc_files) logs --tail=30 asterisk"
       elif [ "$total" -eq 0 ]; then
         c_ylw "⚠ Telefonia: a porta ${PORTA_SIP} está certa, mas o Asterisk não recebeu número nenhum do worker"
         c_ylw "  em ${TELEFONIA_PRAZO_DOS_REGISTROS} s. Se há número cadastrado em Conexões › Telefone, veja:"
         c_ylw "    docker compose $(dc_files) logs --tail=50 worker | grep -i telefonia"
+      elif [ -n "$antes" ] && [ "$antes" -gt "$total" ]; then
+        c_ylw "⚠ Telefonia: a porta ${PORTA_SIP} está certa, mas o Asterisk só recebeu ${total} número(s) do worker em"
+        c_ylw "  ${TELEFONIA_PRAZO_DOS_REGISTROS} s, e antes da atualização havia ${antes} registrado(s). Veja o que o worker diz:"
+        c_ylw "    docker compose $(dc_files) logs --tail=50 worker | grep -i telefonia"
       else
         c_ylw "⚠ Telefonia: a porta ${PORTA_SIP} está certa, mas só ${reg} de ${total} número(s) registraram em ${TELEFONIA_PRAZO_DOS_REGISTROS} s."
+        if [ -n "$antes" ]; then c_ylw "  Antes da atualização eram ${antes}."; fi
         c_ylw "  Aí não é mais a porta: é a operadora ou a senha. O motivo está em Conexões › Telefone."
       fi
       return 1

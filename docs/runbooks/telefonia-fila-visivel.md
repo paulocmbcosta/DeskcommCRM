@@ -124,14 +124,16 @@ entrada antiga expira, a nova já está de pé na porta errada, e o Asterisk a r
 
 **O `update.sh` conserta isto sozinho**, logo depois de subir a versão nova (bloco "Conferindo a
 telefonia"). Ele mede antes de agir: com a porta certa não mexe em nada, e com ligação em curso
-não reinicia o worker. O que esperar no fim da atualização:
+— ou sem conseguir saber se há — não reinicia o worker. O que esperar na saída da atualização:
 
 | A saída diz | O que aconteceu |
 |---|---|
-| `✓ telefonia: a porta 5060 não ficou presa — nada a corrigir` | o Asterisk voltou com o mesmo IP, ou ainda não tinha falado com a operadora |
+| `✓ telefonia: a porta 5060 não ficou presa — N de M número(s) registrado(s)` | o Asterisk voltou com o mesmo IP; os números que estavam registrados antes voltaram sozinhos |
+| `✓ telefonia: a porta 5060 não ficou presa — nada a corrigir` | idem, e não havia número registrado antes (ou não deu para saber): nada a esperar |
 | `✓ telefonia: porta 5060 recuperada — N de M número(s) registrado(s)` | estava presa; foi limpa, o worker reenviou os números e eles registraram |
-| `⚠ … NÃO reiniciei o worker … ligação em curso` | a porta foi consertada, mas os números só voltam sozinhos em até 5 minutos — ou na hora, com o comando abaixo e `--reenviar` |
+| `… NÃO reiniciei o worker` (há ligação em curso, ou o Asterisk não respondeu se há) | a porta foi consertada, mas os números só voltam sozinhos em até 5 minutos — ou na hora, com o comando abaixo e `--reenviar`, sem ligação em curso |
 | `⚠ … só N de M número(s) registraram` | a porta está certa; o que falta é com a operadora ou a senha (veja o motivo na tela) |
+| `⚠ … o Asterisk só recebeu M número(s) do worker … havia A` | a porta está certa, mas o worker não reenviou todos: veja o log dele |
 
 **A primeira atualização que TRAZ este conserto ainda não o usa**: quem roda é o `update.sh` da
 versão anterior, que já estava carregado. Nessa, e sempre que o Asterisk for recriado à mão (um

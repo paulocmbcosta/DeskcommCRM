@@ -19,18 +19,28 @@
 #                   constem como registrados. É o que a mensagem de "não
 #                   reiniciei o worker por causa da ligação em curso" pede.
 #
-# Nunca derruba ligação: com ligação em curso ele conserta a porta, não reinicia
-# o worker, e diz o que falta. Sai 0 quando ficou bom, 1 quando não.
+# Com ligação em curso — ou sem conseguir saber se há — ele conserta a porta, NÃO
+# reinicia o worker, e diz o que falta. Sai 0 quando ficou bom, 1 quando não.
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$KIT_DIR/_common.sh"
-enter_project
 
+USO="Uso: bash hostgator-setup-kit/religar-telefonia.sh [--reenviar]"
 MODO=manual
 case "${1:-}" in
   "") ;;
   --reenviar) MODO=reenviar ;;
-  *) die "Uso: religar-telefonia.sh [--reenviar]" ;;
+  -h|--help)
+    printf '%s\n\n' "$USO"
+    printf '  sem argumento  confere a porta do telefone (SIP 5060) e os números; conserta o que estiver errado.\n'
+    printf '  --reenviar     além disso, reinicia o worker para ele reenviar os números ao Asterisk.\n'
+    printf '\nCom ligação em curso o worker não é reiniciado. Com tudo certo, nada é mexido.\n'
+    exit 0 ;;
+  *) die "$USO" ;;
 esac
+# Argumento a mais não é ignorado calado: quem digitou esperava alguma coisa dele.
+[ $# -le 1 ] || die "$USO"
+
+enter_project
 
 # A mesma guarda do update.sh: uma segunda cópia do repositório reiniciaria o
 # worker da instalação que está no ar com base no .env DELA.

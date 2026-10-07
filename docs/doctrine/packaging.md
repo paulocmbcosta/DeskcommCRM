@@ -475,7 +475,7 @@ parque instalado** percorre, e é o único que a suíte de CI não exercita.
 | CI (mecânico) | `tests/unit/packaging-artefato-do-cliente.test.ts` | serviço `build:`-only, pin upstream solto, `pull_policy` trocado e versão que mente reprovam |
 | CI (mecânico) | `tests/shell/update-guard.test.sh` | atualização que não pina todas as imagens na versão reprova |
 | CI (mecânico) | `hostgator-setup-kit/test-validators.sh` | instalação que nasce em tag móvel reprova |
-| CI (mecânico) | `tests/shell/telefonia-porta-sip.test.sh` | atualização que recria o Asterisk e deixa a porta SIP presa ao contêiner anterior reprova — recriar contêiner é parte de TODA atualização, e o que ela quebra ao recriar é dívida do kit, não do operador |
+| CI (mecânico) | `tests/shell/telefonia-porta-sip.test.sh` | regressão no conserto da porta SIP reprova: o `update.sh` deixar de conferi-la depois de recriar o Asterisk, ou a regra (medir, limpar só UDP 5060, ocupar, reenviar sem derrubar ligação) perder uma perna. Recriar contêiner é parte de toda atualização, e o que ela quebra ao recriar é dívida do kit, não do operador. É um dublê: que a porta volta numa VPS foi medido em laboratório, não é o que o CI prova |
 | Gate de sessão | item 15 do Definition of Done (`CLAUDE.md`) | nenhuma task de imagem/compose/kit fecha sem responder |
 | Revisão | bloco de packaging em `CONTRIBUTING.md` | contribuidor externo sabe a régua antes do PR |
 | Operação | `docs/runbooks/deploy.md` | o procedimento reflete a lei |

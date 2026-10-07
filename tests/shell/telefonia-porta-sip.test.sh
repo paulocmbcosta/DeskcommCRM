@@ -23,6 +23,7 @@
 #      falar (`pjsip qualify`), é o Asterisk. Se não manda e a operadora disputa
 #      a porta, é ela — e o Asterisk sai desviado de novo.
 #   4. O ENCAIXE no update.sh, no Dockerfile e no log do worker.
+#   5. O SCRIPT `religar-telefonia.sh`, executado de verdade contra o dublê.
 #
 # O DUBLÊ NÃO É O DOCKER. Ele não prova que a 5060 volta numa VPS: isso foi
 # provado no laboratório, com NAT e Asterisk de verdade. Ele prova que a função
@@ -32,51 +33,70 @@
 # SABOTAGENS, uma por linha da regra, medidas em 2026-10-07. Cada uma foi
 # aplicada SOZINHA a uma cópia do arquivo (`KIT_COMUM=…` ou `UPDATE_SH=…` trocam
 # o que está sob prova), e à direita está o que fica vermelho: bloco × provas.
-# Nenhuma das 41 deixou a suíte verde.
-#   sem o passo OCUPAR ........................................... 3b×3 3c×4 3e×1 3m×1
-#   reinicia logo após limpar, sem conferir a porta .............. 3b×1 3i×1
-#   sem a guarda de ligação em curso ............................. 3e×5 3k×3
-#   sem a prova de que o worker reenviou ......................... 3f×3
-#   registro pela porta errada conta como 'voltou' ............... 3e×3 3k×2
-#   tabela ilegível vira 'está certo' ............................ 3h×4
-#   limpa mesmo com tudo certo ................................... 3a×5 3b×7 3c×3 3d×3 3e×3 3f×4 3g×4 3k×8 3l×1 3n×4
-#   não enxerga a linha presa .................................... 1×5 3d×3
-#   sobra desviada de um Asterisk antigo conta como presa ........ 1×1
-#   julga com a PRIMEIRA rede da lista, sem perguntar a rota ..... 3n×6
-#   sem saber a rota, julga com a primeira rede (não com todas) .. 3n×1
-#   com a rota conhecida, ainda julga com todas as redes ......... 3n×2
-#   qualquer IP de fora conta como presa ......................... 1×5 3n×2
-#   lê o 1º dport (a porta da operadora), não o último ........... 1×5 3b×5 3c×2 3e×4 3f×5 3g×3 3i×3 3l×1 3n×2
-#   limpa TODA a tabela UDP, não só a 5060 ....................... 3b×1 3l×1
-#   limpa a 5060 de qualquer protocolo ........................... 3b×1 3l×1
-#   ignora os registrados de antes (régua = todos) ............... 3g×2
-#   régua frouxa (basta 1 registrado) ............................ 3g×2
-#   sem limite de rodadas respeitado (10) ........................ 3i×4
-#   age com a telefonia desligada ................................ 3j×2
-#   age com o Asterisk parado .................................... 3j×1
-#   nunca usa o conntrack do servidor ............................ 3l×1
-#   usa o conntrack do servidor sem ser root ..................... 3a×1 3b×1 3h×5 3l×2
-#   nome do tronco sem filtro .................................... 3m×1
-#   à mão não reenvia o número recusado .......................... 3k×3
-#   --reenviar não força o reenvio ............................... 3k×4
-#   --reenviar adiado conta como feito ........................... 3k×2
-#   reinício que falha conta como feito .......................... 3k×1
-#   Unregistered casa como Registered ............................ 2×1
-#   'No objects found' vira um número ............................ 2×2 3b×1 3d×1 3e×1 3g×1 3k×4
-#   Asterisk mudo vira 'nenhum número' ........................... 2×2
-#   reinicia o worker no caminho da prevenção .................... 3d×1
-#   declara sucesso sem olhar os registros ....................... 3d×1 3g×2 3k×2
-#   usa pjsip send register no lugar do qualify .................. 3b×4 3c×4 3e×1 3m×1
-#   o texto procurado no log muda só no kit ...................... 3b×2 3c×1 3f×1 3g×4 3k×2 3l×1 3n×2 4×1
-#   com_prazo não roda o comando quando não há timeout ........... 2×5 3a×3 3b×10 3c×4 3d×4 3e×3 3f×4 3g×4 3h×2 3i×2 3k×7 3l×4 3m×1 3n×4
-#   update.sh: confere a telefonia DEPOIS da saúde do app ........ 4×1
-#   update.sh: sem o || true ..................................... 4×1
-#   update.sh: sem a guarda de telefonia ligada .................. 4×1
-#   update.sh: não passa os registrados de antes ................. 4×1
-#   update.sh: lê os registrados DEPOIS do up -d ................. 4×1
+# Nenhuma das 54 deixou a suíte verde.
+#   sem o passo OCUPAR .............................................. 3a2×1 3b×3 3c×4 3e×1 3e2×1 3m×1
+#   reinicia logo após limpar, sem conferir a porta ................. 3b×1 3i×1
+#   sem a guarda de ligação em curso ................................ 3e×5 3k×3 5×1
+#   guarda de ligação falha ABERTA (não soube = não há) ............. 3e2×3 3k×1
+#   pergunta pelos canais uma vez só ................................ 3e2×1
+#   sem a prova de que o worker reenviou ............................ 3f×3
+#   a prova do reenvio lê o log INTEIRO (sem --since) ............... 3f×4
+#   a prova do reenvio conta desde sempre (desde=0) ................. 3f×4
+#   registro pela porta errada conta como 'voltou' .................. 3e×3 3k×2 5×1
+#   tabela ilegível vira 'está certo' ............................... 3h×2
+#   limpa mesmo com tudo certo ...................................... 3a×8 3a2×6 3b×7 3c×3 3d×3 3e×3 3e2×3 3f×5 3g×8 3k×8 3l×1 3o×3 3p×1 3n×4 5×4
+#   não enxerga a linha presa ....................................... 1×5 3d×3 3o×1
+#   sobra desviada de um Asterisk antigo conta como presa ........... 1×1
+#   presa que reaparece é limpa de novo a cada volta ................ 3o×3
+#   julga com a PRIMEIRA rede da lista, sem perguntar a rota ........ 3n×5
+#   sem saber a rota, julga com a primeira rede (não com todas) ..... 3n×1
+#   com a rota conhecida, ainda julga com todas as redes ............ 3n×2
+#   qualquer IP de fora conta como presa ............................ 1×5 3n×2
+#   lê o 1º dport (a porta da operadora), não o último .............. 1×5 3a2×2 3b×5 3c×2 3e×4 3e2×2 3f×6 3g×3 3i×2 3l×1 3p×1 3n×2
+#   limpa TODA a tabela UDP, não só a 5060 .......................... 3b×1 3l×1
+#   limpa a 5060 de qualquer protocolo .............................. 3b×1 3l×1
+#   ignora os registrados de antes (régua = todos) .................. 3g×6
+#   zero registrados antes vira 'não sei' (régua = todos) ........... 3g×2
+#   mais registrados antes do que há agora vira 'todos' ............. 3g×2
+#   régua frouxa (basta 1 registrado) ............................... 3g×7
+#   declara sucesso sem olhar os registros .......................... 3a2×4 3d×1 3g×5 3k×2
+#   na atualização, 'não ficou presa' lido uma vez já é 'voltou' .... 3a×1 3a2×4
+#   na atualização, reinicia o worker quando os números não voltam .. 3a2×4 3d×1
+#   sem limite de rodadas respeitado (10) ........................... 3i×4
+#   age com a telefonia desligada ................................... 3j×2
+#   age com o Asterisk parado ....................................... 3j×1
+#   nunca usa o conntrack do servidor ............................... 3l×1
+#   usa o conntrack do servidor sem ser root ........................ 3a×1 3b×1 3h×5 3l×2 3p×1
+#   nome do tronco sem filtro ....................................... 3m×1
+#   à mão não reenvia o número recusado ............................. 3k×3
+#   à mão, sem número nenhum, reinicia o worker assim mesmo ......... 3k×2
+#   Asterisk mudo passa por 'não tem número nenhum' ................. 3k×1
+#   --reenviar não força o reenvio .................................. 3k×4 5×2
+#   --reenviar adiado conta como feito .............................. 3k×2 5×1
+#   reinício que falha conta como feito ............................. 3k×1
+#   Unregistered casa como Registered ............................... 2×1
+#   'No objects found' vira um número ............................... 2×2 3a×1 3a2×2 3b×1 3d×1 3e×1 3e2×1 3g×3 3k×6 5×4
+#   Asterisk mudo vira 'nenhum número' .............................. 2×2 3k×1
+#   pergunta ao Asterisk sem o prazo de dentro ...................... 2×1
+#   reinicia o worker no caminho da prevenção ....................... 3d×1 3o×1
+#   usa pjsip send register no lugar do qualify ..................... 3a2×1 3b×4 3c×4 3e×1 3e2×1 3m×1
+#   o texto procurado no log muda só no kit ......................... 3a2×1 3b×2 3c×1 3f×1 3g×8 3k×2 3l×1 3p×1 3n×2 4×1 5×2
+#   com_prazo não roda o comando quando não há timeout .............. 2×7 3a×6 3a2×6 3b×10 3c×4 3d×4 3e×3 3e2×3 3f×5 3g×8 3h×2 3i×2 3k×8 3l×4 3m×1 3o×2 3n×4 5×4
+#   docker restart sem o prazo de fora .............................. 3p×1
+#   update.sh: confere a telefonia DEPOIS da saúde do app ........... 4×1
+#   update.sh: sem o || true ........................................ 4×1
+#   update.sh: sem a guarda de telefonia ligada ..................... 4×1
+#   update.sh: não passa os registrados de antes .................... 4×1
+#   update.sh: lê os registrados DEPOIS do up -d .................... 4×1
 # As cinco últimas, do update.sh, aqui são conferidas no TEXTO do arquivo. A
 # prova de comportamento delas — o update.sh inteiro rodando — é o caso 16 de
 # tests/shell/update-guard.test.sh.
+#
+# Duas destas linhas existem porque uma revisão independente as achou PASSANDO:
+# a prova de "o worker reenviou" ficava verde lendo o log inteiro (sem `--since`)
+# e contando desde sempre, porque o dublê de `docker logs` não filtrava por
+# instante e o log do mundo nascia vazio. Num worker de verdade sempre há uma
+# linha de envio anterior. Hoje o dublê filtra e o mundo nasce com a linha velha.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -179,28 +199,34 @@ case "${1:-}" in
     [ -f "$M/imagem-sem-conntrack" ] && { echo 'exec: "conntrack": executable file not found in $PATH' >&2; exit 127; }
     shift 9; exec "$CONNTRACK_DO_MUNDO" "$@" ;;
   exec)
-    # docker exec <asterisk> ip -4 route get <endereço>: por onde o contêiner sai.
-    # A saída é a do busybox da imagem (copiada do laboratório).
-    if [ "${3:-}" = "ip" ]; then
-      ev "PERGUNTOU-A-ROTA"
-      [ -f "$M/sem-ip-route" ] && exit 1
-      printf '192.0.2.1 via 172.19.0.1 dev eth1  src %s \n' "$(cat "$M/saida-por")"
-      exit 0
-    fi
-    # docker exec <asterisk> asterisk -rx '<comando>'
-    cmd="${5:-}"
-    case "$cmd" in
-      "pjsip show registrations")
-        [ -f "$M/asterisk-mudo" ] && exit 1
-        cat "$M/registros" ;;
-      "core show channels count")
-        [ -f "$M/asterisk-mudo" ] && exit 1
-        printf '%s active channels\n%s active calls\n31 calls processed\n' "$(cat "$M/canais")" "$(cat "$M/canais")" ;;
-      "pjsip qualify "*)
-        ev "OCUPOU ${cmd#pjsip qualify }"
-        # O Asterisk falou: se a porta estava limpa, é dele.
-        if [ -f "$M/aberta" ]; then rm -f "$M/aberta"; cat "$M/linha-certa" >> "$M/tabela"; fi ;;
-      *) ev "COMANDO-DESCONHECIDO $cmd" ;;
+    # docker exec <asterisk> timeout <s> <programa> …  — o prazo de DENTRO é do kit
+    # (perguntar_ao_asterisk); o dublê o anota e segue para o programa.
+    shift 2
+    if [ "${1:-}" = "timeout" ]; then ev "PRAZO-DE-DENTRO $2"; shift 2; else ev "SEM-PRAZO-DE-DENTRO $*"; fi
+    case "${1:-}" in
+      ip)
+        # ip -4 route get <endereço>: por onde o contêiner sai. A saída é a do
+        # busybox da imagem (copiada do laboratório).
+        ev "PERGUNTOU-A-ROTA"
+        [ -f "$M/sem-ip-route" ] && exit 1
+        printf '192.0.2.1 via 172.19.0.1 dev eth1  src %s \n' "$(cat "$M/saida-por")" ;;
+      asterisk)
+        cmd="${3:-}"   # asterisk -rx '<comando>'
+        case "$cmd" in
+          "pjsip show registrations")
+            [ -f "$M/asterisk-mudo" ] && exit 1
+            cat "$M/registros" ;;
+          "core show channels count")
+            ev "PERGUNTOU-OS-CANAIS"
+            [ -f "$M/asterisk-mudo" ] && exit 1
+            [ -f "$M/canais-mudos" ] && exit 1
+            printf '%s active channels\n%s active calls\n31 calls processed\n' "$(cat "$M/canais")" "$(cat "$M/canais")" ;;
+          "pjsip qualify "*)
+            ev "OCUPOU ${cmd#pjsip qualify }"
+            # O Asterisk falou: se a porta estava limpa, é dele.
+            if [ -f "$M/aberta" ]; then rm -f "$M/aberta"; cat "$M/linha-certa" >> "$M/tabela"; fi ;;
+          *) ev "COMANDO-DESCONHECIDO $cmd" ;;
+        esac ;;
     esac ;;
   restart)
     ev "REINICIOU $2"
@@ -209,8 +235,15 @@ case "${1:-}" in
     # Asterisk registra. Um caso pode trocar isto por outro desfecho.
     if [ -f "$M/ao-reiniciar" ]; then . "$M/ao-reiniciar"; fi ;;
   logs)
+    # docker logs --since <instante> <contêiner>. O arquivo do mundo guarda
+    # "<instante> <linha>", e o `--since` FILTRA como o Docker filtra: no log do
+    # worker de verdade sempre há uma linha "tronco enviado" de antes do
+    # reinício (a de quando ele subiu com a atualização), e é só a de DEPOIS que
+    # prova alguma coisa. Sem `--since`, sai tudo — que é o defeito.
     ev "LEU-O-LOG"
-    cat "$M/log-do-worker" 2>/dev/null ;;
+    desde=0
+    [ "${2:-}" = "--since" ] && desde="${3:-0}"
+    awk -v d="$desde" '$1 + 0 >= d + 0 { sub(/^[0-9]+ /, ""); print }' "$M/log-do-worker" 2>/dev/null ;;
 esac
 exit 0
 STUB
@@ -247,9 +280,13 @@ mundo() {  # mundo <tabela> <registros> [canais]   — zera o mundo e o põe num
   : > "$M/eventos"; : > "$M/chamadas"; : > "$M/roteiro"
   # Por padrão o worker que reinicia faz o que o de verdade faz.
   cat > "$M/ao-reiniciar" <<HOOK
-printf '{"level":"info","msg":"%s","tronco":"a"}\n' "$MARCA_NO_WORKER" >> "\$M/log-do-worker"
+printf '%s {"level":"info","msg":"%s","tronco":"a"}\n' "\$(date +%s)" "$MARCA_NO_WORKER" >> "\$M/log-do-worker"
 sed 's/ Rejected / Registered /; s/ Unregistered / Registered /' "\$M/registros" > "\$M/registros.novo" && mv "\$M/registros.novo" "\$M/registros"
 HOOK
+  # No log do worker JÁ existe uma linha de envio, de cinco minutos atrás: a de
+  # quando ele subiu. É o estado de toda instalação de verdade, e é o que faz do
+  # `--since` uma regra e não um enfeite.
+  printf '%s {"level":"info","msg":"%s","tronco":"a"}\n' "$(( $(date +%s) - 300 ))" "$MARCA_NO_WORKER" > "$M/log-do-worker"
 }
 
 cat > "$WORK/deskcommcrm/.env" <<'ENV'
@@ -266,7 +303,9 @@ rodar() {  # rodar <modo> [registrados antes]   → saída em $SAIDA, status em 
       bash -c 'source "$KIT_COMUM"; religar_troncos_sip "$@"' -- "$@" ) > "$SAIDA" 2>&1
   RC=$?
 }
-eventos() { cut -d' ' -f1 "$M/eventos" | tr '\n' ' ' | sed 's/ $//'; }   # a sequência do que o kit fez
+# A sequência do que o kit FEZ, sem as perguntas de apoio (os prazos, os canais,
+# a rota): o que as provas de ordem comparam são os atos, não cada consulta.
+eventos() { cut -d' ' -f1 "$M/eventos" | grep -E '^(EFEMERO|LISTOU|LIMPOU|OCUPOU|REINICIOU|LEU-O-LOG)$' | tr '\n' ' ' | sed 's/ $//'; }
 quantos() { local n; n="$(grep -c "^$1" "$M/eventos" 2>/dev/null)" || n=0; printf '%s' "$n"; }
 nao_fez() { ! grep -q "^$1" "$M/eventos"; }
 disse() { grep -q "$1" "$SAIDA"; }
@@ -322,6 +361,12 @@ ler() {  # ler <função> — com o mundo já montado
 mundo "$CERTA" "$(registros "$(registro tronco-a Registered)" "$(registro tronco-b Rejected)" "$(registro tronco-c Unregistered)")"
 check "lista nome e estado de cada número" test "$(ler registros_sip deskcommcrm-asterisk-1 | tr '\n' ',')" = "tronco-a Registered,tronco-b Rejected,tronco-c Unregistered,"
 check "conta só os Registered (Unregistered NÃO casa por ser parecido)" test "$(ler troncos_registrados_agora .env)" = "1"
+# O nome de PRODUÇÃO é `tronco-<uuid>`: 43 caracteres, estoura a primeira coluna
+# e o Asterisk corta a URI. Linha copiada do Asterisk 20.11 do laboratório.
+LINHA_UUID=' tronco-0f3a9c1d-5e7b-4a2c-9d10-3b6f8e2a7c41/sip:172.20  tronco-0f3a9c1d-5e7b-4a2c-9d10-3b6f8e2a7c41  Registered        (exp. 276s)'
+mundo "$CERTA" "$(registros "$LINHA_UUID" "$(registro tronco-b Rejected)")"
+check "nome de produção (tronco-<uuid>, URI cortada): nome inteiro e estado certos" test "$(ler registros_sip deskcommcrm-asterisk-1 | head -1)" = "tronco-0f3a9c1d-5e7b-4a2c-9d10-3b6f8e2a7c41 Registered"
+check "toda pergunta ao Asterisk leva o prazo de DENTRO do contêiner" test "$(quantos PRAZO-DE-DENTRO)" -ge 1 -a "$(quantos SEM-PRAZO-DE-DENTRO)" -eq 0
 mundo "$CERTA" "$SEM_REGISTROS"
 check "'No objects found.' é zero número, não um número chamado No" test -z "$(ler registros_sip deskcommcrm-asterisk-1)"
 check "  e zero registrados" test "$(ler troncos_registrados_agora .env)" = "0"
@@ -334,16 +379,51 @@ check "  e o update.sh fica sem régua (vazio), não com zero" test -z "$(ler tr
 # ═════════════════════════════════════════════════════════════════════════════
 UM="$(registros "$(registro tronco-a Registered)")"
 UM_RECUSADO="$(registros "$(registro tronco-a Rejected)")"
+UM_RECUSADO_AQUI_NAO_IMPORTA="$UM_RECUSADO"   # casos em que o estado do número não pode decidir nada
 
 echo "── 3a. Tudo certo: a função não toca em nada"
 mundo "$CERTA" "$UM"
 rodar atualizacao 1
 check "sai 0" test "$RC" -eq 0
-check "diz que não havia o que corrigir" disse "nada a corrigir"
+check "diz que a porta não ficou presa, e quantos números estão registrados" disse "não ficou presa — 1 de 1"
 check "NÃO limpou a tabela" nao_fez LIMPOU
 check "NÃO mandou o Asterisk falar" nao_fez OCUPOU
 check "NÃO reiniciou o worker" nao_fez REINICIOU
-check "só leu: uma listagem, e mais nada" test "$(eventos)" = "EFEMERO LISTOU"
+check "só leu: uma listagem da tabela, e mais nada nela" test "$(quantos EFEMERO)-$(quantos LISTOU)" = "1-1"
+# Sem saber quantos estavam registrados antes (ou sabendo que era nenhum), não há
+# o que esperar: uma linha e segue.
+mundo "$CERTA" "$UM_RECUSADO_AQUI_NAO_IMPORTA"
+rodar atualizacao ""
+check "sem régua de antes: uma linha, sai 0, não espera" test "$RC" -eq 0 -a "$(grep -c . "$SAIDA")" -eq 1
+check "  e a linha é 'nada a corrigir'" disse "nada a corrigir"
+mundo "$CERTA" "$UM_RECUSADO_AQUI_NAO_IMPORTA"
+rodar atualizacao 0
+check "com ZERO registrados antes: idem, não espera número nenhum" test "$RC" -eq 0 -a "$(quantos LISTOU)" -eq 1
+
+echo "── 3a2. Porta certa, mas o Asterisk novo ainda não falou: espera os números, sem reiniciar"
+# 'Não ficou presa' lido UMA vez, antes de o worker enviar os números, ainda não
+# é 'os números voltaram'. Aqui o worker — que subiu com a atualização — envia na
+# 3ª listagem.
+mundo "" "$SEM_REGISTROS"
+{ echo ":"; echo ":"; echo "cat \"\$M/registros-depois\" > \"\$M/registros\"; cat \"\$M/linha-certa\" >> \"\$M/tabela\""; } > "$M/roteiro"
+printf '%s\n' "$UM" > "$M/registros-depois"
+rodar atualizacao 1
+check "não declara nada na primeira leitura (tabela vazia não é 'voltou')" test "$(quantos LISTOU)" -ge 3
+check "espera, e diz quantos voltaram" disse "não ficou presa — 1 de 1"
+check "sem limpar e sem reiniciar o worker" test "$(quantos LIMPOU)-$(quantos REINICIOU)" = "0-0"
+check "sai 0" test "$RC" -eq 0
+# E se o Asterisk novo sair DESVIADO durante a espera (a corrida do cabeçalho), conserta.
+mundo "" "$SEM_REGISTROS"
+{ echo "cat \"\$M/registros-depois\" > \"\$M/registros\""; echo "cat \"\$M/linha-desviada\" >> \"\$M/tabela\""; } > "$M/roteiro"
+printf '%s\n' "$UM_RECUSADO" > "$M/registros-depois"
+rodar atualizacao 1
+check "desviado no meio da espera: limpa, ocupa e reenvia" test "$(quantos LIMPOU)-$(quantos OCUPOU)-$(quantos REINICIOU)" = "1-1-1"
+check "  e termina recuperado" test "$RC" -eq 0
+# Os números não voltam e a porta está certa: avisa, NÃO reinicia (não é a porta).
+mundo "$CERTA" "$UM_RECUSADO"
+PRAZO=0 rodar atualizacao 1
+check "números que não voltam com a porta certa: avisa e sai 1" test "$RC" -eq 1 -a "$(grep -c 'é a operadora ou a senha' "$SAIDA")" -eq 1
+check "  sem reiniciar o worker — na atualização, quem reenvia é o worker que acabou de subir" nao_fez REINICIOU
 
 echo "── 3b. O defeito da VPS: antiga presa + nova desviada, registro recusado"
 mundo "$PRESA
@@ -394,14 +474,29 @@ check "NÃO declara que voltou — o 'Registered' da lista é o da porta errada"
 check "sai 1 (não ficou bom)" test "$RC" -eq 1
 check "ensina o passo que falta, com o --reenviar" disse "religar-telefonia.sh --reenviar"
 
-echo "── 3f. 'Registrado' não basta: sem o worker reenviar, não é 'voltou'"
+echo "── 3e2. O Asterisk não responde se há ligação: a guarda falha FECHADA"
+# 'Não respondeu' não é 'não há ligação': um Asterisk no teto de memória, com
+# gente na linha, é justamente o que demora. Sem saber, não reinicia.
+mundo "$PRESA
+$DESVIADA" "$UM_RECUSADO" 4
+: > "$M/canais-mudos"
+rodar atualizacao 1
+check "perguntou três vezes antes de desistir" test "$(quantos PERGUNTOU-OS-CANAIS)" -eq 3
+check "NÃO reiniciou o worker" nao_fez REINICIOU
+check "diz que não soube, em vez de dizer que não há ligação" disse "não respondeu se há ligação"
+check "consertou a porta mesmo assim" test "$(quantos LIMPOU)-$(quantos OCUPOU)" = "1-1"
+check "não declara que voltou, e sai 1" test "$RC" -eq 1 -a "$(grep -c '✓' "$SAIDA")" -eq 0
+
+echo "── 3f. 'Registrado' não basta: sem o worker reenviar DEPOIS do reinício, não é 'voltou'"
 mundo "$PRESA
 $DESVIADA" "$UM"         # de novo 'Registered' pela porta errada
-: > "$M/ao-reiniciar"    # o worker reinicia mas NÃO sobe (nenhuma linha no log)
+: > "$M/ao-reiniciar"    # o worker reinicia mas NÃO sobe (nenhuma linha NOVA no log)
+check "fixture: o log do worker já tem uma linha de envio, de ANTES do reinício" grep -q "$MARCA_NO_WORKER" "$M/log-do-worker"
 PRAZO=0 rodar atualizacao 1
 check "reiniciou o worker" test "$(quantos REINICIOU)" -eq 1
 check "foi ao log do worker conferir" test "$(quantos LEU-O-LOG)" -ge 1
-check "NÃO declara que voltou" nao_disse "✓"
+check "  perguntando só pelo que veio depois do reinício" grep -qE '^logs --since [0-9]{9,} deskcommcrm-worker-1$' "$M/chamadas"
+check "NÃO declara que voltou (a linha velha do log não prova nada)" nao_disse "✓"
 check "diz que não viu o worker reenviar" disse "não o vi"
 check "sai 1" test "$RC" -eq 1
 # O controle: com o worker reenviando, o MESMO estado é sucesso.
@@ -416,7 +511,7 @@ mundo "$PRESA
 $DESVIADA" "$TRES"
 # Dois voltam; o terceiro já era recusado antes (senha errada), e continua.
 cat > "$M/ao-reiniciar" <<HOOK
-printf '{"msg":"%s"}\n' "$MARCA_NO_WORKER" >> "\$M/log-do-worker"
+printf '%s {"msg":"%s"}\n' "\$(date +%s)" "$MARCA_NO_WORKER" >> "\$M/log-do-worker"
 sed '/tronco-a/s/ Rejected / Registered /; /tronco-b/s/ Rejected / Registered /' "\$M/registros" > "\$M/r" && mv "\$M/r" "\$M/registros"
 HOOK
 rodar atualizacao 2
@@ -426,12 +521,30 @@ check "  e que o terceiro já estava fora" disse "já não estava"
 mundo "$PRESA
 $DESVIADA" "$TRES"
 cat > "$M/ao-reiniciar" <<HOOK
-printf '{"msg":"%s"}\n' "$MARCA_NO_WORKER" >> "\$M/log-do-worker"
+printf '%s {"msg":"%s"}\n' "\$(date +%s)" "$MARCA_NO_WORKER" >> "\$M/log-do-worker"
 sed '/tronco-a/s/ Rejected / Registered /; /tronco-b/s/ Rejected / Registered /' "\$M/registros" > "\$M/r" && mv "\$M/r" "\$M/registros"
 HOOK
 PRAZO=0 rodar atualizacao 3
 check "2 de 3, com 3 registrados antes: NÃO é sucesso" test "$RC" -eq 1
 check "  e manda olhar a operadora ou a senha, não a porta" disse "é a operadora ou a senha"
+check "  dizendo quantos eram antes" disse "Antes da atualização eram 3"
+# ZERO sabido não é "não sei": o número que já era recusado antes (senha errada)
+# não custa um minuto de espera e um aviso amarelo a cada atualização.
+mundo "$PRESA
+$DESVIADA" "$UM_RECUSADO"
+cat > "$M/ao-reiniciar" <<HOOK
+printf '%s {"msg":"%s"}\n' "\$(date +%s)" "$MARCA_NO_WORKER" >> "\$M/log-do-worker"
+HOOK
+rodar atualizacao 0
+check "0 registrados antes, 0 de 1 depois: a porta foi recuperada e isso é sucesso" test "$RC" -eq 0
+check "  dizendo a conta, e que o número já estava fora" test "$(grep -c '0 de 1' "$SAIDA")-$(grep -c 'já não estava' "$SAIDA")" = "1-1"
+# MAIS registrados antes do que o Asterisk tem agora: falta o worker enviar algum.
+DOIS="$(registros "$(registro tronco-a Registered)" "$(registro tronco-b Registered)")"
+mundo "$PRESA
+$DESVIADA" "$DOIS"
+PRAZO=0 rodar atualizacao 3
+check "3 registrados antes e só 2 números no Asterisk: NÃO é '2 de 2, tudo certo'" test "$RC" -eq 1 -a "$(grep -c '✓' "$SAIDA")" -eq 0
+check "  e diz que o worker não enviou todos" disse "só recebeu 2 número"
 
 echo "── 3h. Não deu para ler a tabela: 'não sei' não vira 'está certo'"
 mundo "$PRESA
@@ -483,6 +596,18 @@ rodar manual
 check "porta certa e número recusado: reenvia uma vez" test "$(quantos REINICIOU)" -eq 1
 check "  e termina bem quando o número volta" test "$RC" -eq 0
 check "  sem ter mexido na tabela, que estava certa" nao_fez LIMPOU
+# Telefonia ligada e nenhum número cadastrado: quem só veio conferir não tem o
+# worker reiniciado, nem espera um minuto, nem sai com erro.
+mundo "" "$SEM_REGISTROS"
+rodar manual
+check "sem número nenhum: NÃO reinicia o worker" nao_fez REINICIOU
+check "  diz que não há número, e sai 0 na hora" test "$RC" -eq 0 -a "$(grep -c 'não tem número nenhum' "$SAIDA")" -eq 1 -a "$(quantos LISTOU)" -eq 1
+# Mas "o Asterisk não respondeu" não é "não tem número": aí não é esse o desfecho.
+mundo "" "$SEM_REGISTROS"
+: > "$M/asterisk-mudo"
+PRAZO=0 rodar manual
+check "Asterisk mudo NÃO vira 'não tem número nenhum'" nao_disse "não tem número nenhum"
+check "  nem reinicia o worker sem saber se há ligação" nao_fez REINICIOU
 mundo "$CERTA" "$UM"
 rodar reenviar
 check "--reenviar: reinicia mesmo com tudo 'registrado'" test "$(quantos REINICIOU)" -eq 1
@@ -523,6 +648,37 @@ rodar atualizacao 2
 check "o nome estranho NÃO vira comando no Asterisk" bash -c "! grep -q 'reload' '$M/eventos'"
 check "o nome bom continua sendo usado" grep -qx 'OCUPOU tronco-b' "$M/eventos"
 
+echo "── 3o. Outro programa VIVO fala pela 5060 na rede do Asterisk: uma limpeza, não cinco"
+# A rede do proxy pode ser compartilhada com outras stacks. Linha de Asterisk
+# antigo não volta depois de apagada; a que VOLTA é de um vizinho vivo.
+VIVO="udp      17 118 src=172.19.0.9 dst=192.0.2.77 sport=5060 dport=5060 src=192.0.2.77 dst=${PUB} sport=5060 dport=5060 [ASSURED] mark=0 use=1"
+mundo "$CERTA
+$VIVO" "$UM"
+printf '%s\n' "$VIVO" > "$M/linha-do-vizinho"
+for _ in 1 2 3 4 5 6 7 8; do echo "grep -q 'src=172.19.0.9' \"\$M/tabela\" || cat \"\$M/linha-do-vizinho\" >> \"\$M/tabela\""; done > "$M/roteiro"
+rodar atualizacao 1
+check "limpou UMA vez (na primeira não dá para distinguir de uma linha antiga)" test "$(quantos LIMPOU)" -eq 1
+check "não ficou limpando a tabela do vizinho a cada volta" test "$(quantos LISTOU)" -le 3
+check "não reiniciou o worker (o Asterisk nunca saiu desviado)" nao_fez REINICIOU
+check "sai 0" test "$RC" -eq 0
+
+echo "── 3p. O prazo de fora: onde há timeout, todo comando do Docker passa por ele"
+cat > "$WORK/bin/timeout" <<'STUB'
+#!/usr/bin/env bash
+printf 'PRAZO-DE-FORA %s %s\n' "$1" "$2" >> "$MUNDO/eventos"
+shift; exec "$@"
+STUB
+chmod +x "$WORK/bin/timeout"
+mundo "$PRESA
+$DESVIADA" "$UM_RECUSADO"
+rodar atualizacao 1
+check "com timeout no servidor a função segue funcionando" test "$RC" -eq 0
+check "o docker inspect, o exec, o run, o restart e o logs passaram pelo prazo" \
+  test "$(grep -c '^PRAZO-DE-FORA [0-9][0-9]* docker$' "$M/eventos")" -ge 5
+check "nenhum docker foi chamado por fora dele" \
+  test "$(grep -c '^PRAZO-DE-FORA' "$M/eventos")" -eq "$(grep -c . "$M/chamadas")"
+rm -f "$WORK/bin/timeout"
+
 echo "── 3n. Asterisk em DUAS redes (o override do Traefik: internal + a do proxy)"
 # É a topologia da VPS onde o defeito foi medido. O `docker inspect` lista as
 # duas; a conexão SIP sai por UMA. Aqui a de saída é a SEGUNDA da lista.
@@ -539,7 +695,7 @@ mundo "$CERTA
 $VIZINHO" "$UM"
 duas_redes
 rodar atualizacao 1
-check "o vizinho da rede do proxy NÃO é uma linha presa nossa: nada a corrigir" disse "nada a corrigir"
+check "o vizinho da rede do proxy NÃO é uma linha presa nossa: a porta não ficou presa" disse "não ficou presa"
 check "  e a tabela dele fica intocada" nao_fez LIMPOU
 # Sem conseguir perguntar a rota: vale o IP dele em qualquer das redes.
 mundo "$PRESA
@@ -570,6 +726,53 @@ check "o kit sabe que linha procurar no log do worker" test -n "$MARCA_NO_KIT"
 check "  e o worker escreve exatamente essa linha (sincronizacao.ts)" grep -qF "$MARCA_NO_KIT\"" "$REPO_ROOT/lib/channels/telefonia/sincronizacao.ts"
 check "  ao reconectar o worker reenvia TUDO (laco.ts: sincronizar(true))" grep -q 'sync.sincronizar(true)' "$REPO_ROOT/lib/channels/telefonia/laco.ts"
 check "o Asterisk continua SEM porta SIP publicada (só a faixa de áudio)" bash -c "! grep -nE '^\s*- .*5060' '$REPO_ROOT/docker-compose.prod.yml'"
+# O passo OCUPAR usa o nome do REGISTRO como nome do ENDPOINT. Vale porque os
+# quatro objetos de um tronco nascem com o mesmo `id` — se um dia deixarem de
+# nascer, o `pjsip qualify` passa a falar com ninguém, em silêncio.
+PJSIP="$REPO_ROOT/lib/channels/telefonia/pjsip.ts"
+mesmo_id() { awk -v t="$1" '/^export function objetosDoTronco/ { dentro = 1 } dentro && index($0, "tipo: \"" t "\"") { getline; gsub(/[ \t]/, ""); print; exit }' "$PJSIP"; }
+check "em pjsip.ts, o registro e o endpoint do tronco levam o mesmo id" test "$(mesmo_id endpoint)" = "id," -a "$(mesmo_id registration)" = "id,"
+check "  e o tronco tem qualify (é o OPTIONS que o passo OCUPAR dispara)" grep -q 'f("qualify_frequency", 25)' "$PJSIP"
+
+# ═════════════════════════════════════════════════════════════════════════════
+echo "── 5. O script religar-telefonia.sh, executado de verdade"
+SCRIPT="$REPO_ROOT/hostgator-setup-kit/religar-telefonia.sh"
+KIT_DA_FIXTURE="$WORK/deskcommcrm/hostgator-setup-kit"
+mkdir -p "$KIT_DA_FIXTURE"
+cp "$SCRIPT" "$KIT_DA_FIXTURE/"; cp "$KIT_COMUM" "$KIT_DA_FIXTURE/_common.sh"
+script() {  # script [argumentos]  → saída em $SAIDA, status em $RC
+  ( cd "$WORK/deskcommcrm" && env PATH="$WORK/bin:$PATH" NO_COLOR=1 TELEFONIA_PAUSA=0 \
+      TELEFONIA_PRAZO_DOS_REGISTROS="${PRAZO:-10}" DUBLE_UID=1000 DESKCOMM_ASSUMIR_PROJETO=1 \
+      bash hostgator-setup-kit/religar-telefonia.sh "$@" ) > "$SAIDA" 2>&1 < /dev/null
+  RC=$?
+}
+mundo "$CERTA" "$UM"
+script
+check "sem argumento, tudo certo: confere e sai 0 sem reiniciar" test "$RC" -eq 0 -a "$(quantos REINICIOU)" -eq 0
+check "  com o cabeçalho do passo e a linha de resultado" test "$(grep -c 'Conferindo a telefonia' "$SAIDA")-$(grep -c 'constam como registrados' "$SAIDA")" = "1-1"
+mundo "$PRESA
+$DESVIADA" "$UM_RECUSADO"
+script
+check "com o defeito: conserta e sai 0" test "$RC" -eq 0 -a "$(quantos LIMPOU)" -eq 1 -a "$(quantos REINICIOU)" -eq 1
+mundo "$CERTA" "$UM"
+script --reenviar
+check "--reenviar: reinicia o worker" test "$RC" -eq 0 -a "$(quantos REINICIOU)" -eq 1
+mundo "$CERTA" "$UM" 2
+script --reenviar
+check "--reenviar com ligação em curso: sai 1 sem reiniciar" test "$RC" -eq 1 -a "$(quantos REINICIOU)" -eq 0
+mundo "$CERTA" "$UM"
+script --apagar-tudo
+check "argumento desconhecido: uso, sai 1 e não chama o Docker" test "$RC" -eq 1 -a "$(grep -c 'Uso: ' "$SAIDA")" -eq 1 -a ! -s "$M/chamadas"
+script --reenviar outra-coisa
+check "argumento a mais: uso, sai 1 (não é ignorado calado)" test "$RC" -eq 1 -a "$(grep -c 'Uso: ' "$SAIDA")" -eq 1
+script --help
+check "--help: explica e sai 0" test "$RC" -eq 0 -a "$(grep -c -- '--reenviar' "$SAIDA")" -ge 1
+printf 'COMPOSE_PROFILES=\n' > "$WORK/deskcommcrm/.env"
+mundo "$PRESA
+$DESVIADA" "$UM_RECUSADO"
+script
+check "telefonia desligada: diz, sai 0 e não toca em nada" test "$RC" -eq 0 -a "$(grep -c 'não está ligada' "$SAIDA")" -eq 1 -a "$(quantos LIMPOU)-$(quantos REINICIOU)" = "0-0"
+printf 'COMPOSE_PROFILES=telefonia\nTELEFONIA_ARI_URL=http://asterisk:8088\n' > "$WORK/deskcommcrm/.env"
 
 if [ "$FAILS" -ne 0 ]; then
   printf '\nFALHOU — %s prova(s) vermelha(s).\n' "$FAILS" >&2

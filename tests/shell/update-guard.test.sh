@@ -1218,8 +1218,8 @@ unset DUBLE_NO_DISCO
 
 echo "── 16. Telefonia: a porta SIP é conferida depois do up -d, e nunca falha a atualização"
 # Recriar o Asterisk deixa a porta 5060 presa ao IP do contêiner anterior, e os
-# números ficam em "registro recusado" sem voltar sozinhos — aconteceu em toda
-# atualização com a telefonia ligada (1.52.2 a 1.57.0). O conserto é
+# números ficam em "registro recusado" sem voltar sozinhos — medido em cinco
+# atualizações com a telefonia ligada (1.52.2 a 1.57.0). O conserto é
 # `religar_troncos_sip`, e a regra dela é provada em
 # tests/shell/telefonia-porta-sip.test.sh. Aqui se prova o que só o update.sh
 # INTEIRO mostra: que ele chama, na hora certa, e que não cai junto.
