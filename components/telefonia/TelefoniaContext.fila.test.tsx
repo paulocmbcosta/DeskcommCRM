@@ -17,6 +17,15 @@
  *    vencido, o pedido recusado, a mesma ordem pela segunda vez, e o toque que
  *    chega com a pessoa já em ligação. Em todos, o caminho é o de sempre: a tela
  *    de toque, com o som, esperando o clique.
+ *
+ * A CORRIDA: o toque pode chegar ao navegador ANTES de a rota responder com a
+ * ordem (o worker toca o ramal enquanto o 202 ainda viaja). Nesse intervalo — e
+ * só nele — o toque é reconhecido pela LIGAÇÃO que a pessoa clicou
+ * (`X-Ligacao-Id`), sempre com o cabeçalho `X-Fila-Atender` presente. Medido nos
+ * dois sentidos também: atende o toque da ligação pedida com o POST em voo; não
+ * atende o de outra ligação, o sem cabeçalho, o que chega depois de o POST
+ * falhar, nem um segundo toque depois de o 202 chegar. E com a ordem já
+ * conhecida, casar a ligação não basta.
  */
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -86,14 +95,17 @@ vi.mock("jssip", () => {
 const api = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn() }));
 vi.mock("@/lib/api/client", () => ({ apiClient: { post: api.post, get: api.get } }));
 
+import { ApiError } from "@/lib/api/types";
 import { CABECALHO_DO_ATENDER } from "@/lib/channels/telefonia/ordens-da-fila";
 
 import { PainelDoTelefone } from "./PainelDoTelefone";
 import { TelefoniaProvider, useTelefonia } from "./TelefoniaContext";
 
 const LIGACAO = "0a0a0a0a-0000-4000-8000-00000000000a";
+const OUTRA_LIGACAO = "0a0a0a0a-0000-4000-8000-00000000000f";
 const ORDEM = "0b0b0b0b-0000-4000-8000-00000000000b";
 const OUTRA_ORDEM = "0c0c0c0c-0000-4000-8000-00000000000c";
+const RAMAL = { data: { ativo: true, usuario: "ramal-u1", senha: "s", ws_url: "wss://x/telefonia/ws", numeros: [] } };
 const AGORA = new Date("2026-10-07T12:00:00Z").getTime();
 /** Como o JsSIP é chamado para atender — pelo clique e pelo atendimento automático. */
 const COMO_SE_ATENDE = { mediaConstraints: { audio: true, video: false }, pcConfig: { iceServers: [] } };
@@ -120,12 +132,21 @@ class AudioContextDeMentira {
 function Sonda() {
   const { pronto, ligacao, atenderDaFila } = useTelefonia();
   const [resposta, setResposta] = useState("ainda não pediu");
+  const [respostaDaOutra, setRespostaDaOutra] = useState("ainda não pediu");
   return (
     <>
       <button type="button" disabled={!pronto} onClick={() => void atenderDaFila(LIGACAO).then((r) => setResposta(String(r)))}>
         pedir para atender
       </button>
+      <button
+        type="button"
+        disabled={!pronto}
+        onClick={() => void atenderDaFila(OUTRA_LIGACAO).then((r) => setRespostaDaOutra(String(r)))}
+      >
+        pedir para atender a outra
+      </button>
       <output data-testid="resposta">{resposta}</output>
+      <output data-testid="resposta-da-outra">{respostaDaOutra}</output>
       <output data-testid="fase">{ligacao?.fase ?? "sem ligação"}</output>
     </>
   );
@@ -145,6 +166,45 @@ async function montar() {
 async function pedir() {
   await userEvent.click(screen.getByRole("button", { name: "pedir para atender" }));
   await waitFor(() => expect(screen.getByTestId("resposta")).not.toHaveTextContent("ainda não pediu"));
+}
+
+const ROTA_DE_ATENDER = /^\/api\/v1\/telefonia\/chamadas\/([^/]+)\/atender$/;
+const saidaDa = (ligacao: string) => screen.getByTestId(ligacao === LIGACAO ? "resposta" : "resposta-da-outra");
+
+/**
+ * A rota de atender NÃO responde até o teste mandar: é o POST "em voo", o
+ * intervalo em que o toque pode chegar antes da ordem. Uma resposta pendente por
+ * ligação; `aceitar` e `falhar` esperam o pedido da tela assentar.
+ */
+function segurarARota() {
+  const pendentes = new Map<string, { resolver(v: unknown): void; rejeitar(e: unknown): void }>();
+  api.post.mockImplementation((url: string) => {
+    if (url === "/api/v1/telefonia/ramal") return Promise.resolve(RAMAL);
+    const rota = ROTA_DE_ATENDER.exec(url);
+    if (!rota) return Promise.reject(new Error(`POST inesperado ${url}`));
+    return new Promise((resolver, rejeitar) => pendentes.set(rota[1]!, { resolver, rejeitar }));
+  });
+  const assentar = (ligacao: string) => waitFor(() => expect(saidaDa(ligacao)).not.toHaveTextContent("ainda não pediu"));
+  return {
+    /** O 202 — por padrão com a ordem; `dados` troca o corpo, para medir a resposta malformada. */
+    async aceitar(ligacao: string = LIGACAO, dados: Record<string, unknown> = { ordem_id: ORDEM }) {
+      pendentes.get(ligacao)!.resolver({ data: dados });
+      await assentar(ligacao);
+    },
+    async falhar(erro: unknown, ligacao: string = LIGACAO) {
+      pendentes.get(ligacao)!.rejeitar(erro);
+      await assentar(ligacao);
+    },
+  };
+}
+
+/** O clique em "Atender" da fila SEM esperar a rota: o pedido saiu e ainda não voltou. */
+async function clicar(ligacao: string = LIGACAO) {
+  await userEvent.click(
+    screen.getByRole("button", { name: ligacao === LIGACAO ? "pedir para atender" : "pedir para atender a outra" }),
+  );
+  expect(api.post).toHaveBeenCalledWith(`/api/v1/telefonia/chamadas/${ligacao}/atender`, {});
+  expect(saidaDa(ligacao)).toHaveTextContent("ainda não pediu");
 }
 
 function chegar(cabecalhos: Record<string, string> = {}, preparar?: (s: SessaoDeMentira) => void): SessaoDeMentira {
@@ -333,6 +393,13 @@ describe("NENHUM outro toque é atendido pela pessoa", () => {
     tocouComoSempre(chegar({ "X-Fila-Atender": OUTRA_ORDEM }));
   });
 
+  it("com a ordem já conhecida, casar a LIGAÇÃO não basta: outra ordem na mesma ligação que eu pedi é o toque de sempre", async () => {
+    await montar();
+    await pedir();
+    // A ligação do toque é a que eu cliquei; a ordem, não é a que a rota me deu.
+    tocouComoSempre(chegar({ "X-Ligacao-Id": LIGACAO, "X-Fila-Atender": OUTRA_ORDEM }));
+  });
+
   it("sem pedido guardado (o clique foi em outra aba), o toque com o cabeçalho é o de sempre", async () => {
     await montar();
     tocouComoSempre(chegar({ "X-Fila-Atender": ORDEM }));
@@ -405,6 +472,181 @@ describe("NENHUM outro toque é atendido pela pessoa", () => {
     expect(segunda.answer).not.toHaveBeenCalled();
     expect(segunda.terminate).toHaveBeenCalledWith({ status_code: 486, reason_phrase: "Busy Here" });
     expect(fase()).toBe("em_ligacao");
+  });
+});
+
+describe("o toque chega ANTES de a rota responder (o POST ainda em voo)", () => {
+  it("com o cabeçalho e a ligação PEDIDA, é atendido sozinho — a ordem ainda nem chegou", async () => {
+    const rota = segurarARota();
+    await montar();
+    await clicar();
+    const s = chegar({ "X-Ligacao-Id": LIGACAO, "X-Fila-Atender": ORDEM });
+
+    expect(s.answer).toHaveBeenCalledTimes(1);
+    expect(s.answer).toHaveBeenCalledWith(COMO_SE_ATENDE);
+    expect(fase()).toBe("atendendo");
+    expect(telaDeToque()).toBeNull();
+    expect(painel()).toHaveAttribute("data-telefonia", "atendendo");
+    expect(som.aberturas).toBe(0);
+    // A rota ainda não respondeu — e quando responde, o pedido devolve a ordem, como sempre.
+    expect(screen.getByTestId("resposta")).toHaveTextContent("ainda não pediu");
+    await rota.aceitar();
+    expect(screen.getByTestId("resposta")).toHaveTextContent(ORDEM);
+    expect(fase()).toBe("atendendo");
+  });
+
+  it.each([
+    ["com a ligação ainda conectando", false],
+    ["com a ligação já encerrada", true],
+  ] as const)(
+    "o 202 que chega DEPOIS (%s) não faz o pedido valer de novo: o segundo toque com a mesma ordem é o de sempre",
+    async (_quando, encerraAntes) => {
+      const rota = segurarARota();
+      await montar();
+      await clicar();
+      const primeira = chegar({ "X-Fila-Atender": ORDEM });
+      expect(primeira.answer).toHaveBeenCalledTimes(1);
+
+      if (encerraAntes) act(() => primeira.emit("ended"));
+      await rota.aceitar();
+      expect(screen.getByTestId("resposta")).toHaveTextContent(ORDEM);
+      if (!encerraAntes) act(() => primeira.emit("ended"));
+      expect(fase()).toBe("sem ligação");
+
+      // Uma ordem, um atendimento: o toque já consumiu o pedido, e o 202 não o guarda de novo.
+      tocouComoSempre(chegar({ "X-Fila-Atender": ORDEM }));
+    },
+  );
+
+  it.each([
+    ["com o cabeçalho, mas de OUTRA ligação", { "X-Ligacao-Id": OUTRA_LIGACAO, "X-Fila-Atender": ORDEM }],
+    ["com o cabeçalho, mas sem dizer de qual ligação é", { "X-Ligacao-Id": "", "X-Fila-Atender": ORDEM }],
+    ["da ligação pedida, mas SEM o cabeçalho (o toque comum do rodízio dela)", { "X-Ligacao-Id": LIGACAO }],
+    ["da ligação pedida, com o cabeçalho vazio", { "X-Ligacao-Id": LIGACAO, "X-Fila-Atender": "" }],
+    ["da ligação pedida, chegando por transferência", { "X-Ligacao-Id": LIGACAO, "X-Transferencia": "transf" }],
+  ] as Array<[string, Record<string, string>]>)("o toque %s NÃO é atendido sozinho", async (_caso, cabecalhos) => {
+    segurarARota();
+    await montar();
+    await clicar();
+    tocouComoSempre(chegar(cabecalhos));
+  });
+
+  it("o prazo vale com o POST em voo: 15 s depois do clique, o toque da ligação pedida é o de sempre", async () => {
+    segurarARota();
+    await montar();
+    await clicar();
+    vi.setSystemTime(AGORA + 15_000);
+    tocouComoSempre(chegar({ "X-Fila-Atender": ORDEM }));
+  });
+
+  it("CONTROLE — com o POST em voo, faltando um instante para o prazo (14,9 s), ainda atende", async () => {
+    segurarARota();
+    await montar();
+    await clicar();
+    vi.setSystemTime(AGORA + 14_900);
+    const s = chegar({ "X-Fila-Atender": ORDEM });
+    expect(s.answer).toHaveBeenCalledTimes(1);
+    expect(fase()).toBe("atendendo");
+  });
+
+  it("o prazo conta do CLIQUE: a resposta que demora não o renova", async () => {
+    const rota = segurarARota();
+    await montar();
+    await clicar();
+    vi.setSystemTime(AGORA + 10_000);
+    await rota.aceitar();
+    // 15 s depois do clique — 5 s depois do 202 —, a ordem certa já não é "o clique de agora".
+    vi.setSystemTime(AGORA + 15_000);
+    tocouComoSempre(chegar({ "X-Fila-Atender": ORDEM }));
+  });
+
+  it("CONTROLE — a resposta demorou 10 s e o toque da ordem chegou aos 14,9 s do clique: atende", async () => {
+    const rota = segurarARota();
+    await montar();
+    await clicar();
+    vi.setSystemTime(AGORA + 10_000);
+    await rota.aceitar();
+    vi.setSystemTime(AGORA + 14_900);
+    const s = chegar({ "X-Fila-Atender": ORDEM });
+    expect(s.answer).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "a rota recusa (409)",
+      (rota: ReturnType<typeof segurarARota>) =>
+        rota.falhar(new ApiError(409, "ja_ha_ordem", undefined, "req-1", "Outra pessoa já está cuidando desta ligação.")),
+      true,
+    ],
+    ["a rede cai", (rota: ReturnType<typeof segurarARota>) => rota.falhar(new TypeError("Failed to fetch")), true],
+    ["a resposta vem sem a ordem", (rota: ReturnType<typeof segurarARota>) => rota.aceitar(LIGACAO, {}), false],
+  ] as const)(
+    "%s: o pedido é LIMPO — o toque com o cabeçalho e a mesma ligação, depois, é o de sempre",
+    async (_caso, falhar, avisa) => {
+      const rota = segurarARota();
+      await montar();
+      await clicar();
+      await falhar(rota);
+      expect(screen.getByTestId("resposta")).toHaveTextContent("null");
+      expect(avisos.showApiError).toHaveBeenCalledTimes(avisa ? 1 : 0);
+      // A intenção pela ligação só vale enquanto o POST está em voo.
+      tocouComoSempre(chegar({ "X-Ligacao-Id": LIGACAO, "X-Fila-Atender": ORDEM }));
+    },
+  );
+});
+
+describe("um pedido novo substitui o anterior", () => {
+  it("o toque da ligação do pedido ANTERIOR não é mais o que eu pedi", async () => {
+    segurarARota();
+    await montar();
+    await clicar(LIGACAO);
+    await clicar(OUTRA_LIGACAO);
+    tocouComoSempre(chegar({ "X-Ligacao-Id": LIGACAO, "X-Fila-Atender": ORDEM }));
+  });
+
+  it("CONTROLE — o toque da ligação do pedido NOVO é atendido", async () => {
+    segurarARota();
+    await montar();
+    await clicar(LIGACAO);
+    await clicar(OUTRA_LIGACAO);
+    const s = chegar({ "X-Ligacao-Id": OUTRA_LIGACAO, "X-Fila-Atender": OUTRA_ORDEM });
+    expect(s.answer).toHaveBeenCalledTimes(1);
+    expect(fase()).toBe("atendendo");
+  });
+
+  it("a resposta do pedido ANTERIOR não toma o lugar do novo: quem vale segue sendo a ligação do último clique", async () => {
+    const rota = segurarARota();
+    await montar();
+    await clicar(LIGACAO);
+    await clicar(OUTRA_LIGACAO);
+    await rota.aceitar(LIGACAO);
+    expect(screen.getByTestId("resposta")).toHaveTextContent(ORDEM);
+
+    const s = chegar({ "X-Ligacao-Id": OUTRA_LIGACAO, "X-Fila-Atender": OUTRA_ORDEM });
+    expect(s.answer).toHaveBeenCalledTimes(1);
+    expect(fase()).toBe("atendendo");
+  });
+
+  it("…e a ordem do pedido anterior, que chegou depois, não é atendida sozinha", async () => {
+    const rota = segurarARota();
+    await montar();
+    await clicar(LIGACAO);
+    await clicar(OUTRA_LIGACAO);
+    await rota.aceitar(LIGACAO);
+    tocouComoSempre(chegar({ "X-Ligacao-Id": LIGACAO, "X-Fila-Atender": ORDEM }));
+  });
+
+  it("a FALHA do pedido anterior não apaga o novo", async () => {
+    const rota = segurarARota();
+    await montar();
+    await clicar(LIGACAO);
+    await clicar(OUTRA_LIGACAO);
+    await rota.falhar(new ApiError(409, "ja_ha_ordem", undefined, "req-1", "Outra pessoa já está cuidando desta ligação."), LIGACAO);
+    expect(screen.getByTestId("resposta")).toHaveTextContent("null");
+
+    const s = chegar({ "X-Ligacao-Id": OUTRA_LIGACAO, "X-Fila-Atender": OUTRA_ORDEM });
+    expect(s.answer).toHaveBeenCalledTimes(1);
+    expect(fase()).toBe("atendendo");
   });
 });
 

@@ -15,10 +15,12 @@
  * e o JsSIP sozinho não distingue "chamando" de "atendeu".
  *
  * ATENDER DA FILA (aba Telefone; entrega 3): `atenderDaFila` pede ao servidor
- * que uma ligação da fila toque NESTE ramal, e o toque que chega com a ordem
- * desse pedido é atendido sem um segundo clique. É o único toque que este
- * contexto atende sozinho — a regra, e por que ela é tão estreita, está em
- * `ehOToqueQueEuPedi`.
+ * que uma ligação da fila toque NESTE ramal, e o toque desse pedido é atendido
+ * sem um segundo clique. Ele se reconhece pela ORDEM que a rota devolveu — ou,
+ * enquanto a rota ainda não respondeu (o toque pode chegar antes do 202), pela
+ * LIGAÇÃO que a pessoa clicou; nos dois casos o toque tem de trazer o cabeçalho
+ * `X-Fila-Atender`. É o único toque que este contexto atende sozinho — a regra,
+ * e por que ela é tão estreita, está em `ehOToqueQueEuPedi`.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -196,37 +198,61 @@ interface DetalheDaLigacao {
 
 const RETENTAR_REGISTRO_MS = 15_000;
 
-/** O pedido de atender da fila que ESTA aba fez e a rota aceitou. */
+/** O pedido de atender da fila que ESTA aba fez — guardado no clique, antes de a rota responder. */
 interface PedidoDaFila {
-  ordemId: string;
+  /** A ligação que a pessoa clicou para atender. */
+  ligacaoId: string;
+  /** A ordem que a rota devolveu; `null` enquanto o pedido ainda está em voo. */
+  ordemId: string | null;
   /** Até quando o toque desse pedido é atendido sozinho (relógio deste navegador, ms). */
   ate: number;
 }
 
+/** O que o toque que chegou diz de si, nos cabeçalhos do INVITE. */
+interface ToqueQueChegou {
+  /** `X-Fila-Atender`: a ordem de quem pediu para atender. Ausente em todo toque que não é esse. */
+  ordemId: string | null;
+  /** `X-Ligacao-Id`: a ligação (o worker põe em todo toque). */
+  ligacaoId: string | null;
+}
+
 /**
- * Por quanto tempo o pedido de atender vale. O worker faz o ramal de quem pediu
- * tocar em menos de um segundo e desiste em dez (`TOQUE_DE_QUEM_PUXOU_MS`); o
- * que passar disso não é mais o clique de agora.
+ * Por quanto tempo o pedido de atender vale, contado do CLIQUE — a resposta da
+ * rota não renova o prazo. O worker faz o ramal de quem pediu tocar em menos de
+ * um segundo e desiste em dez (`TOQUE_DE_QUEM_PUXOU_MS`); o que passar disso não
+ * é mais o clique de agora.
  */
 const PRAZO_DO_PEDIDO_DA_FILA_MS = 15_000;
 
 /**
- * O ÚNICO TOQUE QUE ESTE NAVEGADOR ATENDE SOZINHO: o que traz, no cabeçalho
- * `X-Fila-Atender`, a ordem que ESTA aba pediu e a rota aceitou há menos de
- * 15 s. As três condições juntas, e nenhuma a menos:
+ * O ÚNICO TOQUE QUE ESTE NAVEGADOR ATENDE SOZINHO: o do pedido de atender que
+ * ESTA aba fez há menos de 15 s. Todas as condições juntas, e nenhuma a menos:
  *
- *  - o toque traz o cabeçalho — a ligação comum do rodízio, a transferência e a
- *    interna não trazem, e seguem tocando até alguém clicar;
- *  - a ordem é a MESMA que esta aba guardou — a ordem de um colega, ou a de
- *    outra aba desta mesma pessoa, não é desta aba;
- *  - dentro do prazo — o pedido de um minuto atrás não é o clique de agora.
+ *  - o toque traz o cabeçalho `X-Fila-Atender` — a ligação comum do rodízio, a
+ *    transferência e a interna não trazem, e seguem tocando até alguém clicar.
+ *    Vale SEMPRE: nem a ligação certa dispensa o cabeçalho (o toque comum do
+ *    rodízio da mesma ligação pode chegar a mim enquanto eu peço para atendê-la);
+ *  - dentro do prazo — o pedido de um minuto atrás não é o clique de agora;
+ *  - e o toque é DESTE pedido:
+ *      · com a ordem já conhecida (a rota respondeu), a ordem do toque é a MESMA
+ *        — a de um colega, ou a de outra aba desta mesma pessoa, não é desta
+ *        aba. Aqui casar a ligação NÃO basta;
+ *      · com o pedido ainda em voo (a rota não respondeu), a LIGAÇÃO do toque
+ *        (`X-Ligacao-Id`) é a que a pessoa clicou. O worker toca o ramal assim
+ *        que recebe a ordem, e o toque pode chegar ao navegador antes do 202:
+ *        sem isto, quem clicou em "Atender" via a tela de toque e clicava de novo.
+ *
+ * A intenção pela ligação só vale enquanto o pedido está em voo: a rota que
+ * recusa, a rede que cai e a resposta sem ordem LIMPAM o pedido (`atenderDaFila`).
  *
  * Atender sem a pessoa pedir é abrir o microfone dela sem aviso: na dúvida, o
  * toque é o de sempre, com a tela de toque e o som.
  */
-function ehOToqueQueEuPedi(pedido: PedidoDaFila | null, ordemDoToque: string | null, agoraMs: number): boolean {
-  if (!pedido || !ordemDoToque) return false;
-  return ordemDoToque === pedido.ordemId && agoraMs < pedido.ate;
+function ehOToqueQueEuPedi(pedido: PedidoDaFila | null, toque: ToqueQueChegou, agoraMs: number): boolean {
+  if (!pedido || !toque.ordemId) return false;
+  if (agoraMs >= pedido.ate) return false;
+  if (pedido.ordemId !== null) return toque.ordemId === pedido.ordemId;
+  return toque.ligacaoId !== null && toque.ligacaoId === pedido.ligacaoId;
 }
 
 /** Atende a sessão. O clique em "Atender" e o toque que esta aba pediu passam pelo MESMO lugar. */
@@ -251,7 +277,7 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   /** Id da ligação de saída em curso — para ler, no fim, por que ela acabou. */
   const saidaRef = useRef<string | null>(null);
-  /** O último pedido de atender da fila que a rota aceitou — ver `ehOToqueQueEuPedi`. */
+  /** O último pedido de atender da fila desta aba, em voo ou já aceito — ver `ehOToqueQueEuPedi`. */
   const pedidoDaFilaRef = useRef<PedidoDaFila | null>(null);
   const [tentativa, setTentativa] = useState(0);
 
@@ -396,9 +422,13 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
           const id = ev.request.getHeader("X-Ligacao-Id") ?? null;
           // A ligação interna (v3) traz quem liga no header; o nome e o ramal vêm na bina.
           const interna = Boolean(ev.request.getHeader("X-Interna-De"));
-          const ordemDoToque = ev.request.getHeader(CABECALHO_DO_ATENDER)?.trim() || null;
-          euPedi = ehOToqueQueEuPedi(pedidoDaFilaRef.current, ordemDoToque, Date.now());
-          // Uma ordem, um atendimento: o mesmo cabeçalho de novo não atende de novo.
+          euPedi = ehOToqueQueEuPedi(
+            pedidoDaFilaRef.current,
+            { ordemId: ev.request.getHeader(CABECALHO_DO_ATENDER)?.trim() || null, ligacaoId: id?.trim() || null },
+            Date.now(),
+          );
+          // Um pedido, um atendimento: o mesmo toque de novo não atende de novo — e a
+          // resposta da rota que chegar depois não guarda de volta o que já foi usado.
           if (euPedi) pedidoDaFilaRef.current = null;
           setLigacao({
             id,
@@ -568,20 +598,37 @@ export function TelefoniaProvider({ children }: { children: ReactNode }) {
 
   // Atender da fila (entrega 3): a rota confere e manda a ordem ao serviço de
   // telefonia, que faz ESTE ramal tocar com a ordem no cabeçalho. Aqui só se
-  // guarda qual ordem esta aba pediu — quem atende é o `newRTCSession`, quando (e
-  // se) o toque dela chegar. Um pedido novo substitui o anterior.
+  // guarda o que esta aba pediu — quem atende é o `newRTCSession`, quando (e se)
+  // o toque dela chegar. Um pedido novo substitui o anterior.
+  //
+  // O pedido é guardado ANTES do POST, só com a ligação: o toque pode chegar
+  // antes da resposta. Depois, cada passo só mexe no pedido se ele ainda for
+  // ESTE (a identidade do objeto) — o toque pode tê-lo usado, e um clique mais
+  // novo pode tê-lo trocado.
   const atenderDaFila = useCallback<ContextoDoTelefone["atenderDaFila"]>(async (ligacaoId) => {
+    const pedido: PedidoDaFila = { ligacaoId, ordemId: null, ate: Date.now() + PRAZO_DO_PEDIDO_DA_FILA_MS };
+    pedidoDaFilaRef.current = pedido;
+    // Qualquer falha — a rota recusou, a rede caiu, a resposta veio sem a ordem —
+    // acaba com a intenção: ela só vale pela ligação enquanto o pedido está em voo.
+    const desistir = () => {
+      if (pedidoDaFilaRef.current === pedido) pedidoDaFilaRef.current = null;
+    };
     try {
       const r = await apiClient.post<{ data: { ordem_id?: unknown } }>(
         `/api/v1/telefonia/chamadas/${encodeURIComponent(ligacaoId)}/atender`,
         {},
       );
       const ordemId = r.data.ordem_id;
-      // Sem a ordem não há o que reconhecer no toque: nada é guardado.
-      if (typeof ordemId !== "string" || ordemId === "") return null;
-      pedidoDaFilaRef.current = { ordemId, ate: Date.now() + PRAZO_DO_PEDIDO_DA_FILA_MS };
+      if (typeof ordemId !== "string" || ordemId === "") {
+        desistir();
+        return null;
+      }
+      // Daqui em diante vale a ORDEM, e só ela. Se o toque já usou o pedido, ou
+      // outro clique o trocou, não há o que preencher.
+      if (pedidoDaFilaRef.current === pedido) pedidoDaFilaRef.current = { ...pedido, ordemId };
       return ordemId;
     } catch (e) {
+      desistir();
       showApiError(e);
       return null;
     }
