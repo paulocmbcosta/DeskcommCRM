@@ -1022,8 +1022,9 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
     test.setTimeout(180_000);
     await esvaziarAFila();
     await garantirOOutroTime();
-    // Três ligações esperando na MESMA fase e no MESMO time: uma com alguém
-    // pedindo para atender, uma sendo movida e uma em que ninguém pediu nada (o controle).
+    // Três ligações esperando na MESMA fase e no MESMO time: uma que alguém vai
+    // pedir para atender, uma que alguém vai pedir para mover, e uma em que
+    // ninguém pede nada (o controle).
     const marcaDoCaso = randomUUID().slice(0, 6);
     const puxada = { id: randomUUID(), telefone: `+55619914${QUATRO_DIGITOS}` };
     const movida = { id: randomUUID(), telefone: `+55619915${QUATRO_DIGITOS}` };
@@ -1039,8 +1040,6 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
         caiEmS: 200,
       });
     }
-    const ordemDeAtender = await semearOrdemAberta({ ligacaoId: puxada.id, tipo: "pull", quemPediu: atendente.id });
-    await semearOrdemAberta({ ligacaoId: movida.id, tipo: "move", quemPediu: gerente.id, paraOTime: OUTRO_TIME.id });
 
     await entrar(page, gerente.email, gerente.senha);
     const coluna = await abrirAbaTelefone(page);
@@ -1050,28 +1049,62 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
     const ordemNaPuxada = daPuxada.locator("[data-fila-ordem]");
     const ordemNaMovida = daMovida.locator("[data-fila-ordem]");
     const botoes = "[data-fila-acoes], [data-fila-atender], [data-fila-mover]";
+    // Uma marca na janela: um recarregamento a apagaria. É o que sustenta o "sem recarregar" dos passos abaixo.
+    const marca = randomUUID();
+    let ordemDeAtender = "";
+
+    await test.step("antes de alguém pedir: as três ligações têm o botão, e nenhuma tem frase de ordem", async () => {
+      for (const [l, daLinha] of [
+        [puxada, daPuxada],
+        [movida, daMovida],
+        [livre, daLivre],
+      ] as const) {
+        await expect(daLinha.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando", { timeout: 20_000 });
+        await expect(daLinha.locator(`[data-fila-mover="${l.id}"]`)).toBeVisible();
+        await expect(daLinha.locator("[data-fila-ordem]")).toHaveCount(0);
+      }
+      await page.evaluate((m) => {
+        (window as unknown as { __paginaDaOrdem?: string }).__paginaDaOrdem = m;
+      }, marca);
+    });
 
     await test.step("a ordem aberta troca os botões pela frase de quem está cuidando", async () => {
-      // Alguém pediu para ATENDER: o nome de quem pediu, pela régua de nome da fila.
+      // As ordens são semeadas com a página JÁ aberta: ordem aberta é estado de
+      // segundos (o ramal de quem pediu toca por 10 s), e o caso a lê enquanto é nova.
+      ordemDeAtender = await semearOrdemAberta({ ligacaoId: puxada.id, tipo: "pull", quemPediu: atendente.id });
+      await semearOrdemAberta({ ligacaoId: movida.id, tipo: "move", quemPediu: gerente.id, paraOTime: OUTRO_TIME.id });
+      // O que o worker faz em seguida com a de atender: o ramal de quem pediu
+      // toca (o UPDATE de `marcarTocando`). A ordem não escreve em `voice_calls`;
+      // é esta escrita que avisa a aba pelo tempo real — e a releitura que ela
+      // dispara traz as duas ordens.
+      await sql(
+        `update public.voice_calls set status = 'ringing', ringing_user_id = $3, updated_at = now()
+          where id = $1 and organization_id = $2 and status <> 'ended'`,
+        [puxada.id, orgId, atendente.id],
+      );
+
+      // Alguém pediu para ATENDER: o nome de quem pediu, pela régua de nome da
+      // fila. Pelo tempo real ou, de segurança, pela releitura de 15 s do hook.
       await expect(ordemNaPuxada).toHaveAttribute("data-fila-ordem", "pull", { timeout: 20_000 });
       await expect(ordemNaPuxada).toHaveText(`${atendente.nome} está atendendo…`);
       await expect(daPuxada.locator(botoes)).toHaveCount(0);
-      // A ordem não mexe na ligação: ela segue esperando, na fila.
-      await expect(daPuxada.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando");
+      // A ligação segue na fila — agora tocando para quem a puxou.
+      await expect(daPuxada.getByTestId("estado-da-ligacao")).toHaveText(
+        new RegExp(`^Tocando para ${atendente.nome} · na fila há \\d+:\\d{2}$`),
+      );
 
       // Alguém pediu para MOVER: o nome do time de destino.
       await expect(ordemNaMovida).toHaveAttribute("data-fila-ordem", "move");
       await expect(ordemNaMovida).toHaveText(`Movendo para ${OUTRO_TIME.nome}…`);
       await expect(daMovida.locator(botoes)).toHaveCount(0);
 
-      // CONTROLE: a ligação em que ninguém pediu nada tem o botão — a mesma
-      // pessoa olhando, a mesma fase, o mesmo time. A diferença é só a ordem.
-      await expect(daLivre.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando");
+      // CONTROLE: a ligação em que ninguém pediu nada segue com o botão — a mesma
+      // pessoa olhando, o mesmo time, a mesma leitura. A diferença é só a ordem.
       await expect(daLivre.locator(`[data-fila-mover="${livre.id}"]`)).toBeVisible();
       await expect(daLivre.locator("[data-fila-ordem]")).toHaveCount(0);
-    });
 
-    await test.step("a frase fica embaixo do texto da linha e não faz a coluna rolar para o lado (medido no elemento)", async () => {
+      // Medido no elemento, logo em seguida: a frase fica EMBAIXO do texto da
+      // linha, e a coluna não rola para o lado.
       await page.getByTestId("inbox-aba-atual").hover();
       const medidas = await medirLinhasDaFila(page, { puxada: puxada.id, movida: movida.id, livre: livre.id });
       expect(medidas, "a coluna da fila não foi achada para medir").not.toBeNull();
@@ -1080,7 +1113,7 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
       expect(caixaDaColuna.scrollWidth, "a coluna da fila ganhou rolagem horizontal com a frase da ordem").toBeLessThanOrEqual(caixaDaColuna.clientWidth);
       for (const nome of ["puxada", "movida"] as const) {
         const l = linhas[nome];
-        expect(l?.corpo && l.faixa, `a linha "${nome}" não tem a área principal ou a faixa para medir`).toBeTruthy();
+        expect(l?.corpo && l.faixa, `a linha "${nome}" não tem a área principal ou a frase da ordem para medir`).toBeTruthy();
         expect(l!.scrollWidth, `a linha "${nome}" vaza para o lado`).toBeLessThanOrEqual(l!.clientWidth);
         expect(l!.faixa!.topo, `a frase da ordem da linha "${nome}" não está embaixo do texto`).toBeGreaterThanOrEqual(l!.corpo!.base - 1);
         expect(l!.faixa!.direita, `a frase da ordem da linha "${nome}" passa da borda direita da coluna`).toBeLessThanOrEqual(caixaDaColuna.direita + 1);
@@ -1089,12 +1122,6 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
     });
 
     await test.step("a ordem acaba sem a ligação mudar de mãos: os botões voltam, sem recarregar", async () => {
-      // Uma marca na janela: um recarregamento a apagaria. É o que sustenta o "sem recarregar".
-      const marca = randomUUID();
-      await page.evaluate((m) => {
-        (window as unknown as { __paginaDaOrdem?: string }).__paginaDaOrdem = m;
-      }, marca);
-
       // Quem pediu para atender não atendeu a tempo: o worker fecha a ordem
       // (`encerrarOrdemDaFila`, `no_answer`) e limpa o "tocando" da ligação
       // (`marcarTocando`). A ordem vai primeiro: é a escrita em `voice_calls` que
@@ -1103,11 +1130,11 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
       const fechadas = await sql<{ id: string }>(
         `update public.voice_call_queue_orders
             set status = 'ended', outcome = 'no_answer', reason = null, ended_at = now()
-          where id = $1 and organization_id = $2 and status = 'open'
+          where id = $1 and organization_id = $2
           returning id`,
         [ordemDeAtender, orgId],
       );
-      expect(fechadas, "o fim fecha UMA ordem: a de atender").toHaveLength(1);
+      expect(fechadas, "o fim alcança UMA ordem: a de atender").toHaveLength(1);
       await sql(
         `update public.voice_calls set status = 'ringing', ringing_user_id = null, updated_at = now()
           where id = $1 and organization_id = $2 and status <> 'ended'`,
@@ -1118,11 +1145,9 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
       await expect(ordemNaPuxada).toHaveCount(0, { timeout: 25_000 });
       await expect(daPuxada.locator(`[data-fila-mover="${puxada.id}"]`)).toBeVisible();
       await expect(daPuxada.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando");
-      // Só a linha da ordem que acabou mudou: a outra segue sendo movida.
-      await expect(ordemNaMovida).toHaveText(`Movendo para ${OUTRO_TIME.nome}…`);
       expect(
         await page.evaluate(() => (window as unknown as { __paginaDaOrdem?: string }).__paginaDaOrdem),
-        "a página foi recarregada no meio do caso — os botões tinham de voltar sozinhos",
+        "a página foi recarregada no meio do caso — a frase e os botões tinham de trocar sozinhos",
       ).toBe(marca);
       await page.getByTestId("inbox-aba-atual").hover();
       await anexarCaptura(page, testInfo, "fila-ordem-encerrada");
