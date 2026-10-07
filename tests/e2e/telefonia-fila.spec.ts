@@ -1,8 +1,10 @@
 /**
  * [P1] A FILA DO TELEFONE PELA TELA — a aba "Telefone" do Inbox e a espera máxima
- * por time (fila visível, entrega 2; migration 0295; J44 do mapa de jornadas).
+ * por time (fila visível, entrega 2; migration 0295; J44 do mapa de jornadas), e
+ * o que a aba deixa FAZER com quem espera — atender e mover (entrega 3; migration
+ * 0296; J45).
  *
- * Desenho: docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md (§4.2).
+ * Desenho: docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md (§4.2 e §4.3).
  *
  * O que só a tela prova, e esta spec mede:
  *  1. o ATENDENTE (papel agent) abre o Inbox e o trilho ganha a aba "Telefone",
@@ -19,7 +21,36 @@
  *     `phone.queue_wait_changed`), e o valor VOLTA DO BANCO depois do reload;
  *  3. numa organização SEM número de telefone, na MESMA instalação, a aba não
  *     existe — e o link guardado (`?filter=phone`) diz o porquê em vez de
- *     mostrar uma fila vazia.
+ *     mostrar uma fila vazia;
+ *  4. AGIR NA FILA, quem vê o quê (entrega 3): o GERENTE tem o botão de mover em
+ *     cada ligação que espera por uma pessoa — aguardando ou tocando, inclusive a
+ *     que toca para ele, que a linha chama de "Tocando para você" —, e o menu
+ *     lista os OUTROS times; a ligação que ainda ouve os avisos não tem botão
+ *     nenhum; o ATENDENTE, na mesma fila, não tem o de mover. A faixa das ações
+ *     fica EMBAIXO do texto da linha e não faz a coluna rolar para o lado (medido
+ *     no elemento);
+ *  5. com uma ORDEM ABERTA sobre a ligação (alguém pediu para atender, ou para
+ *     mover), a linha diz quem está cuidando — "Bruno Atendente está atendendo…",
+ *     "Movendo para <time>…" — no lugar dos botões; e, quando a ordem acaba sem a
+ *     ligação mudar de mãos, os botões voltam, sem recarregar a página;
+ *  6. o CARTÃO da ligação, na conversa, conta o que se fez com ela na fila:
+ *     "Movida de <time> para <time> por <quem>" e "Puxada da fila por <quem>" — e
+ *     o cartão da ligação em que ninguém agiu não ganha linha nenhuma.
+ *
+ * ⚠️ O QUE A ENTREGA 3 NÃO PROVA AQUI. O botão "Atender" só existe para quem tem
+ * ramal neste navegador, e a credencial do ramal só sai depois de a rota gravá-la
+ * no Asterisk (`POST /api/v1/telefonia/ramal`) — no CI nada escuta a ARI. O caso
+ * 4 mede esse estado (a rota não entrega ramal, e a tela não oferece "Atender"),
+ * e não o botão. O CLIQUE em "Atender" e em um time do menu de mover também fica
+ * de fora: a rota grava a ordem e a entrega ao worker pela ARI, e quem age é ele.
+ * O botão, o atendimento automático e o que o worker faz com a ordem estão em
+ * unidade (`components/telefonia/fila/LinhaDaFila.test.tsx`,
+ * `components/telefonia/TelefoniaContext.fila.test.tsx`,
+ * `lib/channels/telefonia/controle.test.ts`) e no Postgres real
+ * (`tests/invariants/telefonia-pedido-da-fila.test.ts`,
+ * `telefonia-ordens-da-fila-repositorio.test.ts`); a ligação de verdade é o
+ * roteiro `docs/runbooks/telefonia-fila-visivel.md` (§3) — o estado dele está na
+ * J45 de `docs/testing/user-journey-map.md`.
  *
  * As ligações são SEMEADAS em `voice_calls`, como o worker as deixa
  * (`marcarNaFila`, `marcarPrazoDaFila`, `marcarTocando`, `marcarAtendida` e
@@ -30,7 +61,12 @@
  * unidade (`lib/channels/telefonia/controle.test.ts`) e no Postgres real
  * (`tests/invariants/telefonia-fila-visivel-repositorio.test.ts` e
  * `telefonia-fila-da-tela.test.ts`). As escritas da semeadura vão como o SISTEMA
- * (postgres): pela REST a linha do telefone é só-leitura (policy da 0288).
+ * (postgres): pela REST a linha do telefone é só-leitura (policy da 0288). As
+ * ORDENS da fila (`voice_call_queue_orders`) também, e ali nem a service key
+ * escreve — o `revoke all` da 0296 tirou a escrita de `service_role`; a ordem
+ * aberta é semeada como a rota a deixa (`pedirAtender`/`pedirMover`). O cartão
+ * do caso 6 é a mensagem `ligacao:<id>` com `metadata.voice_call.fila`, como
+ * `registrarNaConversa` a grava no fim da ligação.
  *
  * Os instantes da semeadura são do relógio do BANCO (`now()` ± um intervalo, no
  * próprio INSERT): a tela mede a espera pelo relógio de lá, e semear pelo relógio
@@ -62,6 +98,12 @@ const SUFIXO = randomUUID().slice(0, 8);
 const QUATRO_DIGITOS = String(1000 + Math.floor(Math.random() * 9000));
 /** O time nasce com 10 minutos de espera máxima: o caso 2 lê esse valor na tela antes de trocá-lo. */
 const TIME = { id: randomUUID(), nome: `Suporte Fila ${SUFIXO}`, esperaMaximaS: 600 };
+/**
+ * O SEGUNDO time ativo da organização, só dos casos da entrega 3 (criado por
+ * `garantirOOutroTime`, dentro deles): sem outro time não há para onde mover, e
+ * o botão de mover nem aparece. Os três primeiros casos rodam com um time só.
+ */
+const OUTRO_TIME = { id: randomUUID(), nome: `Financeiro Fila ${SUFIXO}` };
 const NUMERO = { id: randomUUID(), nome: `Número Fila ${SUFIXO}`, e164: `+55613003${QUATRO_DIGITOS}` };
 
 test.use({ viewport: { width: 1440, height: 900 } });
@@ -191,6 +233,168 @@ const contarAuditoria = async (acao: string, ator: string) =>
     )
   )[0]?.n ?? 0;
 
+// ─── agir na fila (entrega 3; migration 0296) ───────────────────────────────
+
+/**
+ * A fila DESTA organização volta a zero, como o fim de cada ligação a deixa: a
+ * ordem que ficou aberta fecha `cancelled` (o UPDATE de `cancelarOrdensDaLigacao`)
+ * e a ligação viva é encerrada (o de `encerrarLigacao`). Os casos da entrega 3
+ * começam por aqui: os de cima deixam ligações vivas na organização, e cada caso
+ * conta só as que semeou.
+ */
+async function esvaziarAFila(): Promise<void> {
+  await sql(
+    `update public.voice_call_queue_orders
+        set status = 'ended', outcome = 'cancelled', reason = 'ligacao_encerrada', ended_at = now()
+      where organization_id = $1 and status = 'open'`,
+    [orgId],
+  );
+  await sql(
+    `update public.voice_calls set status = 'ended', ended_at = now(), end_reason = 'cliente_desligou', ringing_user_id = null
+      where organization_id = $1 and status <> 'ended'`,
+    [orgId],
+  );
+}
+
+/** O segundo time ativo (ver `OUTRO_TIME`). Chamado por cada caso que precisa dele; a segunda chamada não faz nada. */
+async function garantirOOutroTime(): Promise<void> {
+  await sql(
+    `insert into public.attendance_teams (id, organization_id, name, slug) values ($1, $2, $3, $4)
+     on conflict (id) do nothing`,
+    [OUTRO_TIME.id, orgId, OUTRO_TIME.nome, `financeiro-fila-${SUFIXO}`],
+  );
+}
+
+/**
+ * Uma ORDEM ABERTA sobre uma ligação que espera, como a rota a deixa depois de
+ * aceitar o pedido (`pedirAtender` e `pedirMover`, em
+ * lib/channels/telefonia/pedido-da-fila.ts): no atender, `to_user_id` é quem
+ * pediu; no mover, `to_team_id` é o destino; nos dois, `from_team_id` é o time em
+ * que a ligação esperava. Pela conexão direta: pela REST esta tabela é só-leitura
+ * até para a service key (o `revoke all` da 0296).
+ */
+async function semearOrdemAberta(o: {
+  ligacaoId: string;
+  tipo: "pull" | "move";
+  quemPediu: string;
+  /** Só no mover: o time de destino. */
+  paraOTime?: string;
+}): Promise<string> {
+  const [ordem] = await sql<{ id: string }>(
+    `insert into public.voice_call_queue_orders
+       (organization_id, voice_call_id, kind, requested_by, to_user_id, to_team_id, from_team_id)
+     values ($1, $2, $3, $4, $5, $6, $7)
+     returning id`,
+    [
+      orgId,
+      o.ligacaoId,
+      o.tipo,
+      o.quemPediu,
+      o.tipo === "pull" ? o.quemPediu : null,
+      o.tipo === "move" ? (o.paraOTime ?? null) : null,
+      TIME.id,
+    ],
+  );
+  return ordem!.id;
+}
+
+/** Do Inbox à aba Telefone, pelo trilho — o caminho do caso 1. Devolve a coluna da fila, já na tela. */
+async function abrirAbaTelefone(page: Page): Promise<Locator> {
+  await page.goto("/app/inbox");
+  const trilho = page.getByTestId("inbox-abas");
+  const abaTelefone = trilho.getByRole("tab", { name: "Telefone", exact: true });
+  await expect(abaTelefone).toBeVisible({ timeout: 30_000 });
+  await abaTelefone.click();
+  await expect(page).toHaveURL(/[?&]filter=phone\b/);
+  await expect(page.getByTestId("inbox-aba-atual")).toHaveText("Telefone");
+  const coluna = page.getByTestId("fila-do-telefone");
+  await expect(coluna).toBeVisible({ timeout: 20_000 });
+  return coluna;
+}
+
+/**
+ * O que a rota do ramal responde a ESTE navegador, com a sessão dele — a mesma
+ * pergunta que o app faz sozinho ao carregar (`TelefoniaProvider`), feita de
+ * dentro da página.
+ *
+ * É o ramal que decide o botão "Atender" (`disponivel`, em `TelefoniaContext`):
+ * só com `ativo: true` a fila o oferece. Perguntar à rota é o controle da
+ * ausência: se ela não entrega credencial a esta pessoa aqui, "não há Atender" é
+ * o estado da tela, e não um pedido que ainda está no ar.
+ */
+async function ramalDesteNavegador(page: Page): Promise<{ status: number; ativo: boolean }> {
+  return page.evaluate(async () => {
+    const r = await fetch("/api/v1/telefonia/ramal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      credentials: "same-origin",
+    });
+    const corpo = (await r.json().catch(() => null)) as { data?: { ativo?: unknown } } | null;
+    return { status: r.status, ativo: r.ok && corpo?.data?.ativo === true };
+  });
+}
+
+/** A LINHA inteira de uma ligação — a área principal (que abre a conversa) mais a faixa de baixo (os botões, ou quem está cuidando). */
+const linhaInteira = (coluna: Locator, id: string) => coluna.locator(`[data-linha-da-fila="${id}"]`);
+
+interface Caixa {
+  esquerda: number;
+  direita: number;
+  topo: number;
+  base: number;
+  largura: number;
+  altura: number;
+}
+interface MedidaDaLinha extends Caixa {
+  scrollWidth: number;
+  clientWidth: number;
+  /** A área principal: o selo da posição, o nome, os detalhes e o estado. */
+  corpo: Caixa | null;
+  /** A faixa de baixo: os botões (`data-fila-acoes`) ou a frase da ordem aberta (`data-fila-ordem`). */
+  faixa: Caixa | null;
+  mover: Caixa | null;
+  estado: string | null;
+  textoDaFaixa: string | null;
+}
+
+/** As caixas de cada linha pedida, lidas no MESMO quadro, mais a coluna que as contém. */
+async function medirLinhasDaFila(page: Page, ids: Record<string, string>) {
+  return page.evaluate((porNome) => {
+    const col = document.querySelector<HTMLElement>('[data-testid="fila-do-telefone"]');
+    if (!col) return null;
+    const caixa = (el: Element): Caixa => {
+      const r = el.getBoundingClientRect();
+      return { esquerda: r.left, direita: r.right, topo: r.top, base: r.bottom, largura: r.width, altura: r.height };
+    };
+    const parte = (raiz: Element, seletor: string): Caixa | null => {
+      const el = raiz.querySelector(seletor);
+      return el ? caixa(el) : null;
+    };
+    const linhas: Record<string, MedidaDaLinha | null> = {};
+    for (const [nome, id] of Object.entries(porNome)) {
+      const el = col.querySelector<HTMLElement>(`[data-linha-da-fila="${id}"]`);
+      linhas[nome] = el
+        ? {
+            ...caixa(el),
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+            corpo: parte(el, "[data-ligacao-id]"),
+            faixa: parte(el, "[data-fila-acoes], [data-fila-ordem]"),
+            mover: parte(el, "[data-fila-mover]"),
+            estado: el.querySelector('[data-testid="estado-da-ligacao"]')?.textContent ?? null,
+            textoDaFaixa: el.querySelector("[data-fila-ordem]")?.textContent ?? null,
+          }
+        : null;
+    }
+    return {
+      viewport: { largura: window.innerWidth, altura: window.innerHeight },
+      coluna: { ...caixa(col), scrollWidth: col.scrollWidth, clientWidth: col.clientWidth },
+      linhas,
+    };
+  }, ids);
+}
+
 test.describe("telefonia — a fila do telefone pela tela", () => {
   test.beforeAll(async () => {
     test.setTimeout(90_000);
@@ -261,12 +465,8 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
     if (!pool) return;
     try {
       if (orgId) {
-        // Nenhuma ligação "viva" fica para trás (o caso 1 deixa quatro), e o número sai de cena.
-        await sql(
-          `update public.voice_calls set status = 'ended', ended_at = now(), end_reason = 'cliente_desligou', ringing_user_id = null
-            where organization_id = $1 and status <> 'ended'`,
-          [orgId],
-        );
+        // Nenhuma ligação "viva" nem ordem aberta fica para trás (o caso 1 deixa quatro ligações), e o número sai de cena.
+        await esvaziarAFila();
         await sql(`update public.channel_sessions set archived_at = now() where id = $1 and organization_id = $2`, [NUMERO.id, orgId]);
       }
     } finally {
@@ -680,5 +880,390 @@ test.describe("telefonia — a fila do telefone pela tela", () => {
     await expect(page.getByText("O telefone não está ligado nesta organização.")).toBeVisible({ timeout: 30_000 });
     await expect(trilho.getByRole("tab", { name: "Fila", exact: true })).toBeVisible();
     await expect(trilho.getByRole("tab", { name: "Telefone", exact: true })).toHaveCount(0);
+  });
+
+  // ─── agir na fila (entrega 3; migration 0296; J45) ────────────────────────
+
+  test("agir na fila: o gerente tem o mover em quem espera por uma pessoa, o atendente não, e quem ainda ouve os avisos não tem botão", async ({
+    page,
+    browser,
+  }, testInfo) => {
+    test.setTimeout(240_000);
+    await esvaziarAFila();
+    await garantirOOutroTime();
+    // Três ligações PRÓPRIAS do caso, sem contato (a linha mostra o número): uma
+    // que espera, uma que toca para a gerente e uma que ainda ouve os avisos.
+    const marcaDoCaso = randomUUID().slice(0, 6);
+    const espera = { id: randomUUID(), telefone: `+55619911${QUATRO_DIGITOS}` };
+    const toca = { id: randomUUID(), telefone: `+55619912${QUATRO_DIGITOS}` };
+    const avisos = { id: randomUUID(), telefone: `+55619913${QUATRO_DIGITOS}` };
+    await semearLigacao({
+      id: espera.id,
+      ref: `canal-acoes-${marcaDoCaso}-espera`,
+      telefone: espera.telefone,
+      status: "ringing",
+      comecouHaS: 75,
+      naFilaHaS: 60,
+      caiEmS: 240,
+    });
+    await semearLigacao({
+      id: toca.id,
+      ref: `canal-acoes-${marcaDoCaso}-toca`,
+      telefone: toca.telefone,
+      status: "ringing",
+      comecouHaS: 40,
+      naFilaHaS: 30,
+      tocandoPara: gerente.id,
+    });
+    // `queued_at` nulo: ainda não espera por uma pessoa — é a que NÃO pode ter botão.
+    await semearLigacao({ id: avisos.id, ref: `canal-acoes-${marcaDoCaso}-avisos`, telefone: avisos.telefone, status: "ringing", comecouHaS: 8 });
+
+    await test.step("gerente: o mover em quem espera e em quem toca; nada em quem ouve os avisos; sem ramal, nenhum Atender", async () => {
+      await entrar(page, gerente.email, gerente.senha);
+      const coluna = await abrirAbaTelefone(page);
+      const daEspera = linhaInteira(coluna, espera.id);
+      const daQueToca = linhaInteira(coluna, toca.id);
+      const dosAvisos = linhaInteira(coluna, avisos.id);
+
+      // As três estão na fase em que foram semeadas.
+      await expect(daEspera.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando", { timeout: 20_000 });
+      await expect(daQueToca.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "tocando");
+      await expect(dosAvisos.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "avisos");
+
+      // A que espera: o botão de mover, dela — um ícone, com o nome por extenso para quem não o vê.
+      const moverAQueEspera = daEspera.locator(`[data-fila-mover="${espera.id}"]`);
+      await expect(moverAQueEspera).toBeVisible();
+      await expect(moverAQueEspera).toHaveAttribute("aria-label", "Mover para outro time");
+      await expect(moverAQueEspera).toBeEnabled();
+
+      // A que toca para QUEM OLHA: a linha diz "você", e o mover continua lá
+      // (ela se atende pelo aviso de toque; mandá-la a outro time segue valendo).
+      await expect(daQueToca.getByTestId("estado-da-ligacao")).toHaveText(/^Tocando para você · na fila há \d+:\d{2}$/);
+      await expect(daQueToca.locator(`[data-fila-mover="${toca.id}"]`)).toBeVisible();
+
+      // A que ainda ouve os avisos: nem faixa, nem botão, nem frase de ordem.
+      await expect(dosAvisos.locator("[data-fila-acoes], [data-fila-ordem], [data-fila-atender], [data-fila-mover]")).toHaveCount(0);
+
+      // "ATENDER" NÃO É PROVADO AQUI — só a ausência dele neste estado. O botão é
+      // de quem tem ramal neste navegador, e a rota do ramal só entrega a
+      // credencial depois de gravá-la no Asterisk: no CI nada escuta a ARI, então
+      // o botão em si fica para a prova com ligação real (runbook, §3).
+      const ramal = await ramalDesteNavegador(page);
+      expect(ramal.ativo, `a rota do ramal entregou uma credencial (HTTP ${ramal.status}): este caso mede a fila SEM ramal no navegador`).toBe(false);
+      await expect(coluna.locator("[data-fila-atender]")).toHaveCount(0);
+
+      // O menu de mover lista os OUTROS times ativos — o time em que a ligação já
+      // está não é destino. Só abre e fecha: escolher um time manda a ordem ao
+      // worker pela ARI, que aqui não existe.
+      await moverAQueEspera.click();
+      const destino = page.locator(`[data-fila-mover-para="${OUTRO_TIME.id}"]`);
+      await expect(destino).toBeVisible();
+      await expect(destino).toContainText(OUTRO_TIME.nome);
+      await expect(page.locator(`[data-fila-mover-para="${TIME.id}"]`)).toHaveCount(0);
+      await anexarCaptura(page, testInfo, "fila-menu-de-mover");
+      await page.keyboard.press("Escape");
+      await expect(destino).toHaveCount(0);
+
+      // Medido no elemento: a faixa das ações fica EMBAIXO do texto (não ao lado,
+      // espremendo-o), a linha cresce em vez de vazar, e a coluna não rola para o lado.
+      await page.getByTestId("inbox-aba-atual").hover();
+      const medidas = await medirLinhasDaFila(page, { espera: espera.id, toca: toca.id, avisos: avisos.id });
+      expect(medidas, "a coluna da fila não foi achada para medir").not.toBeNull();
+      await anexarJson(testInfo, "medidas-das-acoes", medidas);
+      const { coluna: caixaDaColuna, linhas } = medidas!;
+      const comAcoes = linhas.espera;
+      const semAcoes = linhas.avisos;
+      expect(comAcoes?.corpo && comAcoes.faixa && comAcoes.mover, "a linha que espera não tem a área principal, a faixa ou o botão para medir").toBeTruthy();
+      expect(semAcoes, "a linha de quem ouve os avisos não foi achada para medir").toBeTruthy();
+      expect(semAcoes!.faixa, "a linha de quem ouve os avisos ganhou uma faixa de ações").toBeNull();
+      expect(caixaDaColuna.scrollWidth, "a coluna da fila ganhou rolagem horizontal com os botões").toBeLessThanOrEqual(caixaDaColuna.clientWidth);
+      expect(comAcoes!.scrollWidth, "a linha com ações vaza para o lado").toBeLessThanOrEqual(comAcoes!.clientWidth);
+      expect(comAcoes!.faixa!.topo, "a faixa das ações não está embaixo do texto da linha").toBeGreaterThanOrEqual(comAcoes!.corpo!.base - 1);
+      expect(comAcoes!.faixa!.direita, "a faixa das ações passa da borda direita da coluna").toBeLessThanOrEqual(caixaDaColuna.direita + 1);
+      expect(comAcoes!.mover!.esquerda, "o botão de mover começa antes da coluna").toBeGreaterThanOrEqual(caixaDaColuna.esquerda - 1);
+      expect(comAcoes!.mover!.direita, "o botão de mover passa da borda direita da coluna").toBeLessThanOrEqual(caixaDaColuna.direita + 1);
+      expect(comAcoes!.altura, "a linha com ações deveria ser mais alta que a sem ações (a faixa entra embaixo)").toBeGreaterThan(semAcoes!.altura);
+      await anexarCaptura(page, testInfo, "fila-acoes-gerente");
+    });
+
+    await test.step("atendente: a mesma fila, a mesma ligação esperando — sem o botão de mover", async () => {
+      // Outro navegador, com a gerente ainda logada no primeiro: as duas telas leem a MESMA fila.
+      const contexto = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const p = await contexto.newPage();
+      try {
+        await entrar(p, atendente.email, atendente.senha);
+        const coluna = await abrirAbaTelefone(p);
+        // A mesma ligação, na mesma fase em que a gerente tinha o botão — é o controle da ausência.
+        await expect(linhaInteira(coluna, espera.id).locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando", {
+          timeout: 20_000,
+        });
+        // E para ele a que toca para a gerente tem o NOME dela, não "você".
+        await expect(linhaInteira(coluna, toca.id).getByTestId("estado-da-ligacao")).toHaveText(
+          new RegExp(`^Tocando para ${gerente.nome} · na fila há \\d+:\\d{2}$`),
+        );
+
+        // Mover é de gerente e admin: para o atendente, em linha nenhuma.
+        await expect(coluna.locator("[data-fila-mover]")).toHaveCount(0);
+        // E, sem ramal neste navegador (o mesmo estado do passo de cima), também
+        // não há "Atender": a linha fica sem faixa nenhuma.
+        const ramal = await ramalDesteNavegador(p);
+        expect(ramal.ativo, `a rota do ramal entregou uma credencial (HTTP ${ramal.status}): este caso mede a fila SEM ramal no navegador`).toBe(false);
+        await expect(coluna.locator("[data-fila-atender]")).toHaveCount(0);
+        await expect(coluna.locator("[data-fila-acoes]")).toHaveCount(0);
+        await p.getByTestId("inbox-aba-atual").hover();
+        await anexarCaptura(p, testInfo, "fila-acoes-atendente");
+      } finally {
+        await contexto.close();
+      }
+    });
+  });
+
+  test("com uma ordem aberta a linha diz quem está cuidando, no lugar dos botões — e eles voltam quando a ordem acaba", async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
+    await esvaziarAFila();
+    await garantirOOutroTime();
+    // Três ligações esperando na MESMA fase e no MESMO time: uma com alguém
+    // pedindo para atender, uma sendo movida e uma em que ninguém pediu nada (o controle).
+    const marcaDoCaso = randomUUID().slice(0, 6);
+    const puxada = { id: randomUUID(), telefone: `+55619914${QUATRO_DIGITOS}` };
+    const movida = { id: randomUUID(), telefone: `+55619915${QUATRO_DIGITOS}` };
+    const livre = { id: randomUUID(), telefone: `+55619916${QUATRO_DIGITOS}` };
+    for (const [i, l] of [puxada, movida, livre].entries()) {
+      await semearLigacao({
+        id: l.id,
+        ref: `canal-ordem-${marcaDoCaso}-${i}`,
+        telefone: l.telefone,
+        status: "ringing",
+        comecouHaS: 100 - i * 20,
+        naFilaHaS: 90 - i * 20,
+        caiEmS: 200,
+      });
+    }
+    const ordemDeAtender = await semearOrdemAberta({ ligacaoId: puxada.id, tipo: "pull", quemPediu: atendente.id });
+    await semearOrdemAberta({ ligacaoId: movida.id, tipo: "move", quemPediu: gerente.id, paraOTime: OUTRO_TIME.id });
+
+    await entrar(page, gerente.email, gerente.senha);
+    const coluna = await abrirAbaTelefone(page);
+    const daPuxada = linhaInteira(coluna, puxada.id);
+    const daMovida = linhaInteira(coluna, movida.id);
+    const daLivre = linhaInteira(coluna, livre.id);
+    const ordemNaPuxada = daPuxada.locator("[data-fila-ordem]");
+    const ordemNaMovida = daMovida.locator("[data-fila-ordem]");
+    const botoes = "[data-fila-acoes], [data-fila-atender], [data-fila-mover]";
+
+    await test.step("a ordem aberta troca os botões pela frase de quem está cuidando", async () => {
+      // Alguém pediu para ATENDER: o nome de quem pediu, pela régua de nome da fila.
+      await expect(ordemNaPuxada).toHaveAttribute("data-fila-ordem", "pull", { timeout: 20_000 });
+      await expect(ordemNaPuxada).toHaveText(`${atendente.nome} está atendendo…`);
+      await expect(daPuxada.locator(botoes)).toHaveCount(0);
+      // A ordem não mexe na ligação: ela segue esperando, na fila.
+      await expect(daPuxada.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando");
+
+      // Alguém pediu para MOVER: o nome do time de destino.
+      await expect(ordemNaMovida).toHaveAttribute("data-fila-ordem", "move");
+      await expect(ordemNaMovida).toHaveText(`Movendo para ${OUTRO_TIME.nome}…`);
+      await expect(daMovida.locator(botoes)).toHaveCount(0);
+
+      // CONTROLE: a ligação em que ninguém pediu nada tem o botão — a mesma
+      // pessoa olhando, a mesma fase, o mesmo time. A diferença é só a ordem.
+      await expect(daLivre.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando");
+      await expect(daLivre.locator(`[data-fila-mover="${livre.id}"]`)).toBeVisible();
+      await expect(daLivre.locator("[data-fila-ordem]")).toHaveCount(0);
+    });
+
+    await test.step("a frase fica embaixo do texto da linha e não faz a coluna rolar para o lado (medido no elemento)", async () => {
+      await page.getByTestId("inbox-aba-atual").hover();
+      const medidas = await medirLinhasDaFila(page, { puxada: puxada.id, movida: movida.id, livre: livre.id });
+      expect(medidas, "a coluna da fila não foi achada para medir").not.toBeNull();
+      await anexarJson(testInfo, "medidas-da-ordem-aberta", medidas);
+      const { coluna: caixaDaColuna, linhas } = medidas!;
+      expect(caixaDaColuna.scrollWidth, "a coluna da fila ganhou rolagem horizontal com a frase da ordem").toBeLessThanOrEqual(caixaDaColuna.clientWidth);
+      for (const nome of ["puxada", "movida"] as const) {
+        const l = linhas[nome];
+        expect(l?.corpo && l.faixa, `a linha "${nome}" não tem a área principal ou a faixa para medir`).toBeTruthy();
+        expect(l!.scrollWidth, `a linha "${nome}" vaza para o lado`).toBeLessThanOrEqual(l!.clientWidth);
+        expect(l!.faixa!.topo, `a frase da ordem da linha "${nome}" não está embaixo do texto`).toBeGreaterThanOrEqual(l!.corpo!.base - 1);
+        expect(l!.faixa!.direita, `a frase da ordem da linha "${nome}" passa da borda direita da coluna`).toBeLessThanOrEqual(caixaDaColuna.direita + 1);
+      }
+      await anexarCaptura(page, testInfo, "fila-ordem-aberta");
+    });
+
+    await test.step("a ordem acaba sem a ligação mudar de mãos: os botões voltam, sem recarregar", async () => {
+      // Uma marca na janela: um recarregamento a apagaria. É o que sustenta o "sem recarregar".
+      const marca = randomUUID();
+      await page.evaluate((m) => {
+        (window as unknown as { __paginaDaOrdem?: string }).__paginaDaOrdem = m;
+      }, marca);
+
+      // Quem pediu para atender não atendeu a tempo: o worker fecha a ordem
+      // (`encerrarOrdemDaFila`, `no_answer`) e limpa o "tocando" da ligação
+      // (`marcarTocando`). A ordem vai primeiro: é a escrita em `voice_calls` que
+      // avisa a aba pelo tempo real, e a releitura que ela dispara já tem de
+      // achar a ordem fechada.
+      const fechadas = await sql<{ id: string }>(
+        `update public.voice_call_queue_orders
+            set status = 'ended', outcome = 'no_answer', reason = null, ended_at = now()
+          where id = $1 and organization_id = $2 and status = 'open'
+          returning id`,
+        [ordemDeAtender, orgId],
+      );
+      expect(fechadas, "o fim fecha UMA ordem: a de atender").toHaveLength(1);
+      await sql(
+        `update public.voice_calls set status = 'ringing', ringing_user_id = null, updated_at = now()
+          where id = $1 and organization_id = $2 and status <> 'ended'`,
+        [puxada.id, orgId],
+      );
+
+      // Pelo tempo real de `voice_calls` ou, de segurança, pela releitura de 15 s do hook.
+      await expect(ordemNaPuxada).toHaveCount(0, { timeout: 25_000 });
+      await expect(daPuxada.locator(`[data-fila-mover="${puxada.id}"]`)).toBeVisible();
+      await expect(daPuxada.locator("[data-ligacao-id]")).toHaveAttribute("data-fase", "aguardando");
+      // Só a linha da ordem que acabou mudou: a outra segue sendo movida.
+      await expect(ordemNaMovida).toHaveText(`Movendo para ${OUTRO_TIME.nome}…`);
+      expect(
+        await page.evaluate(() => (window as unknown as { __paginaDaOrdem?: string }).__paginaDaOrdem),
+        "a página foi recarregada no meio do caso — os botões tinham de voltar sozinhos",
+      ).toBe(marca);
+      await page.getByTestId("inbox-aba-atual").hover();
+      await anexarCaptura(page, testInfo, "fila-ordem-encerrada");
+    });
+  });
+
+  test("o cartão da ligação conta quem a moveu de time e quem a puxou da fila", async ({ page }, testInfo) => {
+    test.setTimeout(120_000);
+    await garantirOOutroTime();
+    // Contato, conversa e ligações PRÓPRIOS do caso. A conversa como a ligação
+    // atendida a deixa: no time, com quem atendeu.
+    const marcaDoCaso = randomUUID().slice(0, 6);
+    const telefone = `+55619917${QUATRO_DIGITOS}`;
+    const contato = await criarContato(`Cliente Puxado da Fila ${marcaDoCaso}`, telefone);
+    const [conversa] = await sql<{ id: string }>(
+      `insert into public.conversations
+         (organization_id, contact_id, channel_session_id, channel, status, is_group, unread_count_for_assignee,
+          team_id, assignee_kind, assigned_to_user_id, assigned_to_user_name)
+       values ($1, $2, $3, 'phone', 'open', false, 0, $4, 'user', $5, $6) returning id`,
+      [orgId, contato, NUMERO.id, TIME.id, atendente.id, atendente.nome],
+    );
+
+    // Duas recebidas ATENDIDAS e já encerradas, de 65 s cada: a `comum`, em que
+    // ninguém agiu na fila (o controle), e a `agida` — que caiu no time errado,
+    // a gerente moveu para o time certo, e o atendente puxou para si.
+    const comum = randomUUID();
+    const agida = randomUUID();
+    for (const [i, id] of [comum, agida].entries()) {
+      await semearLigacao({
+        id,
+        ref: `canal-cartao-${marcaDoCaso}-${i}`,
+        telefone,
+        status: "ended",
+        comecouHaS: 600 - i * 300,
+        naFilaHaS: 590 - i * 300,
+        atendidaHaS: 560 - i * 300,
+        encerradaHaS: 495 - i * 300,
+        motivo: "cliente_desligou",
+        contatoId: contato,
+        conversaId: conversa!.id,
+        dono: atendente.id,
+      });
+    }
+    // O registro da ligação na conversa, como `registrarNaConversa` o grava no
+    // fim: `fila` só entra quando houve ordem que ACONTECEU (`done`), na ordem em
+    // que foram pedidas, com os nomes daquela hora. Semeado: que o worker o
+    // escreva assim está em `tests/invariants/telefonia-ordens-da-fila-repositorio.test.ts`.
+    const oQueSeFezNaFila = [
+      { tipo: "move", por_nome: gerente.nome, de_time: OUTRO_TIME.nome, para_time: TIME.nome },
+      { tipo: "pull", por_nome: atendente.nome, de_time: TIME.nome, para_time: null },
+    ];
+    for (const [id, fila] of [
+      [comum, null],
+      [agida, oQueSeFezNaFila],
+    ] as const) {
+      await sql(
+        `insert into public.messages
+           (organization_id, conversation_id, contact_id, channel_session_id, external_id, direction, type, body,
+            sent_via, status, metadata)
+         values ($1, $2, $3, $4, $5, 'outbound', 'system', $6, 'system', 'sent', $7)`,
+        [
+          orgId,
+          conversa!.id,
+          contato,
+          NUMERO.id,
+          `ligacao:${id}`,
+          `Ligação recebida, atendida por ${atendente.nome} · 1 min 05 s`,
+          JSON.stringify({
+            voice_call: {
+              id,
+              direcao: "inbound",
+              desfecho: "atendida",
+              duracao_ms: 65_000,
+              atendente_id: atendente.id,
+              atendente_nome: atendente.nome,
+              motivo: "cliente_desligou",
+              menu: null,
+              ouviu_aviso: false,
+              ...(fila ? { fila } : {}),
+            },
+          }),
+        ],
+      );
+    }
+
+    await entrar(page, atendente.email, atendente.senha);
+    await page.goto(`/app/inbox/${conversa!.id}`);
+    const cartoes = page.locator('[data-ligacao="atendida"]');
+    await expect(cartoes).toHaveCount(2, { timeout: 30_000 });
+
+    // Só o cartão da ligação em que se agiu tem a lista — o outro é o de sempre.
+    const comFila = cartoes.filter({ has: page.locator("[data-ligacao-fila]") });
+    await expect(comFila).toHaveCount(1);
+    await expect(page.locator("[data-ligacao-fila]")).toHaveCount(1);
+    await expect(comFila.locator("[data-ligacao-titulo]")).toHaveText("Ligação recebida");
+    await expect(comFila).toContainText(`atendida por ${atendente.nome}`);
+
+    // Uma linha por ação, na ordem em que aconteceram: primeiro movida, depois puxada.
+    const acoes = comFila.locator("[data-ligacao-fila] > li");
+    await expect(acoes).toHaveCount(2);
+    await expect(acoes.nth(0)).toHaveAttribute("data-ligacao-acao-na-fila", "move");
+    await expect(acoes.nth(0)).toHaveText(`Movida de ${OUTRO_TIME.nome} para ${TIME.nome} por ${gerente.nome}`);
+    await expect(acoes.nth(1)).toHaveAttribute("data-ligacao-acao-na-fila", "pull");
+    await expect(acoes.nth(1)).toHaveText(`Puxada da fila por ${atendente.nome}`);
+    // Não houve transferência: a corrente de transferências não aparece.
+    await expect(comFila.locator("[data-ligacao-transferencias]")).toHaveCount(0);
+
+    // Medido no elemento: as linhas ficam embaixo do selo, dentro do chat.
+    const medidas = await comFila.evaluate((cartao) => {
+      const caixa = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        return { esquerda: r.left, direita: r.right, topo: r.top, base: r.bottom, largura: r.width, altura: r.height };
+      };
+      const chat = cartao.closest('[data-testid="chat-thread"]');
+      const titulo = cartao.querySelector("[data-ligacao-titulo]");
+      const lista = cartao.querySelector("[data-ligacao-fila]");
+      if (!chat || !titulo || !lista) return null;
+      return {
+        viewport: { largura: window.innerWidth, altura: window.innerHeight },
+        chat: caixa(chat),
+        cartao: caixa(cartao),
+        titulo: caixa(titulo),
+        lista: caixa(lista),
+        linhas: Array.from(lista.querySelectorAll<HTMLElement>("li")).map((li) => ({
+          texto: li.textContent ?? "",
+          ...caixa(li),
+          scrollWidth: li.scrollWidth,
+          clientWidth: li.clientWidth,
+        })),
+      };
+    });
+    expect(medidas, "o cartão, o selo ou a lista da fila não foram achados para medir").not.toBeNull();
+    await anexarJson(testInfo, "medidas-do-cartao-da-fila", medidas);
+    expect(medidas!.lista.topo, "as linhas da fila não estão embaixo do selo da ligação").toBeGreaterThanOrEqual(medidas!.titulo.base - 1);
+    expect(medidas!.linhas, "as duas linhas da fila entram na medida").toHaveLength(2);
+    for (const l of medidas!.linhas) {
+      expect(l.esquerda, `"${l.texto}" começa antes do chat`).toBeGreaterThanOrEqual(medidas!.chat.esquerda - 1);
+      expect(l.direita, `"${l.texto}" passa da borda direita do chat`).toBeLessThanOrEqual(medidas!.chat.direita + 1);
+      expect(l.scrollWidth, `"${l.texto}" vaza da própria linha`).toBeLessThanOrEqual(l.clientWidth);
+      expect(l.altura, `"${l.texto}" não tem altura`).toBeGreaterThan(0);
+    }
+    await anexarCaptura(page, testInfo, "cartao-acoes-na-fila");
   });
 });
