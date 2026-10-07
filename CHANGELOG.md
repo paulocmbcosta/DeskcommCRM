@@ -8,6 +8,34 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.57.2] — 2026-10-07
+
+### Corrigido
+
+- **Telefone — a atualização não deixa mais os números sem registro** Depois de uma atualização com a telefonia ligada, os números costumavam ficar em "registro
+  recusado" em Conexões › Telefone e as ligações paravam de chegar — foi assim nas cinco últimas em
+  que alguém conferiu. Não voltava sozinho: só quando alguém rodava dois comandos no servidor. A causa é a porta do telefone (SIP 5060): o Asterisk novo
+  nasce com outro endereço dentro do servidor, a porta fica presa ao anterior, o novo sai por outra
+  e a operadora recusa.
+
+  Agora o `update.sh` confere isso logo depois de subir a versão nova e conserta sozinho. Ele mede
+  antes de agir: se a porta está certa, não mexe em nada. Se houver ligação em curso, conserta a
+  porta mas não reinicia o serviço que reenvia os números, e avisa o que falta. A saída da
+  atualização diz o que encontrou e quantos números voltaram a registrar.
+
+  Para o mesmo conserto à mão — depois de recriar o Asterisk com um `docker compose up -d`, por
+  exemplo — há um comando novo:
+
+  ```bash
+  bash hostgator-setup-kit/religar-telefonia.sh
+  ```
+
+  **Nesta atualização o conserto ainda não roda sozinho**: quem executa é o `update.sh` da versão
+  que você já tinha. Se os números ficarem em "registro recusado" depois dela, rode o comando acima
+  uma vez. Da atualização seguinte em diante, é automático.
+
+  Quem não usa a telefonia não muda nada.
+
 ## [1.57.1] — 2026-10-07
 
 ### Corrigido
@@ -6112,7 +6140,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.1...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.2...HEAD
+[1.57.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.1...v1.57.2
 [1.57.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.0...v1.57.1
 [1.57.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.56.0...v1.57.0
 [1.56.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.55.0...v1.56.0
