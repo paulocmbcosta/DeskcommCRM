@@ -878,14 +878,18 @@ e revalida contra o estado dele antes de mexer na ligação.
   para saber se já rodou e como terminou: `gh run list --workflow e2e.yml --limit 5`). Nenhuma
   ligação real foi puxada nem movida. Em particular, não foi medido em lugar nenhum: o cabeçalho `X-Fila-Atender` num INVITE
   de verdade — que o Asterisk o ponha no toque do ramal WebRTC a partir de
-  `PJSIP_HEADER(add,…)` no `originate`, e que o JsSIP o entregue em `request.getHeader`; o formato
-  do `ChannelUserevent` DESTE evento (`telefonia_fila`), que o leitor assume igual ao da
-  transferência; o JsSIP de verdade atendendo de dentro do `newRTCSession`; quanto tempo passa
+  `PJSIP_HEADER(add,…)` no `originate`, e que o JsSIP o entregue em `request.getHeader`; o JsSIP de verdade atendendo de dentro do `newRTCSession`; quanto tempo passa
   entre o clique e a ligação conectada; os 10 s de toque de quem puxou contra um navegador
   lento; e o mesmo atendente com DUAS abas abertas clicando em "Atender" numa delas — o Asterisk
   pode fazer tocar só um dos registros do ramal, e pode ser o da aba que NÃO clicou, onde o toque
   é o de sempre e pede o clique (caso 3.9 do roteiro). O botão "Atender" na tela também não foi visto fora dos testes de componente: no e2e a
   rota do ramal não entrega credencial (nada escuta a ARI), e o caso mede a ausência dele.
+  **Medido** (sonda na VPS, com um aplicativo Stasis de outro nome, sem ligação nenhuma): o
+  formato do `ChannelUserevent` deste evento. O Asterisk responde `204` ao
+  `POST /ari/events/user/telefonia_fila` e entrega
+  `{"type":"ChannelUserevent","eventname":"telefonia_fila","userevent":{"acao":"atender","ordem_id":"…","voice_call_id":"…","eventname":"telefonia_fila"},…}`
+  — o que `lerOrdemDaFila` lê. Para repetir a sonda: o §1 de
+  `docs/runbooks/telefonia-transferencia-e-ramais.md`, trocando o nome do evento e as variáveis.
 - **Limites conhecidos de agir na fila, não consertados** (fila visível, entrega 3; lidos no
   código e, onde há teste, provados com dublês — nenhum visto numa ligação real):
   - **Quem atende no mesmo instante em que alguém puxa ou move perde a ligação.** O ramal que

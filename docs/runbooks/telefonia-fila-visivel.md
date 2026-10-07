@@ -16,9 +16,10 @@ Casos: J43, J44 e J45 de [`docs/testing/user-journey-map.md`](../testing/user-jo
 Nada do que está abaixo foi feito por quem escreveu o código. As três entregas foram provadas
 com os dublês do controlador e com Postgres de verdade (duas organizações); a tela, num
 navegador sobre dados semeados, pela spec `tests/e2e/telefonia-fila.spec.ts`, que só roda no
-GitHub Actions — os casos das entregas 1 e 2 passaram lá, e os da entrega 3 ainda não tinham
-rodado quando este roteiro foi escrito (para saber como está:
-`gh run list --workflow e2e.yml --limit 5`). **Nenhuma ligação passou pelo tronco**: no dia
+GitHub Actions — os casos das três entregas passaram lá (para ver as execuções:
+`gh run list --workflow e2e.yml --limit 5`). Depois do deploy, uma sonda na VPS mediu o formato
+do evento que leva a ordem de "Atender" e "Mover" da tela ao serviço de telefonia (sem ligação
+nenhuma). **Nenhuma ligação passou pelo tronco**: no dia
 em que o código ficou pronto havia cliente em ligação na instalação, e ligação de teste em
 horário de atendimento não é algo que se faz sem o dono.
 
