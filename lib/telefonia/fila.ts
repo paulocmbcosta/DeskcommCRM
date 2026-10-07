@@ -46,6 +46,26 @@ export interface OrdemNaFila {
   para_time_id: string | null;
 }
 
+/**
+ * Por quanto tempo uma ordem ABERTA vale, em segundos. A puxada vive no máximo
+ * uns 13 s (o ramal de quem pediu toca por 10 — `TOQUE_DE_QUEM_PUXOU_MS` —, mais
+ * a rede de segurança do worker) e o mover é imediato: uma ordem aberta há mais
+ * de 30 s não está acontecendo. Ou a leitura dela falhou no worker, ou a rota
+ * morreu entre gravar e avisar, ou o fechamento de quem não achou o worker
+ * falhou calado.
+ *
+ * Sem o prazo ela travava a ligação até o fim — com o teto do time, até 30
+ * minutos —: a linha dizendo "Fulano está atendendo…" no lugar dos botões, e
+ * todo pedido novo recusado com "outra pessoa já está cuidando".
+ *
+ * As DUAS pontas leem esta constante, e têm de ler a mesma: a tela deixa de
+ * mostrar a ordem vencida (`lerFilaDoTelefone`, em fila-da-tela.ts), e o pedido
+ * seguinte a fecha como `cancelled`/`ordem_vencida` antes de gravar a dele
+ * (`gravarOrdem`, em pedido-da-fila.ts). O corte é pelo relógio do BANCO
+ * (`created_at` contra `now()`), nos dois lugares.
+ */
+export const VALIDADE_DA_ORDEM_DA_FILA_S = 30;
+
 export interface LigacaoNaFila {
   id: string;
   fase: FaseDaLigacao;

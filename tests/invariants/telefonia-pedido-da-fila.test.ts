@@ -19,7 +19,14 @@
  *  4. mover: o time é desta organização, ativo, diferente do atual e dentro do
  *     horário;
  *  5. `recusarOrdemSemWorker` só fecha a ordem ABERTA desta organização;
- *  6. `lerOrdemParaATela` é presa à organização.
+ *  6. `lerOrdemParaATela` é presa à organização;
+ *  7. a ordem aberta VENCE em 30 s (`VALIDADE_DA_ORDEM_DA_FILA_S`): a que ficou
+ *     para trás (o worker não a leu, a rota morreu entre gravar e avisar) não
+ *     trava a ligação até o fim — o pedido seguinte a fecha como
+ *     `cancelled`/`ordem_vencida` e entra. A que AINDA acontece (aberta há menos
+ *     que isso) segue recusando o segundo pedido, como sempre; e só a vencida
+ *     DAQUELA ligação é fechada — a de outra ligação e a de outra organização
+ *     ficam como estavam.
  */
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -30,6 +37,7 @@ import {
   pedirMover,
   recusarOrdemSemWorker,
 } from "@/lib/channels/telefonia/pedido-da-fila";
+import { VALIDADE_DA_ORDEM_DA_FILA_S } from "@/lib/telefonia/fila";
 
 if (!process.env.TEST_DB_CONTAINER) {
   throw new Error("TEST_DB_CONTAINER not set — rode via `pnpm test:db` (scripts/test-db.sh)");
@@ -145,6 +153,55 @@ async function ordensDa(vcId: string): Promise<OrdemGravada[]> {
   );
   return rows;
 }
+
+/**
+ * Uma ordem ABERTA há `haS` segundos (pelo relógio do banco), por SQL direto: é
+ * como fica a ordem que a rota gravou e ninguém fechou. `fechada` a deixa como o
+ * worker a fecha — para medir que o que já acabou não é reescrito.
+ */
+async function ordemDeHa(
+  haS: number,
+  o: { vcId: string; org?: string; por?: string; kind?: "pull" | "move"; deTime?: string | null; fechada?: "done" | "no_answer" },
+): Promise<string> {
+  const kind = o.kind ?? "pull";
+  const por = o.por ?? BIA;
+  const { rows } = await pool.query<{ id: string }>(
+    `insert into public.voice_call_queue_orders
+       (organization_id, voice_call_id, kind, requested_by, to_user_id, to_team_id, from_team_id, status, outcome,
+        created_at, ended_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+             now() - make_interval(secs => $10::double precision),
+             case when $8 = 'ended' then now() - make_interval(secs => $10::double precision) end)
+     returning id`,
+    [
+      o.org ?? ORG,
+      o.vcId,
+      kind,
+      por,
+      kind === "pull" ? por : null,
+      kind === "move" ? VENDAS : null,
+      o.deTime === undefined ? SUPORTE : o.deTime,
+      o.fechada ? "ended" : "open",
+      o.fechada ?? null,
+      haS,
+    ],
+  );
+  return rows[0]!.id;
+}
+
+/** Uma ordem pelo id, como está no banco agora. */
+async function ordemGravada(id: string): Promise<Pick<OrdemGravada, "status" | "outcome" | "reason" | "fechada">> {
+  const { rows } = await pool.query<Pick<OrdemGravada, "status" | "outcome" | "reason" | "fechada">>(
+    `select status, outcome, reason, ended_at is not null as fechada from public.voice_call_queue_orders where id = $1`,
+    [id],
+  );
+  return rows[0]!;
+}
+
+/** Um segundo além da validade: a ordem que já venceu. */
+const VENCIDA_HA_S = VALIDADE_DA_ORDEM_DA_FILA_S + 1;
+const ABERTA = { status: "open", outcome: null, reason: null, fechada: false };
+const VENCIDA = { status: "ended", outcome: "cancelled", reason: "ordem_vencida", fechada: true };
 
 const totalDeOrdens = async () =>
   Number((await pool.query<{ n: string }>(`select count(*) as n from public.voice_call_queue_orders`)).rows[0]!.n);
@@ -417,6 +474,113 @@ describe("pedirMover", () => {
     expect([a.ok, b.ok].sort()).toEqual([false, true]);
     expect(a.ok ? b : a).toEqual({ ok: false, motivo: "ja_ha_ordem", por: null });
     expect(await ordensDa(vc)).toHaveLength(1);
+  });
+});
+
+describe("a ordem aberta vence em 30 s", () => {
+  it("a validade é a da constante que a tela também lê", () => {
+    expect(VALIDADE_DA_ORDEM_DA_FILA_S).toBe(30);
+    expect(VENCIDA_HA_S).toBe(31);
+  });
+
+  it("aberta há 31 s + novo pedido de ATENDER: a velha vira `ended`/`cancelled`/`ordem_vencida`, e a nova é aceita", async () => {
+    const vc = await ligacao();
+    const velha = await ordemDeHa(VENCIDA_HA_S, { vcId: vc, por: BIA });
+
+    const r = await atender({ vcId: vc, userId: ANA });
+    expect(r).toEqual({ ok: true, id: expect.any(String), timeId: SUPORTE });
+    expect(await ordemGravada(velha)).toEqual(VENCIDA);
+    // A velha primeiro (pela criação), a nova depois — e só a nova fica aberta.
+    expect((await ordensDa(vc)).map((o) => [o.requested_by, o.status, o.outcome, o.reason, o.fechada])).toEqual([
+      [BIA, "ended", "cancelled", "ordem_vencida", true],
+      [ANA, "open", null, null, false],
+    ]);
+  });
+
+  it("aberta há 31 s + novo pedido de MOVER: a mesma coisa — e a vencida de mover também sai do caminho de quem atende", async () => {
+    const vc = await ligacao();
+    const velha = await ordemDeHa(VENCIDA_HA_S, { vcId: vc, por: ANA });
+    expect(await mover({ vcId: vc })).toMatchObject({ ok: true, deTimeId: SUPORTE });
+    expect(await ordemGravada(velha)).toEqual(VENCIDA);
+    expect((await ordensDa(vc)).map((o) => [o.kind, o.status])).toEqual([["pull", "ended"], ["move", "open"]]);
+
+    const outra = await ligacao();
+    const moverVelho = await ordemDeHa(VENCIDA_HA_S, { vcId: outra, por: EVA, kind: "move" });
+    expect(await atender({ vcId: outra, userId: BIA })).toMatchObject({ ok: true });
+    expect(await ordemGravada(moverVelho)).toEqual(VENCIDA);
+  });
+
+  it.each([5, VALIDADE_DA_ORDEM_DA_FILA_S - 1])(
+    "aberta há %i s: AINDA acontece — o novo pedido é `ja_ha_ordem`, com o nome, como sempre; e ela não é tocada",
+    async (haS) => {
+      const vc = await ligacao();
+      const emCurso = await ordemDeHa(haS, { vcId: vc, por: ANA });
+
+      expect(await atender({ vcId: vc, userId: BIA })).toEqual({ ok: false, motivo: "ja_ha_ordem", por: NOME_DA_ANA });
+      expect(await mover({ vcId: vc })).toEqual({ ok: false, motivo: "ja_ha_ordem", por: NOME_DA_ANA });
+      expect(await ordemGravada(emCurso)).toEqual(ABERTA);
+      expect(await ordensDa(vc)).toHaveLength(1);
+    },
+  );
+
+  it("só a vencida DAQUELA ligação é fechada: a de outra ligação e a de outra organização ficam como estavam", async () => {
+    const vc = await ligacao();
+    const daLigacao = await ordemDeHa(VENCIDA_HA_S, { vcId: vc, por: BIA });
+    // Tão vencidas quanto: na MESMA organização, em outra ligação; e em outra organização.
+    const vizinha = await ligacao();
+    const daVizinha = await ordemDeHa(VENCIDA_HA_S, { vcId: vizinha, por: EVA, kind: "move" });
+    const deB = await ligacao({ org: OUTRA, numero: NUMERO_OUTRA, time: TIME_OUTRA });
+    const daOutraOrg = await ordemDeHa(VENCIDA_HA_S, { vcId: deB, org: OUTRA, por: ZE, deTime: TIME_OUTRA });
+
+    expect(await atender({ vcId: vc, userId: ANA })).toMatchObject({ ok: true });
+    expect(await ordemGravada(daLigacao)).toEqual(VENCIDA);
+    expect(await ordemGravada(daVizinha)).toEqual(ABERTA);
+    expect(await ordemGravada(daOutraOrg)).toEqual(ABERTA);
+
+    // E quem é de A não fecha a vencida de B pedindo a ligação de B: ela nem existe para A.
+    expect(await atender({ vcId: deB, userId: ANA })).toEqual({ ok: false, motivo: "ligacao_inexistente" });
+    expect(await mover({ vcId: deB })).toEqual({ ok: false, motivo: "ligacao_inexistente" });
+    expect(await ordemGravada(daOutraOrg)).toEqual(ABERTA);
+
+    // O controle: quem é de B, pedindo a ligação de B, fecha a vencida de B — e só ela.
+    expect(await atender({ vcId: deB, org: OUTRA, userId: ZE })).toMatchObject({ ok: true });
+    expect(await ordemGravada(daOutraOrg)).toEqual(VENCIDA);
+    expect(await ordemGravada(daVizinha)).toEqual(ABERTA);
+  });
+
+  it("a ordem que JÁ acabou não é reescrita: o desfecho de uma fechada há mais de 30 s fica como o worker deixou", async () => {
+    const vc = await ligacao();
+    const naoAtendeu = await ordemDeHa(120, { vcId: vc, por: BIA, fechada: "no_answer" });
+    const feita = await ordemDeHa(60, { vcId: vc, por: EVA, kind: "move", fechada: "done" });
+    expect(await atender({ vcId: vc, userId: ANA })).toMatchObject({ ok: true });
+    expect(await ordemGravada(naoAtendeu)).toEqual({ status: "ended", outcome: "no_answer", reason: null, fechada: true });
+    expect(await ordemGravada(feita)).toEqual({ status: "ended", outcome: "done", reason: null, fechada: true });
+  });
+
+  it("dois cliques ao mesmo tempo sobre a ligação com uma ordem vencida: a vencida sai, UMA nova entra, a outra é `ja_ha_ordem`", async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const vc = await ligacao();
+      const velha = await ordemDeHa(VENCIDA_HA_S, { vcId: vc, por: EVA, kind: "move" });
+      const [a, b] = await Promise.all([atender({ vcId: vc, userId: ANA }), atender({ vcId: vc, userId: BIA })]);
+      const [ganhou, perdeu] = a.ok ? [a, b] : [b, a];
+      expect(ganhou.ok).toBe(true);
+      expect(perdeu).toEqual({ ok: false, motivo: "ja_ha_ordem", por: a.ok ? NOME_DA_ANA : BIA_NA_FILA });
+      expect(await ordemGravada(velha)).toEqual(VENCIDA);
+      expect((await ordensDa(vc)).map((o) => o.status)).toEqual(["ended", "open"]);
+    }
+  });
+
+  it("a ordem recém-fechada como vencida é lida pela tela de quem a pediu com o motivo — e o motivo não é recusa de ninguém", async () => {
+    const vc = await ligacao();
+    const velha = await ordemDeHa(VENCIDA_HA_S, { vcId: vc, por: BIA });
+    expect(await atender({ vcId: vc, userId: ANA })).toMatchObject({ ok: true });
+    expect(await lerOrdemParaATela(pool, ORG, velha)).toMatchObject({
+      id: velha,
+      status: "ended",
+      outcome: "cancelled",
+      reason: "ordem_vencida",
+      requested_by: BIA,
+    });
   });
 });
 

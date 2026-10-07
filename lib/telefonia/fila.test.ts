@@ -6,6 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { TOQUE_DE_QUEM_PUXOU_MS } from "@/lib/channels/telefonia/ordens-da-fila";
+
 import { ESPERA_NA_FILA_MS } from "./distribuicao";
 import {
   FASES_DA_LIGACAO,
@@ -13,6 +15,7 @@ import {
   FASES_QUE_ESPERAM,
   FILA_DESLIGADA,
   MOTIVOS_DA_PERDIDA,
+  VALIDADE_DA_ORDEM_DA_FILA_S,
   faseDaLigacao,
   motivoDaPerdida,
   posicoesNaFila,
@@ -227,6 +230,18 @@ describe("FASES_EM_QUE_SE_AGE — em que fases a tela oferece Atender e Mover (e
 
   it("toda fase em que se age é uma fase que espera — o botão nunca aparece numa linha que o selo não conta", () => {
     for (const fase of FASES_EM_QUE_SE_AGE) expect(FASES_QUE_ESPERAM.has(fase)).toBe(true);
+  });
+});
+
+describe("VALIDADE_DA_ORDEM_DA_FILA_S — a ordem aberta vence", () => {
+  it("vence em 30 s: uma ordem esquecida não trava a ligação até o fim dela", () => {
+    expect(VALIDADE_DA_ORDEM_DA_FILA_S).toBe(30);
+  });
+
+  it("e sobra folga sobre a ordem que AINDA acontece: pelo menos o dobro do toque de quem puxou", () => {
+    // Se o toque de quem puxou crescer até perto da validade, o pedido seguinte
+    // fecharia como "vencida" uma puxada que ainda toca — e gravaria outra por cima.
+    expect(VALIDADE_DA_ORDEM_DA_FILA_S * 1000).toBeGreaterThanOrEqual(2 * TOQUE_DE_QUEM_PUXOU_MS);
   });
 });
 

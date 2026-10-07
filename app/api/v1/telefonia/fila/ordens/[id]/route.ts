@@ -12,6 +12,15 @@
  * agent+, e só quem PEDIU a ordem a lê — ou gerente/admin. Para qualquer outra
  * pessoa, e para a ordem de outra organização (a leitura é presa à da sessão), a
  * resposta é a mesma da que não existe: 404.
+ *
+ * ⚠️ "Só quem pediu" é CONVENIÊNCIA DA TELA, não fronteira de segurança. A policy
+ * da 0296 (`tenant_isolation_voice_call_queue_orders_select`) dá `select` a todo
+ * membro da organização: qualquer membro lê as ordens da PRÓPRIA organização
+ * pela REST, com o JWT dele, sem passar por aqui. Esta rota restringe porque
+ * cada tela acompanha o pedido que fez — não porque a ordem seja segredo entre
+ * colegas. A fronteira que vale é a da ORGANIZAÇÃO: aqui, a leitura presa à da
+ * sessão; na REST, a RLS. Quem precisar esconder a ordem de um colega muda a
+ * policy, não esta rota.
  */
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";

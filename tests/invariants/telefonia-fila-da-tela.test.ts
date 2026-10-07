@@ -31,13 +31,16 @@
  *  8. `agora` é o relógio do banco;
  *  9. a ordem ABERTA da ligação (atender ou mover; migration 0296) vem na linha
  *     dela, com quem pediu e para onde — a encerrada não vem, a linha não se
- *     duplica, e a ordem de uma organização não aparece na outra.
+ *     duplica, e a ordem de uma organização não aparece na outra;
+ * 10. a ordem aberta VENCE em 30 s (`VALIDADE_DA_ORDEM_DA_FILA_S`): a que ficou
+ *     aberta há mais que isso não vem na linha — ela não está acontecendo, e a
+ *     linha não pode ficar sem os botões até a ligação acabar. A de 5 s vem.
  */
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { lerFilaDoTelefone } from "@/lib/channels/telefonia/fila-da-tela";
-import type { FilaDoTelefone } from "@/lib/telefonia/fila";
+import { VALIDADE_DA_ORDEM_DA_FILA_S, type FilaDoTelefone } from "@/lib/telefonia/fila";
 
 if (!process.env.TEST_DB_CONTAINER) {
   throw new Error("TEST_DB_CONTAINER not set — rode via `pnpm test:db` (scripts/test-db.sh)");
@@ -138,6 +141,8 @@ async function contato(org: string, nome: string, apelido: string | null, telefo
 /**
  * Uma ordem da fila (`voice_call_queue_orders`, 0296), por SQL direto: aberta,
  * como a rota a grava, ou já fechada (`fechada`), como o worker a deixa.
+ * `pedidaHa` é há quantos segundos ela foi pedida, pelo relógio do banco (o
+ * padrão é agora).
  */
 async function ordem(o: {
   org: string;
@@ -147,14 +152,17 @@ async function ordem(o: {
   deTime: string;
   paraTime?: string;
   fechada?: "done" | "refused" | "no_answer" | "cancelled";
+  pedidaHa?: number;
 }): Promise<void> {
   await pool.query(
     `insert into public.voice_call_queue_orders
-       (organization_id, voice_call_id, kind, requested_by, to_user_id, to_team_id, from_team_id, status, outcome, ended_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, case when $8 = 'ended' then now() end)`,
+       (organization_id, voice_call_id, kind, requested_by, to_user_id, to_team_id, from_team_id, status, outcome,
+        created_at, ended_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+             now() - make_interval(secs => $10::double precision), case when $8 = 'ended' then now() end)`,
     [
       o.org, o.ligacao, o.tipo, o.por, o.tipo === "pull" ? o.por : null, o.paraTime ?? null, o.deTime,
-      o.fechada ? "ended" : "open", o.fechada ?? null,
+      o.fechada ? "ended" : "open", o.fechada ?? null, o.pedidaHa ?? 0,
     ],
   );
 }
@@ -283,10 +291,12 @@ beforeAll(async () => {
   // A primeira da fila: o Bruno puxou e não atendeu (ENCERRADA); agora a Ana puxa (ABERTA).
   await ordem({ org: ORG, ligacao: L.aguardando1, tipo: "pull", por: BRUNO, deTime: SUPORTE, fechada: "no_answer" });
   await ordem({ org: ORG, ligacao: L.aguardando1, tipo: "pull", por: ANA, deTime: SUPORTE });
-  // A terceira: o Caio (sem nome cadastrado) manda para o Financeiro (ABERTA).
-  await ordem({ org: ORG, ligacao: L.aguardando2, tipo: "move", por: CAIO, deTime: SUPORTE, paraTime: FINANCEIRO });
-  // A que toca: só uma ordem que já acabou — não é mais de ninguém.
-  await ordem({ org: ORG, ligacao: L.tocando, tipo: "move", por: BRUNO, deTime: FINANCEIRO, paraTime: SUPORTE, fechada: "done" });
+  // A terceira: o Caio (sem nome cadastrado) manda para o Financeiro (ABERTA, pedida há 5 s: ainda acontece).
+  await ordem({ org: ORG, ligacao: L.aguardando2, tipo: "move", por: CAIO, deTime: SUPORTE, paraTime: FINANCEIRO, pedidaHa: 5 });
+  // A que toca: uma ordem que já acabou, e uma ABERTA que ficou para trás — o Bruno
+  // pediu para atender há 31 s e ninguém a fechou. Nenhuma das duas é de alguém agora.
+  await ordem({ org: ORG, ligacao: L.tocando, tipo: "move", por: BRUNO, deTime: FINANCEIRO, paraTime: SUPORTE, fechada: "done", pedidaHa: 90 });
+  await ordem({ org: ORG, ligacao: L.tocando, tipo: "pull", por: BRUNO, deTime: SUPORTE, pedidaHa: VALIDADE_DA_ORDEM_DA_FILA_S + 1 });
   // Organização B: a Dani puxa a única da fila de B.
   await ordem({ org: OUTRA, ligacao: L.aguardandoDeB, tipo: "pull", por: DANI, deTime: TIME_OUTRA });
 });
@@ -468,11 +478,42 @@ describe("a fila do telefone lida do banco", () => {
     expect(de(filaA, L.tocando).ordem).toBeNull();
     // A linha existe: quem deixa a encerrada de fora é a consulta, não a falta dela.
     const { rows } = await pool.query<{ status: string; outcome: string | null }>(
-      "select status, outcome from public.voice_call_queue_orders where organization_id = $1 and voice_call_id = $2",
+      `select status, outcome from public.voice_call_queue_orders
+        where organization_id = $1 and voice_call_id = $2 and status = 'ended'`,
       [ORG, L.tocando],
     );
     expect(rows).toEqual([{ status: "ended", outcome: "done" }]);
     for (const id of [L.transferencia, L.comBruno, L.noMenu, L.nosAvisos]) expect(de(filaA, id).ordem).toBeNull();
+  });
+
+  it("a ordem aberta há mais de 30 s VENCEU: não vem na linha — a ligação não fica sem os botões até acabar", async () => {
+    // Ela existe e segue `open` no banco: quem a deixa de fora é o corte da leitura.
+    const { rows } = await pool.query<{ status: string; kind: string; requested_by: string; ha_s: number }>(
+      `select status, kind, requested_by, extract(epoch from now() - created_at)::float8 as ha_s
+         from public.voice_call_queue_orders
+        where organization_id = $1 and voice_call_id = $2 and status = 'open'`,
+      [ORG, L.tocando],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "open", kind: "pull", requested_by: BRUNO });
+    expect(rows[0]!.ha_s).toBeGreaterThan(VALIDADE_DA_ORDEM_DA_FILA_S);
+    expect(de(filaA, L.tocando).ordem).toBeNull();
+    // O resto da linha não muda: ela continua tocando para a Ana, na posição dela.
+    expect(de(filaA, L.tocando)).toMatchObject({ fase: "tocando", posicao: 2, tocando_para: { id: ANA, nome: "Ana da Tela" } });
+    // E o Bruno, que a pediu, não aparece cuidando de ligação nenhuma.
+    expect(filaA.ligacoes.some((l) => l.ordem?.por?.id === BRUNO)).toBe(false);
+  });
+
+  it("CONTROLE — a ordem aberta há 5 s ainda acontece, e vem na linha", async () => {
+    const { rows } = await pool.query<{ ha_s: number }>(
+      `select extract(epoch from now() - created_at)::float8 as ha_s from public.voice_call_queue_orders
+        where organization_id = $1 and voice_call_id = $2 and status = 'open'`,
+      [ORG, L.aguardando2],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.ha_s).toBeGreaterThanOrEqual(5);
+    expect(rows[0]!.ha_s).toBeLessThan(VALIDADE_DA_ORDEM_DA_FILA_S);
+    expect(de(filaA, L.aguardando2).ordem).toEqual({ tipo: "move", por: { id: CAIO, nome: CAIO_NA_FILA }, para_time_id: FINANCEIRO });
   });
 
   it("a ordem não duplica a linha da ligação, nem com uma encerrada e uma aberta na mesma", async () => {

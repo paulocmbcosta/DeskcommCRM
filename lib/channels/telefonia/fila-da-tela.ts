@@ -10,6 +10,7 @@ import {
   faseDaLigacao,
   motivoDaPerdida,
   posicoesNaFila,
+  VALIDADE_DA_ORDEM_DA_FILA_S,
   type FilaDoTelefone,
   type LigacaoNaFila,
   type PerdidaRecente,
@@ -59,6 +60,11 @@ export async function lerFilaDoTelefone(db: Queryable, organizationId: string): 
   // para mover, e para onde. É no máximo uma por ligação — o índice único
   // parcial `voice_call_queue_orders_uma_aberta` garante —, então a junção não
   // duplica a linha da ligação, como a da transferência aberta ao lado dela.
+  //
+  // Só a que ainda VALE (`VALIDADE_DA_ORDEM_DA_FILA_S`): a ordem que ficou aberta
+  // há mais que isso não está acontecendo, e mostrá-la deixaria a linha dizendo
+  // "Fulano está atendendo…", sem os botões, até a ligação acabar. O mesmo corte
+  // vale no pedido seguinte, que a fecha (`gravarOrdem`, em pedido-da-fila.ts).
   const vivas = await db.query<{
     id: string; status: string; peer_phone: string; team_id: string | null; channel_session_id: string;
     conversation_id: string | null; contact_id: string | null; contato_nome: string | null;
@@ -87,10 +93,11 @@ export async function lerFilaDoTelefone(db: Queryable, organizationId: string): 
         and tr.status = 'open' and tr.to_team_id is not null
        left join voice_call_queue_orders o
          on o.organization_id = v.organization_id and o.voice_call_id = v.id and o.status = 'open'
+        and o.created_at >= now() - $3::int * interval '1 second'
       where v.organization_id = $1 and v.provider = $2 and v.direction = 'inbound' and v.status <> 'ended'
         and v.started_at > now() - interval '${VIVA_HA_NO_MAXIMO}'
       order by coalesce(v.queued_at, v.started_at) asc, v.id asc`,
-    [organizationId, PROVIDER],
+    [organizationId, PROVIDER, VALIDADE_DA_ORDEM_DA_FILA_S],
   );
 
   const ligacoes: LigacaoNaFila[] = vivas.rows.map((r) => {

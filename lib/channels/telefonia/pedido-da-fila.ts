@@ -18,9 +18,13 @@
  *  - mover: o time é desta organização, não está arquivado, não é o time em que
  *    a ligação já está, e está dentro do horário;
  *  - uma ordem por vez: o índice único parcial do banco decide a corrida de dois
- *    cliques.
+ *    cliques;
+ *  - a ordem aberta VENCE em 30 s (`VALIDADE_DA_ORDEM_DA_FILA_S`): a que ficou
+ *    para trás não trava a ligação até o fim dela — o pedido seguinte a fecha
+ *    antes de gravar a dele (`gravarOrdem`).
  */
 import type { Queryable } from "@/lib/agent-engine/queue/queue";
+import { VALIDADE_DA_ORDEM_DA_FILA_S } from "@/lib/telefonia/fila";
 import { trocarMarcador } from "@/lib/telefonia/texto-do-menu";
 
 import { PROVIDER, pessoaEmLigacao, situacaoDaLinhaDoTime } from "./repositorio";
@@ -133,7 +137,25 @@ async function quemJaPuxa(db: Queryable, org: string, vcId: string): Promise<str
   return rows[0]?.nome ?? null;
 }
 
-/** Grava a ordem `open`. A segunda na mesma ligação bate no índice único parcial (uma aberta por ligação). */
+/**
+ * Grava a ordem `open`. A segunda na mesma ligação bate no índice único parcial
+ * (uma aberta por ligação).
+ *
+ * ANTES, a ordem aberta DESTA ligação que já venceu sai do caminho. Três
+ * caminhos deixam uma ordem `open` sem ninguém para fechá-la: a leitura dela
+ * falha no worker; a rota morre entre gravar e avisar; `recusarOrdemSemWorker`
+ * falha. Sem isto ela valia até a ligação acabar — todo pedido novo recebia
+ * `ja_ha_ordem`. Aberta há mais que a validade ela não está acontecendo (a
+ * puxada vive uns 13 s, o mover é imediato), e fecha como `cancelled` /
+ * `ordem_vencida`.
+ *
+ * São duas consultas, sem transação, e não precisa de uma: fechar a vencida é
+ * certo mesmo que a gravação seguinte não aconteça; e entre as duas quem decide
+ * a corrida de dois cliques de AGORA continua sendo o índice único. A ordem
+ * recente nunca é tocada — o corte é pelo relógio do banco, o mesmo de quando
+ * ela foi criada. Se o worker ainda fechar a vencida depois, não acha nada
+ * aberto e não reescreve o desfecho.
+ */
 async function gravarOrdem(
   db: Queryable,
   o: {
@@ -146,6 +168,13 @@ async function gravarOrdem(
     fromTeamId: string | null;
   },
 ): Promise<{ ok: true; id: string } | RecusaDoPedidoDaFila> {
+  await db.query(
+    `update voice_call_queue_orders
+        set status = 'ended', outcome = 'cancelled', reason = 'ordem_vencida', ended_at = now()
+      where organization_id = $1 and voice_call_id = $2 and status = 'open'
+        and created_at < now() - $3::int * interval '1 second'`,
+    [o.org, o.vcId, VALIDADE_DA_ORDEM_DA_FILA_S],
+  );
   try {
     const { rows } = await db.query<{ id: string }>(
       `insert into voice_call_queue_orders

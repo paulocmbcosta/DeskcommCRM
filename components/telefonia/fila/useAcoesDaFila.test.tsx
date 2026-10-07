@@ -153,6 +153,9 @@ describe("atender", () => {
     ["refused", "motivo_que_a_tela_nao_conhece", "Não foi possível concluir. Tente de novo."],
     ["refused", null, "Não foi possível concluir. Tente de novo."],
     ["cancelled", "worker_reiniciou", "Não foi possível concluir. Tente de novo."],
+    // A ordem que venceu (30 s aberta) é fechada pelo pedido SEGUINTE, muito depois de a
+    // tela de quem a pediu parar de acompanhar: não tem frase própria, e não quebra nada.
+    ["cancelled", "ordem_vencida", "Não foi possível concluir. Tente de novo."],
     // Um desfecho que a tela não conhece (worker mais novo) não é sucesso.
     ["outro_desfecho", null, "Não foi possível concluir. Tente de novo."],
     [null, null, "Não foi possível concluir. Tente de novo."],
