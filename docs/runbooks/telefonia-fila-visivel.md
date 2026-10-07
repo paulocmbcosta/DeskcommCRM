@@ -14,8 +14,11 @@ Casos: J43, J44 e J45 de [`docs/testing/user-journey-map.md`](../testing/user-jo
 ## O que este roteiro prova, e por que ainda falta
 
 Nada do que está abaixo foi feito por quem escreveu o código. As três entregas foram provadas
-com os dublês do controlador, com Postgres de verdade (duas organizações) e com a tela num
-navegador sobre dados semeados (GitHub Actions). **Nenhuma ligação passou pelo tronco**: no dia
+com os dublês do controlador e com Postgres de verdade (duas organizações); a tela, num
+navegador sobre dados semeados, pela spec `tests/e2e/telefonia-fila.spec.ts`, que só roda no
+GitHub Actions — os casos das entregas 1 e 2 passaram lá, e os da entrega 3 ainda não tinham
+rodado quando este roteiro foi escrito (para saber como está:
+`gh run list --workflow e2e.yml --limit 5`). **Nenhuma ligação passou pelo tronco**: no dia
 em que o código ficou pronto havia cliente em ligação na instalação, e ligação de teste em
 horário de atendimento não é algo que se faz sem o dono.
 
@@ -64,7 +67,8 @@ psql "$SUPABASE_DB_URL" -c "select column_name from information_schema.columns
 | 1.7 | Repita 1.1–1.2 e, com a ligação aberta, **transfira** para o outro atendente. | O cartão troca o nome para quem recebeu; a conversa passa a aparecer nas "Minhas" dele. |
 
 Se o cartão ficar preso em "em andamento" depois de a ligação acabar, ele se fecha sozinho em
-até 1 minuto (a passada de conserto do worker). Se passar disso, guarde o horário e veja o §5.
+até 2 minutos (a passada de conserto do worker roda a cada minuto e só mexe em ligação encerrada
+há mais de 1 minuto). Se passar disso, guarde o horário e veja o §5.
 
 ## 2. A aba Telefone e a ordem de chegada (entrega 2)
 
@@ -95,17 +99,18 @@ espera é a de sempre.
 
 | # | Faça | Esperado |
 |---|---|---|
-| 3.1 | A e B **Indisponível**. Ligue do celular 1 e escolha o time 1. Com a conta B (papel `agent`), abra a aba Telefone. | A linha da fila tem o botão **"Atender"**. **Não** tem "Mover" (mover é de gerente e admin). |
-| 3.2 | B clica em **"Atender"**. | O softphone de B **atende sozinho**, sem B clicar em nada no telefone, em cerca de 1 segundo. A linha vai para "Em ligação". No cartão da conversa aparece **"Puxada da fila por {B}"**. |
-| 3.3 | Com outra ligação na fila do time 1, **A e B clicam em "Atender" quase juntos**. | Um dos dois atende. O outro vê uma recusa em português claro e continua livre. A ligação **não cai** e não toca para os dois. |
-| 3.4 | Com uma ligação na fila do time 1, G clica em **"Mover"** e escolhe o time 2. | A linha passa para o time 2 (o chip do time 2 sobe, o do time 1 desce). O cliente **não ouve de novo** a mensagem de fora do horário nem o aviso de instabilidade. Se há alguém disponível no time 2, toca para ele. No cartão: **"Movida de {time 1} para {time 2}"**. |
-| 3.5 | G tenta mover para um time **fechado** (fora do horário dele). | A tela recusa e diz por quê; a ligação continua onde estava. |
+| 3.1 | A e B **Indisponível**. Ligue do celular 1 e escolha o time 1. Com a conta B (papel `agent`), abra a aba Telefone. | Embaixo do texto da linha da fila há o botão **"Atender"**. **Não** há o botão de mover — um ícone de duas setas, sem texto, que é só de gerente e admin. |
+| 3.2 | B clica em **"Atender"**. | O softphone de B **atende sozinho**, sem B clicar em nada no telefone, em cerca de 1 segundo: o painel do telefone abre direto em "Conectando…", sem a tela de toque e sem som. A linha vai para "Em ligação", e a conversa ganha o cartão "Ligação em andamento · com {B}". **Depois de desligar**, o mesmo cartão diz **"Puxada da fila por {B}"** (a linha só entra no fim da ligação). |
+| 3.3 | Com outra ligação na fila do time 1, **A e B clicam em "Atender" quase juntos**. | Um dos dois atende. O outro vê um aviso — "{nome de quem clicou primeiro} já está atendendo esta ligação." ou, se o primeiro já tinha atendido, "Esta ligação já foi atendida." — e continua livre. A ligação **não cai** e não toca para os dois. |
+| 3.4 | Com uma ligação na fila do time 1, G clica no **botão de mover** da linha (o ícone de duas setas; o nome dele é "Mover para outro time") e escolhe o time 2 no menu, que mostra quantos estão disponíveis em cada time. | Aviso "Ligação movida para {time 2}.". A linha passa para o time 2 (o chip do time 2 sobe, o do time 1 desce). O cliente **não ouve de novo** a mensagem de fora do horário nem o aviso de instabilidade. Se há alguém disponível no time 2, toca para ele. Quando a ligação acaba, o cartão dela diz **"Movida de {time 1} para {time 2} por {G}"**. |
+| 3.5 | G tenta mover para um time **fechado** (fora do horário dele; no menu ele aparece com "Fora do horário", e ainda dá para clicar). | A tela recusa: "O time está fora do horário de atendimento."; a ligação continua onde estava. |
 | 3.6 | B está **em outra ligação** e clica em "Atender" numa linha da fila. | Recusa: "Você está em outra ligação." |
-| 3.7 | B clica em "Atender" e **fecha a aba** antes de o toque chegar. | Depois de cerca de 10 s sem resposta, a ligação **volta ao rodízio** de onde estava. O cliente não cai. |
+| 3.7 | B clica em "Atender" e **fecha a aba** antes de o toque chegar (menos de 1 segundo: é difícil à mão). | Em até cerca de 10 s, a ligação **volta ao rodízio** de onde estava. O cliente não cai. **Cuidado:** se o telefone de B já tinha atendido quando a aba fechou, fechar a aba **desliga a ligação** — é o comportamento de sempre do telefone no navegador, e não o que este caso mede. |
 | 3.8 | Uma ligação ainda **no menu** (o cliente ainda não escolheu). | A linha **não** tem "Atender" nem "Mover": só se age sobre quem já espera por uma pessoa. |
+| 3.9 | B abre o CRM em **duas abas** do mesmo navegador (as duas com o telefone conectado). Com uma ligação na fila, clica em "Atender" em **uma** delas. | **Nunca foi verificado, e há dois desfechos aceitos:** o telefone atende sozinho na aba em que B clicou; **ou** toca na OUTRA aba como uma ligação comum, e ali pede o clique em "Atender" do aviso de toque — o Asterisk pode chamar só um dos registros do ramal, e pode ser o da aba que não clicou. Em nenhum dos dois o cliente cai: se B não atender, em cerca de 10 s a ligação volta ao rodízio. **Anote qual dos dois aconteceu** (e em qual aba), que é o que falta saber. |
 
-O caso 3.2 é o coração da entrega e o único que depende do navegador: o toque chega com um
-cabeçalho que só o navegador de quem clicou reconhece. Se o softphone **tocar** em vez de
+O caso 3.2 é o coração da entrega, e ele e o 3.9 são os que dependem do navegador: o toque chega
+com um cabeçalho que só a aba de quem clicou reconhece. Se o softphone **tocar** em vez de
 atender sozinho, a ligação ainda pode ser atendida à mão — anote e veja o §5.
 
 ## 4. Depois de cada atualização: os troncos
@@ -146,8 +151,12 @@ psql "$SUPABASE_DB_URL" -c "select kind, status, outcome, reason, created_at, en
   from public.voice_call_queue_orders order by created_at desc limit 10;"
 ```
 
-Uma ordem que fica `open` para sempre é defeito: toda ordem termina (`done`, `refused`,
-`no_answer` ou `cancelled`), e a passada do worker fecha a que sobrar.
+Toda ordem termina (`done`, `refused`, `no_answer` ou `cancelled`). A que sobra aberta — o
+worker não conseguiu gravar o desfecho, ou nem chegou a lê-la — vale por 30 segundos: passado
+isso a aba deixa de mostrá-la (os botões voltam à linha), e o próximo "Atender" ou "Mover"
+naquela ligação a fecha como `cancelled` (`ordem_vencida`) antes de gravar o dele. Sem pedido
+novo, ela fecha quando a ligação acaba (`ligacao_encerrada`) ou quando o worker reconecta
+(`worker_reiniciou`). Ordem `open` numa ligação que já acabou é defeito.
 
 ## 6. O que continua em aberto, com ou sem este roteiro
 
@@ -158,3 +167,7 @@ Uma ordem que fica `open` para sempre é defeito: toda ordem termina (`done`, `r
   conserto pede mudança num gatilho do banco e ficou fora das três entregas.
 - **Ligação que o worker esquece** quando o fim dela falha ao ser gravado: o atendente fica
   "ocupado" até o worker reiniciar. Já era assim antes da fila visível.
+- **Os limites conhecidos de "Atender" e "Mover"** (o atendente que atende no mesmo instante em
+  que alguém puxa ou move, a reconexão do worker com uma puxada em curso, a ordem que fica aberta
+  por até 30 s): no §9 da [spec 20](../specs/20-spec-telefonia-sip.md) e na J45 do mapa de
+  jornadas.
