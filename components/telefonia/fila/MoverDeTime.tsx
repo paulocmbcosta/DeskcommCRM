@@ -50,10 +50,13 @@ export function MoverDeTime({ ligacaoId, destinos, movendo, desligado, onMover }
     <DropdownMenu open={aberto} onOpenChange={setAberto}>
       {/* O `disabled` vai no GATILHO, que o repassa ao botão: é o gatilho que
           abre o menu, no `pointerdown` — e o navegador entrega esse evento
-          também ao botão desligado. Só no botão, o menu abriria no meio do pedido. */}
+          também ao botão desligado. Só no botão, o menu abriria no meio do pedido.
+          O botão tem TEXTO: só o ícone das duas setas não dizia a ninguém o que
+          ele faz (visto na captura do e2e); o nome completo segue no `aria-label`.
+          (Este comentário fica AQUI, e não entre o gatilho e o botão: a cerca
+          `controle-decorativo` reconhece o botão sem `onClick` pelo gatilho
+          imediatamente antes dele.) */}
       <DropdownMenuTrigger asChild disabled={movendo || desligado}>
-        {/* Com TEXTO: só o ícone das duas setas não dizia a ninguém o que o botão
-            faz (visto na captura do e2e). O nome completo segue no `aria-label`. */}
         <Button
           size="sm"
           variant="outline"
