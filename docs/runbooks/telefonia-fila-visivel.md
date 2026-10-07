@@ -99,10 +99,10 @@ espera é a de sempre.
 
 | # | Faça | Esperado |
 |---|---|---|
-| 3.1 | A e B **Indisponível**. Ligue do celular 1 e escolha o time 1. Com a conta B (papel `agent`), abra a aba Telefone. | Embaixo do texto da linha da fila há o botão **"Atender"**. **Não** há o botão de mover — um ícone de duas setas, sem texto, que é só de gerente e admin. |
+| 3.1 | A e B **Indisponível**. Ligue do celular 1 e escolha o time 1. Com a conta B (papel `agent`), abra a aba Telefone. | Embaixo do texto da linha da fila há o botão **"Atender"**. **Não** há o botão **"Mover"** (o das duas setas), que é só de gerente e admin. |
 | 3.2 | B clica em **"Atender"**. | O softphone de B **atende sozinho**, sem B clicar em nada no telefone, em cerca de 1 segundo: o painel do telefone abre direto em "Conectando…", sem a tela de toque e sem som. A linha vai para "Em ligação", e a conversa ganha o cartão "Ligação em andamento · com {B}". **Depois de desligar**, o mesmo cartão diz **"Puxada da fila por {B}"** (a linha só entra no fim da ligação). |
 | 3.3 | Com outra ligação na fila do time 1, **A e B clicam em "Atender" quase juntos**. | Um dos dois atende. O outro vê um aviso — "{nome de quem clicou primeiro} já está atendendo esta ligação." ou, se o primeiro já tinha atendido, "Esta ligação já foi atendida." — e continua livre. A ligação **não cai** e não toca para os dois. |
-| 3.4 | Com uma ligação na fila do time 1, G clica no **botão de mover** da linha (o ícone de duas setas; o nome dele é "Mover para outro time") e escolhe o time 2 no menu, que mostra quantos estão disponíveis em cada time. | Aviso "Ligação movida para {time 2}.". A linha passa para o time 2 (o chip do time 2 sobe, o do time 1 desce). O cliente **não ouve de novo** a mensagem de fora do horário nem o aviso de instabilidade. Se há alguém disponível no time 2, toca para ele. Quando a ligação acaba, o cartão dela diz **"Movida de {time 1} para {time 2} por {G}"**. |
+| 3.4 | Com uma ligação na fila do time 1, G clica em **"Mover"** na linha (o botão das duas setas) e escolhe o time 2 no menu, que mostra quantos estão disponíveis em cada time. | Aviso "Ligação movida para {time 2}.". A linha passa para o time 2 (o chip do time 2 sobe, o do time 1 desce). O cliente **não ouve de novo** a mensagem de fora do horário nem o aviso de instabilidade. Se há alguém disponível no time 2, toca para ele. Quando a ligação acaba, o cartão dela diz **"Movida de {time 1} para {time 2} por {G}"**. |
 | 3.5 | G tenta mover para um time **fechado** (fora do horário dele; no menu ele aparece com "Fora do horário", e ainda dá para clicar). | A tela recusa: "O time está fora do horário de atendimento."; a ligação continua onde estava. |
 | 3.6 | B está **em outra ligação** e clica em "Atender" numa linha da fila. | Recusa: "Você está em outra ligação." |
 | 3.7 | B clica em "Atender" e **fecha a aba** antes de o toque chegar (menos de 1 segundo: é difícil à mão). | Em até cerca de 10 s, a ligação **volta ao rodízio** de onde estava. O cliente não cai. **Cuidado:** se o telefone de B já tinha atendido quando a aba fechou, fechar a aba **desliga a ligação** — é o comportamento de sempre do telefone no navegador, e não o que este caso mede. |
@@ -117,7 +117,7 @@ atender sozinho, a ligação ainda pode ser atendida à mão — anote e veja o 
 
 Recriar o contêiner do Asterisk pode deixar a porta 5060 presa a uma entrada antiga da tabela de
 conexões da VPS. O sintoma: em **Conexões › Telefone** os números ficam "registro recusado", e
-no Asterisk os registros aparecem como `No response`.
+no Asterisk os registros aparecem como `No response`, `Rejected` ou `Unregistered`.
 
 ```bash
 docker exec deskcommcrm-asterisk-1 asterisk -rx "pjsip show registrations"

@@ -279,6 +279,8 @@ describe("atender e mover direto da fila (entrega 3)", () => {
       expect(botaoAtender()).toHaveTextContent("Atender");
       expect(botaoAtender()).toHaveAttribute("data-fila-atender", "lig-1");
       expect(botaoMover()).toHaveAccessibleName("Mover para outro time");
+      // O botão tem TEXTO, não só o ícone: sem ele ninguém adivinha o que as duas setas fazem.
+      expect(botaoMover()).toHaveTextContent("Mover");
       expect(botaoMover()).toHaveAttribute("data-fila-mover", "lig-1");
     });
 

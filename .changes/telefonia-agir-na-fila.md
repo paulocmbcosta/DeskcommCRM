@@ -10,7 +10,7 @@ que espera na fila tem o botão "Atender": quem clica recebe a ligação no pró
 telefone do navegador atende sozinho, sem precisar de um segundo clique. Serve para quem está
 livre e vê a fila crescer, e para o gerente que resolve atender junto com o time num pico.
 
-Gerente e admin ganharam também o "Mover" (o botão com as duas setas): mandar a ligação que
+Gerente e admin ganharam também o botão "Mover": mandar a ligação que
 espera para a fila de outro time, quando o cliente escolheu a opção errada no menu ou quando um
 time está sem ninguém livre. O cliente continua na linha e não ouve de novo os avisos; só não dá
 para mover para um time que está fora do horário.

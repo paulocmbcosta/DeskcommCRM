@@ -52,15 +52,18 @@ export function MoverDeTime({ ligacaoId, destinos, movendo, desligado, onMover }
           abre o menu, no `pointerdown` — e o navegador entrega esse evento
           também ao botão desligado. Só no botão, o menu abriria no meio do pedido. */}
       <DropdownMenuTrigger asChild disabled={movendo || desligado}>
+        {/* Com TEXTO: só o ícone das duas setas não dizia a ninguém o que o botão
+            faz (visto na captura do e2e). O nome completo segue no `aria-label`. */}
         <Button
-          size="icon"
-          variant="ghost"
-          className="lg:h-8 lg:w-8"
+          size="sm"
+          variant="outline"
+          className="gap-1.5"
           aria-label={t("Mover para outro time")}
           aria-busy={movendo}
           data-fila-mover={ligacaoId}
         >
           {movendo ? <CircleNotch className="animate-spin" aria-hidden /> : <ArrowsLeftRight aria-hidden />}
+          {t("Mover")}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">

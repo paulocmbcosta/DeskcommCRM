@@ -720,7 +720,7 @@ e revalida contra o estado dele antes de mexer na ligação.
   faixa EMBAIXO do texto — ao lado, os botões o espremeriam: a coluna da lista é estreita, e botão
   dentro de botão não existe (a área principal segue abrindo a conversa). Nela: **"Atender"**,
   para quem tem ramal NESTE navegador (`disponivel`, do `TelefoniaProvider`: a rota do ramal
-  entregou a credencial), e o **botão de mover** — um ícone, com o nome "Mover para outro time" —
+  entregou a credencial), e o **botão "Mover"** — as duas setas com o texto, e o nome completo "Mover para outro time" —
   para `manager`+ e só quando há outro time ativo para onde mover. Quem decide quem vê o quê é a
   coluna (`FilaDoTelefone`), uma vez; a linha só desenha. Os botões não se desligam pelo estado
   da ligação — quem recusa, com o motivo, é a rota —, só enquanto um pedido DESTE navegador
