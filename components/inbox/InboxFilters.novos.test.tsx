@@ -339,6 +339,21 @@ describe("PERÍODO e ASSUNTO só existem em Fechadas", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ assunto_id: ASSUNTO }));
   });
 
+  it("sem assunto escolhido o gatilho diz só \"Assunto\" — por extenso ele saía cortado pela seta", async () => {
+    // Medido na captura do teste de tela: o seletor divide a linha com o período.
+    montar({ tab: "closed" });
+    const gatilho = screen.getByLabelText("Filtrar por assunto");
+    expect(gatilho.textContent).toBe("Assunto");
+    // A lista continua dizendo por extenso o que a primeira opção faz.
+    await userEvent.click(gatilho);
+    expect(screen.getByRole("option", { name: "Todos os assuntos" })).toBeTruthy();
+  });
+
+  it("com um assunto escolhido o gatilho mostra o nome dele", () => {
+    montar({ tab: "closed", assunto_id: ASSUNTO });
+    expect(screen.getByLabelText("Filtrar por assunto").textContent).toContain("Segunda via");
+  });
+
   it("organização sem assunto cadastrado não ganha um seletor que leva a uma lista vazia", () => {
     montar({ tab: "closed" }, { ...OPCOES, assuntos: [] });
     expect(screen.queryByLabelText("Filtrar por assunto")).toBeNull();

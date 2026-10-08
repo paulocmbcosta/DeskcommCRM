@@ -689,7 +689,13 @@ export function InboxFilters({
                   aria-label={t("Filtrar por assunto")}
                   data-testid="filtro-de-assunto"
                 >
-                  <SelectValue placeholder={t("Todos os assuntos")} />
+                  {/* Sem assunto escolhido o gatilho diz só "Assunto": ele divide a
+                      linha com o período (uns 134 px cada), e "Todos os assuntos"
+                      saía cortado pela seta — medido na captura do teste de tela.
+                      A lista continua oferecendo "Todos os assuntos" por extenso. */}
+                  <SelectValue placeholder={t("Assunto")}>
+                    {value.assunto_id == null ? t("Assunto") : undefined}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t("Todos os assuntos")}</SelectItem>
