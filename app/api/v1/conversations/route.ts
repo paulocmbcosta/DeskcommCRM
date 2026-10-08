@@ -62,6 +62,9 @@ export async function GET(req: NextRequest): Promise<Response> {
     ordem: url.searchParams.get("ordem") ?? undefined,
     insatisfeitos: url.searchParams.get("insatisfeitos") ?? undefined,
     channel_session_id: url.searchParams.get("channel_session_id") ?? undefined,
+    // O MEIO (só WhatsApp, só telefone…). Mesma cerca das linhas de cima:
+    // `rota-le-todo-filtro-do-schema.test.ts` reprova a falta desta.
+    channel: url.searchParams.get("channel") ?? undefined,
     // O TIME (migration 0263): `none` = fila geral, `mine` = meus times + a
     // fila geral, ou o uuid de um time. A cerca de
     // `tests/unit/rota-le-todo-filtro-do-schema.test.ts` cobra esta linha a

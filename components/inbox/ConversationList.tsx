@@ -11,7 +11,6 @@ import type { ReguaDeEspera } from "@/lib/schemas/settings";
 import { ConversationListItem } from "./ConversationListItem";
 import { EmptyInbox } from "@/components/empty";
 import { EmptyPorFiltro } from "./EmptyPorFiltro";
-import { filtrosAuxiliaresAtivos } from "@/lib/inbox/filtros-ativos";
 import type {
   ConversationsFilters,
   ConversationWithContact,
@@ -30,6 +29,17 @@ interface Props {
   onSelect: (id: string) => void;
   /** Desliga os filtros auxiliares. Sem ele, o vazio por filtro nao oferece o botao. */
   onLimparFiltros?: () => void;
+  /**
+   * Os filtros auxiliares LIGADOS, por extenso — o que o vazio cita para dizer
+   * por que a lista está vazia. Vem de quem montou a consulta
+   * (`nomesDosFiltros`, em `lib/inbox/filtros-de-tela.ts`), a partir do MESMO
+   * objeto que virou `filters`: é o que impede a tela de nomear um filtro que a
+   * consulta não aplicou, ou de calar um que aplicou.
+   *
+   * Obrigatória de propósito. Opcional, o esquecimento viraria "caixa vazia"
+   * com um filtro aceso — a mentira de tela que este estado existe para matar.
+   */
+  filtrosAtivos: string[];
   /** Notifies parent when the visible list changes (used by keyboard nav). */
   onVisibleChange?: (ids: string[]) => void;
   /** A régua do termômetro da organização (`ActiveOrg.regua_de_espera`); ausente = padrão. */
@@ -43,6 +53,7 @@ export function ConversationList({
   onSelect,
   onVisibleChange,
   onLimparFiltros,
+  filtrosAtivos,
   regua,
 }: Props) {
   const t = useT();
@@ -74,8 +85,14 @@ export function ConversationList({
   // A Fila deixou de mandar `assigned_to=unassigned` (agora pede `comando`), e
   // sem esta linha a numeração "1º, 2º…" e o tempo de espera sumiriam da única
   // visão em que servem para alguma coisa — sem erro nenhum, só sumiriam.
-  const isQueue =
-    filters.comando?.includes("aguardando") ?? filters.assigned_to === "unassigned";
+  //
+  // SÓ o `comando` decide. Até aqui havia um resto de compatibilidade,
+  // `?? filters.assigned_to === "unassigned"`, do tempo em que a Fila era esse
+  // filtro. Com o seletor de atendente, "Sem atendente" em Todas manda
+  // exatamente esse par — e toda linha ganhava "1º, 2º…" e "Aguardando",
+  // inclusive as conversas que o automático está respondendo. A tela não manda
+  // o pedido antigo desde que a Fila passou a pedir `comando`.
+  const isQueue = filters.comando?.includes("aguardando") ?? false;
   // Uma leitura por lista, compartilhada por todas as linhas (react-query dedupa
   // com o cabeçalho, que faz a mesma pergunta).
   const automaticoDaOrg = useAutomaticoAtivo();
@@ -159,7 +176,6 @@ export function ConversationList({
   // Vazio por AUSENCIA: a caixa esta mesmo vazia, e o texto pode prometer que
   // mensagens vao aparecer. Este e o unico caso que ainda sai por `return`
   // precoce, porque aqui nao ha pagina seguinte a alcancar.
-  const filtrosAtivos = filtrosAuxiliaresAtivos(filters);
   if (items.length === 0 && filtrosAtivos.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6">

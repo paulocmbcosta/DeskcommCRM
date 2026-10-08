@@ -204,7 +204,14 @@ export async function listConversationsHandler(
   // a ordenação por tempo de espera sumiria **sem nenhum sintoma na tela**: a
   // lista continuaria populada, só que ordenada por atividade recente, e quem
   // espera desde ontem afundaria embaixo de quem escreveu agora.
-  const isQueue = q.comando?.includes("aguardando") ?? q.assigned_to === "unassigned";
+  //
+  // `ordem=atividade` DESLIGA a inferência: "sem dono" deixou de ser só a Fila —
+  // a aba Todas manda `assigned_to=unassigned` pelo filtro "Sem atendente", e
+  // sem isto a lista dela viraria de cabeça para baixo (quem espera há mais
+  // tempo primeiro) com o botão "Espera" desligado.
+  const isQueue =
+    q.ordem !== "atividade" &&
+    (q.comando?.includes("aguardando") ?? q.assigned_to === "unassigned");
   // "Mais tempo esperando" (migration 0279): a PRIMEIRA mensagem sem resposta,
   // mais antiga primeiro; quem não espera ninguém (null) vai para o fim.
   const porEspera = q.ordem === "espera";
@@ -237,6 +244,11 @@ export async function listConversationsHandler(
     query = query.not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`);
   }
   if (q.channel_session_id) query = query.eq("channel_session_id", q.channel_session_id);
+  // O MEIO da conversa (`conversations.channel`). No banco, como os vizinhos:
+  // filtrar depois de paginar devolveria páginas curtas. Sem índice próprio, de
+  // propósito: foi medido e recusado (cabeçalho da migration 0297) — o filtro é
+  // barato, roda antes da RLS, e o índice custaria uma entrada por mensagem.
+  if (q.channel) query = query.eq("channel", q.channel);
   if (q.tag) query = query.contains("tags", [q.tag]); // tags @> array[tag] (GIN)
 
   // O TIME (migration 0263) — o SETOR que espera pela conversa, não a pessoa.

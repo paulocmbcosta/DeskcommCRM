@@ -1,0 +1,76 @@
+-- ---- inbox: índice de Fechadas por atendente (migration 0297) ----
+--
+-- O Inbox ganhou filtro por ATENDENTE (em Todas e em Fechadas) e por MEIO da
+-- conversa — só WhatsApp, só telefone, só chat do site. Desenho:
+-- docs/superpowers/specs/2026-10-08-inbox-filtros-por-atendente-e-caixa-design.md §9.
+--
+-- Não entra coluna, função nem policy: os filtros são predicado sobre colunas
+-- que já existem. Entra UM índice, e um segundo foi medido e recusado.
+--
+-- ─── O que entra: `atendimentos_org_dono_fechamento` ───────────────────────
+--
+-- A aba Fechadas lista ATENDIMENTOS encerrados, do mais recente para o mais
+-- antigo, e passa a aceitar "só os de quem estava atendendo" — o botão "Só as
+-- minhas" e o seletor de atendente. O atendente é
+-- `atendimentos.assigned_to_user_id`, carimbado no encerramento pelo gatilho
+-- `fn_atendimento_acompanha_conversa`; a coluna não tinha índice.
+--
+-- Sem ele, a consulta percorre `atendimentos_org_fechamento` (organização,
+-- data) descartando o que é de outro atendente. Para a LISTA isso custa pouco
+-- enquanto o atendente tem histórico recente; para o SELO da aba, que é
+-- contagem exata e é relido a cada 30 s por todo Inbox aberto, custa sempre:
+-- lê os encerrados da organização inteira para contar os de uma pessoa.
+--
+-- Parcial em `closed_at is not null` porque o dono é carimbado NO ENCERRAMENTO
+-- e a aba só lê atendimento encerrado: o que está em andamento não entra na
+-- consulta, e não precisa ocupar o índice. A tabela é fria — uma escrita ao
+-- abrir, uma ao encerrar —, então manter o índice não pesa em caminho quente
+-- nenhum.
+--
+-- ─── Medido ────────────────────────────────────────────────────────────────
+--
+-- Postgres 15 descartável com o baseline, uma organização com 30.000
+-- conversas (15.000 abertas, 300 delas de telefone) e 15.000 atendimentos
+-- encerrados (750 de uma atendente), `EXPLAIN (ANALYZE, BUFFERS)` sob o papel
+-- `authenticated` — a RLS roda por linha, e medir como dono mede outra coisa.
+-- Uma execução por caso, sessão nova a cada uma: é ordem de grandeza, não
+-- benchmark.
+--
+--   Fechadas de uma atendente       com o índice            sem o índice
+--   lista (51 linhas)               2,4 ms · 1.218 páginas  19,8 ms · 2.344 páginas, 1.049 linhas descartadas
+--   selo (contagem exata)           12,4 ms · 13.093 páginas  44,1 ms · 27.454 páginas, 14.250 linhas descartadas
+--
+-- (Os dois números são da própria atendente, em `own_and_unassigned`. Como
+-- gestora o selo deu 16,4 ms com e 42,8 ms sem. A lista sem índice como
+-- gestora foi a primeira consulta depois do `drop index` e marcou 1.188 ms com
+-- os nós somando 7 ms — custo de sessão, não da consulta; fica fora da conta.)
+--
+-- ─── O que NÃO entra, e por quê ────────────────────────────────────────────
+--
+-- Um índice `conversations (organization_id, channel, last_message_at desc)`
+-- para o filtro por meio. Medido no mesmo banco, pedindo só telefone (2% das
+-- abertas):
+--
+--   Todas + telefone                com o índice            sem o índice
+--   lista (51 linhas)               2,8 ms · 738 páginas    7,5 ms · 11.194 páginas, 4.275 linhas descartadas
+--   selo (contagem exata)           6,6 ms                  8,7 ms (leitura sequencial)
+--
+-- O plano usa o índice, mas o ganho é de milissegundos — o filtro de meio é
+-- barato e roda ANTES da RLS (a igualdade de texto é à prova de vazamento), de
+-- modo que as linhas descartadas não pagam a função de visibilidade. O preço
+-- seria permanente e no caminho mais quente do sistema: `conversations` é
+-- reescrita a cada mensagem, e toda instalação — inclusive a que só tem
+-- WhatsApp, onde a coluna é constante e o índice seria uma cópia do
+-- `idx_conversations_org_last_msg` — manteria uma entrada a mais por mensagem.
+--
+-- O custo sem o índice cresce com o número de conversas da organização e com a
+-- raridade do meio pedido. Se uma instalação com centenas de milhares de
+-- conversas passar a filtrar um meio raro e sentir, é este o índice a criar —
+-- medindo de novo, e de preferência parcial.
+--
+-- Idempotente: `create index if not exists`. Em banco com dados, o índice
+-- segura as escritas de `atendimentos` pelo tempo de construí-lo.
+
+create index if not exists atendimentos_org_dono_fechamento
+  on public.atendimentos (organization_id, assigned_to_user_id, closed_at desc)
+  where closed_at is not null;

@@ -7,6 +7,7 @@ import { useRefetchDeSeguranca } from "@/hooks/realtime/useRefetchDeSeguranca";
 import { apiClient } from "@/lib/api/client";
 import { showApiError } from "@/components/feedback/ApiErrorToast";
 import type { Conversation } from "@/lib/types/messaging";
+import type { MeioDeCanal } from "@/lib/channels/capabilities";
 import type { ComandoDoBanco } from "@/lib/inbox/comando-da-conversa";
 
 export interface ContactSummary {
@@ -95,6 +96,11 @@ export interface ConversationsFilters {
    */
   unread?: boolean;
   channel_session_id?: string;
+  /**
+   * O MEIO da conversa — só WhatsApp, só telefone, só chat do site. É o valor de
+   * `conversations.channel`; a tela nunca fala em provider.
+   */
+  channel?: MeioDeCanal;
   tag?: string;
   /**
    * A FILA por setor (migration 0263): `mine` (meus times + a geral), `none` (só
@@ -106,8 +112,12 @@ export interface ConversationsFilters {
   team_id?: string;
   /** Só a fila dos times: foi para um setor e ninguém pegou (migration 0279). */
   na_fila?: boolean;
-  /** `espera` = quem espera resposta há mais tempo primeiro. */
-  ordem?: "espera";
+  /**
+   * `espera` = quem espera resposta há mais tempo primeiro. `atividade` = a
+   * ordem de sempre (atividade recente), DITA — é o que a aba Todas manda para a
+   * rota não ler `assigned_to=unassigned` como o pedido antigo da Fila.
+   */
+  ordem?: "espera" | "atividade";
   /** Só as de cliente insatisfeito ou crítico (sentimento, migration 0280). */
   insatisfeitos?: boolean;
 }
@@ -146,6 +156,9 @@ export function useConversationsRealtime(
       if (filters.search) qs.set("search", filters.search);
       if (filters.unread) qs.set("unread", "true");
       if (filters.channel_session_id) qs.set("channel_session_id", filters.channel_session_id);
+      // O meio. `tests/unit/hooks-serializam-os-filtros-novos.test.ts` cobra esta
+      // linha a partir das chaves que a tela monta.
+      if (filters.channel) qs.set("channel", filters.channel);
       if (filters.tag) qs.set("tag", filters.tag);
       // Sem esta linha o campo existiria no tipo e a lista voltaria INTEIRA,
       // parecendo funcionar — é a metade do trabalho que o typecheck não pega,

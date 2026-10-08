@@ -29,8 +29,11 @@ describe("tabToFilter — o que cada aba significa", () => {
     expect(tabToFilter("mine")).toEqual({ assigned_to: "me", exclude_finished: true });
   });
 
-  it("Todas mostra somente conversas ainda em andamento", () => {
-    expect(tabToFilter("all")).toEqual({ exclude_finished: true });
+  it("Todas mostra somente conversas ainda em andamento — e DIZ a ordem", () => {
+    // A ordem é declarada porque o filtro "Sem atendente" faz a aba mandar
+    // `assigned_to=unassigned`, que a rota ainda lê, sozinho, como o pedido
+    // antigo da Fila (quem espera há mais tempo primeiro).
+    expect(tabToFilter("all")).toEqual({ exclude_finished: true, ordem: "atividade" });
   });
 
   it("Fechadas continua mostrando as fechadas — senão não sobra onde vê-las", () => {

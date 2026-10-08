@@ -19,6 +19,12 @@
  *     que o cliente volta a conversa começa sem time (0269), e filtrar pelo time
  *     atual esconderia o que o Financeiro encerrou;
  *   · número, etiqueta e não lidas são da CONVERSA, que é onde esses dados moram.
+ *
+ * E quatro que só esta aba tem a mais (desenho de 2026-10-08), aplicados por
+ * `aplicarFiltrosDosFechados` — a régua que a contagem do badge também chama:
+ *   · o ATENDENTE é quem estava com a conversa NO ENCERRAMENTO
+ *     (`atendimentos.assigned_to_user_id`), pela mesma razão do time;
+ *   · o MEIO é da conversa; PERÍODO (`closed_at`) e ASSUNTO são do atendimento.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
@@ -34,7 +40,13 @@ import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import type { AtendimentoResumo } from "@/lib/inbox/eventos-da-conversa";
 import { rotuloDoCanal } from "@/lib/inbox/rotulo-do-canal";
 import { buscaValeConsulta, normalizarTermoDeBusca } from "@/lib/inbox/termo-de-busca";
-import { conversationTagSchema, filtroDeTimeSchema } from "@/lib/schemas";
+import {
+  conversationTagSchema,
+  filtroDeAtendenteSchema,
+  filtroDeMeioSchema,
+  filtroDeTimeSchema,
+  instanteSchema,
+} from "@/lib/schemas";
 
 export const listarFechadosSchema = z.object({
   cursor: z.string().optional(),
@@ -51,8 +63,87 @@ export const listarFechadosSchema = z.object({
     .enum(["true", "false"])
     .optional()
     .transform((v) => v === "true"),
+  /** Quem estava com a conversa no encerramento: `me`, `unassigned` ou um id. */
+  assigned_to: filtroDeAtendenteSchema.optional(),
+  /** O meio da conversa (`conversations.channel`). */
+  channel: filtroDeMeioSchema.optional(),
+  /** Encerrados a partir deste instante (inclusivo). */
+  closed_from: instanteSchema.optional(),
+  /** Encerrados antes deste instante (exclusivo). */
+  closed_to: instanteSchema.optional(),
+  assunto_id: z.string().uuid().optional(),
 });
 export type ListarFechadosQuery = z.infer<typeof listarFechadosSchema>;
+
+/**
+ * O que uma consulta de `atendimentos` precisa saber fazer para receber os
+ * filtros. Estrutural e sem genérico de builder, pelo mesmo motivo de
+ * `ConsultaFiltravel`: o builder tipado por um `select` COM EMBED, entregue a um
+ * genérico, estoura a profundidade de instanciação (TS2589) — e só o
+ * `next build` acusa.
+ */
+export interface ConsultaDeFechados {
+  eq(coluna: string, valor: string): this;
+  is(coluna: string, valor: null): this;
+  gt(coluna: string, valor: number): this;
+  gte(coluna: string, valor: string): this;
+  lt(coluna: string, valor: string): this;
+  contains(coluna: string, valor: string[]): this;
+}
+
+/** Os filtros dos fechados que são predicado direto de coluna. Time e busca têm régua própria. */
+export type FiltrosDosFechadosNoBanco = Partial<
+  Pick<
+    ListarFechadosQuery,
+    | "channel_session_id"
+    | "channel"
+    | "tag"
+    | "unread"
+    | "assigned_to"
+    | "closed_from"
+    | "closed_to"
+    | "assunto_id"
+  >
+>;
+
+/**
+ * OS FILTROS DOS FECHADOS, NUMA RÉGUA SÓ — a lista da aba e o selo dela chamam
+ * esta função.
+ *
+ * Antes cada lado escrevia os predicados por conta própria (aqui e em
+ * `conversations/counts/route.ts`). Com três filtros dava para conferir no olho;
+ * com oito, o selo passaria a contar o que a lista não mostra na primeira vez
+ * em que alguém esquecesse um dos dois — o defeito que `unread` já teve.
+ *
+ * Número, meio, etiqueta e não lidas são da CONVERSA: quem chama precisa ter
+ * `conversations!inner` no `select`. Atendente, período e assunto são do
+ * ATENDIMENTO.
+ *
+ * ⚠️ O ATENDENTE é `atendimentos.assigned_to_user_id` — quem estava com a
+ * conversa quando ela foi encerrada, carimbado pelo gatilho
+ * `fn_atendimento_acompanha_conversa`. Não é o dono ATUAL da conversa (ela
+ * perde o dono quando o cliente volta — 0269 — e o histórico de quem atendeu
+ * sumiria de "Só as minhas"), nem `closed_by_user_id` (o supervisor que encerra
+ * a conversa parada de um atendente não vira dono dela).
+ */
+export function aplicarFiltrosDosFechados<Q extends ConsultaDeFechados>(
+  consulta: Q,
+  q: FiltrosDosFechadosNoBanco,
+  userId: string,
+): Q {
+  let c = consulta;
+  if (q.channel_session_id) c = c.eq("conversations.channel_session_id", q.channel_session_id);
+  if (q.channel) c = c.eq("conversations.channel", q.channel);
+  if (q.tag) c = c.contains("conversations.tags", [q.tag]);
+  if (q.unread) c = c.gt("conversations.unread_count_for_assignee", 0);
+  if (q.assigned_to === "me") c = c.eq("assigned_to_user_id", userId);
+  else if (q.assigned_to === "unassigned") c = c.is("assigned_to_user_id", null);
+  else if (q.assigned_to) c = c.eq("assigned_to_user_id", q.assigned_to);
+  if (q.closed_from) c = c.gte("closed_at", q.closed_from);
+  if (q.closed_to) c = c.lt("closed_at", q.closed_to);
+  if (q.assunto_id) c = c.eq("assunto_id", q.assunto_id);
+  return c;
+}
 
 /** O atendimento encerrado como o card da aba Fechadas o lê. */
 export interface AtendimentoFechado extends AtendimentoResumo {
@@ -196,9 +287,12 @@ export async function listarAtendimentosFechados(
     .order("id", { ascending: false })
     .limit(q.limit + 1);
 
-  if (q.channel_session_id) consulta = consulta.eq("conversations.channel_session_id", q.channel_session_id);
-  if (q.tag) consulta = consulta.contains("conversations.tags", [q.tag]);
-  if (q.unread) consulta = consulta.gt("conversations.unread_count_for_assignee", 0);
+  // O cast é o mesmo do time, logo abaixo, e pela mesma razão (TS2589).
+  consulta = aplicarFiltrosDosFechados(
+    consulta as unknown as ConsultaDeFechados,
+    q,
+    ctx.userId,
+  ) as unknown as typeof consulta;
   if (q.team_id) {
     // O cast tira do compilador uma conta que ele não termina: o builder tipado
     // pelo `select` com embed, passado a um genérico, estoura a profundidade de

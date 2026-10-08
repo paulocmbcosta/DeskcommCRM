@@ -14,7 +14,14 @@ import { z } from "zod";
 import { fail, ok } from "@/lib/api/wrappers";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
 import { traduzir } from "@/lib/i18n/dicionario";
-import { CONVERSATION_TERMINAL_STATUSES, filtroDeTimeSchema, listConversationsQuerySchema } from "@/lib/schemas";
+import {
+  CONVERSATION_TERMINAL_STATUSES,
+  filtroDeAtendenteSchema,
+  filtroDeMeioSchema,
+  filtroDeTimeSchema,
+  instanteSchema,
+  listConversationsQuerySchema,
+} from "@/lib/schemas";
 import { orgTemAutomatico } from "@/lib/ai/agents/org-tem-automatico";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
 import { createClient } from "@/lib/supabase/server";
@@ -23,7 +30,12 @@ import { aplicarPredicadoDeTime, predicadoDeTime, type ConsultaFiltravel } from 
 import { filtroDaBuscaDeConversas } from "../_handler";
 import { aplicarNaFilaDoTime } from "../_na-fila";
 import { LIMITE_INSATISFEITO } from "@/lib/inbox/sentimento";
-import { predicadoDaBuscaDosFechados } from "@/app/api/v1/atendimentos/_handler";
+import {
+  aplicarFiltrosDosFechados,
+  predicadoDaBuscaDosFechados,
+  type ConsultaDeFechados,
+  type FiltrosDosFechadosNoBanco,
+} from "@/app/api/v1/atendimentos/_handler";
 
 export const dynamic = "force-dynamic";
 
@@ -64,8 +76,39 @@ export function filtrosAuxiliaresDaContagem(
   if (canal) filtros.push(["channel_session_id", canal]);
   const tag = sp.get("tag");
   if (tag) filtros.push(["tag", tag]);
+  // O MEIO (`conversations.channel`) é igualdade numa coluna da conversa, como o
+  // número: entra aqui e toda contagem o herda. Só o vocabulário que existe — um
+  // valor fora dele é recusado com 422 pelo schema da rota, mais abaixo.
+  const meio = filtroDeMeioSchema.safeParse(sp.get("channel") ?? undefined);
+  if (meio.success) filtros.push(["channel", meio.data]);
   return filtros;
 }
+
+/**
+ * Os filtros que NÃO valem para toda contagem — e por isso não podem entrar na
+ * fábrica, que aplica tudo a todas:
+ *
+ *   · `assigned_to` vale em Todas (e nos chips de time) e em Fechadas. Em Minhas
+ *     a aba já é "eu"; Fila e Automático pedem comandos que só existem SEM dono
+ *     (`lib/inbox/comando-da-conversa.ts`) — aplicado ali, zeraria um selo cuja
+ *     lista não muda;
+ *   · `closed_from`, `closed_to` e `assunto_id` são do atendimento encerrado: só
+ *     Fechadas.
+ *
+ * É o espelho de `ONDE_VALE` (`lib/inbox/filtros-de-tela.ts`), que decide o que
+ * a LISTA de cada aba recebe; `tests/unit/contagem-aplica-os-filtros-novos.test.ts`
+ * mede os dois lados desta tabela.
+ *
+ * `channel` está aqui só para ser VALIDADO (a aplicação é em
+ * `filtrosAuxiliaresDaContagem`): sem isso `?channel=fax` contaria tudo.
+ */
+export const filtrosPorAbaDaContagemSchema = z.object({
+  assigned_to: filtroDeAtendenteSchema.optional(),
+  channel: filtroDeMeioSchema.optional(),
+  closed_from: instanteSchema.optional(),
+  closed_to: instanteSchema.optional(),
+  assunto_id: z.string().uuid().optional(),
+});
 
 /** Verdadeiro quando a contagem deve pedir só as não lidas. */
 export function contagemSoNaoLidas(sp: URLSearchParams): boolean {
@@ -127,6 +170,18 @@ export async function GET(req: NextRequest): Promise<Response> {
       requestId,
     });
   }
+  const porAba = filtrosPorAbaDaContagemSchema.safeParse({
+    assigned_to: sp.get("assigned_to") ?? undefined,
+    channel: sp.get("channel") ?? undefined,
+    closed_from: sp.get("closed_from") ?? undefined,
+    closed_to: sp.get("closed_to") ?? undefined,
+    assunto_id: sp.get("assunto_id") ?? undefined,
+  });
+  if (!porAba.success) {
+    return fail("validation_failed", traduzir("Query inválida.", authUser?.idioma ?? "pt-BR"), 422, {
+      requestId,
+    });
+  }
   const busca = termo.data.search
     ? await filtroDaBuscaDeConversas(supabase, org, termo.data.search)
     : null;
@@ -156,9 +211,26 @@ export async function GET(req: NextRequest): Promise<Response> {
   const soInsatisfeitos = sp.get("insatisfeitos") === "true";
   const insatisfeitos = <Q extends { lt(coluna: string, valor: number): Q }>(q: Q): Q =>
     soInsatisfeitos ? q.lt("sentimento_atual", LIMITE_INSATISFEITO) : q;
+  // O ATENDENTE das conversas abertas — a mesma forma do handler da lista
+  // (`me` é quem pergunta, `unassigned` é `is null`). Vale para Todas e para os
+  // chips de time, que são de Todas; por isso mora em `daTodas` e não na fábrica.
+  //
+  // O cast para uma forma ESTRUTURAL (e não um genérico restrito pelo builder) é
+  // o mesmo de `ContagemFiltravel`: pedir `eq`/`is` ao builder tipado dentro de
+  // um genérico estoura a profundidade de instanciação (TS2589) — medido aqui.
+  const atendente = porAba.data.assigned_to;
+  const doAtendente = <Q>(q: Q): Q => {
+    if (!atendente) return q;
+    const c = q as unknown as ConsultaFiltravel;
+    const filtrada =
+      atendente === "unassigned"
+        ? c.is("assigned_to_user_id", null)
+        : c.eq("assigned_to_user_id", atendente === "me" ? user.id : atendente);
+    return filtrada as unknown as Q;
+  };
   const daTodas = <Q extends Parameters<typeof aplicarNaFilaDoTime>[0] & { lt(coluna: string, valor: number): Q }>(
     q: Q,
-  ): Q => insatisfeitos(soNaFila ? aplicarNaFilaDoTime(q, agora) : q);
+  ): Q => doAtendente(insatisfeitos(soNaFila ? aplicarNaFilaDoTime(q, agora) : q));
   const countExact = (comTime = true) => {
     let q = supabase
       .from("conversations")
@@ -192,20 +264,35 @@ export async function GET(req: NextRequest): Promise<Response> {
       .select("id, conversations!inner(id)", { count: "exact", head: true })
       .eq("organization_id", org)
       .not("closed_at", "is", null);
-    for (const [coluna, valor] of auxiliares) {
-      q =
-        coluna === "tag"
-          ? q.contains("conversations.tags", [String(valor)])
-          : q.eq(`conversations.${coluna}`, valor);
-    }
-    if (soNaoLidas) q = q.gt("conversations.unread_count_for_assignee", 0);
     if (buscaDosFechados) q = q.or(buscaDosFechados);
-    // O cast poupa o compilador de uma conta que ele não termina: o builder
+    // A MESMA função que a lista da aba chama (`atendimentos/_handler.ts`): os
+    // `auxiliares` (número, meio, etiqueta) e o `soNaoLidas` entram por ela, e
+    // junto vêm os que só Fechadas tem — atendente (o do encerramento), período
+    // e assunto. Escritos duas vezes, lista e selo divergiriam no primeiro
+    // esquecimento.
+    //
+    // Os casts poupam o compilador de uma conta que ele não termina: o builder
     // tipado por um `select` COM EMBED, entregue a um genérico, estoura a
     // profundidade de instanciação (TS2589) — e só o `next build` acusa, porque
     // o `tsconfig` do typecheck não segue o mesmo caminho. O que se preserva é o
     // que a rota lê: `count` e `error`.
-    return aplicarPredicadoDeTime(q as unknown as ContagemFiltravel, time);
+    const filtrosDosFechados: FiltrosDosFechadosNoBanco = {
+      ...(Object.fromEntries(auxiliares) as Pick<
+        FiltrosDosFechadosNoBanco,
+        "channel_session_id" | "channel" | "tag"
+      >),
+      unread: soNaoLidas,
+      assigned_to: porAba.data.assigned_to,
+      closed_from: porAba.data.closed_from,
+      closed_to: porAba.data.closed_to,
+      assunto_id: porAba.data.assunto_id,
+    };
+    const filtrada = aplicarFiltrosDosFechados(
+      q as unknown as ConsultaDeFechados,
+      filtrosDosFechados,
+      user.id,
+    );
+    return aplicarPredicadoDeTime(filtrada as unknown as ContagemFiltravel, time);
   };
 
   // Espelha tabToFilter (InboxLayout): unassigned = fila aberta sem dono;
@@ -269,7 +356,14 @@ export async function GET(req: NextRequest): Promise<Response> {
       .is("team_id", null))] : []),
     // Quantos de cada time estão NA FILA (ninguém pegou) — o selo vermelho do
     // chip. Mesma régua da lista (`_na-fila.ts`).
-    ...times.map((time) => aplicarNaFilaDoTime(countExact(false).eq("team_id", time.id), agora)),
+    //
+    // Acompanha o ATENDENTE e o "Insatisfeitos", como a lista de Todas que o
+    // botão "Na fila N" abre: na fila é conversa SEM dono, então com um
+    // atendente escolhido o número é zero — e a lista, vazia. Sem isto o botão
+    // seguia dizendo "Na fila 5" e o clique não mostrava nenhuma.
+    ...times.map((time) =>
+      doAtendente(insatisfeitos(aplicarNaFilaDoTime(countExact(false).eq("team_id", time.id), agora))),
+    ),
   ]);
 
   const firstErr =

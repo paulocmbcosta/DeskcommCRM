@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/hooks/i18n/useT";
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 import { format } from "date-fns";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth, usePermission } from "@/hooks/auth/AuthProvider";
 import { estadoDaJanela, formatarDecorrido } from "@/lib/channels/janela";
 import { canalFalaPrimeiro, canalReage } from "@/lib/channels/capabilities";
@@ -48,13 +48,22 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
-import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
+import {
+  filtrosAplicados,
+  nomesDosFiltros,
+  paraContagens,
+  paraConversas,
+  paraFechados,
+} from "@/lib/inbox/filtros-de-tela";
+import { enderecoDepoisDoGesto, lerAbaDaUrl, lerFiltrosDaUrl } from "@/lib/inbox/filtros-na-url";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
+import { useOpcoesDosFiltros } from "@/hooks/inbox/useOpcoesDosFiltros";
 import { useFilaDosTimes } from "@/hooks/inbox/useFilaDosTimes";
 import { useFilaDoTelefone } from "@/hooks/telefonia/useFilaDoTelefone";
 import { quantasEsperam } from "@/lib/telefonia/fila";
 import { AlternanciasDaLista, ChipsDosTimes } from "./ChipsDosTimes";
+import { SoAsMinhas } from "./SoAsMinhas";
 import { ALTURA_ABAIXO_DA_TOPBAR } from "@/lib/ui/faixas-do-topo";
 
 /**
@@ -117,7 +126,13 @@ export function tabToFilter(
       // atendia 47. Agora ela pergunta a régua do MOTOR.
       return { comando: ["automatico"] };
     case "all":
-      return { exclude_finished: true };
+      // A ORDEM É DECLARADA, e não deixada para a rota adivinhar. Com o filtro
+      // "Sem atendente" a aba passa a pedir `assigned_to=unassigned` — e a rota
+      // lê esse par, sozinho, como o pedido ANTIGO da Fila (quem espera há mais
+      // tempo primeiro). Sem a ordem dita aqui, escolher "Sem atendente" em
+      // Todas viraria a lista de cabeça para baixo. "Mais tempo esperando"
+      // (`ordem=espera`) continua vencendo: os auxiliares entram por cima.
+      return { exclude_finished: true, ordem: "atividade" };
     case "phone":
       // A aba Telefone não lista conversas — lista ligações, e quem a desenha é
       // `FilaDoTelefone`. A consulta de fundo é a mais barata que existe (as
@@ -130,18 +145,8 @@ export function tabToFilter(
   }
 }
 
-const FILTER_TABS: InboxTab[] = ["unassigned", "mine", "all", "closed", "ai", "phone"];
-
 /** O que os atalhos de teclado recebem quando a coluna não mostra conversa nenhuma. */
 const SEM_CONVERSAS_VISIVEIS: string[] = [];
-
-/**
- * Lê ?filter= (G4-02, deep-link). ?filter=all é HONRADO mesmo para agent — a
- * lista volta RLS-scoped (a tab só some cosmeticamente); default: fila.
- */
-function parseFilterParam(v: string | null): InboxTab {
-  return v && FILTER_TABS.includes(v as InboxTab) ? (v as InboxTab) : "unassigned";
-}
 
 interface InboxLayoutProps {
   initialSelectedId?: string | null;
@@ -155,28 +160,54 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   const podeResponder = usePermission("inbox.reply");
   const orgId = activeOrg?.orgId ?? null;
 
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const tab = parseFilterParam(searchParams.get("filter"));
+  // `?filter=` (G4-02, deep-link). A regra — inclusive a aba em que o Inbox abre
+  // — mora em `lerAbaDaUrl`, junto da dos filtros.
+  const tab = lerAbaDaUrl(searchParams);
 
-  // tab vive na URL (?filter=); os demais filtros são estado local de sessão.
-  const [aux, setAux] = useState<Omit<InboxFiltersValue, "tab">>({
-    search: "",
-    onlyUnread: false,
+  // OS FILTROS MORAM NO ENDEREÇO, junto da aba (`lib/inbox/filtros-na-url.ts`):
+  // recarregar não os perde, e o link de uma lista filtrada abre a mesma lista.
+  // Antes eram `useState` e sumiam a cada F5.
+  //
+  // A BUSCA fica de fora, em estado local: o termo é nome ou telefone de
+  // cliente, e no endereço ele iria para o histórico do navegador.
+  const naUrl = useMemo(() => lerFiltrosDaUrl(searchParams), [searchParams]);
+  const [search, setSearch] = useState("");
+  const filterValue: InboxFiltersValue = useMemo(
+    () => ({ tab, search, ...naUrl }),
+    [tab, search, naUrl],
+  );
+  // O que a tela MOSTRA agora — o estado que quem faz um gesto espalha
+  // (`{ ...value, unread: true }`). Fica numa ref porque `setFilterValue` precisa
+  // dele sem mudar de identidade a cada desenho.
+  const naTela = useRef(filterValue);
+  useEffect(() => {
+    naTela.current = filterValue;
   });
-  const filterValue: InboxFiltersValue = { tab, ...aux };
   const setFilterValue = useCallback(
     (next: InboxFiltersValue) => {
-      if (next.tab !== tab) {
-        const params = new URLSearchParams(searchParams);
-        params.set("filter", next.tab);
-        router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-      }
-      const { tab: _t, ...rest } = next;
-      setAux(rest);
+      const antes = naTela.current;
+      if (next.search !== antes.search) setSearch(next.search);
+      // SÓ O QUE O GESTO MUDOU vai para o endereço, por cima do endereço DE
+      // AGORA (`enderecoDepoisDoGesto`). O endereço chega à tela por uma
+      // transição do React — é assim que o Next aplica o `replaceState` —, então
+      // entre dois gestos rápidos `next` foi montado sobre uma tela atrasada.
+      // Regravar o endereço a partir dele desfaria o gesto anterior: o timer da
+      // busca apagava o "Não lidos" recém-ligado e devolvia a pessoa à aba de
+      // onde ela acabara de sair.
+      const proximo = enderecoDepoisDoGesto(new URLSearchParams(window.location.search), antes, next);
+      // `null` = o gesto não muda o endereço (a busca, por exemplo, não mora
+      // nele): nada de `replaceState`, que derrubaria uma navegação em curso.
+      if (!proximo) return;
+      // `history.replaceState`, e não `router.replace`: o Next sincroniza
+      // `useSearchParams` com a API nativa de histórico, e a página não é refeita
+      // no servidor a cada clique — ela é `force-dynamic` e relê usuário e
+      // organização. `replace`, e não `push`: mexer num filtro não cria uma
+      // entrada no "voltar" do navegador.
+      window.history.replaceState(null, "", `${pathname}?${proximo.toString()}`);
     },
-    [tab, searchParams, router, pathname],
+    [pathname],
   );
 
   // Desliga só os AUXILIARES e mantém a aba: a aba é onde a pessoa está, e
@@ -186,6 +217,8 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
     // pé faria "Limpar filtros" devolver uma lista ainda filtrada — a mentira de
     // tela que este botão existe para desfazer. (Ele não é enumerado aqui: o
     // objeto é reconstruído do zero, então filtro novo nasce limpo.)
+    // No endereço vale o mesmo: tudo o que a tela mostra ligado e não veio aqui
+    // é uma mudança para "desligado", e sai.
     setFilterValue({ tab, search: "", onlyUnread: false });
   }, [tab, setFilterValue]);
 
@@ -200,6 +233,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   const [atendimentoId, setAtendimentoId] = useState<string | null>(null);
   /** Os seletores de filtro ficam recolhidos; abrir uma conversa os fecha. */
   const [filtrosAbertos, setFiltrosAbertos] = useState(false);
+  // As opções dos seletores (atendentes, caixas, assuntos) só são lidas com o
+  // funil ABERTO: com ele fechado ninguém as vê, e o Inbox é a tela que mais
+  // abre no produto.
+  const opcoesDosFiltrosQ = useOpcoesDosFiltros(filtrosAbertos);
   /** A aba do painel direito. `null` = só o trilho, e a conversa fica com a largura. */
   const [abaDoPainel, setAbaDoPainel] = useState<AbaDoPainel | null>("detalhes");
   const [visibleIds, setVisibleIds] = useState<string[]>([]);
@@ -227,72 +264,44 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   const { data: automaticoDaOrg } = useAutomaticoAtivo();
   const composerRef = useRef<ComposerHandle | null>(null);
 
+  // UMA RÉGUA PARA TUDO (`lib/inbox/filtros-de-tela.ts`): o que vale nesta aba
+  // sai de uma tabela só, e dela saem o que vai para cada rota e os nomes que o
+  // vazio cita. Antes havia um `if` por filtro aqui, outro no funil e outro no
+  // vazio — e os três já discordavam.
+  //
+  // O dia entra na dependência para "hoje" virar à meia-noite sem recarregar.
+  const dia = new Date().toDateString();
+  const aplicados = useMemo(
+    () => filtrosAplicados(tab, filterValue),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tab, filterValue, dia],
+  );
   const filters: ConversationsFilters = useMemo(
-    () => ({
-      ...tabToFilter(filterValue.tab, automaticoDaOrg),
-      // A tela NÃO pede o que a rota recusa: o hook trata falha com
-      // `showApiError`, então digitar a primeira letra de qualquer busca faria
-      // piscar um erro na cara de quem digita. A regra é a MESMA que o schema
-      // usa (`lib/inbox/termo-de-busca.ts`) — nunca repetida aqui.
-      search: buscaValeConsulta(filterValue.search)
-        ? filterValue.search
-        : undefined,
-      channel_session_id: filterValue.channel_session_id,
-      tag: filterValue.tag,
-      team_id: filterValue.team_id,
-      unread: filterValue.onlyUnread || undefined,
-      // Os dois chips de Todas (migration 0279). Só valem ali: em outra aba, a
-      // tela não mostra o chip que os desligaria — um filtro que a pessoa não
-      // enxerga é uma lista menor sem explicação. A ordem vale também em
-      // Minhas, que ganha o mesmo chip.
-      na_fila: filterValue.tab === "all" ? filterValue.na_fila || undefined : undefined,
-      ordem:
-        filterValue.tab === "all" || filterValue.tab === "mine" ? filterValue.ordem : undefined,
-      insatisfeitos:
-        filterValue.tab === "all" || filterValue.tab === "mine"
-          ? filterValue.insatisfeitos || undefined
-          : undefined,
-    }),
-    [
-      filterValue.tab,
-      automaticoDaOrg,
-      filterValue.search,
-      filterValue.channel_session_id,
-      filterValue.tag,
-      filterValue.team_id,
-      filterValue.onlyUnread,
-      filterValue.na_fila,
-      filterValue.ordem,
-      filterValue.insatisfeitos,
-    ],
+    // O filtro da ABA primeiro e os auxiliares por cima. `paraConversas` nunca
+    // devolve chave vazia, então um auxiliar desligado não apaga o da aba.
+    () => ({ ...tabToFilter(tab, automaticoDaOrg), ...paraConversas(tab, aplicados) }),
+    [tab, automaticoDaOrg, aplicados],
   );
 
-
-  // A aba Fechadas pergunta por ATENDIMENTOS, e os filtros auxiliares são os
-  // mesmos — só não carregam o `comando`/`status` da aba, que ali não existem.
-  const filtrosDosFechados = useMemo(
-    () => ({
-      search: filters.search,
-      channel_session_id: filters.channel_session_id,
-      tag: filters.tag,
-      team_id: filters.team_id,
-      unread: filters.unread,
-    }),
-    [filters.search, filters.channel_session_id, filters.tag, filters.team_id, filters.unread],
-  );
+  // A aba Fechadas pergunta por ATENDIMENTOS: recebe os auxiliares e mais os
+  // que só ela tem (atendente do encerramento, período, assunto) — e não o
+  // `comando`/`status` da aba, que ali não existem.
+  const filtrosDosFechados = useMemo(() => paraFechados(aplicados), [aplicados]);
+  /** Os filtros ligados, por extenso — o que as listas citam quando ficam vazias. */
+  const filtrosAtivos = useMemo(() => nomesDosFiltros(aplicados), [aplicados]);
 
   // We need the selected conversation object for header / composer / side panel.
   // Source it from the same query the list uses to avoid an extra request.
   const listQ = useConversationsRealtime(filters, orgId);
+  // AS CONTAGENS RECEBEM TODOS OS FILTROS LIGADOS, e não só os desta aba: o selo
+  // de uma aba diz o que a lista mostrará ao CLICAR nela, e quem sabe a que
+  // contagem cada filtro chega é o servidor. Lida UMA vez, aqui — o trilho
+  // recebe o resultado por prop, em vez de chamar o hook com parâmetros
+  // próprios (ele não mandava `na_fila` nem `insatisfeitos`, e o selo de Todas
+  // discordava da lista).
   const contagensQ = useConversationCounts(orgId, {
-    unread: filters.unread,
-    tag: filters.tag,
-    channel_session_id: filters.channel_session_id,
-    team_id: filters.team_id,
-    search: filters.search,
+    ...paraContagens(filterValue),
     by_team: tab === "all",
-    na_fila: filters.na_fila,
-    insatisfeitos: filters.insatisfeitos,
   });
   // POR QUE a fila de cada time não anda — só pergunta quando há fila.
   const haFilaDeTime = (contagensQ.data?.by_team ?? []).some((g) => (g.na_fila ?? 0) > 0);
@@ -671,6 +680,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         <InboxAbas
           value={filterValue}
           onChange={setFilterValue}
+          contagens={contagensQ.data}
           telefone={{
             ativa: filaDoTelefoneQ.data?.ativa === true,
             esperando: quantasEsperam(filaDoTelefoneQ.data?.ligacoes ?? []),
@@ -703,6 +713,20 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 }
               />
             )}
+            {/* FECHADAS: "Só as minhas" — o pedido que originou esta entrega
+                ("as conversas finalizadas aqui são todas misturadas de todos os
+                atendentes"). É o mesmo filtro do seletor de atendente do funil,
+                num clique. O observador não atende: para ele não há "minhas". */}
+            {tab === "closed" && activeOrg?.role !== "viewer" && (
+              <SoAsMinhas
+                // O PRÓPRIO id também é "eu": é o que chega quando a gestora
+                // escolhe a pessoa pelo nome e manda o link para ela.
+                ligado={filterValue.assigned_to === "me" || filterValue.assigned_to === user.id}
+                onChange={(ligado) =>
+                  setFilterValue({ ...filterValue, assigned_to: ligado ? "me" : undefined })
+                }
+              />
+            )}
           </div>
           {/* TELEFONE: a busca, os filtros e o protocolo são de CONVERSA, e a
               aba mostra ligações. Os filtros dela (time e número da empresa)
@@ -713,6 +737,9 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
               onChange={setFilterValue}
               aberto={filtrosAbertos}
               onAbertoChange={setFiltrosAbertos}
+              opcoes={opcoesDosFiltrosQ.data}
+              opcoesComErro={opcoesDosFiltrosQ.isError}
+              onRecarregarOpcoes={() => void opcoesDosFiltrosQ.refetch()}
             />
           )}
           {/* Na aba Fechadas a própria lista já responde pelo protocolo dos
@@ -750,6 +777,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
               // conversa reabre (ver `AtendimentosFechadosList`).
               <AtendimentosFechadosList
                 filtros={filtrosDosFechados}
+                filtrosAtivos={filtrosAtivos}
                 atendimentoEmTelaId={selectedId ? (atendimentoEmTela?.id ?? null) : null}
                 onAbrir={abrirAtendimento}
                 onVisibleChange={handleVisibleChange}
@@ -759,6 +787,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
               <ConversationList
                 listQuery={listQ}
                 filters={filters}
+                filtrosAtivos={filtrosAtivos}
                 selectedId={selectedId}
                 onSelect={handleSelect}
                 onVisibleChange={handleVisibleChange}

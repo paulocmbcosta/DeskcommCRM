@@ -3918,3 +3918,74 @@ abaixo da dobra; a anotação passou a ser feita antes (J46.5); (3) com o relóg
 atrasado, "Transcrevendo…" não aparecia; (4) na conversa vista pelo super-admin, "Transcrevendo…"
 aparecia e o texto nunca vinha (J46.15). Também vieram dele o aviso da transcrição cortada no teto
 (J46.14) e o texto curto com muitas quebras de linha, que ocuparia a tela.
+
+## J47 — Filtrar o Inbox por atendente, caixa de entrada, período e assunto `[P1]` (2026-10-08)
+
+Pedido de quem atende, na Totus: "todas as conversas que vemos aqui são todas misturadas de todos os
+atendentes", com a comparação de que a ferramenta anterior tinha "minhas conversas finalizadas". O dono
+acrescentou: os filtros têm de valer em todas as abas, inclusive nas finalizadas, e incluir a caixa de
+entrada (só WhatsApp, só telefone).
+
+`[P1]` porque é uso de todo dia de quem já atende, e não primeira impressão: o Inbox funciona sem os
+filtros, só custa mais achar o que é seu.
+
+O funil do Inbox ganha quatro seletores — atendente (Todas e Fechadas), caixa de entrada (o meio ou um
+número; substitui "Todos os números" e passa a listar o telefone), período e assunto (só Fechadas) —, a
+aba Fechadas ganha o botão "Só as minhas", e os filtros passam a morar no endereço da página (a busca
+não). Migration 0297 (um índice em `atendimentos`). Desenho:
+`docs/superpowers/specs/2026-10-08-inbox-filtros-por-atendente-e-caixa-design.md`; plano:
+`docs/superpowers/plans/2026-10-08-inbox-filtros-por-atendente-e-caixa.md`; mapa em
+`docs/architecture/inbox-filtros.architecture.json`.
+
+**Como é provado, e com que alcance.**
+
+- **unit (regra pura):** `lib/inbox/filtros-de-tela.test.ts` (em que aba cada filtro vale, o que vai a
+  cada rota, e a cerca "todo filtro aplicado é nomeado no vazio"), `lib/inbox/filtros-na-url.test.ts`
+  (ida e volta, link quebrado) e `lib/inbox/periodo.test.ts` (o dia de quem olha, a virada do dia).
+- **unit (servidor, banco de mentira):** `tests/unit/inbox-filtro-de-meio.test.ts`,
+  `tests/unit/aba-fechadas-lista-atendimentos.test.ts` (os filtros novos viram predicado),
+  `tests/unit/contagem-aplica-os-filtros-novos.test.ts` (a que selo cada filtro chega) e
+  `app/api/v1/conversations/filtros/_handler.test.ts` (organização da sessão em toda leitura; quem não vê
+  colegas não recebe nomes). Provam o predicado montado, não o SQL que o PostgREST gera.
+- **teste de componente:** `components/inbox/InboxFilters.novos.test.tsx` (em que aba cada seletor
+  existe, o que cada escolha propaga, os órfãos) e `tests/unit/inbox-filtros-no-endereco.test.tsx` (o
+  Inbox inteiro sobre um roteador de mentira: do endereço ao pedido de cada rota).
+- **banco de verdade:** o baseline com a 0297 em instalação e atualização (`pnpm test:db`), e a medição
+  do plano com e sem o índice, no cabeçalho da migration.
+- **ponta a ponta:** `tests/e2e/inbox-filtros-por-atendente-e-caixa.spec.ts`, no GitHub Actions.
+
+| # | Caso | Onde é provado |
+|---|---|---|
+| J47.1 | Em Fechadas, "Só as minhas" deixa só o que estava comigo no encerramento, e o selo da aba acompanha | e2e; unit |
+| J47.2 | Recarregar a página e abrir o endereço copiado em outra janela devolvem a mesma lista filtrada | e2e (a única prova de que o `history.replaceState` conversa com o roteador do Next de verdade) |
+| J47.3 | Quem coordena escolhe um atendente pelo nome, em Fechadas e em Todas | e2e (Fechadas); componente e unit (Todas) |
+| J47.12 | "Sem atendente" em Todas é filtro, não a Fila: a ordem é a de Todas e nenhuma linha ganha "1º" | e2e; unit (`sem-atendente-nao-e-a-fila`) |
+| J47.13 | A leitura das opções falhou: o funil diz e oferece tentar de novo | componente |
+| J47.4 | Período "Hoje" e "Ontem" recortam as Fechadas pelo dia do encerramento | e2e; unit |
+| J47.5 | Assunto recorta as Fechadas | e2e; unit |
+| J47.6 | Filtro sem resultado cita os filtros ligados; "Limpar filtros" devolve a lista e limpa o endereço | e2e; componente |
+| J47.7 | Caixa de entrada "Telefone" deixa só a conversa de telefone; "WhatsApp" não a traz | e2e; unit |
+| J47.8 | Trocar de aba mantém os filtros no endereço; filtro que não vale na aba não é aplicado nem contado | componente; e2e (Minhas) |
+| J47.9 | O selo de uma aba diz o que o clique nela vai mostrar, mesmo com um filtro que só vale nela | componente (o pedido de contagem leva todos os filtros); unit (o servidor decide o alcance) |
+| J47.10 | Quem só vê as próprias conversas não recebe nomes de colegas | unit da rota |
+| J47.11 | O texto da busca não vai para o endereço | componente |
+
+**O que NÃO foi provado.**
+
+- **Com gente de verdade.** Nenhum atendente usou os filtros; a prova real é na produção, depois de
+  publicado.
+- **Datas pelo campo de data, no navegador.** "Escolher datas…" e os dois campos são provados no teste de
+  componente; o e2e usa "Hoje" e "Ontem".
+- **Fuso.** "Hoje" é o dia de quem olha a tela. O CI roda em UTC; um observador em outro fuso que o
+  atendente vê outro recorte, e isso não tem teste — é limite declarado no desenho (D7).
+- **Gestos rápidos, no navegador.** O endereço chega à tela por uma transição do React; a regra que
+  impede um gesto de desfazer o anterior (`enderecoDepoisDoGesto`) é provada como função pura, com a
+  tela atrasada montada à mão. A corrida de verdade — digitar na busca e clicar num filtro em menos de
+  250 ms — não foi reproduzida num navegador.
+- **Digitar a data pelo teclado.** Os campos guardam o que foi digitado enquanto o valor não volta de
+  fora (teste de componente); não foi provado num navegador que o trecho em edição não é zerado.
+- **O plano das consultas pelo PostgREST.** O `EXPLAIN` do cabeçalho da 0297 foi sobre SQL escrito à
+  mão, equivalente ao que o PostgREST monta; a consulta real não foi capturada.
+- **O limite de visibilidade.** Em instalação onde o atendente só vê as próprias conversas, um
+  atendimento que ele encerrou some das Fechadas dele quando o cliente volta e outro atende — a regra é
+  da policy de `atendimentos`, que esta entrega não tocou. Tem tarefa própria.

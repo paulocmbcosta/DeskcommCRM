@@ -23,6 +23,12 @@ const sp = (s: string) => new URLSearchParams(s);
 describe("quais filtros a contagem aplica", () => {
   it("tag e canal viram predicado", () => {
     expect(filtrosAuxiliaresDaContagem(sp("tag=urgente"))).toContainEqual(["tag", "urgente"]);
+    // O MEIO (só WhatsApp, só telefone…) é igualdade numa coluna da conversa,
+    // como o número: entra na fábrica e toda contagem o herda.
+    expect(filtrosAuxiliaresDaContagem(sp("channel=phone"))).toContainEqual(["channel", "phone"]);
+    // …mas só o vocabulário que existe. O valor inválido não vira predicado
+    // (e a rota o recusa com 422 — `contagem-aplica-os-filtros-novos.test.ts`).
+    expect(filtrosAuxiliaresDaContagem(sp("channel=fax"))).toEqual([]);
     expect(filtrosAuxiliaresDaContagem(sp("channel_session_id=abc"))).toContainEqual([
       "channel_session_id",
       "abc",
@@ -123,6 +129,14 @@ describe("nenhuma contagem é montada por fora da fábrica", () => {
     expect(fabrica).toContain("organization_id");
     expect(fabrica, "os filtros auxiliares não entram na fábrica dos fechados").toContain("auxiliares");
     expect(fabrica, "o filtro de não lidas não entra na fábrica dos fechados").toContain("soNaoLidas");
+    // …pela régua ÚNICA dos fechados, e com os filtros que só esta aba tem:
+    // o atendente do encerramento, o período e o assunto (desenho de 2026-10-08).
+    expect(fabrica, "a fábrica dos fechados escreve os predicados por conta própria").toContain(
+      "aplicarFiltrosDosFechados(",
+    );
+    for (const filtro of ["assigned_to", "closed_from", "closed_to", "assunto_id"]) {
+      expect(fabrica, `o filtro "${filtro}" não chega à contagem dos fechados`).toContain(`${filtro}: porAba.data.${filtro}`);
+    }
     expect(fabrica, "o filtro de time não entra na fábrica dos fechados").toContain("aplicarPredicadoDeTime");
 
     const dentroDoPromiseAll = fonte.slice(
@@ -145,7 +159,15 @@ describe("nenhuma contagem é montada por fora da fábrica", () => {
       fonte.indexOf("// Espelha tabToFilter"),
     );
     expect(fabricas).toContain('q.contains("tags", [String(valor)])');
-    expect(fabricas).toContain('q.contains("conversations.tags", [String(valor)])');
+    // Nos fechados a etiqueta deixou de ser escrita AQUI: a fábrica entrega os
+    // auxiliares a `aplicarFiltrosDosFechados`, a mesma função que a lista da aba
+    // chama — e é lá que mora o `contains`. O comportamento é medido em
+    // `aba-fechadas-lista-atendimentos.test.ts`; aqui se vigia que a régua é
+    // aquela, e que continua sendo `contains`.
+    expect(fabricas).toContain("aplicarFiltrosDosFechados(");
+    expect(readFileSync("app/api/v1/atendimentos/_handler.ts", "utf8")).toContain(
+      'c.contains("conversations.tags", [q.tag])',
+    );
     // Igualdade crua sobre o par só é aceitável DEPOIS de separar a etiqueta.
     const igualdadesCruas = fabricas
       .split("\n")

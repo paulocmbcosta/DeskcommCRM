@@ -25,31 +25,36 @@ import { cleanup, render, screen } from "@testing-library/react";
 
 import { InboxAbas } from "@/components/inbox/InboxAbas";
 import { InboxFilters, visibleInboxTabs, type InboxFiltersValue } from "@/components/inbox/InboxFilters";
-import type * as CanaisModule from "@/hooks/channels/useChannelSessions";
-import type { ChannelSession } from "@/hooks/channels/useChannelSessions";
 import type { ActiveOrg } from "@/lib/auth/types";
+import type { CaixaDeEntrada, OpcoesDosFiltros } from "@/lib/inbox/opcoes-dos-filtros";
 
 const activeOrgRef: { current: ActiveOrg | null } = { current: null };
-/** `undefined` = listagem ainda carregando (ou que falhou) — não é "zero canais". */
-const canaisRef: { current: ChannelSession[] | undefined } = { current: [] };
+/**
+ * As caixas de entrada que o funil recebe por prop (`opcoes`, lidas no
+ * `InboxLayout` de `GET /conversations/filtros`). `undefined` = a leitura ainda
+ * não chegou (ou falhou) — não é "zero caixas".
+ */
+const caixasRef: { current: CaixaDeEntrada[] | undefined } = { current: [] };
+/** O `opcoes` que o `InboxLayout` entregaria para as caixas de agora. */
+const opcoes = (): OpcoesDosFiltros | undefined =>
+  caixasRef.current === undefined
+    ? undefined
+    : { atendentes: [], caixas: caixasRef.current, assuntos: [] };
 
 vi.mock("@/hooks/auth/AuthProvider", () => ({
   useAuth: () => ({ activeOrg: activeOrgRef.current }),
 }));
-// Só a listagem é dublada: `channelLabel` do módulo real é o que resolve o rótulo
-// de cada opção do seletor, e é parte do que está sob teste aqui.
-vi.mock("@/hooks/channels/useChannelSessions", async (original) => {
-  const real = await original<typeof CanaisModule>();
-  return { ...real, useChannelSessions: () => ({ data: canaisRef.current }) };
-});
 /** `undefined` = vocabulário ainda carregando — não é "zero etiquetas". */
 const tagsRef: { current: string[] | undefined } = { current: [] };
 vi.mock("@/hooks/inbox/useConversationTags", () => ({
   useConversationTagVocabulary: () => ({ data: tagsRef.current }),
 }));
-vi.mock("@/hooks/inbox/useConversationCounts", () => ({
-  useConversationCounts: () => ({ data: { unassigned: 3, mine: 2, all: 5 } }),
-}));
+/**
+ * As contagens que o trilho recebe por prop. Ele deixou de chamar
+ * `useConversationCounts` por conta própria: lia com os PRÓPRIOS parâmetros, e o
+ * selo de "Todas" discordava da lista que o `InboxLayout` montava com outros.
+ */
+const CONTAGENS = { unassigned: 3, mine: 2, all: 5 };
 
 // O seletor de fila por TIME (migration 0263) lê o catálogo por react-query, e
 // este arquivo renderiza `InboxFilters` sem QueryClientProvider. Sem o dublê, o
@@ -65,28 +70,15 @@ function setOrg(role: ActiveOrg["role"], visibility_mode: ActiveOrg["visibility_
   activeOrgRef.current = { orgId: "org-1", name: "Org", role, visibility_mode };
 }
 
-function canal(over: Partial<ChannelSession> = {}): ChannelSession {
-  return {
-    id: "canal-1",
-    waha_session_name: "org_1111_aaa",
-    display_name: "Vendas",
-    phone_number: "5511999999999",
-    status: "WORKING",
-    status_reason: null,
-    last_health_check_at: null,
-    last_status_change_at: null,
-    daily_message_limit: 250,
-    is_warmup_complete: null,
-    created_at: "2026-08-01T00:00:00Z",
-    ...over,
-  };
+function canal(over: Partial<CaixaDeEntrada> = {}): CaixaDeEntrada {
+  return { id: "canal-1", meio: "whatsapp", nome: "Vendas", numero: "5511999999999", ...over };
 }
 
-const SELETOR = "Filtrar por número de WhatsApp";
+const SELETOR = "Filtrar por caixa de entrada";
 
 beforeEach(() => {
   setOrg("agent", "own_and_unassigned");
-  canaisRef.current = [];
+  caixasRef.current = [];
 });
 afterEach(cleanup);
 
@@ -159,7 +151,7 @@ describe("InboxAbas render — 3 visões + escopo", () => {
 
   it("contagens por visão são renderizadas (Fila=3, Minhas=2)", () => {
     setOrg("manager", "all");
-    render(<InboxAbas value={VALUE} onChange={() => {}} />);
+    render(<InboxAbas value={VALUE} onChange={() => {}} contagens={CONTAGENS} />);
     expect(screen.getByRole("tab", { name: /Fila/ })).toHaveTextContent("3");
     expect(screen.getByRole("tab", { name: /Minhas/ })).toHaveTextContent("2");
     expect(screen.getByRole("tab", { name: /Todas/ })).toHaveTextContent("5");
@@ -167,7 +159,14 @@ describe("InboxAbas render — 3 visões + escopo", () => {
 
   it("com a telefonia ligada, o trilho ganha a aba Telefone com o selo de quem espera", () => {
     setOrg("agent", "own_and_unassigned");
-    render(<InboxAbas value={VALUE} onChange={() => {}} telefone={{ ativa: true, esperando: 3 }} />);
+    render(
+      <InboxAbas
+        value={VALUE}
+        onChange={() => {}}
+        contagens={CONTAGENS}
+        telefone={{ ativa: true, esperando: 3 }}
+      />,
+    );
     expect(screen.getByRole("tab", { name: "Telefone" })).toHaveTextContent("3");
     // As outras seguem como estavam: a aba nova não desloca nem esconde nenhuma.
     expect(screen.getByRole("tab", { name: /Fila/ })).toHaveTextContent("3");
@@ -193,18 +192,18 @@ describe("InboxAbas render — 3 visões + escopo", () => {
   });
 });
 
-describe("InboxFilters — seletor de número e o filtro órfão", () => {
+describe("InboxFilters — seletor de caixa de entrada e o filtro órfão", () => {
   it("um número só: não há o que alternar, o seletor não aparece", () => {
     setOrg("manager", "all");
-    canaisRef.current = [canal()];
-    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
+    caixasRef.current = [canal()];
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} opcoes={opcoes()} />);
     expect(screen.queryByLabelText(SELETOR)).not.toBeInTheDocument();
   });
 
   it("dois números: o seletor aparece com os dois", () => {
     setOrg("manager", "all");
-    canaisRef.current = [canal(), canal({ id: "canal-2", display_name: "Suporte" })];
-    render(<InboxFilters aberto value={VALUE} onChange={() => {}} />);
+    caixasRef.current = [canal(), canal({ id: "canal-2", nome: "Suporte" })];
+    render(<InboxFilters aberto value={VALUE} onChange={() => {}} opcoes={opcoes()} />);
     expect(screen.getByLabelText(SELETOR)).toBeInTheDocument();
   });
 
@@ -216,9 +215,14 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
    */
   it("filtro aponta para número que saiu da lista: o seletor FICA e nomeia o número removido", () => {
     setOrg("manager", "all");
-    canaisRef.current = [canal()];
+    caixasRef.current = [canal()];
     render(
-      <InboxFilters aberto value={{ ...VALUE, channel_session_id: "canal-excluido" }} onChange={() => {}} />,
+      <InboxFilters
+        aberto
+        value={{ ...VALUE, channel_session_id: "canal-excluido" }}
+        onChange={() => {}}
+        opcoes={opcoes()}
+      />,
     );
     const seletor = screen.getByLabelText(SELETOR);
     expect(seletor).toBeInTheDocument();
@@ -255,8 +259,15 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
 
   it("filtro que casa com a lista: nada de 'Número removido'", () => {
     setOrg("manager", "all");
-    canaisRef.current = [canal(), canal({ id: "canal-2", display_name: "Suporte" })];
-    render(<InboxFilters aberto value={{ ...VALUE, channel_session_id: "canal-2" }} onChange={() => {}} />);
+    caixasRef.current = [canal(), canal({ id: "canal-2", nome: "Suporte" })];
+    render(
+      <InboxFilters
+        aberto
+        value={{ ...VALUE, channel_session_id: "canal-2" }}
+        onChange={() => {}}
+        opcoes={opcoes()}
+      />,
+    );
     const seletor = screen.getByLabelText(SELETOR);
     expect(seletor).toHaveTextContent("Suporte");
     expect(seletor).not.toHaveTextContent("Número removido");
@@ -270,9 +281,14 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
    */
   it("listagem ainda carregando: não afirma que o número foi removido", () => {
     setOrg("manager", "all");
-    canaisRef.current = undefined;
+    caixasRef.current = undefined;
     render(
-      <InboxFilters aberto value={{ ...VALUE, channel_session_id: "canal-1" }} onChange={() => {}} />,
+      <InboxFilters
+        aberto
+        value={{ ...VALUE, channel_session_id: "canal-1" }}
+        onChange={() => {}}
+        opcoes={opcoes()}
+      />,
     );
     expect(screen.queryByText("Número removido")).not.toBeInTheDocument();
   });
@@ -281,8 +297,8 @@ describe("InboxFilters — seletor de número e o filtro órfão", () => {
 describe("InboxFilters — recolher os seletores não esconde filtro ligado", () => {
   it("fechado por padrão: os seletores não estão na tela", () => {
     setOrg("manager", "all");
-    canaisRef.current = [canal({ id: "canal-1" }), canal({ id: "canal-2" })];
-    render(<InboxFilters value={VALUE} onChange={() => {}} />);
+    caixasRef.current = [canal({ id: "canal-1" }), canal({ id: "canal-2" })];
+    render(<InboxFilters value={VALUE} onChange={() => {}} opcoes={opcoes()} />);
     expect(screen.queryByTestId("inbox-filtros-auxiliares")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Filtros" })).toHaveAttribute("aria-expanded", "false");
   });
@@ -291,7 +307,8 @@ describe("InboxFilters — recolher os seletores não esconde filtro ligado", ()
     // O recolhimento só é honesto se o estado continuar visível: sem o número,
     // a lista encolheria por um filtro que ninguém vê.
     setOrg("manager", "all");
-    canaisRef.current = [canal({ id: "canal-1" }), canal({ id: "canal-2" })];
+    // FECHADO, o funil nem leu as opções ainda (`opcoes` ausente): o número sai
+    // dos filtros LIGADOS, e não da lista do que dá para escolher.
     render(
       <InboxFilters value={{ ...VALUE, channel_session_id: "canal-2", tag: "vip" }} onChange={() => {}} />,
     );

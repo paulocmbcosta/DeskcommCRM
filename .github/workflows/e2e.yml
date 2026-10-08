@@ -686,6 +686,7 @@ jobs:
         voz-desligada-por-padrao.spec.ts
         voz-primeiro-pareamento.spec.ts
         inbox-busca-e-filtros-dizem-a-verdade.spec.ts
+        inbox-filtros-por-atendente-e-caixa.spec.ts
         qa-titulos-das-telas.spec.ts
         qa-equipe-pinta-na-hora.spec.ts
         qa-sugestao-rejeitada-e-motivo.spec.ts
@@ -1044,6 +1045,18 @@ jobs:
         with:
           name: evidencia-inbox-transcricao-do-audio
           path: .superpowers/evidence/inbox-transcricao-do-audio/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Os filtros do Inbox (atendente, caixa de entrada, período, assunto): as
+      # imagens de cada passo sobem SEMPRE, pelo mesmo motivo das de cima — o
+      # funil ganhou seletores e a aba Fechadas ganhou um botão, e esta é a prova
+      # em tela da entrega (o dono não roda o Playwright na máquina dele).
+      - uses: actions/upload-artifact@v7
+        if: always() && matrix.parte == 3
+        with:
+          name: evidencia-inbox-filtros
+          path: .superpowers/evidence/inbox-filtros/
           if-no-files-found: ignore
           retention-days: 7
 
