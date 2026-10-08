@@ -136,10 +136,16 @@ da API, para existir um vocabulário só.
   em ordem alfabética, e por último quem saiu da organização, marcado "(saiu)".
   Id escolhido que não está na lista aparece como "Atendente removido" — o mesmo
   tratamento de número, etiqueta e time órfãos.
-- **Quem vê o seletor:** quem enxerga conversa de colega — `viewer`, `manager`,
+- **Quem vê os nomes:** quem enxerga conversa de colega — `viewer`, `manager`,
   `admin`, e `agent` nos modos `all` e `own_and_team`. É a mesma condição que hoje
   decide a aba Todas em `visibleInboxTabs`; ela vira uma função nomeada em
-  `lib/inbox/abas.ts`, usada pelos dois. Os demais só têm o "Só as minhas".
+  `lib/inbox/abas.ts` (`podeVerColegas`), usada pelos dois. Quem decide é a rota das
+  opções (seção 8.4), que devolve a lista de atendentes vazia para os demais.
+- **O seletor aparece para todos** em Todas e Fechadas. Para quem não vê colegas ele
+  tem só "Todos os atendentes", "Eu" e "Sem atendente" — que servem a esse atendente
+  (no modo padrão ele vê as próprias e as sem dono). Emenda ao desenho aprovado, que
+  escondia o seletor: escondê-lo deixaria o selo do funil contando um filtro que o
+  funil não mostra.
 - **`viewer` não atende:** para ele, a opção "Eu" e o botão "Só as minhas" não
   aparecem.
 - **Filtro não é barreira.** Um `agent` restrito que abrir um link com o id de um
@@ -238,7 +244,8 @@ Molde: `GET /api/v1/conversations/teams`.
   }
   ```
 
-- **Atendentes:** membros da organização com papel diferente de `viewer`, mais os
+- **Atendentes:** só para quem vê colegas (seção 5); para os demais, lista vazia e a
+  tabela nem é lida. Membros da organização com papel diferente de `viewer`, mais os
   revogados (`ativo: false`). Lidos de `user_organizations` com o admin client,
   filtrado pela organização da sessão — o mesmo padrão e a mesma razão de
   `team/assignable` (a RLS mostra ao `agent` só o próprio vínculo). Nomes por
@@ -323,19 +330,24 @@ create index if not exists conversations_org_channel_last_msg
   seletor de caixa com um e com vários meios.
 - "Limpar filtros" apaga os novos.
 
+- Rota das opções: cada leitura leva o `organization_id` da sessão; `agent` restrito
+  recebe a lista de atendentes vazia. (A suíte de invariantes fala com o Postgres, não
+  com rotas HTTP; o isolamento desta rota é provado aqui.)
+
 **Invariantes (`pnpm test:db`)**
 - A migration aplica em instalação nova e em atualização.
-- Duas organizações: `GET /conversations/filtros` de uma não devolve atendente, caixa
-  nem assunto da outra.
-- `agent` em modo `own` filtrando por um colega em Fechadas não recebe nada.
+- O que um `agent` restrito enxerga em `atendimentos` não muda: a policy não é tocada,
+  e `gov-5-visibility-scope` e `visibilidade-por-time` seguem valendo.
 
 **Ponta a ponta** — `tests/e2e/inbox-filtros-por-atendente-e-caixa.spec.ts`, registrado
 no `e2e.yml`: dois atendentes com atendimentos encerrados por cada um, conversas de
 WhatsApp e de telefone. Cobre "Só as minhas", atendente pelo nome, caixa por meio,
 período, assunto, recarregar a página e abrir o endereço copiado.
 
-**Prova em tela** — ambiente fresco no molde da VPS, com evidência em
-`.superpowers/evidence/`, e o mapa `docs/testing/user-journey-map.md` atualizado.
+**Prova em tela** — o teste de ponta a ponta roda no GitHub Actions (o dono não roda
+Supabase local nem Playwright na máquina dele; decisão de 2026-09-29), com capturas em
+`.superpowers/evidence/`, e o mapa `docs/testing/user-journey-map.md` é atualizado. A
+prova real é na produção, depois de publicado.
 
 ## 13. Sistema vivo
 
