@@ -34,6 +34,19 @@ O texto abaixo é o plano como foi escrito. Três coisas saíram diferentes, e v
    do funil, o hook exigiria um `QueryClientProvider` em todo teste que monta o funil sozinho.
 3. **O mapa de arquitetura é um arquivo novo (Task 11),** `docs/architecture/inbox-filtros.architecture.json`,
    em vez de mais peças no mapa da fila e do termômetro.
+4. **A revisão independente (Task 11, passo 6) achou seis coisas, corrigidas antes do PR:**
+   - um gesto podia desfazer o anterior, porque o endereço chega à tela por uma transição — o
+     endereço passa a receber só o que o gesto mudou (`enderecoDepoisDoGesto`);
+   - "Sem atendente" em Todas virava a Fila (ordem por espera e linhas numeradas) — a aba passa a
+     mandar `ordem=atividade`, e a numeração depende só do `comando`;
+   - o botão "Na fila N" ignorava o atendente escolhido;
+   - o próprio id no endereço aparecia como "Atendente removido", e o observador com `me` ficava com
+     o seletor em branco — o próprio id é "Eu", e o desconhecido é "Outro atendente";
+   - os nomes saíam por uma chamada por pessoa e sem a reserva do e-mail — passam por
+     `nomesDeExibicao`, a régua do card;
+   - a falha da rota de opções ficava em "Carregando…" para sempre — o funil diz e oferece tentar de novo;
+   - um teste de ponta a ponta que já existia (`inbox-fila-e-termometro`) procurava o rótulo antigo do
+     seletor de número.
 
 ## Regras do repositório que valem para todas as tasks
 

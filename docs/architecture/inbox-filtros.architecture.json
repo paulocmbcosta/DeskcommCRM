@@ -73,7 +73,7 @@
       "lane": "regra",
       "col": 3,
       "type": "backend",
-      "label": "lib/inbox/filtros-na-url — ler (valor inválido é descartado) e escrever (preserva id e o que não é filtro)"
+      "label": "lib/inbox/filtros-na-url — ler (valor inválido é descartado) e escrever SÓ o que o gesto mudou, por cima do endereço de agora"
     },
     {
       "id": "tabela",
@@ -129,7 +129,7 @@
       "lane": "banco",
       "col": 1,
       "type": "table",
-      "label": "user_organizations (service role + organization_id da sessão) e nomes por nomesDosAtendentes"
+      "label": "user_organizations (service role + organization_id da sessão) e nomes por nomesDeExibicao — uma chamada, a régua do card"
     },
     {
       "id": "caixas",

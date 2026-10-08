@@ -98,7 +98,7 @@ da API, para existir um vocabulário só.
     aquele filtro, não um erro.
   - A escrita preserva parâmetros que não são de filtro (`id` e qualquer outro).
   - `de` e `ate` só valem juntos e com `de <= ate`; `periodo` vence quando os três vêm.
-- **`lib/inbox/filtros-da-aba.ts`** (novo, puro). A tabela acima em código: dada a aba
+- **`lib/inbox/filtros-de-tela.ts`** (novo, puro). A tabela acima em código: dada a aba
   e os filtros da tela, devolve os que **se aplicam**. É a única fonte para quatro
   perguntas que hoje têm respostas separadas:
   1. o que vai para a API;
@@ -121,6 +121,13 @@ da API, para existir um vocabulário só.
   endereço copiado.
 - **"Limpar filtros"** apaga todos os parâmetros de filtro e a busca; mantém `filter`
   e `id`.
+- **Só o que o gesto mudou vai para o endereço** (`enderecoDepoisDoGesto`). O Next
+  aplica o `replaceState` dentro de uma transição, então entre dois gestos rápidos a
+  tela ainda mostra o estado de antes do primeiro; regravar o endereço a partir do
+  estado inteiro do segundo desfaria o primeiro (o timer da busca apagava um filtro
+  recém-ligado e devolvia a pessoa à aba anterior). O gesto é comparado com o que a
+  tela mostrava e aplicado por cima do endereço de agora. Achado da revisão
+  independente, antes do merge.
 
 ## 5. Atendente
 
@@ -152,6 +159,16 @@ da API, para existir um vocabulário só.
   aparecem.
 - **Filtro não é barreira.** Um `agent` restrito que abrir um link com o id de um
   colega recebe o que a RLS deixar (em geral, nada), com o filtro citado no vazio.
+- **O link.** "Eu" grava `assigned_to=me`, que é relativo: o link de "Só as minhas"
+  mostra as de quem o abre. Um colega escolhido pelo nome grava o id dele, e o link
+  abre a mesma lista para qualquer um. Quem abre um link com o PRÓPRIO id vê "Eu" no
+  seletor e "Só as minhas" pressionado. Um id que a tela não sabe nomear aparece como
+  "Outro atendente" — e não "removido", porque a tela não sabe por que o nome não veio.
+- **"Sem atendente" em Todas é filtro, não a Fila.** A rota ainda lê
+  `assigned_to=unassigned`, sozinho, como o pedido antigo da Fila (ordem por espera,
+  mantida para quem consome a API). A aba Todas passa a mandar a ordem dita
+  (`ordem=atividade`), e a numeração "1º, 2º" da lista passa a depender só do
+  `comando`. Achado da revisão independente.
 
 ## 6. Caixa de entrada
 
@@ -206,7 +223,7 @@ da API, para existir um vocabulário só.
 
 | Rota | Parâmetros novos |
 |---|---|
-| `GET /api/v1/conversations` | `channel` |
+| `GET /api/v1/conversations` | `channel`; `ordem` passa a aceitar `atividade` |
 | `GET /api/v1/conversations/counts` | `assigned_to`, `channel`, `closed_from`, `closed_to`, `assunto_id` |
 | `GET /api/v1/atendimentos?status=closed` | `assigned_to`, `channel`, `closed_from`, `closed_to`, `assunto_id` |
 
@@ -251,9 +268,10 @@ Molde: `GET /api/v1/conversations/teams`.
   revogados (`ativo: false`). Lidos de `user_organizations` com o admin client,
   filtrado pela organização da sessão — o mesmo padrão e a mesma razão de
   `team/assignable` (a RLS mostra ao `agent` só o próprio vínculo). Nomes por
-  `nomesDosAtendentes` (`lib/users/nome-do-atendente.ts`): só `full_name`, uma
-  chamada por pessoa (medido no cabeçalho daquele arquivo: ~350 ms para 10). Sem
-  service role, a lista sai com `nome: null` e a tela mostra o rótulo genérico.
+  `nomesDeExibicao` (`lib/users/nome-do-atendente.ts`): o nome cadastrado ou, na
+  falta dele, o que vem antes do `@` — a mesma régua do card de Fechadas —, numa
+  chamada só. Sem service role, a lista sai com `nome: null` e a tela mostra o
+  rótulo genérico.
 - **Caixas:** `channel_sessions` não arquivadas cujo provider tem meio
   (`meioDoCanal(provider) != null`), com o client do usuário. A resposta leva `meio`,
   nunca o provider.
@@ -329,7 +347,7 @@ medir de novo.
 **Unidade**
 - `filtros-na-url`: ida e volta de cada filtro; valor inválido descartado; `id`
   preservado; `periodo` vence `de`/`ate`.
-- `filtros-da-aba`: a tabela da seção 4.1, aba por aba.
+- `filtros-de-tela`: a tabela da seção 4.1, aba por aba.
 - Resolução do período com relógio e fuso fixos, incluindo a virada do dia.
 - Handler de conversas: `channel` vira predicado.
 - Handler dos fechados: cada um dos cinco filtros vira predicado; `assigned_to=me`
@@ -380,8 +398,6 @@ prova real é na produção, depois de publicado.
   `useRouter().replace` para a troca de aba (`debounce-nao-volta-a-aba`,
   `InboxLayout.telefone`) precisam passar a observar o endereço. A sincronização real
   com o roteador só é provada no navegador.
-- **Custo dos nomes** (seção 8.4): uma chamada por membro. Se pesar, o conserto é
-  desnormalizar o nome, não paralelizar.
 - **Fuso** (D7): um observador em outro fuso vê "hoje" diferente do atendente.
 
 ## 15. Fora do escopo

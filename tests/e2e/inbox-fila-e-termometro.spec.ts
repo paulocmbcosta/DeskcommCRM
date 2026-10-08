@@ -232,7 +232,9 @@ test("Todas por chips, fila do time e termômetro de espera", async ({ browser }
 
     // ─── 6. O filtro de número distingue os dois "Totus" ────────────────────
     await page.getByTestId("inbox-abrir-filtros").click();
-    await page.getByRole("combobox", { name: "Filtrar por número de WhatsApp" }).click();
+    // O seletor de número virou "caixa de entrada" (o meio ou um número): os
+    // dois números do mesmo meio continuam listados, cada um com o seu.
+    await page.getByRole("combobox", { name: "Filtrar por caixa de entrada" }).click();
     await expect(page.getByRole("option", { name: "Totus · +551130250000" })).toBeVisible();
     await expect(page.getByRole("option", { name: "Totus · +551140630000" })).toBeVisible();
     await page.screenshot({ path: `${evidence}/04-filtro-de-numero.png` });

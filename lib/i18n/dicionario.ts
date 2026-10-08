@@ -598,7 +598,8 @@ export const DICIONARIO: Traducoes = {
   // ela o guardião do espanhol lê a chave como português sem tradução.
   "WhatsApp": { es: "WhatsApp" },
   "Sem atendente": { es: "Sin agente" },
-  "Atendente removido": { es: "Agente eliminado" },
+  "Outro atendente": { es: "Otro agente" },
+  "Não foi possível carregar": { es: "No se pudo cargar" },
   "saiu": { es: "salió" },
   "Filtrar por caixa de entrada": { es: "Filtrar por bandeja de entrada" },
   "Todas as caixas": { es: "Todas las bandejas" },
@@ -4848,7 +4849,6 @@ export const DICIONARIO: Traducoes = {
   "Erro ao carregar conversas.": { es: "Error al cargar las conversaciones." },
   "Tentar novamente": { es: "Intentar de nuevo" },
   "Buscar conversas": { es: "Buscar conversaciones" },
-  "Filtrar por número de WhatsApp": { es: "Filtrar por número de WhatsApp" },
   "Filtrar por tag": { es: "Filtrar por etiqueta" },
   Anonimizado: { es: "Anonimizado" },
   "Entrou por": { es: "Entró por" },

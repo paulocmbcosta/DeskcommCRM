@@ -69,9 +69,15 @@ const valor = (over: Partial<InboxFiltersValue> = {}): InboxFiltersValue => ({
 });
 
 /** `null` = as opções ainda não chegaram (um `undefined` aqui cairia no valor padrão). */
-function montar(over: Partial<InboxFiltersValue> = {}, opcoes: OpcoesDosFiltros | null = OPCOES) {
+function montar(
+  over: Partial<InboxFiltersValue> = {},
+  opcoes: OpcoesDosFiltros | null = OPCOES,
+  extra: { opcoesComErro?: boolean; onRecarregarOpcoes?: () => void } = {},
+) {
   const onChange = vi.fn();
-  render(<InboxFilters aberto value={valor(over)} onChange={onChange} opcoes={opcoes ?? undefined} />);
+  render(
+    <InboxFilters aberto value={valor(over)} onChange={onChange} opcoes={opcoes ?? undefined} {...extra} />,
+  );
   return onChange;
 }
 
@@ -154,11 +160,28 @@ describe("o seletor de ATENDENTE", () => {
     expect(screen.queryByText("Ana")).toBeNull();
   });
 
-  it("⭐ atendente escolhido que saiu da lista NÃO some: aparece como removido", () => {
+  it("⭐ atendente escolhido que não está na lista NÃO some: aparece como \"outro\"", () => {
     // Sem a linha órfã o seletor mostraria "Todos os atendentes" com o filtro
     // AINDA aplicado — a lista num subconjunto e nada dizendo por quê.
     montar({ assigned_to: "99999999-9999-4999-8999-999999999999" });
-    expect(screen.getByLabelText("Filtrar por atendente").textContent).toContain("Atendente removido");
+    const gatilho = screen.getByLabelText("Filtrar por atendente").textContent ?? "";
+    expect(gatilho).toContain("Outro atendente");
+    // "Removido" seria um palpite: a tela não sabe POR QUE o nome não veio. Quem
+    // não vê colegas recebe a lista vazia, e todo colega pareceria "removido".
+    expect(gatilho).not.toContain("removido");
+  });
+
+  it("⭐ o PRÓPRIO id é \"Eu\" — é o que chega quando a gestora escolhe a pessoa e manda o link para ela", () => {
+    montar({ assigned_to: "u-eu" });
+    const gatilho = screen.getByLabelText("Filtrar por atendente").textContent ?? "";
+    expect(gatilho).toContain("Eu");
+    expect(gatilho).not.toContain("Outro atendente");
+  });
+
+  it("observador que chega por um link com `me`: o seletor mostra \"Eu\", não fica em branco", () => {
+    authRef.current = { role: "viewer", userId: "u-eu" };
+    montar({ assigned_to: "me" });
+    expect(screen.getByLabelText("Filtrar por atendente").textContent).toContain("Eu");
   });
 
   it("enquanto as opções não chegam, o nome ainda não é conhecido — e \"removido\" seria mentira", () => {
@@ -345,5 +368,49 @@ describe("o número no funil", () => {
   it("CONTROLE: sem filtro, sem número", () => {
     montar();
     expect(selo()).toBe("");
+  });
+});
+
+describe("a leitura das opções falhou", () => {
+  it("⭐ a tela DIZ, e oferece tentar de novo — não fica em \"Carregando…\" para sempre", async () => {
+    const onRecarregarOpcoes = vi.fn();
+    montar({ tab: "closed", assigned_to: ANA }, null, { opcoesComErro: true, onRecarregarOpcoes });
+    expect(screen.getByTestId("opcoes-dos-filtros-falharam").textContent).toContain(
+      "Não foi possível carregar as opções dos filtros.",
+    );
+    const gatilho = screen.getByLabelText("Filtrar por atendente").textContent ?? "";
+    expect(gatilho).toContain("Não foi possível carregar");
+    expect(gatilho).not.toContain("Carregando…");
+    await userEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    expect(onRecarregarOpcoes).toHaveBeenCalledTimes(1);
+  });
+
+  it("o que não depende das opções continua funcionando: atendente e período", () => {
+    montar({ tab: "closed" }, null, { opcoesComErro: true });
+    expect(screen.getByLabelText("Filtrar por atendente")).toBeTruthy();
+    expect(screen.getByLabelText("Filtrar por período")).toBeTruthy();
+  });
+
+  it("CONTROLE: carregando (sem erro) não mostra o aviso de falha", () => {
+    montar({ tab: "closed" }, null);
+    expect(screen.queryByTestId("opcoes-dos-filtros-falharam")).toBeNull();
+  });
+
+  it("CONTROLE: com as opções em mãos, um erro de releitura não esconde o que já se tem", () => {
+    montar({ tab: "closed" }, OPCOES, { opcoesComErro: true });
+    expect(screen.queryByTestId("opcoes-dos-filtros-falharam")).toBeNull();
+    expect(screen.getByLabelText("Filtrar por assunto")).toBeTruthy();
+  });
+});
+
+describe("os campos de data mostram o que foi digitado na hora", () => {
+  it("⭐ o campo não espera o valor voltar de fora para mostrar a data nova", () => {
+    // O valor de verdade mora no endereço e volta por uma transição: um campo
+    // controlado direto por ele receberia o valor antigo logo depois da tecla.
+    montar({ tab: "closed", de: "2026-10-01", ate: "2026-10-03" });
+    const de = screen.getByLabelText("De") as HTMLInputElement;
+    fireEvent.change(de, { target: { value: "2026-10-02" } });
+    // `value` de fora ainda é 01/10 (o `onChange` é um espião): o campo já mostra 02/10.
+    expect(de.value).toBe("2026-10-02");
   });
 });

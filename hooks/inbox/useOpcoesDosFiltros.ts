@@ -9,9 +9,9 @@ import type { OpcoesDosFiltros } from "@/lib/inbox/opcoes-dos-filtros";
  * As opções dos seletores do funil do Inbox — atendentes, caixas de entrada e
  * assuntos (`GET /api/v1/conversations/filtros`).
  *
- * `habilitado` existe porque a leitura dos atendentes custa uma chamada por
- * pessoa no servidor (`lib/users/nome-do-atendente.ts`): só se paga quando o
- * funil abre, e não a cada visita ao Inbox.
+ * `habilitado` existe porque são quatro leituras no servidor (membros, nomes,
+ * caixas e assuntos) que só servem a quem abriu o funil: com ele fechado
+ * ninguém vê os seletores, e o Inbox é a tela que mais abre no produto.
  *
  * É dado de referência — quem entra e sai da organização, número novo, assunto
  * novo —, então fica cinco minutos sem reler. A organização entra na chave: quem

@@ -20,7 +20,9 @@
  * `organization_id` da sessão é a ÚNICA barreira (anti-pattern 10 do CLAUDE.md),
  * e `_handler.test.ts` mede que ela está em toda leitura.
  *
- * LGPD: do usuário sai só o nome (`nomesDosAtendentes`). Nunca e-mail.
+ * LGPD: do usuário sai só o nome de exibição (`nomesDeExibicao`: o nome
+ * cadastrado ou, na falta dele, o que vem antes do `@`) — o mesmo que o card
+ * de Fechadas já mostra. Nunca o e-mail inteiro.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -43,7 +45,7 @@ export interface PedidoDasOpcoes {
   /** A organização da SESSÃO — nunca de query nem de corpo. */
   orgId: string;
   role: Role;
-  /** Injetado para o teste; na rota é `nomesDosAtendentes`. */
+  /** Injetado para o teste; na rota é `nomesDeExibicao`. */
   nomes: (userIds: string[]) => Promise<Map<string, string | null>>;
 }
 

@@ -3951,6 +3951,8 @@ não). Migration 0297 (um índice em `atendimentos`). Desenho:
 | J47.1 | Em Fechadas, "Só as minhas" deixa só o que estava comigo no encerramento, e o selo da aba acompanha | e2e; unit |
 | J47.2 | Recarregar a página e abrir o endereço copiado em outra janela devolvem a mesma lista filtrada | e2e (a única prova de que o `history.replaceState` conversa com o roteador do Next de verdade) |
 | J47.3 | Quem coordena escolhe um atendente pelo nome, em Fechadas e em Todas | e2e (Fechadas); componente e unit (Todas) |
+| J47.12 | "Sem atendente" em Todas é filtro, não a Fila: a ordem é a de Todas e nenhuma linha ganha "1º" | e2e; unit (`sem-atendente-nao-e-a-fila`) |
+| J47.13 | A leitura das opções falhou: o funil diz e oferece tentar de novo | componente |
 | J47.4 | Período "Hoje" e "Ontem" recortam as Fechadas pelo dia do encerramento | e2e; unit |
 | J47.5 | Assunto recorta as Fechadas | e2e; unit |
 | J47.6 | Filtro sem resultado cita os filtros ligados; "Limpar filtros" devolve a lista e limpa o endereço | e2e; componente |
@@ -3968,9 +3970,12 @@ não). Migration 0297 (um índice em `atendimentos`). Desenho:
   componente; o e2e usa "Hoje" e "Ontem".
 - **Fuso.** "Hoje" é o dia de quem olha a tela. O CI roda em UTC; um observador em outro fuso que o
   atendente vê outro recorte, e isso não tem teste — é limite declarado no desenho (D7).
-- **O custo dos nomes.** A rota das opções faz uma chamada por atendente para ler o nome. Medido em
-  outro lugar (cabeçalho de `lib/users/nome-do-atendente.ts`: ~350 ms para 10), não aqui, e não com o
-  número de atendentes de uma operação grande.
+- **Gestos rápidos, no navegador.** O endereço chega à tela por uma transição do React; a regra que
+  impede um gesto de desfazer o anterior (`enderecoDepoisDoGesto`) é provada como função pura, com a
+  tela atrasada montada à mão. A corrida de verdade — digitar na busca e clicar num filtro em menos de
+  250 ms — não foi reproduzida num navegador.
+- **Digitar a data pelo teclado.** Os campos guardam o que foi digitado enquanto o valor não volta de
+  fora (teste de componente); não foi provado num navegador que o trecho em edição não é zerado.
 - **O plano das consultas pelo PostgREST.** O `EXPLAIN` do cabeçalho da 0297 foi sobre SQL escrito à
   mão, equivalente ao que o PostgREST monta; a consulta real não foi capturada.
 - **O limite de visibilidade.** Em instalação onde o atendente só vê as próprias conversas, um

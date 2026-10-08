@@ -293,6 +293,7 @@ test("filtros do Inbox: só as minhas, por atendente, por caixa, por período e 
     await expect(fechados(gestora)).toContainText("Cliente Dois Filtros");
 
     await escolher(gestora, "filtro-de-periodo", "Qualquer data");
+    await expect(fechados(gestora)).toHaveCount(2);
     await escolher(gestora, "filtro-de-atendente", "Todos os atendentes");
     await expect(fechados(gestora)).toHaveCount(3);
     await escolher(gestora, "filtro-de-assunto", /Sem internet/);
@@ -324,6 +325,15 @@ test("filtros do Inbox: só as minhas, por atendente, por caixa, por período e 
     expect(parametros(gestora).get("channel")).toBe("phone");
     await expect(gestora.getByRole("tab", { name: /Todas/i })).toContainText("1");
     await gestora.screenshot({ path: `${evidence}/07-so-telefone.png` });
+
+    // "Sem atendente" em Todas é um FILTRO, não a Fila: a conversa sem dono
+    // aparece sem a numeração "1º" que só a aba Fila tem.
+    await escolher(gestora, "filtro-de-atendente", "Sem atendente");
+    await expect(gestora.getByText("Cliente Cinco Filtros")).toBeVisible();
+    expect(parametros(gestora).get("assigned_to")).toBe("unassigned");
+    await expect(gestora.getByText("1º", { exact: true })).toHaveCount(0);
+    await escolher(gestora, "filtro-de-atendente", "Todos os atendentes");
+    await expect(gestora.getByText("Cliente Cinco Filtros")).toBeVisible();
 
     // E o contrário: o WhatsApp não traz a conversa de telefone.
     await escolher(gestora, "filtro-de-caixa", "WhatsApp");

@@ -23,8 +23,10 @@ por causa de filtro diz qual filtro está valendo — o time, inclusive, que ant
 não era citado.
 
 Os filtros passam a morar no endereço da página: recarregar não os perde, e dá
-para mandar a um colega o link de uma lista já filtrada. O texto da busca fica
-de fora do endereço, porque é nome ou telefone de cliente.
+para mandar a um colega o link de uma lista filtrada por atendente escolhido
+pelo nome, por caixa, período ou assunto. O link de "Só as minhas" mostra as de
+quem o abre, não as de quem mandou. O texto da busca fica de fora do endereço,
+porque é nome ou telefone de cliente.
 
 Quem só enxerga as próprias conversas não vê nomes de colegas no seletor de
 atendente. A aba Telefone continua com os filtros dela.

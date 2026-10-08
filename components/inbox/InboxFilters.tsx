@@ -86,17 +86,75 @@ interface Props {
    * Atendentes, caixas de entrada e assuntos — o que os seletores novos listam
    * (`GET /api/v1/conversations/filtros`). Vêm por prop, de quem é dono do
    * "aberto" (`useOpcoesDosFiltros`, no `InboxLayout`): a leitura só acontece com
-   * o funil aberto, porque a lista de atendentes custa uma chamada por pessoa
-   * no servidor.
+   * o funil aberto.
    *
    * `undefined` = ainda não chegou (ou o funil nunca abriu). Os seletores que
    * não dependem dela (atendente com "Eu" e "Sem atendente", período) funcionam
    * assim mesmo; os que dependem aparecem quando ela chega.
    */
   opcoes?: OpcoesDosFiltros;
+  /**
+   * A leitura das opções FALHOU. Sem isto, "ainda não chegou" e "não vai chegar"
+   * eram o mesmo estado: os seletores de caixa e de assunto não apareciam, e um
+   * filtro ligado ficava escrito "Carregando…" para sempre, sem nada dizendo o
+   * que houve nem como tentar de novo.
+   */
+  opcoesComErro?: boolean;
+  onRecarregarOpcoes?: () => void;
 }
 
-export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }: Props) {
+/**
+ * Um campo de data com o valor GUARDADO AQUI enquanto a pessoa digita.
+ *
+ * O valor de verdade mora no endereço da página, e o endereço chega de volta à
+ * tela por uma transição do React (é assim que o Next aplica o `replaceState`).
+ * Um `<input type="date">` controlado direto por ele receberia o valor ANTIGO
+ * logo depois de cada tecla, e o navegador zera o trecho da data que estava
+ * sendo digitado. O campo mostra o que foi digitado na hora; quando o valor de
+ * fora muda (outra ponta puxou esta, "Limpar filtros"), ele adota.
+ */
+function CampoDeData({
+  valor,
+  onMudar,
+  rotulo,
+  min,
+  max,
+}: {
+  valor: string;
+  onMudar: (data: string) => void;
+  rotulo: string;
+  min?: string;
+  max?: string;
+}) {
+  const [local, setLocal] = useState(valor);
+  useEffect(() => setLocal(valor), [valor]);
+  return (
+    <Input
+      type="date"
+      value={local}
+      min={min}
+      max={max}
+      onChange={(e) => {
+        setLocal(e.target.value);
+        // Campo apagado (ou data pela metade) não vira filtro: metade de um
+        // período não recorta nada.
+        if (e.target.value) onMudar(e.target.value);
+      }}
+      aria-label={rotulo}
+      className="h-8 min-w-0 flex-1 rounded-full border-transparent bg-surface-elevated px-3 text-xs shadow-none"
+    />
+  );
+}
+
+export function InboxFilters({
+  value,
+  onChange,
+  aberto,
+  onAbertoChange,
+  opcoes,
+  opcoesComErro = false,
+  onRecarregarOpcoes,
+}: Props) {
   const t = useT();
   const [abertoLocal, setAbertoLocal] = useState(false);
   const filtrosAbertos = aberto ?? abertoLocal;
@@ -201,10 +259,27 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }
   // Quem está olhando sai da lista de nomes quando há "Eu": seriam duas linhas
   // para o mesmo filtro.
   const colegas = (opcoes?.atendentes ?? []).filter((a) => !(podeSerEu && a.user_id === user?.id));
+  // O PRÓPRIO id é "eu": é o que chega quando a gestora escolhe a pessoa pelo
+  // nome e manda o link para ela. Sem isto ela veria "outro atendente" — o id
+  // dela não está em `colegas` — com a própria lista embaixo.
+  const souEu =
+    value.assigned_to === "me" || (podeSerEu && user?.id != null && value.assigned_to === user.id);
+  const valorDoAtendente = souEu ? "me" : (value.assigned_to ?? "all");
   const atendentePorId =
-    value.assigned_to != null && value.assigned_to !== "me" && value.assigned_to !== "unassigned";
+    value.assigned_to != null && !souEu && value.assigned_to !== "unassigned";
   const atendenteForaDaLista =
     atendentePorId && !colegas.some((a) => a.user_id === value.assigned_to);
+  /**
+   * O que escrever numa linha cujo nome a tela não sabe.
+   *
+   * Três estados, e confundi-los é mentir: ainda carregando; a leitura falhou;
+   * ou chegou e o valor não está nela. No último caso a tela NÃO sabe por quê —
+   * a pessoa pode ter saído, ser observadora, ou quem olha pode simplesmente
+   * não ver nomes de colegas (a rota devolve a lista vazia). Por isso "outro",
+   * e não "removido".
+   */
+  const semNome = (quandoChegou: string) =>
+    opcoes != null ? quandoChegou : opcoesComErro ? "Não foi possível carregar" : "Carregando…";
 
   // ─── PERÍODO e ASSUNTO: só a aba Fechadas ────────────────────────────────
   const mostrarSeletorDePeriodo = valeNaAba("periodo", value.tab);
@@ -229,11 +304,11 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }
   // Mexer numa ponta para além da outra PUXA a outra junto, em vez de produzir
   // um intervalo ao contrário (que não recortaria nada).
   const mudarDe = (de: string) => {
-    if (!de || !value.ate) return;
+    if (!value.ate) return;
     onChange({ ...value, de, ate: de > value.ate ? de : value.ate });
   };
   const mudarAte = (ate: string) => {
-    if (!ate || !value.de) return;
+    if (!value.de) return;
     onChange({ ...value, ate, de: ate < value.de ? ate : value.de });
   };
 
@@ -442,13 +517,30 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }
           </Select>
         )}
 
+        {/* A leitura das opções falhou: dizer, e oferecer tentar de novo. Os
+            seletores que não dependem dela (atendente, período) seguem abaixo. */}
+        {opcoesComErro && opcoes == null && (
+          <p className="flex items-center justify-between gap-2 px-1 text-xs text-text-muted" data-testid="opcoes-dos-filtros-falharam">
+            <span>{t("Não foi possível carregar as opções dos filtros.")}</span>
+            {onRecarregarOpcoes && (
+              <button
+                type="button"
+                className="shrink-0 font-medium text-accent underline-offset-2 hover:underline"
+                onClick={onRecarregarOpcoes}
+              >
+                {t("Tentar novamente")}
+              </button>
+            )}
+          </p>
+        )}
+
         {/* O ATENDENTE, em linha própria: responde "de quem é", como o time
             responde "de que setor é". Só em Todas e Fechadas — Minhas já é "eu",
             e Fila e Automático não têm atendente. Em Fechadas ele é quem estava
             com a conversa NO ENCERRAMENTO. */}
         {mostrarSeletorDeAtendente && (
           <Select
-            value={value.assigned_to ?? "all"}
+            value={valorDoAtendente}
             onValueChange={(v) => onChange({ ...value, assigned_to: v === "all" ? undefined : v })}
           >
             <SelectTrigger
@@ -460,16 +552,17 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t("Todos os atendentes")}</SelectItem>
-              {podeSerEu && <SelectItem value="me">{t("Eu")}</SelectItem>}
+              {/* "Eu" também para o observador que chegou por um link com
+                  `assigned_to=me`: sem a linha, o filtro valeria com o seletor em
+                  branco. (Ele não atende, então a lista dele vem vazia — e o
+                  vazio cita "Atendente", com o "Limpar filtros" ao lado.) */}
+              {(podeSerEu || value.assigned_to === "me") && <SelectItem value="me">{t("Eu")}</SelectItem>}
               <SelectItem value="unassigned">{t("Sem atendente")}</SelectItem>
               {/* A órfã entra na lista pelo mesmo motivo do time, da caixa e da
                   etiqueta: sem ela o seletor mostraria o texto de "todos" com um
-                  filtro AINDA aplicado. Enquanto as opções carregam, o nome
-                  ainda não é conhecido — e "removido" seria mentira. */}
+                  filtro AINDA aplicado. */}
               {atendenteForaDaLista && value.assigned_to != null && (
-                <SelectItem value={value.assigned_to}>
-                  {opcoes == null ? t("Carregando…") : t("Atendente removido")}
-                </SelectItem>
+                <SelectItem value={value.assigned_to}>{t(semNome("Outro atendente"))}</SelectItem>
               )}
               {colegas.map((a) => (
                 <SelectItem key={a.user_id} value={a.user_id}>
@@ -497,7 +590,7 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }
                   <SelectItem value="all">{t("Todas as caixas")}</SelectItem>
                   {value.channel_session_id != null && (numeroForaDaLista || caixas == null) && (
                     <SelectItem value={`${CAIXA_NUMERO}${value.channel_session_id}`}>
-                      {caixas == null ? t("Carregando…") : t("Número removido")}
+                      {t(semNome("Número removido"))}
                     </SelectItem>
                   )}
                   {numeroSozinhoNoMeio && (
@@ -602,7 +695,7 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }
                   <SelectItem value="all">{t("Todos os assuntos")}</SelectItem>
                   {value.assunto_id != null && (assuntoForaDaLista || assuntos == null) && (
                     <SelectItem value={value.assunto_id}>
-                      {assuntos == null ? t("Carregando…") : t("Assunto removido")}
+                      {t(semNome("Assunto removido"))}
                     </SelectItem>
                   )}
                   {/* Por time: o mesmo nome de assunto pode existir em dois setores. */}
@@ -629,23 +722,9 @@ export function InboxFilters({ value, onChange, aberto, onAbertoChange, opcoes }
         {/* As duas datas, só com "Escolher datas…". Inclusivas nas duas pontas. */}
         {mostrarSeletorDePeriodo && porDatas && (
           <div className="flex items-center gap-2" data-testid="filtro-de-datas">
-            <Input
-              type="date"
-              value={value.de ?? ""}
-              max={value.ate}
-              onChange={(e) => mudarDe(e.target.value)}
-              aria-label={t("De")}
-              className="h-8 min-w-0 flex-1 rounded-full border-transparent bg-surface-elevated px-3 text-xs shadow-none"
-            />
+            <CampoDeData valor={value.de ?? ""} max={value.ate} onMudar={mudarDe} rotulo={t("De")} />
             <span className="text-xs text-text-muted">{t("até")}</span>
-            <Input
-              type="date"
-              value={value.ate ?? ""}
-              min={value.de}
-              onChange={(e) => mudarAte(e.target.value)}
-              aria-label={t("Até")}
-              className="h-8 min-w-0 flex-1 rounded-full border-transparent bg-surface-elevated px-3 text-xs shadow-none"
-            />
+            <CampoDeData valor={value.ate ?? ""} min={value.de} onMudar={mudarAte} rotulo={t("Até")} />
           </div>
         )}
         </div>

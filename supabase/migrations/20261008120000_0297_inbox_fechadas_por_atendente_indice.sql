@@ -21,10 +21,11 @@
 -- contagem exata e é relido a cada 30 s por todo Inbox aberto, custa sempre:
 -- lê os encerrados da organização inteira para contar os de uma pessoa.
 --
--- Parcial em `closed_at is not null` porque só o encerrado tem dono carimbado
--- (o atendimento em andamento tem a coluna nula), e é só ele que a aba lê. A
--- tabela é fria — uma escrita ao abrir, uma ao encerrar —, então manter o
--- índice não pesa em caminho quente nenhum.
+-- Parcial em `closed_at is not null` porque o dono é carimbado NO ENCERRAMENTO
+-- e a aba só lê atendimento encerrado: o que está em andamento não entra na
+-- consulta, e não precisa ocupar o índice. A tabela é fria — uma escrita ao
+-- abrir, uma ao encerrar —, então manter o índice não pesa em caminho quente
+-- nenhum.
 --
 -- ─── Medido ────────────────────────────────────────────────────────────────
 --

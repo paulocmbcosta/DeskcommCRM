@@ -13,7 +13,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { nomesDosAtendentes } from "@/lib/users/nome-do-atendente";
+import { nomesDeExibicao } from "@/lib/users/nome-do-atendente";
 
 import { carregarOpcoesDosFiltros } from "./_handler";
 
@@ -32,7 +32,11 @@ export async function GET(): Promise<Response> {
       // Fonte confiável: a organização do cookie validado, nunca da query.
       orgId: authz.org.orgId,
       role: authz.org.role,
-      nomes: nomesDosAtendentes,
+      // A MESMA régua do card de Fechadas (`fn_nome_do_usuario`): o nome
+      // cadastrado e, na falta dele, o que vem antes do `@`. E numa chamada só
+      // (`fn_nomes_dos_usuarios`), em vez de uma por pessoa — a lista inclui
+      // quem saiu, e cresce com a operação.
+      nomes: nomesDeExibicao,
     });
     return ok(opcoes, { requestId });
   } catch {
