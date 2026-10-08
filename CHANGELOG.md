@@ -8,6 +8,28 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.58.0] — 2026-10-08
+
+### Adicionado
+
+- **Inbox — a transcrição do áudio do cliente aparece junto do player** O sistema já transcrevia todo áudio que o cliente manda, para o agente de IA entender a mensagem —
+  mas o texto não aparecia na conversa, e o atendente tinha de ouvir. Agora o balão do áudio mostra,
+  logo abaixo do player, o começo do que o cliente falou, com o rótulo "Transcrição automática".
+  Quando o áudio é mais longo, "Ler mais" abre o texto inteiro ali mesmo; um áudio muito comprido
+  rola por dentro da caixa, sem empurrar a conversa.
+
+  O áudio que acabou de chegar mostra "Transcrevendo…" por alguns segundos, e o texto entra sozinho,
+  sem recarregar a página. Se a transcrição não pôde ser feita, o balão diz "Transcrição
+  indisponível".
+
+  O áudio que o atendente grava no CRM não é transcrito e continua só com o player. Os áudios antigos
+  que já tinham sido transcritos ganham o texto na hora.
+
+  A transcrição depende de uma chave da OpenAI cadastrada (a mesma que já era usada para o agente
+  ouvir os áudios). Sem ela, nada muda na tela além do aviso "Transcrição indisponível".
+
+  Nada a fazer na atualização.
+
 ## [1.57.2] — 2026-10-07
 
 ### Corrigido
@@ -6140,7 +6162,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.2...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.58.0...HEAD
+[1.58.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.2...v1.58.0
 [1.57.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.1...v1.57.2
 [1.57.1]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.0...v1.57.1
 [1.57.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.56.0...v1.57.0
