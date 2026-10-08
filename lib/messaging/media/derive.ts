@@ -3,9 +3,8 @@
  * (transcrição, visão, extração de pdf) são injetadas — o worker as monta com as
  * credenciais BYOK da org. O resultado é texto que qualquer modelo de chat lê.
  */
+import { MAX_DERIVED_CHARS } from "@/lib/messaging/media/derivable";
 import type { TranscriptionProvider } from "@/lib/messaging/media/transcription";
-
-const MAX_DERIVED_CHARS = 8000;
 
 export interface DeriveDeps {
   transcriber: TranscriptionProvider;

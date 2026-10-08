@@ -696,6 +696,7 @@ jobs:
         equipe-cadastro-com-senha.spec.ts
         canal-oficial-varios-numeros.spec.ts
         inbox-checks-reacoes-e-nome.spec.ts
+        inbox-transcricao-do-audio.spec.ts
         devolver-ao-proprio-time.spec.ts
         telefonia-ura-e-falas.spec.ts
         telefonia-gravacao.spec.ts
@@ -1032,6 +1033,30 @@ jobs:
         with:
           name: evidencia-telefonia-fila
           path: .superpowers/evidence/telefonia-fila/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # A transcrição do áudio no balão do Inbox: as imagens (trecho, caixa
+      # aberta, chegada sem recarregar, celular) e o `medidas.json` sobem SEMPRE,
+      # pelo mesmo motivo de cima — é mudança de tela, e no run verde o
+      # relatório do Playwright não sobe.
+      - uses: actions/upload-artifact@v7
+        if: always() && matrix.parte == 3
+        with:
+          name: evidencia-inbox-transcricao-do-audio
+          path: .superpowers/evidence/inbox-transcricao-do-audio/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Os filtros do Inbox (atendente, caixa de entrada, período, assunto): as
+      # imagens de cada passo sobem SEMPRE, pelo mesmo motivo das de cima — o
+      # funil ganhou seletores e a aba Fechadas ganhou um botão, e esta é a prova
+      # em tela da entrega (o dono não roda o Playwright na máquina dele).
+      - uses: actions/upload-artifact@v7
+        if: always() && matrix.parte == 3
+        with:
+          name: evidencia-inbox-filtros
+          path: .superpowers/evidence/inbox-filtros/
           if-no-files-found: ignore
           retention-days: 7
 
