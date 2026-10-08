@@ -35,6 +35,9 @@ const conversas: Linha[] = [
   { id: "c3", status: "open", channel: "phone", assigned_to_user_id: null, comando_da_conversa: "aguardando", team_id: null },
   { id: "c4", status: "open", channel: "whatsapp", assigned_to_user_id: null, comando_da_conversa: "automatico", team_id: null },
   { id: "c5", status: "open", channel: "site_chat", assigned_to_user_id: null, comando_da_conversa: "aguardando", team_id: null },
+  // NA FILA DO TIME: foi para o Suporte, ninguém pegou e o automático saiu do
+  // comando (`bot_silenced_until` no futuro) — é o que o botão "Na fila N" conta.
+  { id: "c6", status: "open", channel: "whatsapp", assigned_to_user_id: null, comando_da_conversa: "aguardando", team_id: TIME, bot_silenced_until: "9999-12-31T00:00:00.000Z" },
 ].map((l) => ({ ...l, organization_id: org }));
 
 // As colunas da conversa chegam com o prefixo do embed, como a consulta as nomeia.
@@ -114,7 +117,7 @@ async function contar(qs = "") {
   return { status: resposta.status, data: (await resposta.json()).data };
 }
 
-const SEM_FILTRO = { fila: 2, automatico: 1, mine: 1, all: 5, closed: 4 };
+const SEM_FILTRO = { fila: 3, automatico: 1, mine: 1, all: 6, closed: 4 };
 
 function selos(data: Record<string, number>) {
   return { fila: data.fila, automatico: data.automatico, mine: data.mine, all: data.all, closed: data.closed };
@@ -132,6 +135,14 @@ describe("o MEIO vale em todas as abas", () => {
   it("⭐ `channel=phone` recorta os cinco selos", async () => {
     const { data } = await contar("?channel=phone");
     expect(selos(data)).toEqual({ fila: 1, automatico: 0, mine: 0, all: 2, closed: 1 });
+    // CONTROLE do recorte: o WhatsApp fica com o resto.
+    expect(selos((await contar("?channel=whatsapp")).data)).toEqual({
+      fila: 1,
+      automatico: 1,
+      mine: 1,
+      all: 3,
+      closed: 2,
+    });
   });
 });
 
@@ -149,7 +160,7 @@ describe("o ATENDENTE vale em Todas e em Fechadas — e em mais nenhuma", () => 
 
   it("`unassigned`: o que não tem dono", async () => {
     const { data } = await contar("?assigned_to=unassigned");
-    expect([data.all, data.closed]).toEqual([3, 1]);
+    expect([data.all, data.closed]).toEqual([4, 1]);
   });
 
   it("⛔ Fila, Automático e Minhas NÃO mudam: as listas delas ignoram o filtro", async () => {
@@ -165,9 +176,23 @@ describe("o ATENDENTE vale em Todas e em Fechadas — e em mais nenhuma", () => 
 
   it("os chips de time são de Todas: acompanham o atendente", async () => {
     const semFiltro = (await contar("?by_team=true")).data.by_team;
-    expect(semFiltro).toContainEqual({ team_id: TIME, name: "Suporte", count: 2, na_fila: 0 });
+    expect(semFiltro).toContainEqual({ team_id: TIME, name: "Suporte", count: 3, na_fila: 1 });
     const { data } = await contar("?by_team=true&assigned_to=me");
     expect(data.by_team).toContainEqual({ team_id: TIME, name: "Suporte", count: 1, na_fila: 0 });
+  });
+
+  it("⭐ o botão \"Na fila N\" acompanha o atendente: na fila é conversa SEM dono", async () => {
+    // Achado da revisão: com um atendente escolhido o botão seguia dizendo
+    // "Na fila 1", e o clique abria uma lista vazia — fila de time não tem dono.
+    const naFila = async (qs: string) =>
+      ((await contar(`?by_team=true${qs}`)).data.by_team as Array<{ team_id: string | null; na_fila: number }>).find(
+        (g) => g.team_id === TIME,
+      )?.na_fila;
+    expect(await naFila("")).toBe(1);
+    expect(await naFila("&assigned_to=me")).toBe(0);
+    expect(await naFila(`&assigned_to=${BRUNO}`)).toBe(0);
+    // "Sem atendente" é justamente quem está na fila: o número não muda.
+    expect(await naFila("&assigned_to=unassigned")).toBe(1);
   });
 });
 

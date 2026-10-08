@@ -356,7 +356,14 @@ export async function GET(req: NextRequest): Promise<Response> {
       .is("team_id", null))] : []),
     // Quantos de cada time estão NA FILA (ninguém pegou) — o selo vermelho do
     // chip. Mesma régua da lista (`_na-fila.ts`).
-    ...times.map((time) => aplicarNaFilaDoTime(countExact(false).eq("team_id", time.id), agora)),
+    //
+    // Acompanha o ATENDENTE e o "Insatisfeitos", como a lista de Todas que o
+    // botão "Na fila N" abre: na fila é conversa SEM dono, então com um
+    // atendente escolhido o número é zero — e a lista, vazia. Sem isto o botão
+    // seguia dizendo "Na fila 5" e o clique não mostrava nenhuma.
+    ...times.map((time) =>
+      doAtendente(insatisfeitos(aplicarNaFilaDoTime(countExact(false).eq("team_id", time.id), agora))),
+    ),
   ]);
 
   const firstErr =
