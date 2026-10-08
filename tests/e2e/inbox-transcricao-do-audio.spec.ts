@@ -18,7 +18,10 @@
  *   3. a transcrição de um áudio que acabou de chegar entra SOZINHA, sem F5 —
  *      o worker grava segundos depois, e quem leva a mudança à tela é o
  *      Realtime (ou, com ele mudo, o refetch de segurança de 45 s);
- *   4. o áudio gravado pelo atendente continua só com o player.
+ *   4. quem está no FIM da conversa vê a transcrição chegar inteira (o balão
+ *      cresce e a conversa acompanha), e quem subiu para ler o histórico não é
+ *      arrancado de onde estava;
+ *   5. o áudio gravado pelo atendente continua só com o player.
  *
  * ## O que este spec NÃO afirma
  *
@@ -83,7 +86,19 @@ const LONGA =
   "diferente do combinado, depois eu queria conversar sobre isso tambem, mas o mais urgente " +
   `agora e a internet voltar. ${FIM}`;
 const CURTA = "Oi, pode me ligar quando puder?";
-const CHEGANDO = "Acabei de mandar o comprovante, consegue conferir?";
+/**
+ * Longo o bastante para ganhar "Ler mais" (passa da folga do trecho): é a caixa
+ * ALTA — rótulo, quatro ou cinco linhas e botão — que estoura os 120 px de
+ * tolerância da rolagem. Um texto de uma linha deixaria o passo 3 verde mesmo
+ * com a conversa parada no lugar.
+ */
+const CHEGANDO =
+  "Acabei de mandar o comprovante do pagamento, consegue conferir para mim? Foi feito agora " +
+  "ha pouco pelo aplicativo do banco, no valor da fatura deste mes, e eu queria ter certeza " +
+  "de que caiu antes de vencer, porque da ultima vez demorou tres dias para aparecer ai.";
+const NAO_PUXA = "So mais um detalhe: o portao fica na rua de tras.";
+/** Mensagens de texto antigas: fazem a conversa passar da altura da tela. */
+const ANTIGAS = 16;
 
 /**
  * Um segundo de tom em MP3 — o mesmo arquivo de `telefonia-gravacao.spec.ts`,
@@ -227,6 +242,21 @@ test.describe("Inbox — a transcrição do áudio aparece junto do player", () 
     // que é de quem acabou de chegar — esse caso é o do áudio inserido no teste.
     const t0 = Date.now() - 60 * 60_000;
     const em = (minutos: number) => new Date(t0 + minutos * 60_000).toISOString();
+    for (let i = 0; i < ANTIGAS; i++) {
+      const { error } = await admin.from("messages").insert({
+        organization_id: creds.org_id,
+        conversation_id: conversaId,
+        channel_session_id: sessaoId,
+        contact_id: contatoId,
+        type: "text",
+        direction: i % 2 === 0 ? "inbound" : "outbound",
+        status: i % 2 === 0 ? "delivered" : "sent",
+        sent_via: "external_device",
+        body: `Mensagem antiga ${i + 1}`,
+        sent_at: em(i - ANTIGAS),
+      });
+      if (error) throw new Error(`messages (antiga ${i + 1}): ${error.message}`);
+    }
     await inserirAudio({ direction: "inbound", sent_at: em(0), texto: LONGA, estado: "ready" });
     await inserirAudio({ direction: "inbound", sent_at: em(1), texto: CURTA, estado: "ready" });
     // O áudio do ATENDENTE, gravado no CRM: o sistema não transcreve o que sai.
@@ -250,6 +280,10 @@ test.describe("Inbox — a transcrição do áudio aparece junto do player", () 
     await page.goto(`/app/inbox/${conversaId}`);
 
     const conversa = page.getByTestId("chat-thread");
+    // A área que rola: o filho direto do thread (`ChatThread`, `overflow-y-auto`).
+    const rolagem = conversa.locator("xpath=./div[contains(@class,'overflow-y-auto')]");
+    const distanciaDoFim = () =>
+      rolagem.evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
     const caixas = conversa.getByTestId("transcricao-do-audio");
     const caixaLonga = caixas.filter({ hasText: COMECO });
     const caixaCurta = caixas.filter({ hasText: CURTA });
@@ -299,6 +333,13 @@ test.describe("Inbox — a transcrição do áudio aparece junto do player", () 
         };
       });
 
+    // A conversa é MAIOR que a tela: sem isto, "acompanhou a chegada" e "não foi
+    // arrancado do histórico", lá embaixo, passariam sem rolagem nenhuma.
+    await expect
+      .poll(() => rolagem.evaluate((el) => el.scrollHeight - el.clientHeight), { timeout: 20_000 })
+      .toBeGreaterThan(300);
+
+    await caixaLonga.scrollIntoViewIfNeeded();
     const fechada = await medir();
     expect(fechada.transbordaParaOLado, "o texto não pode vazar para o lado do balão").toBe(false);
     expect(fechada.caixa!.largura, "a caixa cabe dentro do balão").toBeLessThanOrEqual(fechada.balao!.largura);
@@ -323,36 +364,68 @@ test.describe("Inbox — a transcrição do áudio aparece junto do player", () 
     expect(aberta.alturaDoConteudo, "o texto inteiro é maior que a caixa — ela rola por dentro").toBeGreaterThan(
       aberta.alturaVisivel,
     );
+    await caixaLonga.scrollIntoViewIfNeeded();
     await captura(page, "2-aberta");
 
     await lerMenos.click();
     await expect(caixaLonga).not.toContainText(FIM);
 
-    // ── 3. O ÁUDIO QUE ACABA DE CHEGAR ─────────────────────────────────────
+    // ── 3. O ÁUDIO QUE ACABA DE CHEGAR, para quem está no FIM da conversa ──
     //
     // Inserido AGORA, sem derivado — o estado em que a ingestão deixa a linha
     // até o worker terminar. A tela diz que está transcrevendo.
+    await rolagem.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+    await expect.poll(distanciaDoFim).toBeLessThanOrEqual(2);
+
     const chegando = await inserirAudio({ direction: "inbound", sent_at: new Date().toISOString() });
     const transcrevendo = conversa.locator('[data-testid="transcricao-do-audio"][data-estado="transcrevendo"]');
     await expect(transcrevendo, "o áudio novo devia dizer 'Transcrevendo…'").toBeVisible({ timeout: 90_000 });
     await expect(transcrevendo).toHaveText("Transcrevendo…");
+    await expect(transcrevendo).toBeInViewport();
     await captura(page, "3-transcrevendo");
 
     // O worker termina: o MESMO update que `media-derive-worker.ts` faz. Daqui
     // em diante o teste não navega nem recarrega — o texto tem de entrar só.
-    const { error: erroDoUpdate } = await admin
-      .from("messages")
-      .update({ media_derived_text: CHEGANDO, media_derived_status: "ready" })
-      .eq("id", chegando)
-      .eq("organization_id", creds.org_id);
-    if (erroDoUpdate) throw new Error(`update da transcrição: ${erroDoUpdate.message}`);
+    const gravarTranscricao = async (id: string, texto: string) => {
+      const { error } = await admin
+        .from("messages")
+        .update({ media_derived_text: texto, media_derived_status: "ready" })
+        .eq("id", id)
+        .eq("organization_id", creds.org_id);
+      if (error) throw new Error(`update da transcrição: ${error.message}`);
+    };
+    await gravarTranscricao(chegando, CHEGANDO);
 
-    await expect(
-      caixas.filter({ hasText: CHEGANDO }),
-      "a transcrição pronta devia entrar na tela sem recarregar",
-    ).toBeVisible({ timeout: 90_000 });
+    const caixaQueChegou = caixas.filter({ hasText: CHEGANDO.slice(0, 40) });
+    await expect(caixaQueChegou, "a transcrição pronta devia entrar na tela sem recarregar").toBeVisible({
+      timeout: 90_000,
+    });
     await expect(transcrevendo).toHaveCount(0);
+    // O balão CRESCEU — rótulo, trecho e "Ler mais" — e a conversa acompanhou:
+    // a caixa inteira está à vista e a rolagem voltou ao fim. Sem acompanhar, o
+    // texto nasce abaixo da dobra para quem estava olhando o áudio chegar.
+    await expect(caixaQueChegou.getByRole("button", { name: "Ler mais" })).toBeVisible();
+    await expect(caixaQueChegou, "a caixa que chegou devia estar inteira na tela").toBeInViewport({ ratio: 0.95 });
+    await expect.poll(distanciaDoFim, { timeout: 10_000 }).toBeLessThanOrEqual(4);
     await captura(page, "4-chegou-sem-recarregar");
+
+    // ── 3b. …e para quem SUBIU para ler o histórico ────────────────────────
+    //
+    // O controle do passo acima: a conversa só acompanha quem estava no fim.
+    await rolagem.evaluate((el) => el.scrollTo(0, 0));
+    await expect.poll(() => rolagem.evaluate((el) => el.scrollTop)).toBe(0);
+
+    const segundo = await inserirAudio({ direction: "inbound", sent_at: new Date().toISOString() });
+    await expect(transcrevendo, "o segundo áudio devia entrar na conversa").toHaveCount(1, { timeout: 90_000 });
+    await gravarTranscricao(segundo, NAO_PUXA);
+    await expect(caixas.filter({ hasText: NAO_PUXA })).toHaveCount(1, { timeout: 90_000 });
+    // Tempo para uma rolagem suave que NÃO deve acontecer terminar de acontecer.
+    await page.waitForTimeout(1_500);
+    expect(
+      await rolagem.evaluate((el) => el.scrollTop),
+      "quem lê o histórico não pode ser levado ao fim pela chegada de uma transcrição",
+    ).toBeLessThanOrEqual(2);
+    await expect(conversa.locator("audio")).toHaveCount(5);
 
     // ── 4. NO CELULAR ──────────────────────────────────────────────────────
     await page.setViewportSize({ width: 390, height: 844 });

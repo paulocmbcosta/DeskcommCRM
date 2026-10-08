@@ -3,7 +3,7 @@
 import { useLocaleDeData } from "@/hooks/i18n/useLocaleDeData";
 
 import type { Locale } from "date-fns";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useT } from "@/hooks/i18n/useT";
 import { format, isToday, isYesterday } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -66,6 +66,26 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const paginasVistas = useRef(0);
+  // O leitor ESTAVA no fim da conversa? Anotado a cada rolagem (e depois de um
+  // clique, que é como um balão abre e fecha), e lido pelo efeito que acompanha
+  // o que chega.
+  //
+  // Tem de ser "estava", e não "está": o efeito roda DEPOIS de o conteúdo novo
+  // entrar, e medir ali conta o próprio crescimento como distância. A guarda era
+  // `distância > 120 px → o leitor está no histórico`, e funcionava enquanto um
+  // balão novo tinha menos que isso. O balão de áudio com "Transcrevendo…" já
+  // encosta nos 120; a transcrição que chega (rótulo, quatro linhas, botão)
+  // passa — e nasceria abaixo da dobra justamente para quem estava no fim.
+  const estavaNoFim = useRef(true);
+  const aoRolar = useCallback(() => {
+    const sc = scrollerRef.current;
+    if (sc) estavaNoFim.current = sc.scrollHeight - sc.scrollTop - sc.clientHeight <= 120;
+  }, []);
+  // Um clique pode mudar a altura sem rolar nada ("Ler mais" numa transcrição):
+  // a anotação é refeita no quadro seguinte, já com o layout novo.
+  const aoClicar = useCallback(() => {
+    requestAnimationFrame(aoRolar);
+  }, [aoRolar]);
   const activeOrg = useActiveOrg();
   const currentUser = useUser();
   const deleteNote = useDeleteNote(conversationId ?? "");
@@ -104,9 +124,8 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
   const paginas = q.data?.pages.length ?? 0;
 
   // Quantos áudios já têm transcrição. Quando ela chega (segundos depois do
-  // áudio), o balão CRESCE sem que a lista ganhe item — e, no fim da conversa,
-  // o texto nasceria abaixo da dobra. Entra nas dependências do efeito de
-  // rolagem, que já sabe não arrancar do lugar quem está lendo o histórico.
+  // áudio), o balão CRESCE sem que a lista ganhe item. Entra nas dependências
+  // do efeito de rolagem para que a conversa acompanhe quem estava no fim.
   const transcricoesProntas = useMemo(
     () => messages.filter((m) => m.type === "audio" && m.media_derived_status === "ready").length,
     [messages],
@@ -116,6 +135,7 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
   // próxima conversa seria confundida com um "carregar mais antigas".
   useEffect(() => {
     paginasVistas.current = 0;
+    estavaNoFim.current = true;
   }, [conversationId, atendimentoId]);
 
   // Rola ao fim na primeira carga e quando chega mensagem/nota nova — mas NÃO
@@ -133,19 +153,21 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
     const primeiraCarga = paginasVistas.current === 0;
     const carregouAntigas = !primeiraCarga && paginas > paginasVistas.current;
     paginasVistas.current = paginas;
-    if (carregouAntigas) return;
+    if (carregouAntigas) {
+      // As antigas entram ACIMA sem que a rolagem se mexa: sem reler aqui, a
+      // anotação continuaria dizendo "no fim" para quem agora está no topo.
+      aoRolar();
+      return;
+    }
 
     // A guarda de distância NÃO vale na primeira carga: ali o scroller ainda
     // está no topo por definição, e tratá-lo como "usuário lendo o histórico"
     // abriria a conversa na mensagem mais antiga da página em vez da mais nova
     // (medido: a thread abria em msg#15 em vez de msg#64).
-    if (!primeiraCarga) {
-      const sc = scrollerRef.current;
-      if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight > 120) return;
-    }
+    if (!primeiraCarga && !estavaNoFim.current) return;
 
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [items.length, conversationId, paginas, transcricoesProntas]);
+  }, [items.length, conversationId, paginas, transcricoesProntas, aoRolar]);
 
   /**
    * O ESTADO DO CANAL DESTE THREAD, PUBLICADO SEMPRE — inclusive quando não há
@@ -231,7 +253,7 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
 
   return (
     <div {...sinalDoCanal} className="flex h-full flex-col">
-      <div ref={scrollerRef} className="flex-1 overflow-y-auto py-2">
+      <div ref={scrollerRef} onScroll={aoRolar} onClick={aoClicar} className="flex-1 overflow-y-auto py-2">
         {q.hasNextPage && (
           <div className="flex justify-center py-2">
             <Button

@@ -37,12 +37,15 @@ export function TranscricaoDoAudio({ message, isOutbound }: Props) {
 
   // "Transcrevendo…" tem prazo. Sem este relógio a frase ficaria na tela até a
   // próxima renderização por outro motivo — prometendo um texto que não veio.
+  // `agora` está nas dependências para o relógio se REARMAR: se ele disparar e o
+  // prazo ainda não tiver vencido (o relógio do sistema andou para trás), sem
+  // rearmar a frase ficaria presa.
   useEffect(() => {
     if (!transcrevendo) return;
     const resta = JANELA_DA_TRANSCRICAO_MS - (Date.now() - Date.parse(message.created_at));
     const id = window.setTimeout(() => setAgora(Date.now()), Math.max(resta, 0) + 100);
     return () => window.clearTimeout(id);
-  }, [transcrevendo, message.created_at]);
+  }, [transcrevendo, message.created_at, agora]);
 
   // Abriu: a caixa cresce para baixo e, no último balão da conversa, o fim dela
   // ficaria fora da tela. `nearest` não mexe em nada quando ela já está inteira
@@ -97,6 +100,9 @@ export function TranscricaoDoAudio({ message, isOutbound }: Props) {
       </div>
       <p
         id={idDoTexto}
+        // Aberta, a caixa pode rolar por dentro — e quem navega pelo teclado só
+        // rola o que consegue focar.
+        tabIndex={aberta ? 0 : undefined}
         className={cn(
           "text-[13px] leading-snug break-words whitespace-pre-wrap",
           // Um áudio de três minutos passa de 3.000 caracteres: aberta, a caixa
@@ -104,15 +110,22 @@ export function TranscricaoDoAudio({ message, isOutbound }: Props) {
           aberta && "max-h-64 overflow-y-auto pr-1",
         )}
       >
-        {aberta || !cortou ? estado.texto : trecho}
+        {aberta ? estado.texto : trecho}
       </p>
+      {estado.incompleta && (aberta || !cortou) && (
+        // O texto bateu no teto do que o sistema guarda: o áudio continua, e
+        // quem lê precisa saber que o fim não está aqui.
+        <p data-testid="transcricao-incompleta" className="mt-1 text-[11px] italic opacity-70">
+          {t("O áudio continua além deste ponto: a transcrição tem um limite de tamanho.")}
+        </p>
+      )}
       {cortou && (
         <button
           type="button"
           aria-expanded={aberta}
           aria-controls={idDoTexto}
           onClick={() => setAberta((v) => !v)}
-          className="mt-1 rounded-sm text-[11px] font-semibold underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+          className="mt-1 rounded-sm text-[11px] font-semibold underline-offset-2 hover:underline focus-visible:underline"
         >
           {aberta ? t("Ler menos") : t("Ler mais")}
         </button>

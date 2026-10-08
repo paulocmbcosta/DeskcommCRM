@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MessageBubble } from "@/components/inbox/MessageBubble";
 import { JANELA_DA_TRANSCRICAO_MS } from "@/lib/inbox/transcricao-do-audio";
+import { MAX_DERIVED_CHARS } from "@/lib/messaging/media/derivable";
 import type { Message } from "@/lib/types/messaging";
 
 /**
@@ -86,6 +87,29 @@ describe("Transcrição do áudio no balão", () => {
     expect(screen.getByTestId("transcricao-do-audio")).not.toHaveTextContent(
       "porque eu trabalho de casa",
     );
+  });
+
+  it("aberta, a caixa que rola por dentro é alcançável pelo teclado; fechada, não entra na ordem de foco", () => {
+    render(<MessageBubble message={audio()} />);
+    const texto = () => screen.getByTestId("transcricao-do-audio").querySelector("p")!;
+    expect(texto()).not.toHaveAttribute("tabindex");
+    fireEvent.click(screen.getByRole("button", { name: "Ler mais" }));
+    expect(texto()).toHaveAttribute("tabindex", "0");
+  });
+
+  it("transcrição cortada no teto do sistema avisa que o áudio continua — só com o texto aberto", () => {
+    render(<MessageBubble message={audio({ media_derived_text: "palavra ".repeat(MAX_DERIVED_CHARS / 8) })} />);
+    // Fechada, o trecho já termina em reticências e há o que abrir: o aviso
+    // sobre o FIM do texto só faz sentido quando o fim está na tela.
+    expect(screen.queryByTestId("transcricao-incompleta")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Ler mais" }));
+    expect(screen.getByTestId("transcricao-incompleta")).toHaveTextContent("O áudio continua além deste ponto");
+  });
+
+  it("transcrição inteira (abaixo do teto) não leva aviso nenhum, nem aberta", () => {
+    render(<MessageBubble message={audio()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Ler mais" }));
+    expect(screen.queryByTestId("transcricao-incompleta")).toBeNull();
   });
 
   it("transcrição curta aparece inteira e sem botão", () => {

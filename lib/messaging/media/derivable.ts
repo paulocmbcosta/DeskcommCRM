@@ -15,6 +15,13 @@ export const TIPOS_DERIVAVEIS: ReadonlySet<string> = new Set([
   "video",
 ]);
 
+/**
+ * O teto do texto derivado: `deriveMediaText` corta aqui. Mora neste módulo
+ * porque a tela também precisa dele — uma transcrição que bate no teto foi
+ * CORTADA, e o balão não pode apresentá-la como o áudio inteiro.
+ */
+export const MAX_DERIVED_CHARS = 8000;
+
 /** Estados finais de `messages.media_derived_status` — não há o que esperar. */
 export const DERIVACAO_TERMINADA: ReadonlySet<string> = new Set(["ready", "failed"]);
 

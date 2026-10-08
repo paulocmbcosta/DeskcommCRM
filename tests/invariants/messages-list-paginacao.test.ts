@@ -95,6 +95,7 @@ type Res = { data: unknown; error: { message: string } | null };
 class FakeQuery implements PromiseLike<Res> {
   private cols = "*";
   private eqs: Array<{ col: string; val: unknown }> = [];
+  private ins: Array<{ col: string; vals: unknown[] }> = [];
   private ors: string[] = [];
   // ACUMULA os order: o handler encadeia .order("sent_at").order("id") e o
   // desempate por id é o que segura a borda da página quando há sent_at igual.
@@ -113,6 +114,10 @@ class FakeQuery implements PromiseLike<Res> {
     this.eqs.push({ col, val });
     return this;
   }
+  in(col: string, vals: unknown[]): this {
+    this.ins.push({ col, vals });
+    return this;
+  }
   or(raw: string): this {
     this.ors.push(`(${splitTopLevel(raw).map(orNodeToSql).join(" or ")})`);
     return this;
@@ -129,6 +134,10 @@ class FakeQuery implements PromiseLike<Res> {
   private toSql(): string {
     const where = [
       ...this.eqs.map((f) => `${f.col} = ${sqlString(String(f.val))}`),
+      // Lista vazia vira `false`, como no PostgREST — nunca `in ()`, que é erro de sintaxe.
+      ...this.ins.map((f) =>
+        f.vals.length ? `${f.col} in (${f.vals.map((v) => sqlString(String(v))).join(", ")})` : "false",
+      ),
       ...this.ors,
     ];
     let q = `select ${this.cols} from public.${this.table}`;
@@ -405,38 +414,53 @@ describe("listMessagesHandler — paginação da thread", () => {
  * de colunas roda contra o `baseline.sql` de verdade.
  *
  * E o inverso, que é o que importa para a privacidade: o derivado existe também
- * em imagem e PDF, sobrevive ao "apagar para todos" e à anonimização do contato
- * (`fn_lgpd_cascade_redact_contact` zera a mídia, não o derivado). Nesses três
- * casos ele NÃO pode sair. As linhas abaixo ficam vermelhas se
- * `soATranscricaoDoAudio` sair do caminho da listagem.
+ * em imagem e PDF, sobrevive ao "apagar para todos" e às DUAS anonimizações do
+ * contato. Em nenhum desses casos a listagem pode entregá-lo. As linhas abaixo
+ * ficam vermelhas se `soATranscricaoDoAudio` sair do caminho, ou se a
+ * conferência do contato deixar de acontecer.
  */
 describe("listMessagesHandler — a transcrição do áudio", () => {
   const CONTACT_AUDIO = "aaaabbbb-2222-4000-8000-0000000000aa";
   const CONV_AUDIO = "aaaabbbb-4444-4000-8000-0000000000aa";
+  // Um contato por caminho de anonimização: a unicidade (contato, sessão) pede
+  // conversa própria, e anonimizar um não pode afetar os casos do outro.
+  const CONTACT_BOTAO = "aaaabbbb-2222-4000-8000-0000000000ab";
+  const CONV_BOTAO = "aaaabbbb-4444-4000-8000-0000000000ab";
+  const CONTACT_CASCATA = "aaaabbbb-2222-4000-8000-0000000000ac";
+  const CONV_CASCATA = "aaaabbbb-4444-4000-8000-0000000000ac";
   const TRANSCRICAO = "Oi, eu queria a segunda via do boleto.";
   const id = (n: number) => `aaaabbbb-8888-4000-8000-${String(n).padStart(12, "0")}`;
   const quando = (n: number) => new Date(BASE_MS + n * 60_000).toISOString();
 
+  /** Um áudio transcrito, com o arquivo — como o worker de mídia o deixa. */
+  const audioTranscrito = (n: number, conv: string, contato: string, corpo: string) =>
+    `('${id(n)}','${ORG}','${conv}','${SESSION}','${contato}','audio',
+      'inbound','received','crm','${corpo}','${quando(n)}',
+      '${ORG}/${conv}/${id(n)}.ogg','${TRANSCRICAO}','ready',null)`;
+
   beforeAll(() => {
     sql(`
       insert into public.contacts (id, organization_id, name, phone_number) values
-        ('${CONTACT_AUDIO}', '${ORG}', 'Contato do Áudio', '+5511900000065')
+        ('${CONTACT_AUDIO}', '${ORG}', 'Contato do Áudio', '+5511900000065'),
+        ('${CONTACT_BOTAO}', '${ORG}', 'Contato do Botão', '+5511900000066'),
+        ('${CONTACT_CASCATA}', '${ORG}', 'Contato da Cascata', '+5511900000067')
         on conflict (id) do nothing;
 
       insert into public.conversations (id, organization_id, contact_id, channel_session_id, status) values
-        ('${CONV_AUDIO}', '${ORG}', '${CONTACT_AUDIO}', '${SESSION}', 'open')
+        ('${CONV_AUDIO}', '${ORG}', '${CONTACT_AUDIO}', '${SESSION}', 'open'),
+        ('${CONV_BOTAO}', '${ORG}', '${CONTACT_BOTAO}', '${SESSION}', 'open'),
+        ('${CONV_CASCATA}', '${ORG}', '${CONTACT_CASCATA}', '${SESSION}', 'open')
         on conflict (id) do nothing;
 
-      delete from public.messages where conversation_id = '${CONV_AUDIO}';
+      delete from public.messages
+        where conversation_id in ('${CONV_AUDIO}', '${CONV_BOTAO}', '${CONV_CASCATA}');
 
       insert into public.messages
         (id, organization_id, conversation_id, channel_session_id, contact_id, type,
          direction, status, sent_via, body, sent_at,
          media_storage_path, media_derived_text, media_derived_status, revoked_at)
       values
-        ('${id(1)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','audio',
-         'inbound','received','crm','audio-transcrito','${quando(1)}',
-         '${ORG}/${CONV_AUDIO}/${id(1)}.ogg','${TRANSCRICAO}','ready',null),
+        ${audioTranscrito(1, CONV_AUDIO, CONTACT_AUDIO, "audio-transcrito")},
         ('${id(2)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','image',
          'inbound','received','crm','imagem-descrita','${quando(2)}',
          '${ORG}/${CONV_AUDIO}/${id(2)}.jpg','Foto de um comprovante de pagamento.','ready',null),
@@ -445,15 +469,17 @@ describe("listMessagesHandler — a transcrição do áudio", () => {
          '${ORG}/${CONV_AUDIO}/${id(3)}.ogg','Fala que o cliente apagou.','ready','${quando(4)}'),
         ('${id(4)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','audio',
          'inbound','received','crm','audio-sem-arquivo','${quando(5)}',
-         null,'Fala de um contato anonimizado.','ready',null),
+         null,'Fala de um áudio cujo arquivo não existe mais.','ready',null),
         ('${id(5)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','audio',
          'inbound','received','crm','audio-ainda-sem-texto','${quando(6)}',
-         '${ORG}/${CONV_AUDIO}/${id(5)}.ogg',null,null,null);
+         '${ORG}/${CONV_AUDIO}/${id(5)}.ogg',null,null,null),
+        ${audioTranscrito(6, CONV_BOTAO, CONTACT_BOTAO, "audio-do-botao")},
+        ${audioTranscrito(7, CONV_CASCATA, CONTACT_CASCATA, "audio-da-cascata")};
     `);
   });
 
-  async function porCorpo() {
-    const r = await listMessagesHandler(fakeAdminClient(), ctx, CONV_AUDIO, { limit: LIMIT });
+  async function porCorpo(conversa: string = CONV_AUDIO) {
+    const r = await listMessagesHandler(fakeAdminClient(), ctx, conversa, { limit: LIMIT });
     return new Map(r.messages.map((m) => [m.body, m]));
   }
 
@@ -486,4 +512,61 @@ describe("listMessagesHandler — a transcrição do áudio", () => {
       expect(m?.media_derived_status).toBeNull();
     },
   );
+
+  /**
+   * AS DUAS ANONIMIZAÇÕES. Cada caso mede ANTES e DEPOIS na mesma conversa: sem
+   * o "antes", um `select` quebrado passaria por proteção.
+   *
+   * O que estes casos NÃO afirmam, de propósito: que o texto continua no banco
+   * depois de anonimizar. Hoje continua (nenhuma das duas rotinas zera o
+   * derivado), e isso é defeito a consertar em migration própria — prender o
+   * sintoma aqui faria este teste reprovar o conserto.
+   */
+  it("anonimizado pelo BOTÃO da ficha (o contato muda, as mensagens ficam intactas): a transcrição deixa de sair", async () => {
+    expect((await porCorpo(CONV_BOTAO)).get("audio-do-botao")?.media_derived_text).toBe(TRANSCRICAO);
+
+    // O MESMO update de `fn_lgpd_anonymize_contact`, que é o que a rota
+    // `/api/v1/lgpd/anonymize` chama. A função em si exige sessão com papel de
+    // admin e MFA provado, que este harness (psql cru) não tem; os gatilhos de
+    // `is_anonymized` disparam do mesmo jeito.
+    sql(`
+      update public.contacts set name = null,
+        display_name = 'Contato Anonimizado #' || substring('${CONTACT_BOTAO}' from 1 for 8),
+        email = null, phone_number = null, cpf_encrypted = null, cpf_hash = null, birthdate = null,
+        is_anonymized = true, anonymized_at = now(), updated_at = now()
+      where organization_id = '${ORG}' and id = '${CONTACT_BOTAO}';
+    `);
+    // A premissa do caso: esse caminho NÃO mexe na mídia da mensagem. É por
+    // isso que "linha sem arquivo" não serve de sinal de anonimização.
+    const arquivoIntacto = sql(`
+      select media_storage_path is not null from public.messages where id = '${id(6)}';
+    `).trim();
+    expect(arquivoIntacto).toBe("t");
+
+    const depois = (await porCorpo(CONV_BOTAO)).get("audio-do-botao");
+    expect(depois).toBeDefined();
+    expect(depois?.media_derived_text).toBeNull();
+    expect(depois?.media_derived_status).toBeNull();
+  });
+
+  it("anonimizado pela CASCATA (fn_lgpd_cascade_redact_contact, a de verdade): a transcrição deixa de sair", async () => {
+    expect((await porCorpo(CONV_CASCATA)).get("audio-da-cascata")?.media_derived_text).toBe(TRANSCRICAO);
+
+    // Sem pedido de LGPD (`null`): com mídia na mensagem a rotina enfileira a limpeza do
+    // Storage, e a fila tem FK para o pedido — um id inventado é recusado.
+    sql(`select public.fn_lgpd_cascade_redact_contact('${ORG}', '${CONTACT_CASCATA}', null);`);
+
+    // A cascata troca o corpo: a linha é achada pelo id.
+    const r = await listMessagesHandler(fakeAdminClient(), ctx, CONV_CASCATA, { limit: LIMIT });
+    const depois = r.messages.find((m) => m.id === id(7));
+    expect(depois).toBeDefined();
+    expect(depois?.media_derived_text).toBeNull();
+    expect(depois?.media_derived_status).toBeNull();
+  });
+
+  it("anonimizar um contato não cala a transcrição dos outros", async () => {
+    // Roda depois dos dois casos acima (o arquivo é sequencial): o contato do
+    // áudio comum segue liberado.
+    expect((await porCorpo()).get("audio-transcrito")?.media_derived_text).toBe(TRANSCRICAO);
+  });
 });

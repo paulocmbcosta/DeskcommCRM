@@ -5069,6 +5069,7 @@ export const DICIONARIO: Traducoes = {
   "Transcrevendo…": { es: "Transcribiendo…" },
   "Nenhuma fala reconhecida neste áudio": { es: "No se reconoció ninguna voz en este audio" },
   "Transcrição indisponível": { es: "Transcripción no disponible" },
+  "O áudio continua além deste ponto: a transcrição tem um limite de tamanho.": { es: "El audio continúa más allá de este punto: la transcripción tiene un límite de tamaño." },
   "Ampliar imagem": { es: "Ampliar imagen" },
   "Imagem recebida": { es: "Imagen recibida" },
   Baixar: { es: "Descargar" },

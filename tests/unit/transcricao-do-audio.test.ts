@@ -5,9 +5,10 @@ import {
   JANELA_DA_TRANSCRICAO_MS,
   soATranscricaoDoAudio,
   TAMANHO_DO_TRECHO,
+  temTranscricaoAEntregar,
   trechoDaTranscricao,
 } from "@/lib/inbox/transcricao-do-audio";
-import { MARCADOR_NAO_LIDA } from "@/lib/messaging/media/derivable";
+import { MARCADOR_NAO_LIDA, MAX_DERIVED_CHARS } from "@/lib/messaging/media/derivable";
 
 /**
  * A TRANSCRIÇÃO DO ÁUDIO — a regra, sem tela.
@@ -39,43 +40,61 @@ function audio(over: Record<string, unknown> = {}) {
   };
 }
 
-describe("soATranscricaoDoAudio — o que a listagem deixa sair", () => {
-  it("áudio com arquivo: a transcrição sai como está", () => {
+describe("soATranscricaoDoAudio — o que a listagem entrega", () => {
+  const LIBERADO = true;
+  const NAO_LIBERADO = false;
+
+  it("áudio com arquivo, de contato liberado: a transcrição sai como está", () => {
     const m = audio();
-    expect(soATranscricaoDoAudio(m)).toBe(m);
+    expect(soATranscricaoDoAudio(m, LIBERADO)).toBe(m);
   });
 
   it("áudio ainda só com a URL do provedor (arquivo não guardado): sai", () => {
     const m = audio({ media_storage_path: null, media_url: "https://provedor/arquivo" });
-    expect(soATranscricaoDoAudio(m).media_derived_text).toBe(m.media_derived_text);
+    expect(soATranscricaoDoAudio(m, LIBERADO).media_derived_text).toBe(m.media_derived_text);
   });
 
   it.each(["image", "document", "video", "text"])(
     "%s: o derivado NÃO sai (descrição e extração não são transcrição)",
     (type) => {
-      const saida = soATranscricaoDoAudio(audio({ type }));
+      const saida = soATranscricaoDoAudio(audio({ type }), LIBERADO);
       expect(saida.media_derived_text).toBeNull();
       expect(saida.media_derived_status).toBeNull();
     },
   );
 
-  it("apagada pelo autor: a transcrição não segue no JSON", () => {
-    const saida = soATranscricaoDoAudio(audio({ revoked_at: haSegundos(10) }));
+  it("apagada pelo autor: a transcrição não é entregue", () => {
+    const saida = soATranscricaoDoAudio(audio({ revoked_at: haSegundos(10) }), LIBERADO);
     expect(saida.media_derived_text).toBeNull();
     expect(saida.media_derived_status).toBeNull();
   });
 
-  it("sem arquivo nenhum (o estado em que a anonimização deixa a linha): não sai", () => {
-    const saida = soATranscricaoDoAudio(audio({ media_storage_path: null, media_url: null }));
+  it("contato NÃO liberado (anonimizado, ou não deu para saber): não sai, mesmo com o áudio intacto", () => {
+    // O botão "Anonimizar" da ficha não toca em `messages`: a linha fica com o
+    // arquivo e com o derivado. Quem barra é o fato do contato, não a mídia.
+    const saida = soATranscricaoDoAudio(audio(), NAO_LIBERADO);
+    expect(saida.media_derived_text).toBeNull();
+    expect(saida.media_derived_status).toBeNull();
+  });
+
+  it("sem arquivo nenhum (como a cascata de anonimização deixa a linha): não sai", () => {
+    const saida = soATranscricaoDoAudio(audio({ media_storage_path: null, media_url: null }), LIBERADO);
     expect(saida.media_derived_text).toBeNull();
     expect(saida.media_derived_status).toBeNull();
   });
 
   it("não mexe nos outros campos nem na linha original", () => {
     const m = audio({ type: "image", body: "legenda" });
-    const saida = soATranscricaoDoAudio(m);
+    const saida = soATranscricaoDoAudio(m, LIBERADO);
     expect(saida).toMatchObject({ type: "image", body: "legenda" });
     expect(m.media_derived_text).toBe("Oi, eu queria saber do meu boleto.");
+  });
+
+  it("só o áudio com texto pede a conferência do contato", () => {
+    expect(temTranscricaoAEntregar(audio())).toBe(true);
+    expect(temTranscricaoAEntregar(audio({ media_derived_text: null, media_derived_status: null }))).toBe(false);
+    // Imagem com descrição não custa consulta: o derivado dela nunca sai.
+    expect(temTranscricaoAEntregar(audio({ type: "image" }))).toBe(false);
   });
 });
 
@@ -84,7 +103,16 @@ describe("estadoDaTranscricao — o que o balão mostra", () => {
     expect(estadoDaTranscricao(audio(), AGORA)).toEqual({
       tipo: "texto",
       texto: "Oi, eu queria saber do meu boleto.",
+      incompleta: false,
     });
+  });
+
+  it("texto que bateu no teto do derivado é marcado como incompleto", () => {
+    // `deriveMediaText` corta em MAX_DERIVED_CHARS: o áudio continua além dali.
+    const noTeto = estadoDaTranscricao(audio({ media_derived_text: "a".repeat(MAX_DERIVED_CHARS) }), AGORA);
+    expect(noTeto).toMatchObject({ tipo: "texto", incompleta: true });
+    const abaixo = estadoDaTranscricao(audio({ media_derived_text: "a".repeat(MAX_DERIVED_CHARS - 1) }), AGORA);
+    expect(abaixo).toMatchObject({ tipo: "texto", incompleta: false });
   });
 
   it("pronta e vazia: o áudio foi lido e não havia fala", () => {
@@ -137,9 +165,29 @@ describe("estadoDaTranscricao — o que o balão mostra", () => {
     expect(estadoDaTranscricao(audio({ type: "image" }), AGORA)).toBeNull();
   });
 
-  it("os campos ausentes (mensagem otimista) e a data ilegível não quebram", () => {
-    const semCampos = { type: "audio", direction: "inbound" as const, created_at: "não é data" };
+  it("leitura que NÃO traz o derivado (super-admin, mensagem otimista): nada, nem 'transcrevendo'", () => {
+    // `undefined` ≠ `null`. Com as colunas ausentes a tela não sabe o estado, e
+    // o texto nunca chegaria por esse caminho — anunciar seria prometer à toa.
+    const semCampos = { type: "audio", direction: "inbound" as const, created_at: haSegundos(5) };
     expect(estadoDaTranscricao(semCampos, AGORA)).toBeNull();
+  });
+
+  it("navegador com o relógio poucos segundos atrasado ainda vê 'transcrevendo'", () => {
+    // `created_at` é do servidor: para um navegador atrasado, o áudio que acabou
+    // de chegar está "no futuro". É o caso comum, não o exótico.
+    const m = audio({
+      media_derived_status: null,
+      media_derived_text: null,
+      created_at: new Date(AGORA + 5_000).toISOString(),
+    });
+    expect(estadoDaTranscricao(m, AGORA)).toEqual({ tipo: "transcrevendo" });
+  });
+
+  it("data ilegível, ou longe no futuro, não vira 'transcrevendo'", () => {
+    const pendente = { media_derived_status: null, media_derived_text: null };
+    expect(estadoDaTranscricao(audio({ ...pendente, created_at: "não é data" }), AGORA)).toBeNull();
+    const longe = new Date(AGORA + JANELA_DA_TRANSCRICAO_MS).toISOString();
+    expect(estadoDaTranscricao(audio({ ...pendente, created_at: longe }), AGORA)).toBeNull();
   });
 });
 
@@ -177,6 +225,25 @@ describe("trechoDaTranscricao — onde corta", () => {
     const { trecho, cortou } = trechoDaTranscricao(texto);
     expect(cortou).toBe(true);
     expect(trecho).toBe(`${"😀".repeat(TAMANHO_DO_TRECHO)}…`);
+  });
+
+  it("exatamente no limite da folga não corta; um caractere além, corta", () => {
+    const noLimite = `${"palavra ".repeat(22)}abcd`; // 180
+    expect(noLimite.length).toBe(180);
+    expect(trechoDaTranscricao(noLimite).cortou).toBe(false);
+    expect(trechoDaTranscricao(`${noLimite}e`).cortou).toBe(true);
+  });
+
+  it("texto curto com MUITAS quebras de linha vira corrido — não ocupa a tela, e nenhuma palavra some", () => {
+    const empilhado = Array.from({ length: 30 }, (_, i) => `p${i}`).join("\n\n");
+    const { trecho, cortou } = trechoDaTranscricao(empilhado);
+    expect(cortou).toBe(false);
+    expect(trecho).not.toContain("\n");
+    expect(trecho.split(" ")).toHaveLength(30);
+  });
+
+  it("texto curto com poucas quebras fica como veio", () => {
+    expect(trechoDaTranscricao("Oi.\nTudo bem?").trecho).toBe("Oi.\nTudo bem?");
   });
 
   it("quebras de linha contam como um espaço na hora de medir o trecho", () => {

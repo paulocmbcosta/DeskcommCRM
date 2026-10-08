@@ -3833,3 +3833,80 @@ Lidos no código (e, onde há teste, provados com dublês). Nenhum foi visto num
 - **Com a ARI fora do ar, um clique em "mover" pode gravar até três ordens recusadas**: o cliente HTTP
   do navegador repete o 503 até três vezes, e cada repetição é um pedido novo. Nenhuma fica aberta.
   Lido no código (`lib/api/client.ts`), não medido.
+
+## J46 — O atendente lê o áudio do cliente sem ouvir `[P1]` (2026-10-08)
+
+Pedido do dono: o sistema já transcreve o áudio que o cliente manda (é como o agente de IA o
+entende), mas o texto não aparecia na conversa — o atendente via só o player e tinha de escutar.
+O balão do áudio passa a mostrar o começo da transcrição logo abaixo do player, com "Ler mais"
+para abrir o texto inteiro ali mesmo.
+
+Sem migration: o texto é `messages.media_derived_text` (0058), que `workers/media-derive-worker.ts`
+já gravava. Medido em produção antes de escrever (2026-10-08, só contagens, 14 dias): 320 áudios
+recebidos, 320 com transcrição pronta; metade com até 132 caracteres, 90% com até 450, o maior com
+3.917; pronta 8 s depois do áudio na mediana, 27 s no pior caso. Mapa em
+`docs/architecture/transcricao-do-audio.architecture.json`.
+
+**Como é provado.** A regra pura (o que a listagem entrega, o que o balão mostra, onde o trecho
+corta) em `tests/unit/transcricao-do-audio.test.ts`; o balão montado pelo `MessageBubble`, com
+relógio de mentira para o prazo do "Transcrevendo…", em
+`tests/unit/inbox-transcricao-do-audio.test.tsx`; a rota contra o Postgres real em
+`tests/invariants/messages-list-paginacao.test.ts` (bloco "a transcrição do áudio"), que anonimiza
+de verdade pelos dois caminhos e mede antes e depois; e a tela, com os áudios semeados como o worker
+os deixa, em `tests/e2e/inbox-transcricao-do-audio.spec.ts`.
+
+O invariante foi sabotado de três jeitos e reprovou nos três: sem a regra no caminho da listagem
+(os casos de imagem, apagada e sem arquivo); sem as colunas no `select` (todos os do bloco); e sem
+a conferência do contato (o caso do botão de anonimizar).
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J46.1 Áudio do cliente já transcrito: abaixo do player aparece o começo do que ele falou, com o rótulo "Transcrição automática" | `[P1]` | E2E_PENDENTE |
+| J46.2 "Ler mais" abre o texto inteiro ali mesmo, e "Ler menos" recolhe; áudio comprido rola por dentro da caixa (teto de 256 px medido no navegador) | `[P1]` | E2E_PENDENTE |
+| J46.3 Transcrição curta aparece inteira e sem botão | `[P1]` | E2E_PENDENTE |
+| J46.4 Áudio que acabou de chegar diz "Transcrevendo…", e o texto entra sozinho quando fica pronto, sem recarregar a página | `[P1]` | E2E_PENDENTE |
+| J46.5 Quem está no fim da conversa vê a transcrição chegar inteira (o balão cresce e a conversa acompanha); quem subiu para ler o histórico não é levado ao fim | `[P1]` | E2E_PENDENTE |
+| J46.6 O "Transcrevendo…" tem prazo (3 min): passou, a tela para de prometer. Navegador com o relógio alguns segundos atrasado ainda vê o aviso | `[P2]` | em unidade (relógio de mentira) |
+| J46.7 Áudio gravado pelo atendente no CRM, e áudio antigo sem transcrição: só o player, como era | `[P1]` | E2E_PENDENTE |
+| J46.8 A transcrição falhou, ou falta a chave da OpenAI: "Transcrição indisponível" — o recado interno do agente nunca aparece como fala do cliente | `[P1]` | em unidade |
+| J46.9 Descrição de imagem e texto de PDF (que o sistema também gera para o agente) não são entregues pela listagem | `[P1]` | no Postgres real |
+| J46.10 Mensagem apagada pelo cliente: a listagem não entrega a transcrição, e o balão não a mostra | `[P0]` | no Postgres real e em unidade |
+| J46.11 Contato anonimizado pelo BOTÃO da ficha (o contato muda, as mensagens ficam com o áudio): a listagem deixa de entregar a transcrição | `[P0]` | no Postgres real (antes e depois) |
+| J46.12 Contato anonimizado pela CASCATA de LGPD (`fn_lgpd_cascade_redact_contact`, a de verdade): a listagem deixa de entregar a transcrição | `[P0]` | no Postgres real (antes e depois) |
+| J46.13 Anonimizar um contato não cala a transcrição dos outros | `[P1]` | no Postgres real |
+| J46.14 Transcrição que bateu no teto do sistema (8.000 caracteres) avisa que o áudio continua | `[P2]` | em unidade |
+| J46.15 A conversa vista pelo super-admin (leitura que não traz a transcrição): só o player, sem "Transcrevendo…" | `[P2]` | em unidade |
+| J46.16 No celular (390 px), a caixa não passa da borda da tela | `[P2]` | E2E_PENDENTE |
+| J46.17 Áudio real de um cliente em produção: o texto do balão é o que ele falou | `[P1]` | pendente — prova do dono |
+
+### O que NÃO foi provado
+
+- **Áudio real.** O e2e semeia o texto que o worker gravaria; nenhum áudio de cliente foi enviado
+  nem transcrito para esta prova. A cadeia que produz o texto não mudou e roda em produção.
+- **A qualidade da transcrição.** O Whisper erra nome, valor e número de documento. O rótulo
+  "Transcrição automática" avisa; nada confere o texto contra o áudio.
+- **O texto continua no banco depois da anonimização**, pelos dois caminhos: nenhuma das duas
+  rotinas zera `media_derived_text`, e a do botão da ficha nem toca em `messages` (corpo e áudio
+  também ficam). Esta entrega só garante que a LISTAGEM não entrega a transcrição (J46.11 e J46.12);
+  apagar é mudança de banco, registrada à parte. Em produção, na data da medição, nenhum contato
+  tinha sido anonimizado.
+- **O que o Realtime carrega.** O aviso de mudança do Supabase leva a linha inteira da mensagem ao
+  navegador, e isso é anterior a esta entrega; a tela só o usa para recarregar. Não foi medido num
+  Supabase real quais colunas chegam.
+- **A rolagem com mais de 50 mensagens no atendimento.** A conversa só acompanha a chegada quando a
+  contagem de itens muda; com a página cheia entra uma e sai outra, e ela não muda. É anterior a
+  esta entrega e vale para toda mensagem nova. Lido no código, não reproduzido na tela.
+- **Tema escuro e leitor de tela.** O botão tem `aria-expanded` e `aria-controls`, conferidos em
+  unidade; ninguém ouviu a tela. O aviso "pode conter erros" só existe como dica ao passar o mouse.
+
+### O que a revisão independente achou
+
+Um subagente leu o commit sem as conclusões de quem escreveu. Quatro achados mudaram o código antes
+do PR: (1) a proteção do contato anonimizado se apoiava em "mensagem sem arquivo", e o botão
+"Anonimizar" da ficha não mexe nas mensagens — a transcrição seguiria na tela; a listagem passou a
+conferir `contacts.is_anonymized`, falhando fechada (J46.11); (2) a conversa media "o leitor está no
+fim?" DEPOIS de o balão crescer, e a transcrição que chega passa dos 120 px de tolerância — nasceria
+abaixo da dobra; a anotação passou a ser feita antes (J46.5); (3) com o relógio do navegador
+atrasado, "Transcrevendo…" não aparecia; (4) na conversa vista pelo super-admin, "Transcrevendo…"
+aparecia e o texto nunca vinha (J46.15). Também vieram dele o aviso da transcrição cortada no teto
+(J46.14) e o texto curto com muitas quebras de linha, que ocuparia a tela.
