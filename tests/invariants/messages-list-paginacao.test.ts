@@ -392,3 +392,98 @@ describe("listMessagesHandler — paginação da thread", () => {
     expect(r.messages.map((m) => m.body)).toEqual(["curta-1", "curta-2", "curta-3"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// a transcrição do áudio — o que a listagem entrega ao balão
+// ---------------------------------------------------------------------------
+
+/**
+ * O balão do Inbox mostra a transcrição do áudio (`messages.media_derived_text`),
+ * e ela só chega lá se a consulta da listagem PEDIR a coluna. Um nome errado no
+ * `select` não aparece em teste de componente nenhum — o objeto é montado à
+ * mão —, e em produção vira 400 do PostgREST na conversa inteira. Aqui a lista
+ * de colunas roda contra o `baseline.sql` de verdade.
+ *
+ * E o inverso, que é o que importa para a privacidade: o derivado existe também
+ * em imagem e PDF, sobrevive ao "apagar para todos" e à anonimização do contato
+ * (`fn_lgpd_cascade_redact_contact` zera a mídia, não o derivado). Nesses três
+ * casos ele NÃO pode sair. As linhas abaixo ficam vermelhas se
+ * `soATranscricaoDoAudio` sair do caminho da listagem.
+ */
+describe("listMessagesHandler — a transcrição do áudio", () => {
+  const CONTACT_AUDIO = "aaaabbbb-2222-4000-8000-0000000000aa";
+  const CONV_AUDIO = "aaaabbbb-4444-4000-8000-0000000000aa";
+  const TRANSCRICAO = "Oi, eu queria a segunda via do boleto.";
+  const id = (n: number) => `aaaabbbb-8888-4000-8000-${String(n).padStart(12, "0")}`;
+  const quando = (n: number) => new Date(BASE_MS + n * 60_000).toISOString();
+
+  beforeAll(() => {
+    sql(`
+      insert into public.contacts (id, organization_id, name, phone_number) values
+        ('${CONTACT_AUDIO}', '${ORG}', 'Contato do Áudio', '+5511900000065')
+        on conflict (id) do nothing;
+
+      insert into public.conversations (id, organization_id, contact_id, channel_session_id, status) values
+        ('${CONV_AUDIO}', '${ORG}', '${CONTACT_AUDIO}', '${SESSION}', 'open')
+        on conflict (id) do nothing;
+
+      delete from public.messages where conversation_id = '${CONV_AUDIO}';
+
+      insert into public.messages
+        (id, organization_id, conversation_id, channel_session_id, contact_id, type,
+         direction, status, sent_via, body, sent_at,
+         media_storage_path, media_derived_text, media_derived_status, revoked_at)
+      values
+        ('${id(1)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','audio',
+         'inbound','received','crm','audio-transcrito','${quando(1)}',
+         '${ORG}/${CONV_AUDIO}/${id(1)}.ogg','${TRANSCRICAO}','ready',null),
+        ('${id(2)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','image',
+         'inbound','received','crm','imagem-descrita','${quando(2)}',
+         '${ORG}/${CONV_AUDIO}/${id(2)}.jpg','Foto de um comprovante de pagamento.','ready',null),
+        ('${id(3)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','audio',
+         'inbound','received','crm','audio-apagado','${quando(3)}',
+         '${ORG}/${CONV_AUDIO}/${id(3)}.ogg','Fala que o cliente apagou.','ready','${quando(4)}'),
+        ('${id(4)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','audio',
+         'inbound','received','crm','audio-sem-arquivo','${quando(5)}',
+         null,'Fala de um contato anonimizado.','ready',null),
+        ('${id(5)}','${ORG}','${CONV_AUDIO}','${SESSION}','${CONTACT_AUDIO}','audio',
+         'inbound','received','crm','audio-ainda-sem-texto','${quando(6)}',
+         '${ORG}/${CONV_AUDIO}/${id(5)}.ogg',null,null,null);
+    `);
+  });
+
+  async function porCorpo() {
+    const r = await listMessagesHandler(fakeAdminClient(), ctx, CONV_AUDIO, { limit: LIMIT });
+    return new Map(r.messages.map((m) => [m.body, m]));
+  }
+
+  it("o áudio transcrito sai com o texto e o estado", async () => {
+    const m = (await porCorpo()).get("audio-transcrito");
+    expect(m?.media_derived_text).toBe(TRANSCRICAO);
+    expect(m?.media_derived_status).toBe("ready");
+  });
+
+  it("o áudio ainda sem derivado sai com os dois campos nulos (a tela decide pelo relógio)", async () => {
+    const m = (await porCorpo()).get("audio-ainda-sem-texto");
+    expect(m).toBeDefined();
+    expect(m?.media_derived_text).toBeNull();
+    expect(m?.media_derived_status).toBeNull();
+  });
+
+  it.each(["imagem-descrita", "audio-apagado", "audio-sem-arquivo"])(
+    "%s: o derivado está no banco e NÃO sai na listagem",
+    async (corpoDaLinha) => {
+      // A fixture tem o texto — senão o teste passaria sem provar nada.
+      const noBanco = sql(`
+        select media_derived_text is not null from public.messages
+        where conversation_id = '${CONV_AUDIO}' and body = '${corpoDaLinha}';
+      `).trim();
+      expect(noBanco).toBe("t");
+
+      const m = (await porCorpo()).get(corpoDaLinha);
+      expect(m).toBeDefined();
+      expect(m?.media_derived_text).toBeNull();
+      expect(m?.media_derived_status).toBeNull();
+    },
+  );
+});

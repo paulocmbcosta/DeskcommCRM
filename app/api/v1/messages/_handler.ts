@@ -27,6 +27,7 @@ import { decidirPreGoLiveDoCanalViaSupabase } from "@/lib/ai/elegibilidade/consu
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { soATranscricaoDoAudio } from "@/lib/inbox/transcricao-do-audio";
 import {
   CHANNEL_SESSION_REF_COLUMNS,
   DEFAULT_CHANNEL_PROVIDER,
@@ -135,6 +136,13 @@ async function removerEcoDoProprioEnvio(
 const MSG_COLS =
   "id, organization_id, conversation_id, channel_session_id, contact_id, external_id, type, direction, status, ack, error_code, error_message, body, media_url, media_mime, media_size_bytes, media_storage_path, sent_via, sent_by_user_id, sent_at, delivered_at, read_at, metadata, edited_at, revoked_at, reply_to_message_id, created_at";
 
+/**
+ * A LISTAGEM leva também o texto derivado da mídia — e só ela: é a leitura que
+ * alimenta o balão, onde a transcrição do áudio aparece. O que de fato sai é
+ * decidido por `soATranscricaoDoAudio`, linha a linha.
+ */
+const MSG_COLS_DA_LISTA = `${MSG_COLS}, media_derived_text, media_derived_status`;
+
 function actorAuditPayload(actor: Actor): {
   actorUserId: string | null;
   metadataActor: Record<string, unknown>;
@@ -207,7 +215,7 @@ export async function listMessagesHandler(
   // (`lt`), e não mais para o futuro.
   let query = supabase
     .from("messages")
-    .select(MSG_COLS)
+    .select(MSG_COLS_DA_LISTA)
     .eq("conversation_id", conversationId)
     .eq("organization_id", ctx.organization_id)
     .order("sent_at", { ascending: false })
@@ -259,7 +267,7 @@ export async function listMessagesHandler(
 
   const rows = (data ?? []) as unknown as Message[];
   const hasMore = rows.length > q.limit;
-  const page = hasMore ? rows.slice(0, q.limit) : rows;
+  const page = (hasMore ? rows.slice(0, q.limit) : rows).map(soATranscricaoDoAudio);
 
   // Em ordem decrescente, o ÚLTIMO da página é o mais antigo dela — é dele que
   // sai o cursor, porque a próxima página é a que vem ANTES no tempo.

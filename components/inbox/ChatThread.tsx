@@ -103,6 +103,15 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
 
   const paginas = q.data?.pages.length ?? 0;
 
+  // Quantos áudios já têm transcrição. Quando ela chega (segundos depois do
+  // áudio), o balão CRESCE sem que a lista ganhe item — e, no fim da conversa,
+  // o texto nasceria abaixo da dobra. Entra nas dependências do efeito de
+  // rolagem, que já sabe não arrancar do lugar quem está lendo o histórico.
+  const transcricoesProntas = useMemo(
+    () => messages.filter((m) => m.type === "audio" && m.media_derived_status === "ready").length,
+    [messages],
+  );
+
   // Conversa nova: a contagem de páginas recomeça, senão a primeira carga da
   // próxima conversa seria confundida com um "carregar mais antigas".
   useEffect(() => {
@@ -136,7 +145,7 @@ export function ChatThread({ conversationId, atendimentoId = null, onResponder, 
     }
 
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [items.length, conversationId, paginas]);
+  }, [items.length, conversationId, paginas, transcricoesProntas]);
 
   /**
    * O ESTADO DO CANAL DESTE THREAD, PUBLICADO SEMPRE — inclusive quando não há
