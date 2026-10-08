@@ -33,6 +33,22 @@ export const INBOX_TABS: { value: InboxTab; label: string }[] = [
 ];
 
 /**
+ * Quem enxerga conversa de COLEGA: todo papel acima de `agent`, e o `agent` nos
+ * modos em que a organização o deixa ver além do que é dele (`all`) ou do time
+ * (`own_and_team`, 0281).
+ *
+ * É a MESMA pergunta em dois lugares — a aba "Todas" (abaixo) e a lista de nomes
+ * do filtro por atendente (`app/api/v1/conversations/filtros/_handler.ts`). Uma
+ * função, para as duas respostas não divergirem: aba que mostra o colega com
+ * filtro que não o nomeia, ou o contrário.
+ *
+ * Cosmético, como tudo aqui: quem garante o escopo é a RLS.
+ */
+export function podeVerColegas(role: Role, mode: VisibilityMode | undefined): boolean {
+  return role !== "agent" || mode === "all" || mode === "own_and_team";
+}
+
+/**
  * Visões visíveis por papel + escopo (G4-02, acceptance 1). 'Todas' fica oculta
  * para `agent`, salvo nos modos em que ele enxerga conversa de colega: `all` e
  * `own_and_team` (0281) — sem a aba, a conversa do colega de time só existiria
@@ -49,7 +65,7 @@ export function visibleInboxTabs(
   mode: VisibilityMode | undefined,
   opcoes: { telefone?: boolean } = {},
 ): InboxTab[] {
-  const hideAll = role === "agent" && mode !== "all" && mode !== "own_and_team";
+  const hideAll = !podeVerColegas(role, mode);
   return INBOX_TABS.filter((t) => !(t.value === "all" && hideAll))
     .filter((t) => t.value !== "phone" || opcoes.telefone === true)
     .map((t) => t.value);
