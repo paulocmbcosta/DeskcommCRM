@@ -30996,6 +30996,19 @@ comment on column public.voice_call_queue_orders.reason is
 
 notify pgrst, 'reload schema';
 
+-- ---- inbox: índice de Fechadas por atendente (migration 0297) ----
+--
+-- A aba Fechadas passa a filtrar por quem estava atendendo — o botão "Só as
+-- minhas" e o seletor de atendente. `atendimentos.assigned_to_user_id` (o dono
+-- carimbado no encerramento) não tinha índice: o selo da aba, contagem exata
+-- relida a cada 30 s, lia os encerrados da organização inteira para contar os
+-- de uma pessoa. Parcial: só o encerrado tem dono carimbado, e é só ele que a
+-- aba lê. A medição, e o índice por meio que foi medido e recusado, estão no
+-- cabeçalho da migration.
+create index if not exists atendimentos_org_dono_fechamento
+  on public.atendimentos (organization_id, assigned_to_user_id, closed_at desc)
+  where closed_at is not null;
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES
