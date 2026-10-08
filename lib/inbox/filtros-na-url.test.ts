@@ -3,8 +3,12 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { InboxTab } from "@/lib/inbox/abas";
+
 import {
+  enderecoDepoisDoGesto,
   escreverFiltrosNaUrl,
+  lerAbaDaUrl,
   lerFiltrosDaUrl,
   PARAMETROS_DE_FILTRO,
   type FiltrosNaUrl,
@@ -165,5 +169,117 @@ describe("link quebrado abre a lista sem aquele filtro — não um erro", () => 
   it("⛔ a busca não é lida do endereço, mesmo que alguém a escreva lá", () => {
     expect(lerFiltrosDaUrl(sp("search=maria&q=maria"))).toEqual(NADA);
     expect(PARAMETROS_DE_FILTRO as readonly string[]).not.toContain("search");
+  });
+});
+
+describe("a aba do endereço", () => {
+  it.each(["unassigned", "mine", "all", "closed", "ai", "phone"])("`filter=%s` é a aba", (aba) => {
+    expect(lerAbaDaUrl(sp(`filter=${aba}`))).toBe(aba);
+  });
+
+  it("ausente ou desconhecida: a Fila, que é onde o Inbox abre", () => {
+    expect(lerAbaDaUrl(sp(""))).toBe("unassigned");
+    expect(lerAbaDaUrl(sp("filter=arquivadas"))).toBe("unassigned");
+  });
+});
+
+/**
+ * ⭐ O GESTO É APLICADO POR CIMA DO ENDEREÇO DE AGORA, e não regravado a partir
+ * do estado inteiro que a tela mostrava.
+ *
+ * O endereço chega à tela por uma transição do React (é assim que o Next aplica
+ * o `replaceState`), então entre dois gestos rápidos `antes` está ATRASADO em
+ * relação ao endereço. Cada caso abaixo monta essa situação à mão: o endereço já
+ * tem o primeiro gesto, e `antes` ainda não.
+ */
+describe("o endereço depois de um gesto", () => {
+  type Tela = FiltrosNaUrl & { tab: InboxTab };
+  const tela = (over: Partial<Tela> = {}): Tela => ({ tab: "all", onlyUnread: false, ...over });
+
+  it("⭐ o timer da busca não desfaz o \"Não lidos\" que a pessoa ligou logo antes", () => {
+    // O endereço já tem `unread=1`; a tela ainda não foi redesenhada. O timer
+    // da busca entrega o estado que ELE conhece (sem não lidos), mudando só a
+    // busca — que nem mora no endereço.
+    const endereco = sp("filter=all&unread=1");
+    const atrasada = tela();
+    expect(enderecoDepoisDoGesto(endereco, atrasada, { ...atrasada })).toBeNull();
+  });
+
+  it("⭐ o timer da busca não devolve a pessoa à aba anterior", () => {
+    // Ela digitou na Fila e trocou para Todas antes dos 250 ms. O endereço já
+    // diz Todas; o timer ainda fala em Fila.
+    const endereco = sp("filter=all");
+    const atrasada = tela({ tab: "unassigned" });
+    expect(enderecoDepoisDoGesto(endereco, atrasada, { ...atrasada })).toBeNull();
+  });
+
+  it("dois gestos seguidos, o segundo a partir da tela atrasada: valem os DOIS", () => {
+    // 1º gesto já no endereço (atendente); 2º gesto (caixa) parte da tela que
+    // ainda não mostra o atendente.
+    const endereco = sp("filter=closed&assigned_to=me");
+    const atrasada = tela({ tab: "closed" });
+    const proximo = enderecoDepoisDoGesto(endereco, atrasada, { ...atrasada, channel: "phone" });
+    expect(proximo?.get("assigned_to")).toBe("me");
+    expect(proximo?.get("channel")).toBe("phone");
+  });
+
+  it("trocar de aba a partir da tela atrasada não apaga o filtro que acabou de entrar", () => {
+    const endereco = sp("filter=closed&periodo=hoje");
+    const atrasada = tela({ tab: "closed" });
+    const proximo = enderecoDepoisDoGesto(endereco, atrasada, { ...atrasada, tab: "all" });
+    expect(proximo?.get("filter")).toBe("all");
+    expect(proximo?.get("periodo")).toBe("hoje");
+  });
+
+  it("um gesto que só mexe na busca não reescreve o endereço — nem para acrescentar `filter`", () => {
+    // Em `/app/inbox`, sem parâmetro nenhum: digitar não pode chamar o
+    // `replaceState` (ele derruba uma navegação que estiver em curso).
+    expect(enderecoDepoisDoGesto(sp(""), tela({ tab: "unassigned" }), tela({ tab: "unassigned" }))).toBeNull();
+  });
+
+  it("desligar um filtro tira o parâmetro", () => {
+    const antes = tela({ tab: "closed", assigned_to: "me" });
+    const proximo = enderecoDepoisDoGesto(sp("filter=closed&assigned_to=me"), antes, {
+      ...antes,
+      assigned_to: undefined,
+    });
+    expect(proximo?.toString()).toBe("filter=closed");
+  });
+
+  it("\"Limpar filtros\" a partir da tela em dia apaga tudo e mantém a aba e a conversa aberta", () => {
+    const antes = tela({ tab: "closed", assigned_to: "me", periodo: "hoje", channel: "phone", onlyUnread: true });
+    const endereco = sp("filter=closed&id=c1&assigned_to=me&periodo=hoje&channel=phone&unread=1");
+    expect(enderecoDepoisDoGesto(endereco, antes, tela({ tab: "closed" }))?.toString()).toBe(
+      "filter=closed&id=c1",
+    );
+  });
+
+  it("trocar a escolha pronta por datas tira `periodo` e grava `de`/`ate`", () => {
+    const antes = tela({ tab: "closed", periodo: "hoje" });
+    const proximo = enderecoDepoisDoGesto(sp("filter=closed&periodo=hoje"), antes, {
+      ...antes,
+      periodo: undefined,
+      de: "2026-10-01",
+      ate: "2026-10-03",
+    });
+    expect(proximo?.toString()).toBe("filter=closed&de=2026-10-01&ate=2026-10-03");
+  });
+
+  it("`false` e ausente são o mesmo \"desligado\": não contam como mudança", () => {
+    const antes = tela({ na_fila: undefined });
+    expect(enderecoDepoisDoGesto(sp("filter=all"), antes, { ...antes, na_fila: false })).toBeNull();
+  });
+
+  it("gesto que deixa o endereço como está devolve `null` — nada a escrever", () => {
+    const antes = tela({ onlyUnread: false });
+    // A tela atrasada acha que vai LIGAR; o endereço já está ligado.
+    expect(enderecoDepoisDoGesto(sp("filter=all&unread=1"), antes, { ...antes, onlyUnread: true })).toBeNull();
+  });
+
+  it("CONTROLE: um gesto de verdade muda o endereço", () => {
+    const antes = tela();
+    expect(enderecoDepoisDoGesto(sp("filter=all"), antes, { ...antes, onlyUnread: true })?.toString()).toBe(
+      "filter=all&unread=1",
+    );
   });
 });

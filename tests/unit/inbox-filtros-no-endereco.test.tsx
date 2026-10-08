@@ -68,7 +68,7 @@ vi.mock("next/navigation", async () => {
 });
 vi.mock("@/hooks/auth/AuthProvider", () => ({
   useAuth: () => ({
-    user: { id: "u-eu" },
+    user: { id: "00000000-0000-4000-8000-0000000000e1" },
     activeOrg: { orgId: ORG, role: "manager", visibility_mode: "all" },
   }),
   usePermission: () => true,
@@ -211,6 +211,11 @@ describe("⭐ abrir um endereço com filtros abre a lista já filtrada", () => {
     expect(screen.getByTestId("so-as-minhas").getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("…e também com o PRÓPRIO id no endereço — o link que a gestora manda para a pessoa", () => {
+    abrirEm("/app/inbox?filter=closed&assigned_to=00000000-0000-4000-8000-0000000000e1");
+    expect(screen.getByTestId("so-as-minhas").getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("valor fora de forma no endereço é ignorado — a lista abre sem aquele filtro", () => {
     abrirEm("/app/inbox?filter=closed&assigned_to=qualquer-coisa&channel=fax");
     expect(filtrosDosFechados()).toEqual({});
@@ -265,9 +270,20 @@ describe("um gesto na tela escreve o endereço", () => {
   });
 
   it("⛔ a busca NÃO vai para o endereço — nome de cliente não fica no histórico do navegador", async () => {
-    abrirEm("/app/inbox?filter=all");
+    abrirEm("/app/inbox");
+    const escritas = vi.fn();
+    const comAviso = window.history.replaceState;
+    window.history.replaceState = (...args: Parameters<History["replaceState"]>) => {
+      escritas();
+      comAviso(...args);
+    };
     await userEvent.click(screen.getByText("buscar maria"));
     expect(window.location.search).not.toContain("maria");
+    // Nem uma escrita: o `replaceState` derruba uma navegação que esteja em
+    // curso, e em `/app/inbox` sem parâmetro digitar não pode acrescentar `filter`.
+    expect(escritas).not.toHaveBeenCalled();
+    expect(window.location.search).toBe("");
+    await userEvent.click(within(screen.getByTestId("inbox-abas")).getByRole("tab", { name: /Todas/ }));
     // …mas vale: a lista pede com ela.
     await waitFor(() => expect(ultimo("/api/v1/conversations?").get("search")).toBe("maria"));
   });
@@ -298,6 +314,12 @@ describe("⭐ a lista leva o que vale NA ABA; a contagem leva TUDO o que está l
     abrirEm(`/app/inbox?filter=all&assigned_to=${ANA}`);
     await waitFor(() => expect(ultimo("/api/v1/conversations?").get("assigned_to")).toBe(ANA));
     expect(ultimo("/api/v1/conversations?").get("exclude_finished")).toBe("true");
+  });
+
+  it("\"Sem atendente\" em Todas pede a ordem de Todas — não a da Fila", async () => {
+    abrirEm("/app/inbox?filter=all&assigned_to=unassigned");
+    await waitFor(() => expect(ultimo("/api/v1/conversations?").get("assigned_to")).toBe("unassigned"));
+    expect(ultimo("/api/v1/conversations?").get("ordem")).toBe("atividade");
   });
 
   it("⛔ em Minhas, o filtro de atendente do endereço NÃO troca o dono da aba", async () => {

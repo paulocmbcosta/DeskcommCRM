@@ -17,7 +17,7 @@
 import { z } from "zod";
 
 import { MEIOS_DE_CANAL, type MeioDeCanal } from "@/lib/channels/capabilities";
-import type { InboxTab } from "@/lib/inbox/abas";
+import { INBOX_TABS, type InboxTab } from "@/lib/inbox/abas";
 import type { FiltrosDeTela } from "@/lib/inbox/filtros-de-tela";
 import { dataValida, PERIODOS, type Periodo } from "@/lib/inbox/periodo";
 
@@ -43,6 +43,16 @@ export const PARAMETROS_DE_FILTRO = [
 
 /** O teto de `conversationTagSchema` (`lib/schemas/messaging.ts`). */
 const TETO_DA_ETIQUETA = 40;
+
+/**
+ * A ABA do endereço (`?filter=`). Valor ausente ou desconhecido cai na Fila — a
+ * aba em que o Inbox abre. `?filter=all` é honrado mesmo para quem não tem a
+ * aba no trilho: a lista volta no escopo da RLS (a aba só some cosmeticamente).
+ */
+export function lerAbaDaUrl(sp: Pick<URLSearchParams, "get">): InboxTab {
+  const valor = sp.get("filter");
+  return INBOX_TABS.some((aba) => aba.value === valor) ? (valor as InboxTab) : "unassigned";
+}
 
 // A MESMA régua do servidor (`z.string().uuid()`): um id que a tela aceita nunca
 // vira 422 na rota.
@@ -136,4 +146,71 @@ export function escreverFiltrosNaUrl(
   if (filtros.ordem) proximo.set("ordem", filtros.ordem);
   if (filtros.insatisfeitos) proximo.set("insatisfeitos", "1");
   return proximo;
+}
+
+/** As chaves de `FiltrosNaUrl`, uma a uma — é por elas que um gesto é comparado. */
+const CHAVES_DOS_FILTROS = [
+  "onlyUnread",
+  "team_id",
+  "tag",
+  "channel",
+  "channel_session_id",
+  "assigned_to",
+  "periodo",
+  "de",
+  "ate",
+  "assunto_id",
+  "na_fila",
+  "ordem",
+  "insatisfeitos",
+] as const satisfies ReadonlyArray<keyof FiltrosNaUrl>;
+
+type EstadoDaTela = FiltrosNaUrl & { tab: InboxTab };
+
+/** Desligado é desligado: `false` e ausente são o mesmo valor para um filtro de ligar. */
+const valor = (v: unknown) => (v === false ? undefined : v);
+
+/**
+ * O ENDEREÇO DEPOIS DE UM GESTO — ou `null` quando o gesto não muda o endereço.
+ *
+ * ─── O defeito que esta função existe para impedir ──────────────────────────
+ * Quem faz o gesto entrega o estado INTEIRO (`{ ...value, unread: true }`), e o
+ * `value` que ele espalha é o do último desenho da tela. Só que o endereço chega
+ * à tela DEPOIS: o Next aplica o `history.replaceState` dentro de uma transição
+ * (`startTransition`, em `app-router.js`), então entre dois gestos rápidos a
+ * tela ainda mostra o estado de antes do primeiro. Regravar o endereço a partir
+ * do estado inteiro do segundo gesto DESFARIA o primeiro:
+ *
+ *   · digitar na busca e clicar em "Não lidos" antes dos 250 ms do debounce — o
+ *     timer da busca regravaria o endereço sem o `unread`;
+ *   · digitar e trocar de aba — o timer devolveria a pessoa à aba anterior (o
+ *     defeito que `debounce-nao-volta-a-aba.test.tsx` conta).
+ *
+ * ─── Como ───────────────────────────────────────────────────────────────────
+ * Compara `depois` com `antes` (o que a tela mostrava a quem fez o gesto) para
+ * saber O QUE o gesto mudou, e aplica só isso por cima do endereço DE AGORA —
+ * que pode estar à frente da tela. O que o gesto não tocou fica como o endereço
+ * diz, não como a tela (talvez atrasada) dizia.
+ *
+ * Consequência boa: um gesto que só mexe na busca não muda nada aqui, e o
+ * endereço nem é reescrito — a busca não mora nele.
+ */
+export function enderecoDepoisDoGesto(
+  atual: URLSearchParams,
+  antes: EstadoDaTela,
+  depois: EstadoDaTela,
+): URLSearchParams | null {
+  const mudouAba = depois.tab !== antes.tab;
+  const mudadas = CHAVES_DOS_FILTROS.filter((chave) => valor(depois[chave]) !== valor(antes[chave]));
+  if (!mudouAba && mudadas.length === 0) return null;
+
+  const fundido: Record<string, unknown> = { ...lerFiltrosDaUrl(atual) };
+  for (const chave of mudadas) fundido[chave] = depois[chave];
+
+  const proximo = escreverFiltrosNaUrl(
+    atual,
+    mudouAba ? depois.tab : lerAbaDaUrl(atual),
+    fundido as unknown as FiltrosNaUrl,
+  );
+  return proximo.toString() === atual.toString() ? null : proximo;
 }
