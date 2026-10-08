@@ -686,6 +686,7 @@ jobs:
         voz-desligada-por-padrao.spec.ts
         voz-primeiro-pareamento.spec.ts
         inbox-busca-e-filtros-dizem-a-verdade.spec.ts
+        inbox-filtros-por-atendente-e-caixa.spec.ts
         qa-titulos-das-telas.spec.ts
         qa-equipe-pinta-na-hora.spec.ts
         qa-sugestao-rejeitada-e-motivo.spec.ts
