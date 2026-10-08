@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-import { filtrosAuxiliaresAtivos } from "@/lib/inbox/filtros-ativos";
+import { filtrosAplicados, nomesDosFiltros, type FiltrosDeTela } from "@/lib/inbox/filtros-de-tela";
 import type { ConversationsFilters } from "@/hooks/inbox/useConversationsRealtime";
 
 /**
@@ -49,11 +49,20 @@ function listaFalsa({ itens = [], hasNextPage = false }: { itens?: unknown[]; ha
   } as never;
 }
 
+const SEM_FILTRO: FiltrosDeTela = { search: "", onlyUnread: false };
+/** Os nomes como o `InboxLayout` os monta: da régua única, para a aba Todas. */
+const nomes = (tela: Partial<FiltrosDeTela>, aba: "all" | "unassigned" | "mine" = "all") =>
+  nomesDosFiltros(filtrosAplicados(aba, { ...SEM_FILTRO, ...tela }));
+
 function montar(filters: ConversationsFilters, hasNextPage = false) {
   return render(
     <ConversationList
       listQuery={listaFalsa({ itens: [], hasNextPage })}
       filters={filters}
+      // A lista deixou de derivar os nomes sozinha: quem monta a consulta os
+      // entrega, a partir do mesmo objeto. Aqui, o que o `InboxLayout` entregaria
+      // para estes filtros.
+      filtrosAtivos={nomes({ onlyUnread: Boolean(filters.unread) })}
       selectedId={null}
       onSelect={() => undefined}
     />,
@@ -64,16 +73,27 @@ afterEach(() => cleanup());
 
 describe("quais filtros a tela nomeia", () => {
   it("a ABA não entra — ela é onde o operador está, não algo a limpar", () => {
-    expect(filtrosAuxiliaresAtivos({ comando: ["aguardando"] } as ConversationsFilters)).toEqual([]);
-    expect(filtrosAuxiliaresAtivos({ exclude_finished: true } as ConversationsFilters)).toEqual([]);
+    // Nenhum filtro auxiliar ligado: a Fila, Minhas e Todas não nomeiam nada,
+    // embora cada uma mande à rota o filtro DA ABA (`comando`, `assigned_to=me`,
+    // `exclude_finished`).
+    expect(nomes({}, "unassigned")).toEqual([]);
+    expect(nomes({}, "mine")).toEqual([]);
+    expect(nomes({}, "all")).toEqual([]);
   });
 
-  it("os quatro auxiliares entram, e só quando ligados", () => {
-    expect(filtrosAuxiliaresAtivos({} as ConversationsFilters)).toEqual([]);
-    expect(filtrosAuxiliaresAtivos({ unread: true } as ConversationsFilters)).toEqual(["Não lidos"]);
-    expect(
-      filtrosAuxiliaresAtivos({ unread: true, tag: "urgente" } as ConversationsFilters),
-    ).toEqual(["Não lidos", "Etiqueta"]);
+  it("os auxiliares entram, e só quando ligados", () => {
+    expect(nomes({ onlyUnread: true })).toEqual(["Não lidos"]);
+    expect(nomes({ onlyUnread: true, tag: "urgente" })).toEqual(["Não lidos", "Etiqueta"]);
+  });
+
+  it("⭐ o TIME é nomeado — era o filtro que a lista antiga aplicava e não citava", () => {
+    // Com só o time ligado e nenhum resultado, a tela dizia "Sem conversas por
+    // aqui": a caixa parecia vazia com um filtro aceso.
+    expect(nomes({ team_id: "mine" })).toEqual(["Time"]);
+  });
+
+  it("os filtros novos também: atendente e caixa de entrada", () => {
+    expect(nomes({ assigned_to: "me", channel: "phone" })).toEqual(["Caixa de entrada", "Atendente"]);
   });
 });
 

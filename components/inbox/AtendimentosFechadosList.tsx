@@ -10,7 +10,6 @@ import type { AtendimentoFechado } from "@/app/api/v1/atendimentos/_handler";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { filtrosAuxiliaresAtivos } from "@/lib/inbox/filtros-ativos";
 import { rotuloDoAtendimento } from "@/lib/inbox/eventos-da-conversa";
 import { ArrowBendUpLeft, Hash, Phone, UsersThree } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
@@ -38,6 +37,8 @@ interface Props {
   onAbrir: (atendimento: AtendimentoFechado) => void;
   onLimparFiltros?: () => void;
   onVisibleChange?: (conversationIds: string[]) => void;
+  /** Os filtros ligados, por extenso — a mesma prop (e a mesma razão) de `ConversationList`. */
+  filtrosAtivos: string[];
 }
 
 function iniciais(nome: string): string {
@@ -53,6 +54,7 @@ export function AtendimentosFechadosList({
   onAbrir,
   onLimparFiltros,
   onVisibleChange,
+  filtrosAtivos,
 }: Props) {
   const t = useT();
   const locale = useLocaleDeData();
@@ -91,8 +93,6 @@ export function AtendimentosFechadosList({
       </div>
     );
   }
-
-  const filtrosAtivos = filtrosAuxiliaresAtivos(filtros);
 
   return (
     <div className="flex h-full flex-col" data-testid="lista-de-atendimentos-fechados">

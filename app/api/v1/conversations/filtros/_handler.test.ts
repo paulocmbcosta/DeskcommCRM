@@ -15,6 +15,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import type * as Capacidades from "@/lib/channels/capabilities";
+
 /**
  * O handler pergunta o MEIO a `meioDoCanal` e nunca olha o transporte — então o
  * teste também não precisa (nem pode: `pnpm lint:channels`) nomear transporte
@@ -28,7 +30,7 @@ const MEIO_DE_MENTIRA: Record<string, string> = {
   "t-fone": "phone",
 };
 vi.mock("@/lib/channels/capabilities", async (original) => ({
-  ...(await original<typeof import("@/lib/channels/capabilities")>()),
+  ...(await original<typeof Capacidades>()),
   meioDoCanal: (transporte: string | null | undefined) => MEIO_DE_MENTIRA[transporte ?? ""] ?? null,
 }));
 

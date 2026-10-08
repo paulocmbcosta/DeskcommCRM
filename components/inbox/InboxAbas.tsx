@@ -3,12 +3,11 @@ import type { ComponentType } from "react";
 
 import { useT } from "@/hooks/i18n/useT";
 import { useAuth } from "@/hooks/auth/AuthProvider";
-import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
+import type { ConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Archive, Inbox, Phone, Robot, User, UsersThree } from "@/lib/ui/icons";
 import { cn } from "@/lib/utils";
-import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 
 import { INBOX_TABS, visibleInboxTabs, type InboxTab } from "@/lib/inbox/abas";
 import type { InboxFiltersValue } from "./InboxFilters";
@@ -61,19 +60,20 @@ interface Props {
    * o selo. Ausente = sem telefone: o trilho fica como sempre foi.
    */
   telefone?: { ativa: boolean; esperando: number };
+  /**
+   * As contagens das abas, já lidas por quem monta o trilho (`useConversationCounts`,
+   * uma vez, no `InboxLayout`). Vêm por prop pela mesma razão da fila do telefone,
+   * logo acima: este componente chamava o hook com os PRÓPRIOS parâmetros — sem
+   * `na_fila` nem `insatisfeitos` —, e o selo de "Todas" discordava da lista que
+   * o `InboxLayout` montava com eles. Com os filtros novos (atendente, caixa,
+   * período, assunto) seriam mais cinco para manter iguais em dois lugares.
+   */
+  contagens?: ConversationCounts;
 }
 
-export function InboxAbas({ value, onChange, telefone }: Props) {
+export function InboxAbas({ value, onChange, telefone, contagens: counts }: Props) {
   const t = useT();
   const { activeOrg } = useAuth();
-  const { data: counts } = useConversationCounts(activeOrg?.orgId ?? null, {
-    unread: value.onlyUnread,
-    tag: value.tag,
-    channel_session_id: value.channel_session_id,
-    team_id: value.team_id,
-    search: buscaValeConsulta(value.search) ? value.search : undefined,
-    by_team: value.tab === "all",
-  });
 
   const tabs = activeOrg
     ? visibleInboxTabs(activeOrg.role, activeOrg.visibility_mode, { telefone: telefone?.ativa })
