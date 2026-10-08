@@ -107,6 +107,13 @@ export interface Message {
   media_mime: string | null;
   media_size_bytes: number | null;
   media_storage_path: string | null;
+  /**
+   * A transcrição do áudio (migration 0058) e o estado dela: `ready`, `failed`
+   * ou nulo. Só a leitura do histórico os traz, e só para áudio — ver
+   * `lib/inbox/transcricao-do-audio.ts`. Ausentes na mensagem otimista.
+   */
+  media_derived_text?: string | null;
+  media_derived_status?: string | null;
   // Espelha o CHECK do banco (messages_sent_via_check): 'crm', 'external_device',
   // 'automation', 'ai', 'user', 'system'. O tipo listava só três e o TypeScript
   // aceitava os demais só porque o dado vem do Supabase sem cast — a tela então

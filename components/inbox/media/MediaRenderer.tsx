@@ -6,6 +6,7 @@ import { AudioPlayer } from "./AudioPlayer";
 import { DocumentCard } from "./DocumentCard";
 import { ImageMedia } from "./ImageMedia";
 import { StickerMedia } from "./StickerMedia";
+import { TranscricaoDoAudio } from "./TranscricaoDoAudio";
 import { VideoMedia } from "./VideoMedia";
 
 /**
@@ -22,7 +23,12 @@ export function MediaRenderer({ message }: { message: Message }) {
     case "sticker":
       return <StickerMedia messageId={message.id} />;
     case "audio":
-      return <AudioPlayer messageId={message.id} isOutbound={isOutbound} />;
+      return (
+        <>
+          <AudioPlayer messageId={message.id} isOutbound={isOutbound} />
+          <TranscricaoDoAudio message={message} isOutbound={isOutbound} />
+        </>
+      );
     case "video":
       return <VideoMedia messageId={message.id} />;
     case "contact":

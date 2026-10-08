@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "A transcrição do áudio, do worker ao balão",
+    "subtitle": "todo áudio que chega é transcrito para o agente ouvir; a mesma transcrição passa a ser lida pelo atendente, abaixo do player, sem buscar nada de novo",
+    "output": "transcricao-do-audio.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    {
+      "id": "tela",
+      "label": "Tela"
+    },
+    {
+      "id": "api",
+      "label": "API"
+    },
+    {
+      "id": "worker",
+      "label": "Workers"
+    },
+    {
+      "id": "banco",
+      "label": "Banco"
+    }
+  ],
+  "mainPath": [
+    "persiste",
+    "deriva",
+    "derivado",
+    "listagem",
+    "balao"
+  ],
+  "nodes": [
+    {
+      "id": "balao",
+      "lane": "tela",
+      "col": 4,
+      "type": "frontend",
+      "label": "Inbox — balão do áudio: player + TranscricaoDoAudio (trecho, 'Ler mais', 'Transcrevendo…', 'Transcrição indisponível')"
+    },
+    {
+      "id": "conversa_aberta",
+      "lane": "tela",
+      "col": 3,
+      "type": "frontend",
+      "label": "useMessagesRealtime — recarrega a conversa aberta a cada mudança em messages; refetch de segurança a cada 45 s"
+    },
+    {
+      "id": "central",
+      "lane": "tela",
+      "col": 2,
+      "type": "frontend",
+      "label": "Central de avisos — 'O agente não conseguiu ler áudio que o cliente enviou' (midia_nao_lida)"
+    },
+    {
+      "id": "listagem",
+      "lane": "api",
+      "col": 3,
+      "type": "backend",
+      "label": "GET /api/v1/conversations/[id]/messages — listMessagesHandler pede media_derived_text e media_derived_status"
+    },
+    {
+      "id": "recorte",
+      "lane": "api",
+      "col": 4,
+      "type": "backend",
+      "label": "soATranscricaoDoAudio (lib/inbox/transcricao-do-audio.ts) — só é entregue o derivado de ÁUDIO, com arquivo, não apagado, de contato não anonimizado"
+    },
+    {
+      "id": "persiste",
+      "lane": "worker",
+      "col": 0,
+      "type": "backend",
+      "label": "media-persist-worker — guarda o arquivo no Storage e emite media.derive_requested"
+    },
+    {
+      "id": "deriva",
+      "lane": "worker",
+      "col": 1,
+      "type": "backend",
+      "label": "media-derive-worker — transcreve (Whisper, chave OpenAI da organização) e grava o texto"
+    },
+    {
+      "id": "turno",
+      "lane": "worker",
+      "col": 2,
+      "type": "backend",
+      "label": "agent-engine (get-lead-context, inbound-turn) — o agente lê o mesmo texto como a fala do cliente"
+    },
+    {
+      "id": "derivado",
+      "lane": "banco",
+      "col": 2,
+      "type": "database",
+      "label": "messages.media_derived_text / media_derived_status (0058) — 'ready', 'failed' ou nulo"
+    },
+    {
+      "id": "contato",
+      "lane": "banco",
+      "col": 3,
+      "type": "database",
+      "label": "contacts.is_anonymized — o FATO da anonimização, qualquer que tenha sido o caminho"
+    },
+    {
+      "id": "aviso",
+      "lane": "banco",
+      "col": 1,
+      "type": "database",
+      "label": "agent_inbox_items kind midia_nao_lida — um aberto por organização enquanto o problema durar"
+    }
+  ],
+  "edges": [
+    {
+      "from": "persiste",
+      "to": "deriva",
+      "label": "media.derive_requested (event_log)"
+    },
+    {
+      "from": "deriva",
+      "to": "derivado",
+      "label": "grava o texto e 'ready'; 'failed' depois de 5 tentativas"
+    },
+    {
+      "from": "deriva",
+      "to": "aviso",
+      "label": "sem chave ou falha permanente: abre o aviso"
+    },
+    {
+      "from": "aviso",
+      "to": "central",
+      "label": "o operador vê e ajusta a chave em Provedores de IA"
+    },
+    {
+      "from": "derivado",
+      "to": "turno",
+      "label": "o agente responde ao conteúdo do áudio"
+    },
+    {
+      "from": "derivado",
+      "to": "listagem",
+      "label": "as duas colunas entram no select da listagem"
+    },
+    {
+      "from": "listagem",
+      "to": "recorte",
+      "label": "linha a linha, antes de responder"
+    },
+    {
+      "from": "contato",
+      "to": "listagem",
+      "label": "quais contatos da página estão liberados (só quando há transcrição; sem resposta, não entrega)"
+    },
+    {
+      "from": "recorte",
+      "to": "balao",
+      "label": "transcrição e estado dentro da própria mensagem"
+    },
+    {
+      "from": "derivado",
+      "to": "conversa_aberta",
+      "label": "o UPDATE do worker chega pelo Realtime"
+    },
+    {
+      "from": "conversa_aberta",
+      "to": "listagem",
+      "label": "relê a página; o texto entra sem recarregar a tela"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "O que a forma não mostra",
+      "items": [
+        "Nada novo é gerado nem cobrado: a transcrição já existia para o agente; a tela só passou a recebê-la",
+        "Só passa pelo media-persist-worker o áudio que vem do CANAL: o do cliente e, no WAHA, o que o atendente manda pelo celular. O áudio gravado no CRM nasce já no Storage, não é transcrito e fica só com o player",
+        "media_derived_status nulo não distingue 'ainda vai chegar' de 'nunca foi pedido': a tela diz 'Transcrevendo…' só no áudio recebido há menos de 3 minutos, e depois se cala",
+        "O marcador MARCADOR_NAO_LIDA é recado para o agente; na tela vira 'Transcrição indisponível', nunca texto do cliente",
+        "Não-ligação declarada: a descrição de imagem e o texto de PDF ficam no banco e a listagem NÃO os entrega; a ferramenta MCP crm_get_conversation_history e a conversa vista pelo super-admin também não recebem o derivado", "O recorte é da ROTA: o aviso de mudança do Realtime leva a linha inteira ao navegador (anterior a esta peça); a tela só o usa para recarregar",
+        "Não-ligação declarada: nenhuma das duas anonimizações apaga o derivado — a cascata (fn_lgpd_cascade_redact_contact) zera a mídia e o botão da ficha (fn_lgpd_anonymize_contact) nem toca em messages. A listagem confere contacts.is_anonymized e não entrega; o texto segue no banco até a correção própria",
+        "Laço de retorno: transcrição que falha aparece no balão ('Transcrição indisponível') para o atendente e na Central (midia_nao_lida) para quem administra, que corrige a chave em Provedores de IA"
+      ]
+    }
+  ]
+}
