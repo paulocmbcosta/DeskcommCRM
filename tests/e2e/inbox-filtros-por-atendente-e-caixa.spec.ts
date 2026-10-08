@@ -244,6 +244,10 @@ test("filtros do Inbox: só as minhas, por atendente, por caixa, por período e 
     // (atendente, caixa, período, assunto), numa coluna de 300 px. Medido, e não
     // a olho: nada passa da largura do painel, e nenhum seletor some para fora.
     const painel = gestora.getByTestId("inbox-filtros-auxiliares");
+    // Caixa e assunto dependem das opções, que só são lidas quando o funil abre:
+    // medir antes de elas chegarem mediria um painel com dois seletores a menos.
+    await expect(painel.getByTestId("filtro-de-caixa")).toBeVisible();
+    await expect(painel.getByTestId("filtro-de-assunto")).toBeVisible();
     const medidas = await painel.evaluate((el) => {
       const caixa = el.getBoundingClientRect();
       const seletores = [...el.querySelectorAll<HTMLElement>("[data-testid^='filtro-de-']")].map((s) => {
