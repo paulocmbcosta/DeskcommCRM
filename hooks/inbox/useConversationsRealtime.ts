@@ -112,8 +112,12 @@ export interface ConversationsFilters {
   team_id?: string;
   /** Só a fila dos times: foi para um setor e ninguém pegou (migration 0279). */
   na_fila?: boolean;
-  /** `espera` = quem espera resposta há mais tempo primeiro. */
-  ordem?: "espera";
+  /**
+   * `espera` = quem espera resposta há mais tempo primeiro. `atividade` = a
+   * ordem de sempre (atividade recente), DITA — é o que a aba Todas manda para a
+   * rota não ler `assigned_to=unassigned` como o pedido antigo da Fila.
+   */
+  ordem?: "espera" | "atividade";
   /** Só as de cliente insatisfeito ou crítico (sentimento, migration 0280). */
   insatisfeitos?: boolean;
 }

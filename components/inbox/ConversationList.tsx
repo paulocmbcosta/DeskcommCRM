@@ -85,8 +85,14 @@ export function ConversationList({
   // A Fila deixou de mandar `assigned_to=unassigned` (agora pede `comando`), e
   // sem esta linha a numeração "1º, 2º…" e o tempo de espera sumiriam da única
   // visão em que servem para alguma coisa — sem erro nenhum, só sumiriam.
-  const isQueue =
-    filters.comando?.includes("aguardando") ?? filters.assigned_to === "unassigned";
+  //
+  // SÓ o `comando` decide. Até aqui havia um resto de compatibilidade,
+  // `?? filters.assigned_to === "unassigned"`, do tempo em que a Fila era esse
+  // filtro. Com o seletor de atendente, "Sem atendente" em Todas manda
+  // exatamente esse par — e toda linha ganhava "1º, 2º…" e "Aguardando",
+  // inclusive as conversas que o automático está respondendo. A tela não manda
+  // o pedido antigo desde que a Fila passou a pedir `comando`.
+  const isQueue = filters.comando?.includes("aguardando") ?? false;
   // Uma leitura por lista, compartilhada por todas as linhas (react-query dedupa
   // com o cabeçalho, que faz a mesma pergunta).
   const automaticoDaOrg = useAutomaticoAtivo();

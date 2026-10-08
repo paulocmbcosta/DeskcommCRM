@@ -545,8 +545,13 @@ export const listConversationsQuerySchema = z.object({
    * A ORDEM da lista. `espera` = quem espera resposta há mais tempo primeiro
    * (`espera_desde` asc, migration 0279), e quem não espera vai para o fim.
    * Ausente = a ordem da aba (atividade recente; na Fila, tempo de espera).
+   *
+   * `atividade` = atividade recente, DITA. Existe porque "a Fila" ainda é
+   * reconhecida também pelo pedido antigo `assigned_to=unassigned` (mantido para
+   * quem consome a API), e a aba Todas passou a poder mandar esse mesmo par pelo
+   * filtro "Sem atendente". Quem quer as sem dono na ordem normal diz a ordem.
    */
-  ordem: z.enum(["espera"]).optional(),
+  ordem: z.enum(["espera", "atividade"]).optional(),
   /** Só as de cliente insatisfeito ou crítico (sentimento, migration 0280). Mesma forma de `na_fila`. */
   insatisfeitos: z
     .union([z.boolean(), z.enum(["true", "false"])])
