@@ -81,6 +81,13 @@ export async function GET(req: NextRequest): Promise<Response> {
       tag: sp.get("tag") ?? undefined,
       team_id: sp.get("team_id") ?? undefined,
       unread: sp.get("unread") ?? undefined,
+      // Atendente, meio, período e assunto (desenho de 2026-10-08). A cerca de
+      // `rota-le-todo-filtro-do-schema.test.ts` cobra cada linha daqui.
+      assigned_to: sp.get("assigned_to") ?? undefined,
+      channel: sp.get("channel") ?? undefined,
+      closed_from: sp.get("closed_from") ?? undefined,
+      closed_to: sp.get("closed_to") ?? undefined,
+      assunto_id: sp.get("assunto_id") ?? undefined,
     });
     if (!q.success) return fail("validation_failed", t("Query inválida."), 422, { requestId });
     const resultado = await listarAtendimentosFechados(

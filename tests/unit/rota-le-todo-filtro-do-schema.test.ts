@@ -30,6 +30,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { listarFechadosSchema } from "@/app/api/v1/atendimentos/_handler";
 import { listConversationsQuerySchema } from "@/lib/schemas";
 
 const RAIZ = join(__dirname, "..", "..");
@@ -78,6 +79,54 @@ describe("a rota lê todo filtro que o schema aceita", () => {
     );
     expect(
       new RegExp(`comando:\\s*url\\.searchParams\\.get\\(\\s*["']comando["']`).test(sabotado),
+      "a sabotagem não removeu a linha — o regex do teste não casa com o código real",
+    ).toBe(false);
+  });
+});
+
+/**
+ * A MESMA CERCA, PARA A ABA FECHADAS.
+ *
+ * A lista dos atendimentos encerrados tem o seu schema (`listarFechadosSchema`) e
+ * a sua rota, e ficou fora desta cerca enquanto tinha cinco filtros. Ganhou mais
+ * cinco (atendente, meio, período e assunto) — e a rotura possível é idêntica à
+ * que este arquivo existe para impedir: o schema aceita, o hook manda, e a rota
+ * não lê. A aba mostraria a lista inteira com o filtro aceso.
+ */
+const ROTA_DOS_FECHADOS = "app/api/v1/atendimentos/route.ts";
+
+function fonteDaRotaDosFechados(): string {
+  return readFileSync(join(RAIZ, ROTA_DOS_FECHADOS), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+}
+
+function chavesDosFechados(): string[] {
+  return Object.keys(listarFechadosSchema.shape).sort();
+}
+
+describe("a rota dos atendimentos encerrados lê todo filtro que o schema aceita", () => {
+  it("o schema tem chaves — vazio, o teste abaixo aprovaria tudo", () => {
+    const chaves = chavesDosFechados();
+    expect(chaves.length).toBeGreaterThanOrEqual(10);
+    expect(chaves).toContain("team_id");
+    expect(chaves).toContain("assigned_to");
+  });
+
+  it.each(chavesDosFechados())("a rota lê `%s` de searchParams", (chave) => {
+    expect(
+      new RegExp(`${chave}:\\s*sp\\.get\\(\\s*["']${chave}["']`).test(fonteDaRotaDosFechados()),
+      `${ROTA_DOS_FECHADOS} não lê "${chave}" da URL — o schema aceita, o browser manda, e a rota descarta em silêncio`,
+    ).toBe(true);
+  });
+
+  it("o controle: a cerca reprova quando uma chave some da rota", () => {
+    const sabotado = fonteDaRotaDosFechados().replace(
+      /team_id:\s*sp\.get\(\s*["']team_id["']\s*\)\s*\?\?\s*undefined,/,
+      "",
+    );
+    expect(
+      /team_id:\s*sp\.get\(\s*["']team_id["']/.test(sabotado),
       "a sabotagem não removeu a linha — o regex do teste não casa com o código real",
     ).toBe(false);
   });

@@ -258,3 +258,102 @@ describe("paginação e o que o card recebe", () => {
     expect(r.data[0]?.canal).toBeTruthy();
   });
 });
+
+/**
+ * OS FILTROS QUE A ABA GANHOU (desenho de 2026-10-08): atendente, meio, período
+ * e assunto. O pedido veio de quem atende — "as conversas finalizadas aqui são
+ * todas misturadas de todos os atendentes".
+ */
+describe("atendente, meio, período e assunto viram predicado", () => {
+  const MARIA = "8d9f3c1e-0000-4000-8000-00000000000a";
+  const ASSUNTO = "8d9f3c1e-0000-4000-8000-00000000000b";
+
+  async function predicados(extra: Record<string, string>) {
+    const { client, chamadas } = fakeSupabase({ atendimentos: [] });
+    await listarAtendimentosFechados(client, ctx, consulta(extra));
+    return chamadas;
+  }
+
+  it("⭐ `assigned_to=me` é quem estava com a conversa NO ENCERRAMENTO — e o `me` é o usuário da sessão", async () => {
+    const c = await predicados({ assigned_to: "me" });
+    // `atendimentos.assigned_to_user_id`, carimbado no fechamento. O dono ATUAL
+    // da conversa não serve: ela perde o dono quando o cliente volta (0269), e o
+    // histórico de quem atendeu sumiria do "Só as minhas".
+    expect(args(c, "atendimentos", "eq")).toContain('["assigned_to_user_id","user-1"]');
+    expect(args(c, "atendimentos", "eq")).not.toContain("conversations.assigned_to_user_id");
+    // Nunca "quem clicou em encerrar": o supervisor que fecha a conversa parada
+    // de um atendente não vira dono dela.
+    expect(args(c, "atendimentos", "eq")).not.toContain("closed_by_user_id");
+  });
+
+  it("um atendente pelo id filtra o mesmo campo", async () => {
+    const c = await predicados({ assigned_to: MARIA });
+    expect(args(c, "atendimentos", "eq")).toContain(`["assigned_to_user_id","${MARIA}"]`);
+  });
+
+  it("`unassigned` é `is null`: o que foi encerrado sem ninguém ter assumido", async () => {
+    const c = await predicados({ assigned_to: "unassigned" });
+    expect(args(c, "atendimentos", "is")).toContain('["assigned_to_user_id",null]');
+    expect(args(c, "atendimentos", "eq")).not.toContain("assigned_to_user_id");
+  });
+
+  it("o MEIO é da conversa, pelo mesmo `!inner` do número", async () => {
+    const c = await predicados({ channel: "phone" });
+    expect(args(c, "atendimentos", "eq")).toContain('["conversations.channel","phone"]');
+  });
+
+  it("o período recorta `closed_at`: de inclusivo, até exclusivo", async () => {
+    const c = await predicados({
+      closed_from: "2026-10-08T03:00:00.000Z",
+      closed_to: "2026-10-09T03:00:00.000Z",
+    });
+    expect(args(c, "atendimentos", "gte")).toContain('["closed_at","2026-10-08T03:00:00.000Z"]');
+    expect(args(c, "atendimentos", "lt")).toContain('["closed_at","2026-10-09T03:00:00.000Z"]');
+  });
+
+  it("só o começo do período (\"hoje\", \"últimos 7 dias\") não inventa um fim", async () => {
+    const c = await predicados({ closed_from: "2026-10-08T03:00:00.000Z" });
+    expect(args(c, "atendimentos", "gte")).toContain('["closed_at","2026-10-08T03:00:00.000Z"]');
+    expect(c.some((x) => x.tabela === "atendimentos" && x.metodo === "lt")).toBe(false);
+  });
+
+  it("o assunto é o do atendimento", async () => {
+    const c = await predicados({ assunto_id: ASSUNTO });
+    expect(args(c, "atendimentos", "eq")).toContain(`["assunto_id","${ASSUNTO}"]`);
+  });
+
+  it("CONTROLE: sem filtro, nenhum predicado novo", async () => {
+    const c = await predicados({});
+    const eqs = args(c, "atendimentos", "eq");
+    expect(eqs).not.toContain("assigned_to_user_id");
+    expect(eqs).not.toContain("assunto_id");
+    expect(eqs).not.toContain("conversations.channel");
+    expect(c.some((x) => x.metodo === "gte" || x.metodo === "lt")).toBe(false);
+  });
+
+  it("todos juntos convivem com os que já existiam", async () => {
+    const c = await predicados({
+      assigned_to: MARIA,
+      channel: "whatsapp",
+      closed_from: "2026-10-01T03:00:00.000Z",
+      assunto_id: ASSUNTO,
+      tag: "urgente",
+    });
+    const eqs = args(c, "atendimentos", "eq");
+    expect(eqs).toContain('["organization_id","org-1"]');
+    expect(eqs).toContain(`["assigned_to_user_id","${MARIA}"]`);
+    expect(eqs).toContain('["conversations.channel","whatsapp"]');
+    expect(eqs).toContain(`["assunto_id","${ASSUNTO}"]`);
+    expect(args(c, "atendimentos", "contains")).toContain('["conversations.tags",["urgente"]]');
+  });
+
+  it.each([
+    ["assigned_to", "qualquer-coisa"],
+    ["channel", "fax"],
+    ["closed_from", "ontem"],
+    ["closed_to", "2026-10-08"],
+    ["assunto_id", "abc"],
+  ])("o schema recusa `%s=%s` — filtro fora de forma não vira lista menor em silêncio", (chave, valor) => {
+    expect(listarFechadosSchema.safeParse({ [chave]: valor }).success).toBe(false);
+  });
+});
