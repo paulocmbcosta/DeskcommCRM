@@ -2,6 +2,8 @@
 
 **Data:** 2026-10-08 · **Estado:** desenho aprovado pelo dono do produto · **Migration:** 0297 · **Tarefa:** CU-124b4z9rjvg
 
+Plano e emendas: `docs/superpowers/plans/2026-10-08-inbox-filtros-por-atendente-e-caixa.md`.
+
 ## 1. O problema
 
 O pedido veio dos atendentes da Totus, comparando com a ferramenta anterior: "todas as
@@ -257,34 +259,41 @@ Molde: `GET /api/v1/conversations/teams`.
   nunca o provider.
 - **Assuntos:** `atendimento_assuntos` com o time, incluindo arquivados, com o client
   do usuário.
-- **Carga:** a tela só pede quando o funil abre ou quando há filtro de atendente,
-  caixa ou assunto vindo do endereço. Cache de 5 minutos no cliente.
+- **Carga:** a tela só pede quando o funil abre. Cache de 5 minutos no cliente. Com o
+  funil fechado, um filtro vindo do endereço é contado no número do funil sem precisar
+  das opções.
 - Leitura pura: sem auditoria.
 
 ## 9. Banco (migration 0297)
 
-Dois índices, sem coluna, função ou policy nova:
+Um índice, sem coluna, função ou policy nova:
 
 ```sql
 create index if not exists atendimentos_org_dono_fechamento
   on public.atendimentos (organization_id, assigned_to_user_id, closed_at desc)
   where closed_at is not null;
-
-create index if not exists conversations_org_channel_last_msg
-  on public.conversations (organization_id, channel, last_message_at desc nulls last);
 ```
 
-- O primeiro serve "Só as minhas" e o filtro por nome em Fechadas.
-- O segundo serve o filtro por meio quando o meio é minoria (telefone, chat do site):
-  sem ele, a consulta percorre as conversas da organização em ordem de atividade,
-  passando cada linha pela RLS, até juntar uma página.
+- Serve "Só as minhas" e o filtro por nome em Fechadas. Sem ele, o selo da aba —
+  contagem exata, relida a cada 30 s — lê os encerrados da organização inteira para
+  contar os de uma pessoa.
 - Período e assunto já têm índice (`atendimentos_org_fechamento`,
   `atendimentos_assunto`).
-- Antes de fechar o PR, medir os dois planos com `EXPLAIN` sob o papel
-  `authenticated` num banco com volume sintético. Índice que o plano não usar sai da
-  migration.
 - Tripla: arquivo em `supabase/migrations/`, apêndice idempotente no `baseline.sql`,
   linha no `MANIFEST.md`.
+
+**Medido** (Postgres 15, sob `authenticated`, 15.000 encerrados e 750 de uma
+atendente; uma execução por caso, ordem de grandeza): lista 19,8 ms → 2,4 ms; selo
+44,1 ms → 12,4 ms.
+
+**Medido e recusado:** o desenho previa um segundo índice, em
+`conversations (organization_id, channel, last_message_at desc)`, para o filtro por
+meio. O plano o usa, mas o ganho é de milissegundos (lista 7,5 ms → 2,8 ms com 15.000
+conversas abertas e 2% de telefone): o filtro de meio é barato e roda antes da RLS. O
+preço seria uma entrada a mais por mensagem na tabela mais reescrita do sistema, em
+toda instalação — inclusive a que só tem WhatsApp, onde o índice seria cópia do que já
+existe. A conta inteira está no cabeçalho da migration, com a condição em que valeria
+medir de novo.
 
 ## 10. Tela
 
@@ -298,8 +307,10 @@ create index if not exists conversations_org_channel_last_msg
 - **Linha do título de Fechadas:** o botão "Só as minhas".
 - **Vazio por filtro** (`EmptyPorFiltro`): cita os filtros que se aplicam, agora
   incluindo Time, Atendente, Caixa de entrada, Período e Assunto.
-- **`InboxAbas.tsx` e `InboxLayout.tsx`** pedem as contagens com os mesmos parâmetros,
-  montados por uma função só.
+- **Uma leitura de contagem só.** `InboxLayout.tsx` pede as contagens com todos os
+  filtros ligados (`paraContagens`) e `InboxAbas.tsx` as recebe por prop — o mesmo
+  arranjo da fila do telefone. As opções dos seletores (`GET /conversations/filtros`)
+  também são lidas no `InboxLayout`, só com o funil aberto, e descem por prop.
 - **Idiomas:** toda frase nova entra em `lib/i18n/dicionario.ts`.
 - A coluna da lista tem 300 px. As medidas dos controles novos são conferidas por
   ferramenta, não a olho.

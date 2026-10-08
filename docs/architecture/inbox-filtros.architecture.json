@@ -1,0 +1,339 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Inbox: filtros por atendente, caixa de entrada, período e assunto",
+    "subtitle": "os filtros moram no endereço; uma tabela diz em que aba cada um vale; lista e selo saem da mesma régua",
+    "output": "inbox-filtros.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    {
+      "id": "tela",
+      "label": "Tela"
+    },
+    {
+      "id": "regra",
+      "label": "Regra (módulos puros)"
+    },
+    {
+      "id": "api",
+      "label": "API"
+    },
+    {
+      "id": "banco",
+      "label": "Banco"
+    }
+  ],
+  "mainPath": [
+    "funil",
+    "endereco",
+    "tabela",
+    "rota_fechados",
+    "atendimentos"
+  ],
+  "nodes": [
+    {
+      "id": "funil",
+      "lane": "tela",
+      "col": 1,
+      "type": "frontend",
+      "label": "Inbox › funil de filtros — Time, Atendente, Caixa de entrada, Etiqueta; em Fechadas: Período e Assunto (InboxFilters)"
+    },
+    {
+      "id": "so_as_minhas",
+      "lane": "tela",
+      "col": 2,
+      "type": "frontend",
+      "label": "Inbox › Fechadas › botão 'Só as minhas' — o mesmo filtro do seletor de atendente, num clique"
+    },
+    {
+      "id": "endereco",
+      "lane": "tela",
+      "col": 3,
+      "type": "frontend",
+      "label": "Endereço da página (?filter=&assigned_to=&channel=&periodo=…) — a fonte do estado; a busca fica de fora"
+    },
+    {
+      "id": "listas",
+      "lane": "tela",
+      "col": 4,
+      "type": "frontend",
+      "label": "Listas — ConversationList e AtendimentosFechadosList; vazio por filtro cita os filtros ligados"
+    },
+    {
+      "id": "selos",
+      "lane": "tela",
+      "col": 5,
+      "type": "frontend",
+      "label": "Selos das abas (InboxAbas) — recebem as contagens por prop, de uma leitura só"
+    },
+    {
+      "id": "url",
+      "lane": "regra",
+      "col": 3,
+      "type": "backend",
+      "label": "lib/inbox/filtros-na-url — ler (valor inválido é descartado) e escrever (preserva id e o que não é filtro)"
+    },
+    {
+      "id": "tabela",
+      "lane": "regra",
+      "col": 4,
+      "type": "backend",
+      "label": "lib/inbox/filtros-de-tela — ONDE_VALE: em que aba cada filtro vale; o que vai a cada rota; nomes do vazio; número do funil"
+    },
+    {
+      "id": "periodo",
+      "lane": "regra",
+      "col": 5,
+      "type": "backend",
+      "label": "lib/inbox/periodo — hoje/ontem/7d/30d/datas viram dois instantes, no dia de quem olha a tela"
+    },
+    {
+      "id": "rota_opcoes",
+      "lane": "api",
+      "col": 1,
+      "type": "backend",
+      "label": "GET /conversations/filtros (viewer+) — atendentes (vazio para quem não vê colegas), caixas com MEIO, assuntos por time"
+    },
+    {
+      "id": "rota_conversas",
+      "lane": "api",
+      "col": 3,
+      "type": "backend",
+      "label": "GET /conversations — assigned_to, channel (meio), channel_session_id…"
+    },
+    {
+      "id": "rota_fechados",
+      "lane": "api",
+      "col": 4,
+      "type": "backend",
+      "label": "GET /atendimentos?status=closed — assigned_to (dono no encerramento), channel, closed_from/closed_to, assunto_id"
+    },
+    {
+      "id": "rota_contagens",
+      "lane": "api",
+      "col": 5,
+      "type": "backend",
+      "label": "GET /conversations/counts — recebe TODOS os filtros ligados e decide a que contagem cada um chega"
+    },
+    {
+      "id": "regua_fechados",
+      "lane": "api",
+      "col": 6,
+      "type": "backend",
+      "label": "aplicarFiltrosDosFechados — os predicados dos encerrados, numa função que a lista E a contagem chamam"
+    },
+    {
+      "id": "membros",
+      "lane": "banco",
+      "col": 1,
+      "type": "table",
+      "label": "user_organizations (service role + organization_id da sessão) e nomes por nomesDosAtendentes"
+    },
+    {
+      "id": "caixas",
+      "lane": "banco",
+      "col": 2,
+      "type": "table",
+      "label": "channel_sessions não arquivadas — provider vira meio (meioDoCanal), inclui o telefone"
+    },
+    {
+      "id": "assuntos",
+      "lane": "banco",
+      "col": 3,
+      "type": "table",
+      "label": "atendimento_assuntos + attendance_teams — com os arquivados, que nomeiam o passado"
+    },
+    {
+      "id": "conversas",
+      "lane": "banco",
+      "col": 4,
+      "type": "table",
+      "label": "conversations — assigned_to_user_id, channel, channel_session_id; RLS por linha"
+    },
+    {
+      "id": "atendimentos",
+      "lane": "banco",
+      "col": 5,
+      "type": "table",
+      "label": "atendimentos — assigned_to_user_id carimbado no encerramento, closed_at, assunto_id; índice atendimentos_org_dono_fechamento (0297)"
+    }
+  ],
+  "edges": [
+    {
+      "from": "funil",
+      "to": "endereco",
+      "label": "cada escolha escreve o endereço (history.replaceState)"
+    },
+    {
+      "from": "so_as_minhas",
+      "to": "endereco",
+      "label": "liga e desliga assigned_to=me"
+    },
+    {
+      "from": "endereco",
+      "to": "url",
+      "label": "useSearchParams → lerFiltrosDaUrl"
+    },
+    {
+      "from": "url",
+      "to": "tabela",
+      "label": "os filtros ligados + a aba atual"
+    },
+    {
+      "from": "periodo",
+      "to": "tabela",
+      "label": "closed_from / closed_to"
+    },
+    {
+      "from": "tabela",
+      "to": "funil",
+      "label": "que seletor aparece na aba; quantos o funil conta"
+    },
+    {
+      "from": "tabela",
+      "to": "so_as_minhas",
+      "label": "pressionado quando assigned_to = me"
+    },
+    {
+      "from": "tabela",
+      "to": "listas",
+      "label": "nomesDosFiltros — o que o vazio cita"
+    },
+    {
+      "from": "tabela",
+      "to": "rota_conversas",
+      "label": "paraConversas — só o que vale na aba"
+    },
+    {
+      "from": "tabela",
+      "to": "rota_fechados",
+      "label": "paraFechados — atendente, período, assunto"
+    },
+    {
+      "from": "tabela",
+      "to": "rota_contagens",
+      "label": "paraContagens — todos os ligados, sem olhar a aba"
+    },
+    {
+      "from": "rota_conversas",
+      "to": "listas",
+      "label": "a página de conversas"
+    },
+    {
+      "from": "rota_fechados",
+      "to": "listas",
+      "label": "a página de atendimentos encerrados"
+    },
+    {
+      "from": "rota_contagens",
+      "to": "selos",
+      "label": "fila, automático, minhas, todas, fechadas"
+    },
+    {
+      "from": "rota_opcoes",
+      "to": "funil",
+      "label": "as opções dos seletores, lidas com o funil aberto"
+    },
+    {
+      "from": "rota_fechados",
+      "to": "regua_fechados",
+      "label": "aplica os filtros da lista"
+    },
+    {
+      "from": "rota_contagens",
+      "to": "regua_fechados",
+      "label": "aplica os MESMOS filtros ao selo de Fechadas"
+    },
+    {
+      "from": "regua_fechados",
+      "to": "atendimentos",
+      "label": "predicados sobre o atendimento e, pelo !inner, sobre a conversa"
+    },
+    {
+      "from": "rota_conversas",
+      "to": "conversas",
+      "label": "eq channel / assigned_to_user_id, sob RLS"
+    },
+    {
+      "from": "rota_contagens",
+      "to": "conversas",
+      "label": "contagem exata, sob RLS"
+    },
+    {
+      "from": "atendimentos",
+      "to": "conversas",
+      "label": "a policy herda o escopo da conversa de hoje"
+    },
+    {
+      "from": "rota_opcoes",
+      "to": "membros",
+      "label": "só para quem vê colegas (podeVerColegas)"
+    },
+    {
+      "from": "rota_opcoes",
+      "to": "caixas",
+      "label": "client do usuário; o provider não sai na resposta"
+    },
+    {
+      "from": "rota_opcoes",
+      "to": "assuntos",
+      "label": "client do usuário"
+    },
+    {
+      "from": "membros",
+      "to": "funil",
+      "label": "nomes no seletor de atendente"
+    },
+    {
+      "from": "caixas",
+      "to": "funil",
+      "label": "meios e números no seletor de caixa"
+    },
+    {
+      "from": "assuntos",
+      "to": "funil",
+      "label": "assuntos por time no seletor de assunto"
+    },
+    {
+      "from": "selos",
+      "to": "endereco",
+      "label": "clicar numa aba troca filter= e mantém os filtros"
+    },
+    {
+      "from": "periodo",
+      "to": "url",
+      "label": "dataValida e as escolhas prontas — o que o endereço aceita"
+    },
+    {
+      "from": "periodo",
+      "to": "funil",
+      "label": "hojeComoData — 'Escolher datas…' nasce com hoje nas duas pontas"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "O que a forma não mostra",
+      "items": [
+        "Em Fechadas, 'do atendente X' é quem estava com a conversa NO ENCERRAMENTO (atendimentos.assigned_to_user_id). Não é o dono de hoje — a conversa perde o dono quando o cliente volta (0269) — nem quem clicou em encerrar",
+        "O atendente não vale em Minhas (a aba já é 'eu') nem em Fila e Automático: conversa com dono tem comando 'humano', e essas abas pedem os comandos que só existem sem dono",
+        "Filtro ligado em aba onde não vale fica no endereço, não é aplicado nem contado ali, e volta a valer na aba dele",
+        "A contagem recebe todos os filtros ligados para o selo de uma aba dizer o que o clique vai mostrar; a que contagem cada um chega é decisão do servidor, espelho de ONDE_VALE",
+        "Filtro é de tela, não barreira: quem vê o quê continua sendo a RLS de conversations e o visibility_mode"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Laço de retorno e não-ligações",
+      "items": [
+        "Se a lista e o selo divergirem: badge-espelha-o-filtro, contagem-aplica-os-filtros-novos e a cerca rota-le-todo-filtro-do-schema reprovam",
+        "Se a tela montar um filtro e o hook não o mandar: hooks-serializam-os-filtros-novos reprova",
+        "NÃO ligado: a aba Telefone — lista ligações, tem outra fonte de dados e filtros próprios",
+        "NÃO ligado: a busca não vai para o endereço — é nome ou telefone de cliente",
+        "NÃO entrou: índice em conversations(organization_id, channel, last_message_at) — medido e recusado (cabeçalho da migration 0297)"
+      ]
+    }
+  ]
+}

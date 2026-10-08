@@ -21,6 +21,20 @@ Desenho: `docs/superpowers/specs/2026-10-08-inbox-filtros-por-atendente-e-caixa-
 5. **"Escolher datas…" nasce com hoje nos dois campos.** Não existe estado intermediário com uma data só: mexer em `de` para depois de `ate` puxa `ate` junto, e o contrário.
 6. **Prova em tela.** O dono não roda Supabase local nem Playwright na máquina dele (decisão de 2026-09-29). A prova em tela é o teste de ponta a ponta no GitHub Actions, com capturas, e a prova real é na produção depois de publicado.
 
+## O que a execução mudou neste plano
+
+O texto abaixo é o plano como foi escrito. Três coisas saíram diferentes, e valem sobre ele:
+
+1. **Um índice, não dois (Task 5).** A medição mandou tirar o índice de `conversations` por meio:
+   o plano o usa, mas o ganho é de milissegundos contra uma entrada a mais por mensagem na tabela
+   mais reescrita do sistema. Ficou só `atendimentos_org_dono_fechamento`, e a migration se chama
+   `20261008120000_0297_inbox_fechadas_por_atendente_indice.sql`. A conta está no cabeçalho dela.
+2. **As opções dos seletores descem por prop (Tasks 7 a 9).** `useOpcoesDosFiltros` é chamado no
+   `InboxLayout`, que é o dono do "funil aberto", e `InboxFilters` recebe `opcoes`. Chamado dentro
+   do funil, o hook exigiria um `QueryClientProvider` em todo teste que monta o funil sozinho.
+3. **O mapa de arquitetura é um arquivo novo (Task 11),** `docs/architecture/inbox-filtros.architecture.json`,
+   em vez de mais peças no mapa da fila e do termômetro.
+
 ## Regras do repositório que valem para todas as tasks
 
 - Node 22: `source ~/.nvm/nvm.sh && nvm use 22.23.2` antes de qualquer `pnpm`. zsh: aspas em volta de qualquer glob.
