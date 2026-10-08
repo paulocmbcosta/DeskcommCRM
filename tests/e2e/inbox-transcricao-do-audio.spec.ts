@@ -406,7 +406,11 @@ test.describe("Inbox — a transcrição do áudio aparece junto do player", () 
     // texto nasce abaixo da dobra para quem estava olhando o áudio chegar.
     await expect(caixaQueChegou.getByRole("button", { name: "Ler mais" })).toBeVisible();
     await expect(caixaQueChegou, "a caixa que chegou devia estar inteira na tela").toBeInViewport({ ratio: 0.95 });
-    await expect.poll(distanciaDoFim, { timeout: 10_000 }).toBeLessThanOrEqual(4);
+    // "No fim", nesta tela, é a 7–8 px do fundo: a conversa rola até a âncora
+    // que fica ANTES do respiro de baixo (`py-2`). Medido na execução
+    // 37789164838, em que esta linha exigia 4 e recebeu 7. O que importa aqui é
+    // não ter ficado a um balão de distância.
+    await expect.poll(distanciaDoFim, { timeout: 10_000 }).toBeLessThanOrEqual(16);
     await captura(page, "4-chegou-sem-recarregar");
 
     // ── 3b. …e para quem SUBIU para ler o histórico ────────────────────────
