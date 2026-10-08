@@ -3855,19 +3855,26 @@ relógio de mentira para o prazo do "Transcrevendo…", em
 de verdade pelos dois caminhos e mede antes e depois; e a tela, com os áudios semeados como o worker
 os deixa, em `tests/e2e/inbox-transcricao-do-audio.spec.ts`.
 
+A spec de tela passou inteira no GitHub Actions, na execução 37798949042 do `e2e.yml` (o commit de
+merge na `main`). As imagens e o `medidas.json` sobem como artefato
+`evidencia-inbox-transcricao-do-audio`: caixa de 282 px num balão de 306 px, abaixo do player; trecho
+de 72 px (4 linhas de 13 px); aberta, 256 px visíveis de 501 px de texto; no celular (390 px), caixa de
+245 px. As falhas das outras specs dessa execução são herdadas (`card-pelo-classificador`,
+`inbox-rotulo-de-origem`, 1ª tentativa de `degradacao-silenciosa`).
+
 O invariante foi sabotado de três jeitos e reprovou nos três: sem a regra no caminho da listagem
 (os casos de imagem, apagada e sem arquivo); sem as colunas no `select` (todos os do bloco); e sem
 a conferência do contato (o caso do botão de anonimizar).
 
 | Caso | Prioridade | Resultado |
 |---|---|---|
-| J46.1 Áudio do cliente já transcrito: abaixo do player aparece o começo do que ele falou, com o rótulo "Transcrição automática" | `[P1]` | E2E_PENDENTE |
-| J46.2 "Ler mais" abre o texto inteiro ali mesmo, e "Ler menos" recolhe; áudio comprido rola por dentro da caixa (teto de 256 px medido no navegador) | `[P1]` | E2E_PENDENTE |
-| J46.3 Transcrição curta aparece inteira e sem botão | `[P1]` | E2E_PENDENTE |
-| J46.4 Áudio que acabou de chegar diz "Transcrevendo…", e o texto entra sozinho quando fica pronto, sem recarregar a página | `[P1]` | E2E_PENDENTE |
-| J46.5 Quem está no fim da conversa vê a transcrição chegar inteira (o balão cresce e a conversa acompanha); quem subiu para ler o histórico não é levado ao fim | `[P1]` | E2E_PENDENTE |
+| J46.1 Áudio do cliente já transcrito: abaixo do player aparece o começo do que ele falou, com o rótulo "Transcrição automática" | `[P1]` | **PASS** (pela tela, e2e — execução 37798949042 na `main`) |
+| J46.2 "Ler mais" abre o texto inteiro ali mesmo, e "Ler menos" recolhe; áudio comprido rola por dentro da caixa (teto de 256 px medido no navegador) | `[P1]` | **PASS** (pela tela, e2e — execução 37798949042 na `main`) |
+| J46.3 Transcrição curta aparece inteira e sem botão | `[P1]` | **PASS** (pela tela, e2e — execução 37798949042 na `main`) |
+| J46.4 Áudio que acabou de chegar diz "Transcrevendo…", e o texto entra sozinho quando fica pronto, sem recarregar a página | `[P1]` | **PASS** (pela tela, e2e — execução 37798949042 na `main`) |
+| J46.5 Quem está no fim da conversa vê a transcrição chegar inteira (o balão cresce e a conversa acompanha); quem subiu para ler o histórico não é levado ao fim | `[P1]` | **PASS** (pela tela, e2e — execução 37798949042 na `main`) |
 | J46.6 O "Transcrevendo…" tem prazo (3 min): passou, a tela para de prometer. Navegador com o relógio alguns segundos atrasado ainda vê o aviso | `[P2]` | em unidade (relógio de mentira) |
-| J46.7 Áudio gravado pelo atendente no CRM, e áudio antigo sem transcrição: só o player, como era | `[P1]` | E2E_PENDENTE |
+| J46.7 Áudio gravado pelo atendente no CRM, e áudio antigo sem transcrição: só o player, como era | `[P1]` | **PASS** (pela tela, e2e — execução 37798949042 na `main`) |
 | J46.8 A transcrição falhou, ou falta a chave da OpenAI: "Transcrição indisponível" — o recado interno do agente nunca aparece como fala do cliente | `[P1]` | em unidade |
 | J46.9 Descrição de imagem e texto de PDF (que o sistema também gera para o agente) não são entregues pela listagem | `[P1]` | no Postgres real |
 | J46.10 Mensagem apagada pelo cliente: a listagem não entrega a transcrição, e o balão não a mostra | `[P0]` | no Postgres real e em unidade |
@@ -3876,13 +3883,14 @@ a conferência do contato (o caso do botão de anonimizar).
 | J46.13 Anonimizar um contato não cala a transcrição dos outros | `[P1]` | no Postgres real |
 | J46.14 Transcrição que bateu no teto do sistema (8.000 caracteres) avisa que o áudio continua | `[P2]` | em unidade |
 | J46.15 A conversa vista pelo super-admin (leitura que não traz a transcrição): só o player, sem "Transcrevendo…" | `[P2]` | em unidade |
-| J46.16 No celular (390 px), a caixa não passa da borda da tela | `[P2]` | E2E_PENDENTE |
+| J46.16 No celular (390 px), a caixa não passa da borda da tela | `[P2]` | **PASS** (pela tela, e2e — execução 37798949042 na `main`) |
 | J46.17 Áudio real de um cliente em produção: o texto do balão é o que ele falou | `[P1]` | pendente — prova do dono |
 
 ### O que NÃO foi provado
 
 - **Áudio real.** O e2e semeia o texto que o worker gravaria; nenhum áudio de cliente foi enviado
-  nem transcrito para esta prova. A cadeia que produz o texto não mudou e roda em produção.
+  nem transcrito para esta prova. A cadeia que produz o texto não mudou e roda em produção. A
+  feature está em produção desde a 1.58.0 (2026-10-08); a conferência na tela real é do dono.
 - **A qualidade da transcrição.** O Whisper erra nome, valor e número de documento. O rótulo
   "Transcrição automática" avisa; nada confere o texto contra o áudio.
 - **O texto continua no banco depois da anonimização**, pelos dois caminhos: nenhuma das duas
