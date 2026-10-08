@@ -1,6 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api/client";
+import type { MeioDeCanal } from "@/lib/channels/capabilities";
 
 export interface ConversationCounts {
   /**
@@ -39,6 +40,18 @@ export interface FiltrosDaContagem {
   na_fila?: boolean;
   /** Só insatisfeitos — vale para Todas e Minhas (as abas que mostram o botão). */
   insatisfeitos?: boolean;
+  /** O meio da conversa — vale para as cinco contagens. */
+  channel?: MeioDeCanal;
+  /**
+   * O atendente (`me`, `unassigned` ou um id). O SERVIDOR decide a que contagem
+   * ele chega: Todas (com os chips de time) e Fechadas — nunca Minhas, Fila nem
+   * Automático.
+   */
+  assigned_to?: string;
+  /** O período e o assunto do encerramento: só a contagem de Fechadas os aplica. */
+  closed_from?: string;
+  closed_to?: string;
+  assunto_id?: string;
 }
 
 /**
@@ -58,6 +71,11 @@ export function useConversationCounts(
   if (filtros.by_team) qs.set("by_team", "true");
   if (filtros.na_fila) qs.set("na_fila", "true");
   if (filtros.insatisfeitos) qs.set("insatisfeitos", "true");
+  if (filtros.channel) qs.set("channel", filtros.channel);
+  if (filtros.assigned_to) qs.set("assigned_to", filtros.assigned_to);
+  if (filtros.closed_from) qs.set("closed_from", filtros.closed_from);
+  if (filtros.closed_to) qs.set("closed_to", filtros.closed_to);
+  if (filtros.assunto_id) qs.set("assunto_id", filtros.assunto_id);
   const sufixo = qs.toString();
 
   return useQuery({
