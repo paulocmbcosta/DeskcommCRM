@@ -9,6 +9,7 @@ import { z } from "zod";
 import { COMANDOS_DO_BANCO, type ComandoDoBanco } from "@/lib/inbox/comando-da-conversa";
 import { RESUMO_MAXIMO } from "@/lib/atendimento/encerramento";
 import { PISO_DA_BUSCA, buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
+import { MEIOS_DE_CANAL } from "@/lib/channels/capabilities";
 
 /**
  * O que a API aceita ESCREVER. Cinco valores, e a ausência de `pending`/`resolved`
@@ -382,6 +383,30 @@ export const filtroDeTimeSchema = z
   // mão. Medido: o typecheck reprovou `lib/mcp/tools/conversations.ts` assim.
   .optional();
 
+/**
+ * O ATENDENTE como filtro: `me`, `unassigned` ou o id de um usuário.
+ *
+ * Mora FORA do objeto pela mesma razão de `filtroDeTimeSchema`: três rotas
+ * aplicam a MESMA régua — a lista de conversas, a lista dos atendimentos
+ * encerrados e a contagem das abas. Cada uma com a sua cópia, o selo passaria a
+ * aceitar um valor que a lista recusa.
+ */
+export const filtroDeAtendenteSchema = z.union([
+  z.string().uuid(),
+  z.literal("me"),
+  z.literal("unassigned"),
+]);
+
+/**
+ * O MEIO da conversa — `whatsapp`, `site_chat` ou `phone`, o mesmo valor de
+ * `conversations.channel`. Nunca o provider: a tela não sabe (nem pode saber)
+ * por qual transporte a mensagem chegou.
+ */
+export const filtroDeMeioSchema = z.enum(MEIOS_DE_CANAL);
+
+/** Um instante ISO-8601 com fuso (`Z` ou `-03:00`) — os recortes de data dos encerrados. */
+export const instanteSchema = z.string().datetime({ offset: true });
+
 export const listConversationsQuerySchema = z.object({
   /**
    * Um status, ou vários separados por vírgula (`?status=open,pending`).
@@ -473,8 +498,15 @@ export const listConversationsQuerySchema = z.object({
    * significar "meu trabalho" para virar "tudo que já toquei".
    */
   exclude_finished: z.boolean().optional(),
-  assigned_to: z.union([z.string().uuid(), z.literal("me"), z.literal("unassigned")]).optional(),
+  assigned_to: filtroDeAtendenteSchema.optional(),
   channel_session_id: z.string().uuid().optional(),
+  /**
+   * O MEIO: só WhatsApp, só telefone, só chat do site. Pergunta diferente de
+   * `channel_session_id`, que é UM número — o meio alcança também a conversa de
+   * um número que já foi removido, e é a única forma de pedir "o telefone" numa
+   * organização com mais de um número de telefone.
+   */
+  channel: filtroDeMeioSchema.optional(),
   tag: conversationTagSchema.optional(),
   /**
    * A fila por TIME (migration 0263). A régua inteira — as três formas que ele

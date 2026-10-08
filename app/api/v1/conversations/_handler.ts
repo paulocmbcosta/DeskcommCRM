@@ -237,6 +237,9 @@ export async function listConversationsHandler(
     query = query.not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`);
   }
   if (q.channel_session_id) query = query.eq("channel_session_id", q.channel_session_id);
+  // O MEIO da conversa (`conversations.channel`). No banco, como os vizinhos:
+  // filtrar depois de paginar devolveria páginas curtas. Índice na 0297.
+  if (q.channel) query = query.eq("channel", q.channel);
   if (q.tag) query = query.contains("tags", [q.tag]); // tags @> array[tag] (GIN)
 
   // O TIME (migration 0263) — o SETOR que espera pela conversa, não a pessoa.
