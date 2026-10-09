@@ -1442,10 +1442,29 @@ montar_vps() {
   #
   # `DUBLE_GHCR` permite ao teste escolher o cenário: vazio/`200` = as três
   # imagens publicadas; `403` = pacote privado; `404` = não existe.
+  #
+  # Desde o repositório fechado o dublê fala um TERCEIRO dialeto: a sonda COM
+  # login. O `_common.sh` manda a credencial do `docker login` por stdin
+  # (`-K -`), e o dublê devolve um token DIFERENTE quando a recebe — é o que
+  # permite a `DUBLE_GHCR_COM_LOGIN` responder outra coisa que `DUBLE_GHCR`, do
+  # jeito que o registro de verdade responde 403 ao anônimo e 200 a quem logou.
+  # Ele só lê o stdin quando o `-K -` está nos argumentos: ler sempre comeria o
+  # stdin da suíte.
+  #
+  # `CURL_ARGS_LOG` guarda os ARGUMENTOS de cada chamada, e existe para uma
+  # prova só: a credencial nunca pode aparecer na linha de comando.
   cat > "$raiz/bin/curl" <<'STUBCURL'
 #!/usr/bin/env bash
-case "$*" in
-  *ghcr.io/token*) printf '{"token":"dublê"}' ;;
+[ -n "${CURL_ARGS_LOG:-}" ] && printf '%s\n' "$*" >> "$CURL_ARGS_LOG"
+case " $* " in
+  *ghcr.io/token*)
+    case " $* " in
+      *" -K - "*)
+        if grep -q 'Authorization: Basic'; then printf '{"token":"duble-com-login"}'
+        else printf '{"token":"dublê"}'; fi ;;
+      *) printf '{"token":"dublê"}' ;;
+    esac ;;
+  *"Bearer duble-com-login"*ghcr.io/v2/*) printf '%s' "${DUBLE_GHCR_COM_LOGIN:-200}" ;;
   *ghcr.io/v2/*)   printf '%s' "${DUBLE_GHCR:-200}" ;;
   *)               printf 200 ;;
 esac
@@ -1499,18 +1518,25 @@ STUB
 # token EXPORTADO no shell de quem roda a suíte entraria no cenário sem ninguém
 # pedir — o teste passaria a depender da máquina, e faria chamada de rede a
 # partir de um .env de mentira. O cenário declara o próprio ambiente.
+#
+# `DOCKER_CONFIG` pela MESMA razão: o `_common.sh` lê a credencial do `docker
+# login` desta máquina para sondar o registro, e um desenvolvedor logado no GHCR
+# faria toda sonda "privada" responder como pública. Sem `DOCKER_CONFIG_DO_CENARIO`
+# o cenário roda SEM login (pasta vazia); com ela, com o login que o teste montou.
 rodar() {
   local script="$1" flags="$2"
+  local docker_cfg="${DOCKER_CONFIG_DO_CENARIO:-$VPS_RAIZ/sem-docker-login}"
+  mkdir -p "$docker_cfg"
   printf '%s\n%s\n' "$BASE_ENV" "${3-}" > "$VPS_PROJ/.env"
   : > "$VPS_LOG"
   if [ $# -ge 4 ]; then
     printf '%s' "$4" > "$VPS_RAIZ/respostas.txt"
     (cd "$VPS_PROJ" && env PATH="$VPS_RAIZ/bin:$PATH" DOCKER_LOG="$VPS_LOG" CRONTAB_SANDBOX="$CRONTAB_SANDBOX" \
-      SUPABASE_ACCESS_TOKEN= \
+      SUPABASE_ACCESS_TOKEN= DOCKER_CONFIG="$docker_cfg" \
       bash "$VPS_RAIZ/$script" $flags <"$VPS_RAIZ/respostas.txt" 2>&1 || true) | sed -E 's/\x1b\[[0-9;]*m//g'
   else
     (cd "$VPS_PROJ" && env PATH="$VPS_RAIZ/bin:$PATH" DOCKER_LOG="$VPS_LOG" CRONTAB_SANDBOX="$CRONTAB_SANDBOX" \
-      SUPABASE_ACCESS_TOKEN= \
+      SUPABASE_ACCESS_TOKEN= DOCKER_CONFIG="$docker_cfg" \
       bash "$VPS_RAIZ/$script" $flags 2>&1 || true) | sed -E 's/\x1b\[[0-9;]*m//g'
   fi
 }
@@ -1870,6 +1896,170 @@ STUB
   printf '  ✓ e mesmo assim conclui a instalação (constrói é lento, não é impedimento)\n'
 ) || fail=1
 rm -rf "$TMP_PRIV"
+
+echo "packaging: repositório FECHADO — a sonda usa o login do Docker desta máquina"
+# Com os pacotes privados no GHCR, a sonda anônima responde 403 a imagens que
+# EXISTEM. O instalador lia isso como "a versão não está publicada", caía no
+# `stable`, depois em "construir aqui" — e o `docker compose pull` do app, que
+# não tem `build:`, morria no fim. O `pull` usa a credencial do `docker login`;
+# a sonda tem de usar a MESMA, senão mede um caminho e o cliente usa outro.
+(
+  # A função lê `auths[registro].auth` do config.json do Docker. Cada variação
+  # abaixo é um formato que o Docker escreve de verdade.
+  dk="$(mktemp -d)"
+  cred_de() { printf '%s' "$1" > "$dk/config.json"; DOCKER_CONFIG="$dk" credencial_do_registro ghcr.io; }
+  falhou=0
+  confere() {  # confere <descrição> <esperado> <json>
+    local veio; veio="$(cred_de "$3")"
+    if [ "$veio" != "$2" ]; then
+      printf '  ✗ %s: esperado "%s", veio "%s"\n' "$1" "$2" "$veio"; falhou=1
+    fi
+  }
+  confere "chave simples"            "QUJD" '{"auths":{"ghcr.io":{"auth":"QUJD"}}}'
+  confere "chave com https e barra"  "REVG" '{ "auths": { "https://ghcr.io/": { "auth": "REVG" } } }'
+  confere "vários registros"         "R0hJ" '{"auths":{"docker.io":{"auth":"WFla"},"ghcr.io":{"auth":"R0hJ","email":"a@b"},"x.io":{"auth":"SktM"}}}'
+  confere "arquivo em várias linhas" "TU5P" "$(printf '{\n  "auths": {\n    "ghcr.io": {\n      "auth": "TU5P"\n    }\n  }\n}')"
+  confere "cofre (credsStore) sem auth no arquivo" "" '{"auths":{"ghcr.io":{}},"credsStore":"pass"}'
+  confere "login só em OUTRO registro"             "" '{"auths":{"docker.io":{"auth":"WFla"}}}'
+  rm -f "$dk/config.json"
+  if [ -n "$(DOCKER_CONFIG="$dk" credencial_do_registro ghcr.io)" ]; then
+    printf '  ✗ sem config.json a função devia ecoar vazio\n'; falhou=1
+  fi
+  rm -rf "$dk"
+  [ "$falhou" -eq 0 ] || exit 1
+  printf '  ✓ lê a credencial do Docker nos formatos que ele escreve, e ecoa vazio quando não há\n'
+) || fail=1
+
+TMP_FECH="$(mktemp -d)"
+(
+  origem="$TMP_FECH/origem.git"
+  git init --quiet --bare "$origem"
+  (
+    cd "$TMP_FECH" || exit 1
+    git clone --quiet "$origem" w 2>/dev/null
+    cd w || exit 1
+    git config user.email t@t; git config user.name t
+    echo x > a; git add -A; git commit --quiet -m init
+    for t in v1.0.0 v1.10.0; do git tag "$t"; done
+    git push --quiet origin HEAD --tags 2>/dev/null
+  )
+  montar_vps "$TMP_FECH/vps" "crmfech" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  export REPO_URL="$origem"
+  # O registro deste bloco: 403 para o anônimo, 200 para quem logou. É o que um
+  # pacote privado responde.
+  export DUBLE_GHCR=403 DUBLE_GHCR_COM_LOGIN=200
+  SEGREDO_DE_TESTE="Y3JlZGVuY2lhbC1kZS10ZXN0ZQ=="
+
+  # ── COM login: o instalador enxerga a versão e a grava ─────────────────────
+  export DOCKER_CONFIG_DO_CENARIO="$TMP_FECH/docker-logado"
+  mkdir -p "$DOCKER_CONFIG_DO_CENARIO"
+  printf '{"auths":{"ghcr.io":{"auth":"%s"}}}' "$SEGREDO_DE_TESTE" > "$DOCKER_CONFIG_DO_CENARIO/config.json"
+  export CURL_ARGS_LOG="$TMP_FECH/curl-args.log"; : > "$CURL_ARGS_LOG"
+  saida="$(rodar install.sh --yes)"
+
+  if printf '%s' "$saida" | grep -qE "construídas neste servidor|não tem permissão para baixá-las"; then
+    printf '  ✗ com o login feito, o instalador ainda trata as imagens privadas como inalcançáveis\n'
+    printf '     a sonda está perguntando como anônimo — e o `docker compose pull` vai perguntar como logado.\n'
+    exit 1
+  fi
+  for par in "APP_IMAGE:deskcommcrm" "WORKER_IMAGE:deskcomm-worker" "SCHEDULER_IMAGE:deskcomm-scheduler"; do
+    chave="${par%%:*}"; repo="${par##*:}"
+    if [ "$(valor_no_env "$VPS_PROJ/.env" "$chave")" != "${IMG_NS}/${repo}:1.10.0" ]; then
+      printf '  ✗ com o login feito, %s não nasceu na versão publicada (1.10.0): %s\n' "$chave" \
+        "$(grep -E "^${chave}=" "$VPS_PROJ/.env" || echo '(ausente)')"
+      exit 1
+    fi
+  done
+  printf '  ✓ pacote privado + docker login: a instalação nasce fixada na versão (as três imagens)\n'
+
+  # A credencial vai ao curl por stdin. Na linha de comando ela ficaria visível
+  # em `ps` para qualquer usuário da máquina enquanto a requisição durasse.
+  if ! grep -q -- '-K -' "$CURL_ARGS_LOG"; then
+    printf '  ✗ fixture: nenhuma chamada ao registro usou a credencial — a prova seguinte passaria por vacuidade\n'; exit 1
+  fi
+  if grep -qF "$SEGREDO_DE_TESTE" "$CURL_ARGS_LOG"; then
+    printf '  ✗ a credencial do Docker apareceu na LINHA DE COMANDO do curl (visível em ps)\n'; exit 1
+  fi
+  printf '  ✓ a credencial nunca aparece na linha de comando do curl\n'
+  unset CURL_ARGS_LOG
+
+  # ── SEM login, no MESMO registro: o instalador diz a causa certa ───────────
+  # Controle do bloco acima (sem login a resposta tem de ser outra, senão o
+  # dublê estaria respondendo 200 a todo mundo) e a mensagem que importa: quem
+  # lê "ainda não estão publicadas" espera por algo que esperar não resolve.
+  unset DOCKER_CONFIG_DO_CENARIO
+  saida="$(rodar install.sh --yes)"
+  if ! printf '%s' "$saida" | grep -q "não tem permissão para baixá-las"; then
+    printf '  ✗ sem login num registro privado, o instalador não disse que falta permissão\n'; exit 1
+  fi
+  if ! printf '%s' "$saida" | grep -q "docker login ghcr.io"; then
+    printf '  ✗ não mostrou o comando do login\n'; exit 1
+  fi
+  if printf '%s' "$saida" | grep -q "ainda não estão publicadas"; then
+    printf '  ✗ disse "ainda não estão publicadas" de imagens que EXISTEM e são privadas\n'; exit 1
+  fi
+  printf '  ✓ pacote privado SEM login: diz que falta permissão e mostra o comando, em vez de mandar esperar\n'
+
+  # ── imagem que NÃO existe (404) não é acusada de falta de login ────────────
+  export DUBLE_GHCR=404
+  saida="$(rodar install.sh --yes)"
+  if printf '%s' "$saida" | grep -q "não tem permissão para baixá-las"; then
+    printf '  ✗ imagem inexistente (404) foi tratada como falta de login — pista falsa\n'; exit 1
+  fi
+  if ! printf '%s' "$saida" | grep -q "ainda não estão publicadas"; then
+    printf '  ✗ com 404 o instalador deixou de avisar que as imagens não estão publicadas\n'; exit 1
+  fi
+  printf '  ✓ imagem que não existe (404) continua sendo "ainda não publicada", sem falar em login\n'
+  unset DUBLE_GHCR DUBLE_GHCR_COM_LOGIN REPO_URL
+
+  # ── sem REPO_URL: o endereço público recusa, a ORIGEM do clone responde ────
+  # É o caso de quem clonou por SSH com a chave de leitura e rodou o instalador
+  # sem exportar nada. O dublê de git recusa o `ls-remote` do endereço público
+  # do jeito que o GitHub recusa um repositório privado, e deixa o resto passar.
+  git_de_verdade="$(command -v git)"
+  cat > "$VPS_RAIZ/bin/git" <<STUBGIT
+#!/usr/bin/env bash
+case " \$* " in
+  *" ls-remote "*"https://github.com/"*)
+    echo "fatal: could not read Username for 'https://github.com': terminal prompts disabled" >&2
+    exit 128 ;;
+esac
+exec "$git_de_verdade" "\$@"
+STUBGIT
+  chmod +x "$VPS_RAIZ/bin/git"
+  (cd "$VPS_PROJ" && "$git_de_verdade" init --quiet && "$git_de_verdade" remote add origin "$origem")
+  export DOCKER_CONFIG_DO_CENARIO="$TMP_FECH/docker-logado"
+  export DUBLE_GHCR=403 DUBLE_GHCR_COM_LOGIN=200
+  rodar install.sh --yes >/dev/null
+  if [ "$(valor_no_env "$VPS_PROJ/.env" APP_IMAGE)" != "${IMG_NS}/deskcommcrm:1.10.0" ]; then
+    printf '  ✗ sem REPO_URL, o instalador não perguntou a versão à origem do próprio clone: %s\n' \
+      "$(grep -E "^APP_IMAGE=" "$VPS_PROJ/.env" || echo '(ausente)')"
+    printf '     num repositório fechado o endereço público não responde, e a instalação nasceria em canal móvel.\n'
+    exit 1
+  fi
+  printf '  ✓ sem REPO_URL: o endereço público recusa, e a versão vem da origem do próprio clone (1.10.0)\n'
+
+  # Controle: sem origem que responda, não inventa versão — cai no canal e avisa.
+  (cd "$VPS_PROJ" && "$git_de_verdade" remote remove origin)
+  saida="$(rodar install.sh --yes)"
+  if [ "$(valor_no_env "$VPS_PROJ/.env" APP_IMAGE)" = "${IMG_NS}/deskcommcrm:1.10.0" ]; then
+    printf '  ✗ controle: sem origem nenhuma, a versão 1.10.0 não tinha de onde vir — o caso acima não prova nada\n'; exit 1
+  fi
+  if ! printf '%s' "$saida" | grep -q "canal 'stable'"; then
+    printf '  ✗ sem conseguir descobrir a versão, o instalador não avisou que caiu no canal móvel\n'; exit 1
+  fi
+  printf '  ✓ controle: sem origem que responda, cai no canal stable e AVISA (não inventa versão)\n'
+  rm -f "$VPS_RAIZ/bin/git"
+  unset DUBLE_GHCR DUBLE_GHCR_COM_LOGIN DOCKER_CONFIG_DO_CENARIO
+) || fail=1
+rm -rf "$TMP_FECH"
 
 echo "integração: os TRÊS provedores de IA que o instalador oferece"
 # A pergunta "qual IA vai atender" tem três respostas, e até aqui só uma delas

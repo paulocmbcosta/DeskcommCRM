@@ -41,7 +41,33 @@ setup_update_agent_cron
 
 # ── 1. Tem atualização mesmo? ────────────────────────────────────────────────
 step "Procurando atualizações"
-git fetch --tags --quiet origin 2>/dev/null || c_ylw "⚠ não consegui falar com o GitHub — sigo com o código que já está aqui."
+# `GIT_TERMINAL_PROMPT=0`: com o repositório FECHADO e este servidor sem a chave
+# de leitura, o git por HTTPS PERGUNTA usuário e senha no terminal de quem rodou
+# o script — e o `update.sh` ficaria parado numa pergunta que ninguém sabe
+# responder. Sem prompt, ele falha na hora e a mensagem abaixo diz o que houve.
+#
+# A falha é GUARDADA (`FETCH_FALHOU`) porque ela muda o que a resposta mais
+# abaixo significa: "você já está na versão mais recente" só é verdade entre as
+# versões que este servidor CONHECE. Sem ter conseguido consultar, afirmar isso
+# em verde é dizer "em dia" a uma instalação que pode estar atrasada.
+FETCH_FALHOU=""
+if ! ERRO_FETCH="$(GIT_TERMINAL_PROMPT=0 git fetch --tags --quiet origin 2>&1)"; then
+  FETCH_FALHOU=1
+  # `case` sobre a variável, e não `printf | grep -q`: sob `pipefail`, um `grep
+  # -q` que casa cedo fecha o pipe, o `printf` morre de SIGPIPE e a condição
+  # sai FALSA justamente quando casou. O `tr` só normaliza a caixa.
+  ERRO_FETCH="$(printf '%s' "$ERRO_FETCH" | tr '[:upper:]' '[:lower:]')"
+  case "$ERRO_FETCH" in
+    *"permission denied"*|*"authentication failed"*|*"could not read username"*|*"could not read password"*|*"terminal prompts disabled"*|*"repository not found"*|*"access denied"*|*"publickey"*)
+      c_ylw "⚠ o GitHub RECUSOU o acesso deste servidor ao repositório — sigo com o código que já está aqui."
+      c_ylw "  Se o repositório é privado, falta (ou foi revogada) a chave de leitura deste servidor."
+      c_ylw "  Passo a passo: docs/runbooks/repositorio-fechado.md"
+      ;;
+    *)
+      c_ylw "⚠ não consegui falar com o GitHub — sigo com o código que já está aqui."
+      ;;
+  esac
+fi
 [ -n "$TARGET_TAG" ] || TARGET_TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)"
 [ -n "$TARGET_TAG" ] || die "Não encontrei nenhuma versão publicada para instalar."
 git rev-parse --verify --quiet "${TARGET_TAG}^{commit}" >/dev/null \
@@ -112,6 +138,12 @@ MESMA_TAG=""
 [ "$CURRENT_TAG" = "$TARGET_TAG" ] && MESMA_TAG=1
 
 if [ -n "$MESMA_TAG" ] && [ -z "$FORCE" ] && ! image_desatualizada; then
+  if [ -n "$FETCH_FALHOU" ]; then
+    # Amarelo, e não verde: a comparação foi feita só com o que já estava aqui.
+    c_ylw "⚠ Você está na versão mais recente QUE ESTE SERVIDOR CONHECE ($TARGET_TAG)."
+    c_ylw "  Como não consegui consultar o GitHub, pode existir uma mais nova. Nada foi alterado."
+    exit 0
+  fi
   c_grn "✓ Você já está na versão mais recente ($TARGET_TAG). Nada a atualizar."
   exit 0
 fi

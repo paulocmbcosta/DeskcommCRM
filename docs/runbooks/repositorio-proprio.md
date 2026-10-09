@@ -261,7 +261,8 @@ Para voltar ao remoto antigo, `git remote set-url origin` de volta.
   poder voltar a ser privado está no cabeçalho de `.github/workflows/ci.yml` (uma verificação
   completa por versão, por condição de job — **não** por `paths-ignore`, que travaria o PR). Em
   repositório privado de conta gratuita não existe proteção de branch: o passo 4 deixa de valer
-  e os checks passam a ser exigidos só por combinado.
+  e os checks passam a ser exigidos só por combinado. O que cada VPS precisa antes de fechar, e
+  a ordem, estão em [`repositorio-fechado.md`](repositorio-fechado.md).
 - **Os sete minutos de produto da origem.** Entre o primeiro `update.sh` e a correção, o app, o
   worker e o scheduler da origem (1.29.0 de lá) rodaram sobre este banco. O schema é o nosso
   (aplicado pelo nosso `baseline.sql`), mas o que aquele worker processou naquela janela foi com a

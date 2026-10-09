@@ -15,6 +15,9 @@ set -euo pipefail
 # de qualquer 'cd' (step 2 pode entrar num repo clonado à parte).
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+# Guardado ANTES do default: "o dono informou um endereço" e "caiu no padrão"
+# decidem coisas diferentes lá embaixo, na hora de descobrir a última versão.
+REPO_URL_INFORMADA="${REPO_URL:-}"
 REPO_URL="${REPO_URL:-https://github.com/paulocmbcosta/DeskcommCRM.git}"
 # Uma constante, dois usos (o fim feliz e o fim travado) — e o comecar.sh tem a
 # gêmea. Link repetido à mão vira link divergente na primeira troca.
@@ -1200,6 +1203,20 @@ fi
 #
 # Resolvido no REMOTO porque o clone é `--depth 1` e não traz tag nenhuma.
 VERSAO_ALVO="$(ultima_versao_publicada "$REPO_URL")"
+# Repositório FECHADO: o endereço público padrão não responde mais, mas quem
+# está rodando isto chegou aqui por um clone que RESPONDE (por SSH, com a chave
+# de leitura). Perguntar à origem do próprio clone é o que evita a instalação
+# nascer num canal móvel só porque ninguém lembrou de exportar `REPO_URL`.
+#
+# Só como SEGUNDA tentativa, e só quando o dono não informou endereço: enquanto
+# o endereço padrão responder, nada muda — inclusive para um fork, que continua
+# lendo as versões do mesmo lugar de onde vêm as imagens (`IMG_NS`).
+if [ -z "$VERSAO_ALVO" ] && [ -z "$REPO_URL_INFORMADA" ]; then
+  ORIGEM_DO_CLONE="$(git remote get-url origin 2>/dev/null || true)"
+  if [ -n "$ORIGEM_DO_CLONE" ] && [ "$ORIGEM_DO_CLONE" != "$REPO_URL" ]; then
+    VERSAO_ALVO="$(ultima_versao_publicada "$ORIGEM_DO_CLONE")"
+  fi
+fi
 
 # A tag do git é condição NECESSÁRIA, não suficiente: ela nasce minutos antes
 # das imagens, e `deskcomm-worker`/`deskcomm-scheduler` só passaram a existir
@@ -1222,9 +1239,21 @@ elif [ -n "$VERSAO_ALVO" ]; then
   # `build:` ao lado do `image:` do worker e do scheduler, então eles são
   # construídos aqui. É lento, mas instala. O que NÃO pode é isso acontecer
   # calado: o dono precisa saber que duas peças dele saíram do fonte local.
-  c_ylw "⚠ As imagens do worker e do agendador ainda não estão publicadas."
-  c_ylw "  Elas serão construídas neste servidor — leva alguns minutos a mais."
-  c_ylw "  Rode 'bash hostgator-setup-kit/update.sh' quando a próxima versão sair."
+  if registro_recusa_esta_maquina; then
+    # Repositório FECHADO: as imagens existem, mas são privadas e esta máquina
+    # não fez `docker login`. Dizer "ainda não estão publicadas" mandaria o dono
+    # esperar por algo que esperar não resolve — e o `pull` do app, que não tem
+    # `build:` ao lado, vai morrer logo adiante pelo mesmo motivo.
+    c_ylw "⚠ As imagens existem, mas este servidor não tem permissão para baixá-las."
+    c_ylw "  Elas são privadas: faça o login do Docker no registro antes de continuar:"
+    c_ylw "      docker login ${IMG_NS%%/*}"
+    c_ylw "  Passo a passo: docs/runbooks/repositorio-fechado.md"
+    c_ylw "  Sem o login, as peças que puderem serão construídas neste servidor — e o app não sobe."
+  else
+    c_ylw "⚠ As imagens do worker e do agendador ainda não estão publicadas."
+    c_ylw "  Elas serão construídas neste servidor — leva alguns minutos a mais."
+    c_ylw "  Rode 'bash hostgator-setup-kit/update.sh' quando a próxima versão sair."
+  fi
 else
   # Falha ABERTA: sem rede ou sem tag no remoto, segue como antes. Travar a
   # instalação por não resolver um número seria trocar previsibilidade por
