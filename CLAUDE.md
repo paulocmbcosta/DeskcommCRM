@@ -418,6 +418,14 @@ Mudança de schema, RLS, RBAC ou do kit de instalação pede esse disparo **ante
 Quem diz o que roda em cada caso é a condição de cada job, presa por inteiro em
 `tests/unit/gatilho-dos-jobs-de-entrega.test.ts` — leia lá em vez de confiar nesta tabela.
 
+**A outra metade da mesma decisão: a release sai em LOTE.** Cada trabalho entra na `main` no dia
+em que fica pronto (com a autorização do dono para aquele PR); a release junta o que acumulou, no
+máximo uma por dia útil, quando o dono manda — e **terminar um PR não é motivo para propor
+release**. Só a urgência sai na hora: atendimento parado, cliente sem conseguir falar ou pagar,
+risco de perder dado. Por isso a `main` tem de estar **sempre lançável**: uma release urgente leva
+junto tudo o que estiver nela. Lei e medição em
+[`docs/doctrine/versionamento.md`](docs/doctrine/versionamento.md), §"A cadência".
+
 Checks **obrigatórios** na branch protection da `main` (verificado na configuração, não só no papel).
 Em PR comum os quatro reportam `skipped`, que a proteção lê como satisfeito:
 

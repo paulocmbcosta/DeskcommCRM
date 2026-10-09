@@ -150,6 +150,12 @@ roda `rapido` (tipos e lint) e os jobs completos aparecem pulados; `verify`, `in
 `gh workflow run <ci|perf>.yml --ref <branch>`. **Verde num PR comum não quer dizer que os testes
 passaram.** A condição de cada job está presa em `tests/unit/gatilho-dos-jobs-de-entrega.test.ts`.
 
+**Release em lote (decisão do dono, 2026-10-09).** O trabalho entra na `main` no dia em que fica
+pronto; a release junta o que acumulou, no máximo uma por dia útil, quando o dono manda. Não
+proponha release ao terminar um PR. Só urgência (atendimento parado, cliente sem falar ou pagar,
+risco de perder dado) sai na hora — e por isso a `main` fica sempre lançável. Ver
+`docs/doctrine/versionamento.md`, §"A cadência".
+
 **O que o CI cobre.** `.github/workflows/ci.yml`: `verify` = os passos do job, na ordem —
 typecheck, lint, `lint:channels`, `test:unit` e `test:shell` hoje, e `pnpm lint` sozinho **não**
 cobre os dois últimos (liste em vez de acreditar nesta linha:
