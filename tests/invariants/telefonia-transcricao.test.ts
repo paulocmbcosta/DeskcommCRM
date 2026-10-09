@@ -18,10 +18,12 @@
  *  5. concluir grava texto, trechos e resumo e a projeção vira "pronta" — sem
  *     NENHUM texto na linha de `messages`;
  *  6. contato anonimizado: concluir não escreve; e anonimizar DEPOIS apaga a
- *     transcrição pelos dois caminhos (o botão da ficha e a cascata);
+ *     transcrição pelos dois caminhos (o botão da ficha e a cascata) — mas o
+ *     membro que escreve o campo direto pela REST não apaga nada;
  *  7. perdida: `failed`, projeção "falhou" e UM aviso na Central para duas falhas;
  *  8. a poda da gravação vencida apaga a transcrição junto;
- *  9. a mensagem da ligação que sai leva a transcrição;
+ *  9. a mensagem da ligação que sai leva a transcrição — inclusive quando quem
+ *     apaga a conversa é um MEMBRO, pela cascata (o defeito da 1ª versão);
  * 10. a política: ligar marca o instante (a régua do "só daqui para frente"),
  *     salvar de novo não o move, e ligar sem chave não grava nada.
  */
@@ -529,7 +531,7 @@ describe("LGPD — anonimizar o contato apaga a transcrição", () => {
     expect(await linhaDa(vcId)).toBeUndefined();
   });
 
-  it("um membro que marca o contato como anonimizado pela REST também dispara a limpeza (a função é definer)", async () => {
+  it("um MEMBRO que escreve is_anonymized direto pela REST não apaga transcrição nenhuma — isso não é anonimização, e seria destruição (e custo) ao alcance de qualquer um", async () => {
     const { vcId, contactId } = await gravada(ORG, NUMERO);
     await transcricoes.pedirTranscricao(pool, ORG, vcId);
     await concluir(ORG, vcId);
@@ -538,22 +540,43 @@ describe("LGPD — anonimizar o contato apaga a transcrição", () => {
        on conflict do nothing`,
       [ORG, ANA],
     );
-    // A função do trigger NÃO é executável por `authenticated` (a varredura de
-    // definers cobra isso) — e o trigger dispara mesmo assim.
-    const { rows: grants } = await pool.query(
-      "select has_function_privilege('authenticated', 'public.fn_transcricoes_do_contato_anonimizado()', 'execute') as pode",
-    );
-    expect(grants[0]?.pode).toBe(false);
+    const comoAna = async (sql: string, valores: unknown[]) => {
+      const c = await pool.connect();
+      try {
+        await c.query("begin");
+        await c.query("set local role authenticated");
+        await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: ANA, role: "authenticated" })]);
+        const r = await c.query(sql, valores);
+        await c.query("commit");
+        return r.rowCount;
+      } catch (e) {
+        await c.query("rollback").catch(() => undefined);
+        throw e;
+      } finally {
+        c.release();
+      }
+    };
+    // A RLS de `contacts` hoje deixa o membro escrever o campo. Se um dia barrar
+    // (zero linhas), este caso deixa de medir o trigger — e tem de dizer.
+    expect(await comoAna("update public.contacts set is_anonymized = true, anonymized_at = now() where id = $1", [contactId])).toBe(1);
+    expect(await linhaDa(vcId)).toMatchObject({ status: "ready", text: TEXTO, summary: RESUMO });
+    expect(await projecaoDa(ORG, vcId)).toEqual({ situacao: "pronta" });
+    // E o ida-e-volta não gera pedido novo: a linha nunca saiu.
+    expect(await comoAna("update public.contacts set is_anonymized = false, anonymized_at = null where id = $1", [contactId])).toBe(1);
+    await transcricoes.pedirAsQueFaltam(pool, 500);
+    expect(await linhaDa(vcId)).toMatchObject({ status: "ready", attempts: 0 });
+  });
+
+  it("a anonimização com a service key (o worker de LGPD) apaga: quem decide é o papel de quem escreve", async () => {
+    const { vcId, contactId } = await gravada(ORG, NUMERO);
+    await transcricoes.pedirTranscricao(pool, ORG, vcId);
+    await concluir(ORG, vcId);
     const c = await pool.connect();
     try {
       await c.query("begin");
-      await c.query("set local role authenticated");
-      await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: ANA, role: "authenticated" })]);
-      const r = await c.query("update public.contacts set is_anonymized = true, anonymized_at = now() where id = $1", [contactId]);
+      await c.query("set local role service_role");
+      await c.query("update public.contacts set is_anonymized = true, anonymized_at = now() where id = $1", [contactId]);
       await c.query("commit");
-      // Se a RLS de `contacts` um dia barrar este UPDATE, o caso deixa de medir
-      // o trigger — e tem de dizer isso em vez de passar calado.
-      expect(r.rowCount).toBe(1);
     } catch (e) {
       await c.query("rollback").catch(() => undefined);
       throw e;
@@ -561,6 +584,7 @@ describe("LGPD — anonimizar o contato apaga a transcrição", () => {
       c.release();
     }
     expect(await linhaDa(vcId)).toBeUndefined();
+    expect(await projecaoDa(ORG, vcId)).toBeUndefined();
   });
 
   it("voltar is_anonymized para falso e outras escritas do contato não apagam nada", async () => {
@@ -673,6 +697,46 @@ describe("retenção e saída da mensagem", () => {
     expect(await linhaDa(g.vcId)).toBeUndefined();
     const { rows } = await pool.query("select 1 from storage_redaction_queue where object_path = $1", [g.caminho]);
     expect(rows).toHaveLength(1);
+  });
+
+  // ⚠️ O caso que a revisão independente achou, e que a primeira versão da 0298
+  // quebrava em TODA instalação, com a transcrição ligada ou não: excluir um
+  // contato pela tela apaga a conversa com o JWT do membro; a mensagem da ligação
+  // sai pela cascata, e o trigger AFTER dela roda no papel da SESSÃO (o BEFORE é
+  // que roda como dono). Sem ser definer, a função esbarrava no `revoke` da
+  // tabela nova e a exclusão inteira falhava com 42501.
+  it.each([
+    ["com transcrição", true],
+    ["sem transcrição (a organização nunca ligou)", false],
+  ])("um MEMBRO apaga a conversa de uma ligação gravada, %s: a exclusão passa, e a transcrição e o arquivo saem", async (_nome, transcrita) => {
+    await pool.query(
+      `insert into public.user_organizations (organization_id, user_id, role, accepted_at) values ($1, $2, 'agent', now())
+       on conflict do nothing`,
+      [ORG, ANA],
+    );
+    const g = await gravada(ORG, NUMERO);
+    if (transcrita) {
+      await transcricoes.pedirTranscricao(pool, ORG, g.vcId);
+      await concluir(ORG, g.vcId);
+    }
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      await c.query("set local role authenticated");
+      await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: ANA, role: "authenticated" })]);
+      const r = await c.query("delete from public.conversations where id = $1", [g.conversationId]);
+      await c.query("commit");
+      // Se a RLS barrar o DELETE (zero linhas), o caso não mede nada — e diz.
+      expect(r.rowCount).toBe(1);
+    } catch (e) {
+      await c.query("rollback").catch(() => undefined);
+      throw e;
+    } finally {
+      c.release();
+    }
+    expect((await pool.query("select 1 from messages where id = $1", [g.mensagemId])).rows).toEqual([]);
+    expect(await linhaDa(g.vcId)).toBeUndefined();
+    expect((await pool.query("select 1 from storage_redaction_queue where object_path = $1", [g.caminho])).rows).toHaveLength(1);
   });
 
   it("apagar a ligação apaga a transcrição (FK em cascata)", async () => {

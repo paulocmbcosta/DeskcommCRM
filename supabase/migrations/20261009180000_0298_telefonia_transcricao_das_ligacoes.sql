@@ -30,9 +30,12 @@
 -- 3. Anonimizar o contato apaga as transcrições das ligações dele. O sinal é
 --    `contacts.is_anonymized`, que os DOIS caminhos de anonimização gravam (a
 --    cascata do worker de LGPD e o botão da ficha). Trigger de coluna, com WHEN:
---    não pesa nas escritas comuns de `contacts`.
+--    não pesa nas escritas comuns de `contacts`. Só age para quem anonimiza de
+--    verdade (função definer ou service key); o membro que escreve o campo
+--    direto pela REST não apaga nada — o porquê no bloco 3.
 -- 4. A mensagem da ligação que é apagada leva a transcrição junto — a função
---    `fn_gravacao_da_mensagem_apagada` (0289) passa a apagar também a linha daqui.
+--    `fn_gravacao_da_mensagem_apagada` (0289) passa a apagar também a linha daqui,
+--    e por isso passa a ser SECURITY DEFINER (o porquê no bloco 4).
 --    `create or replace`, sem tocar no trigger: nenhuma trava em `messages`.
 -- 5. `agent_inbox_items.kind` ganha `phone_transcription_failed`: a transcrição
 --    de uma ligação não saiu (falta a chave, o provedor recusou todas as
@@ -110,14 +113,24 @@ create trigger trg_voice_call_transcripts_updated_at
   for each row execute function public.fn_set_updated_at();
 
 -- 3. anonimização do contato apaga as transcrições -----------------------------
--- SECURITY DEFINER: a tabela não é escrita por `authenticated`, e a anonimização
--- chega por função definer (a cascata, o botão da ficha) ou — hoje a RLS de
--- `contacts` deixa — por um UPDATE direto de um membro. Nos três casos o efeito
--- tem de ser o mesmo. Não há seletor: só as ligações do contato que acabou de ser
--- anonimizado, na organização dele.
+-- SÓ para a anonimização DE VERDADE. Os dois caminhos do produto mudam
+-- `is_anonymized` de dentro de uma função definer (a cascata do worker de LGPD,
+-- o botão da ficha) ou com a service key: nos dois, `current_user` é o dono ou
+-- `service_role`. Um membro que escreve `is_anonymized = true` direto pela REST
+-- (a RLS de `contacts` hoje deixa) NÃO é anonimização — e, se apagasse as
+-- transcrições, qualquer membro destruiria as de conversas que nem enxerga e,
+-- voltando o campo, faria o worker transcrever tudo de novo, pagando outra vez
+-- (achado da revisão de segurança). Para ele a função não faz nada.
+--
+-- Por isso é INVOKER, como `fn_mensagem_de_ligacao_e_do_sistema` (0289): é o
+-- `current_user` de quem escreve que decide. O dono e o `service_role` têm o que
+-- precisam para apagar; o membro, que não tem, nem chega ao DELETE.
 create or replace function public.fn_transcricoes_do_contato_anonimizado()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql set search_path = public as $$
 begin
+  if current_user in ('authenticated', 'anon') then
+    return new;
+  end if;
   delete from public.voice_call_transcripts t
    using public.voice_calls v
    where v.id = t.voice_call_id
@@ -135,12 +148,10 @@ begin
      and m.metadata #> '{voice_call,transcricao}' is not null;
   return new;
 end $$;
--- Definer que ESCREVE: ninguém a executa por conta própria. Trigger não confere
--- EXECUTE de quem dispara o comando, então o membro que anonimiza pela REST
--- segue acionando a limpeza sem ter o privilégio (provado em
--- tests/invariants/telefonia-transcricao.test.ts).
-revoke execute on function public.fn_transcricoes_do_contato_anonimizado() from public, anon, authenticated;
-grant execute on function public.fn_transcricoes_do_contato_anonimizado() to service_role;
+-- Função de trigger não é chamada por RPC (o PostgREST não expõe `returns
+-- trigger`), mas a regra 9 vale para toda função nova em `public`.
+revoke execute on function public.fn_transcricoes_do_contato_anonimizado() from public, anon;
+grant execute on function public.fn_transcricoes_do_contato_anonimizado() to authenticated, service_role;
 
 do $trg_anon$
 begin
@@ -160,8 +171,18 @@ end $trg_anon$;
 -- Mesmo corpo da 0289 (o arquivo vai para a fila de remoção do Storage), mais a
 -- transcrição. O id da ligação sai do `external_id` (`ligacao:<uuid>`), que só o
 -- sistema escreve; o que não for uuid não vira consulta.
+--
+-- ⚠️ PASSA A SER SECURITY DEFINER, e não é detalhe. Excluir um contato pela tela
+-- apaga a conversa com o JWT do membro; a mensagem da ligação sai pela cascata, e
+-- o trigger AFTER de uma linha apagada por cascata roda no papel da SESSÃO — o
+-- BEFORE é que roda como dono. O membro não tem (nem pode ter) privilégio em
+-- `voice_call_transcripts`: como invoker, a exclusão inteira falhava com 42501
+-- em toda conversa com cartão de ligação, com a transcrição ligada ou não
+-- (achado da revisão; reproduzido em tests/invariants/telefonia-transcricao.test.ts).
+-- Não há seletor: ela só alcança o arquivo e a transcrição da PRÓPRIA linha que
+-- está saindo, e a linha de ligação um membro não apaga direto (0289).
 create or replace function public.fn_gravacao_da_mensagem_apagada()
-returns trigger language plpgsql set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $$
 declare
   v_ligacao text;
 begin
@@ -179,8 +200,10 @@ begin
   end if;
   return old;
 end $$;
-revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon;
-grant execute on function public.fn_gravacao_da_mensagem_apagada() to authenticated, service_role;
+-- Definer que escreve: ninguém a executa por conta própria (trigger não confere
+-- EXECUTE de quem dispara o comando).
+revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon, authenticated;
+grant execute on function public.fn_gravacao_da_mensagem_apagada() to service_role;
 
 -- 5. agent_inbox_items.kind — a LISTA INTEIRA: a última migration que reconstrói
 --    a constraint termina igual ao baseline (tests/unit/kind-check-migration-x-baseline.test.ts).
