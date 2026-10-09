@@ -649,3 +649,184 @@ describe("a ligação em andamento (fila visível, entrega 1)", () => {
     expect(raiz.textContent).toContain("1:05");
   });
 });
+
+/**
+ * A TRANSCRIÇÃO NO CARTÃO (F4). O que chega é o que a LISTAGEM entrega em
+ * `metadata.voice_call.transcricao` — a situação e, para quem pode ouvir a
+ * gravação, o resumo. O texto inteiro é pedido à rota da leitura auditada SÓ no
+ * clique em "Ver transcrição": abrir a conversa não é ler a transcrição.
+ */
+describe("a transcrição no cartão", () => {
+  const VC = "3f1c2b8e-9a4d-4c6e-8f00-1234567890ab";
+  const transcrita = (transcricao: unknown, extra: Record<string, unknown> = {}) =>
+    registro({
+      id: VC,
+      desfecho: "atendida",
+      duracao_ms: 61_000,
+      atendente_nome: "Ana",
+      gravacao: { situacao: "pronta", duracao_ms: 61_000 },
+      transcricao,
+      ...extra,
+    });
+  const RESUMO = "A cliente cobrou a visita técnica, que foi remarcada para o começo da tarde.";
+  const LIDA = {
+    situacao: "pronta",
+    resumo: RESUMO,
+    falas: [
+      { quem: "atendente", inicio_ms: 0, texto: "Totus, boa tarde." },
+      { quem: "cliente", inicio_ms: 2_400, texto: "Estou esperando o técnico desde cedo." },
+      { quem: "sistema", inicio_ms: 65_000, texto: "Sua ligação é muito importante." },
+      { quem: null, inicio_ms: 3_795_000, texto: "Tá bom." },
+    ],
+    duracao_ms: 61_000,
+    estimativa: true,
+  };
+
+  function comTranscricao(metadata: unknown, podeOuvirGravacao = true) {
+    const ligacao = ligacaoDaMensagem(metadata)!;
+    const { container } = render(<CartaoDaLigacao ligacao={ligacao} em={EM} podeOuvirGravacao={podeOuvirGravacao} />);
+    return { linha: () => container.querySelector("[data-ligacao-transcricao]"), container };
+  }
+  const respostaDaRota = (corpo: unknown, status = 200) =>
+    vi.fn(async (_url: string) => new Response(JSON.stringify(corpo), { status, headers: { "Content-Type": "application/json" } }));
+
+  it("ligação sem transcrição: nenhuma linha (o cartão de antes)", () => {
+    const { linha } = comTranscricao(registro({ id: VC, desfecho: "atendida", gravacao: { situacao: "pronta", duracao_ms: 1_000 } }));
+    expect(linha()).toBeNull();
+  });
+
+  it.each([
+    ["processando", "Transcrevendo a ligação…"],
+    ["sem_fala", "A gravação não tem fala para transcrever."],
+    ["falhou", "Não foi possível transcrever esta ligação."],
+  ])("%s: diz o que houve, sem botão", (situacao, texto) => {
+    const { linha } = comTranscricao(transcrita({ situacao }));
+    expect(linha()?.getAttribute("data-ligacao-transcricao")).toBe(situacao);
+    expect(linha()?.textContent).toBe(texto);
+    expect(document.querySelector("[data-ver-transcricao]")).toBeNull();
+  });
+
+  it("situação fora do vocabulário (worker mais novo): o cartão cala, em vez de prometer um texto", () => {
+    const { linha } = comTranscricao(transcrita({ situacao: "em_revisao", resumo: "x" }));
+    expect(linha()).toBeNull();
+  });
+
+  it("pronta: mostra o resumo, dito como feito por IA, e o botão — sem pedir nada ao abrir a conversa", () => {
+    const f = vi.fn();
+    vi.stubGlobal("fetch", f);
+    try {
+      const { container } = comTranscricao(transcrita({ situacao: "pronta", resumo: RESUMO }));
+      const resumo = container.querySelector("[data-ligacao-resumo]");
+      expect(resumo?.textContent).toContain(RESUMO);
+      expect(resumo?.textContent).toContain("feito por IA");
+      expect(container.querySelector("[data-ver-transcricao]")?.textContent).toBe("Ver transcrição");
+      expect(f).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("pronta sem resumo (o passo do resumo falhou): só o botão", () => {
+    const { container } = comTranscricao(transcrita({ situacao: "pronta" }));
+    expect(container.querySelector("[data-ligacao-resumo]")).toBeNull();
+    expect(container.querySelector("[data-ver-transcricao]")).not.toBeNull();
+  });
+
+  it("quem não pode ouvir a gravação não vê NADA da transcrição — nem que ela existe", () => {
+    const f = vi.fn();
+    vi.stubGlobal("fetch", f);
+    try {
+      const { linha, container } = comTranscricao(transcrita({ situacao: "pronta", resumo: RESUMO }), false);
+      expect(linha()).toBeNull();
+      expect(container.textContent).not.toContain("visita técnica");
+      expect(document.querySelector("[data-ver-transcricao]")).toBeNull();
+      expect(f).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("'Ver transcrição': UM clique, UM pedido à leitura auditada; a janela lista quem falou, quando e o quê, e avisa que é estimativa", async () => {
+    const f = respostaDaRota({ data: LIDA });
+    vi.stubGlobal("fetch", f);
+    try {
+      const { container } = comTranscricao(transcrita({ situacao: "pronta", resumo: RESUMO }));
+      fireEvent.click(container.querySelector("[data-ver-transcricao]")!);
+      await waitFor(() => expect(document.querySelector('[data-transcricao-corpo="lida"]')).not.toBeNull());
+      expect(f).toHaveBeenCalledTimes(1);
+      expect(f.mock.calls[0]![0]).toBe(`/api/v1/telefonia/chamadas/${VC}/transcricao`);
+
+      const janela = document.querySelector("[data-janela-da-transcricao]")!;
+      expect(janela.textContent).toContain("Quem falou é uma estimativa");
+      expect(janela.textContent).toContain("pode errar nomes, números e endereços");
+      expect(janela.querySelector("[data-transcricao-resumo]")?.textContent).toContain(RESUMO);
+      const falas = [...janela.querySelectorAll("[data-fala-de]")];
+      expect(falas.map((el) => el.getAttribute("data-fala-de"))).toEqual(["atendente", "cliente", "sistema", "desconhecido"]);
+      expect(falas[0]?.textContent).toBe("Atendente0:00Totus, boa tarde.");
+      expect(falas[1]?.textContent).toBe("Cliente0:02Estou esperando o técnico desde cedo.");
+      expect(falas[2]?.textContent).toBe("Gravação automática ou ruído1:05Sua ligação é muito importante.");
+      expect(falas[3]?.textContent).toBe("Não identificado1:03:15Tá bom.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("o texto da ligação é mostrado como TEXTO: marcação dentro da fala não vira elemento", async () => {
+    const f = respostaDaRota({ data: { ...LIDA, resumo: "<b>resumo</b>", falas: [{ quem: "cliente", inicio_ms: 0, texto: "<img src=x onerror=alert(1)>" }] } });
+    vi.stubGlobal("fetch", f);
+    try {
+      const { container } = comTranscricao(transcrita({ situacao: "pronta" }));
+      fireEvent.click(container.querySelector("[data-ver-transcricao]")!);
+      await waitFor(() => expect(document.querySelector('[data-transcricao-corpo="lida"]')).not.toBeNull());
+      const janela = document.querySelector("[data-janela-da-transcricao]")!;
+      expect(janela.querySelector("img")).toBeNull();
+      expect(janela.querySelector("b")).toBeNull();
+      expect(janela.textContent).toContain("<img src=x onerror=alert(1)>");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a leitura recusada (403/404): a janela avisa, sem texto nenhum", async () => {
+    vi.stubGlobal("fetch", respostaDaRota({ error: { code: "not_found" } }, 404));
+    try {
+      const { container } = comTranscricao(transcrita({ situacao: "pronta", resumo: RESUMO }));
+      fireEvent.click(container.querySelector("[data-ver-transcricao]")!);
+      await waitFor(() => expect(document.querySelector('[data-transcricao-corpo="erro"]')).not.toBeNull());
+      expect(document.querySelector('[data-janela-da-transcricao] [role="alert"]')?.textContent).toBe(
+        "Não foi possível abrir a transcrição. Feche e tente de novo.",
+      );
+      expect(document.querySelector("[data-transcricao-falas]")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a rota respondeu que não há texto (apagada no meio): a janela diz isso, em vez de ficar vazia", async () => {
+    vi.stubGlobal("fetch", respostaDaRota({ data: { situacao: "sem_fala", resumo: null, falas: [], duracao_ms: null, estimativa: true } }));
+    try {
+      const { container } = comTranscricao(transcrita({ situacao: "pronta" }));
+      fireEvent.click(container.querySelector("[data-ver-transcricao]")!);
+      await waitFor(() => expect(document.querySelector('[data-transcricao-corpo="lida"]')).not.toBeNull());
+      expect(document.querySelector("[data-janela-da-transcricao]")?.textContent).toContain("Esta ligação não tem transcrição para mostrar.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("id de ligação que não é uuid (metadado forjado): nada da transcrição, e nenhum pedido", () => {
+    const { linha } = comTranscricao(transcrita({ situacao: "pronta", resumo: RESUMO }, { id: "../../admin" }));
+    expect(linha()).toBeNull();
+  });
+
+  it("em espanhol", () => {
+    const ligacao = ligacaoDaMensagem(transcrita({ situacao: "pronta", resumo: RESUMO }))!;
+    const { container } = render(
+      <IdiomaProvider locale="es">
+        <CartaoDaLigacao ligacao={ligacao} em={EM} podeOuvirGravacao />
+      </IdiomaProvider>,
+    );
+    expect(container.querySelector("[data-ver-transcricao]")?.textContent).toBe("Ver transcripción");
+    expect(container.querySelector("[data-ligacao-resumo]")?.textContent).toContain("Resumen de la llamada · hecho por IA");
+  });
+});

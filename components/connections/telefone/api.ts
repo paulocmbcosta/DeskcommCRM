@@ -101,6 +101,10 @@ export interface GravacaoDoTelefone {
   retencoes: number[];
   /** O aviso de gravação configurado (pronto ou não). Sem ele pronto, a gravação não liga. */
   aviso: FalaPublica | null;
+  /** Transcrever e resumir as ligações gravadas (F4). */
+  transcrever: boolean;
+  /** Há chave para transcrever? `false` = falta cadastrar; `null` = a rota não conseguiu saber agora. */
+  transcricao_com_chave: boolean | null;
 }
 
 export const CHAVE_DA_GRAVACAO = ["telefonia", "gravacao"] as const;

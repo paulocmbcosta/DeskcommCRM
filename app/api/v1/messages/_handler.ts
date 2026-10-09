@@ -27,6 +27,8 @@ import { decidirPreGoLiveDoCanalViaSupabase } from "@/lib/ai/elegibilidade/consu
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { roleAtLeast } from "@/lib/auth/types";
+import { comTranscricaoDasLigacoes } from "@/lib/inbox/transcricao-da-ligacao";
 import { soATranscricaoDoAudio, temTranscricaoAEntregar } from "@/lib/inbox/transcricao-do-audio";
 import { logger } from "@/lib/logger";
 import {
@@ -306,7 +308,17 @@ export async function listMessagesHandler(
   const hasMore = rows.length > q.limit;
   const pagina = hasMore ? rows.slice(0, q.limit) : rows;
   const liberados = await contatosNaoAnonimizados(supabase, ctx.organization_id, pagina);
-  const page = pagina.map((m) => soATranscricaoDoAudio(m, liberados.has(m.contact_id)));
+  // A transcrição da LIGAÇÃO (F4) não mora em `messages`: a linha traz só a
+  // situação. O resumo vem da tabela própria, e só para quem pode ouvir a
+  // gravação — usuário com papel atendente ou acima. Sem papel conhecido (o
+  // chamador não disse), token de integração e agente de IA: não recebem.
+  const page = await comTranscricaoDasLigacoes(
+    pagina.map((m) => soATranscricaoDoAudio(m, liberados.has(m.contact_id))),
+    {
+      organizationId: ctx.organization_id,
+      podeLer: ctx.actor.type === "user" && roleAtLeast(ctx.actor.role, "agent"),
+    },
+  );
 
   // Em ordem decrescente, o ÚLTIMO da página é o mais antigo dela — é dele que
   // sai o cursor, porque a próxima página é a que vem ANTES no tempo.

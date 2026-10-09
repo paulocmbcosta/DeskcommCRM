@@ -58,7 +58,9 @@ export async function GET(req: NextRequest, ctx: RouteCtx): Promise<Response> {
       supabase,
       {
         organization_id: activeOrg.orgId,
-        actor: { type: "user", id: user.id },
+        // O papel vai junto: é por ele que a listagem decide entregar o resumo
+        // da ligação transcrita (atendente ou acima, como a escuta da gravação).
+        actor: { type: "user", id: user.id, role: activeOrg.role },
         requestId,
         idioma: authUser?.idioma,
       },

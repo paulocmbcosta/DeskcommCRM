@@ -44,13 +44,13 @@
  */
 import type pg from "pg";
 
-import { LlmNotConfiguredError, resolveOrgLlmConfig } from "@/lib/agent-engine/edge/llm/credentials";
-import { runModelCall, type LlmEdgeConfig } from "@/lib/agent-engine/edge/llm/run-model-call";
+import { runModelCall } from "@/lib/agent-engine/edge/llm/run-model-call";
 import { traduzir } from "@/lib/i18n/dicionario";
 import type { Idioma } from "@/lib/i18n/idiomas";
 import { apiTranscriptionWithSegments, type TranscricaoComTrechos } from "@/lib/messaging/media/transcription";
 import { storagePathFor } from "@/lib/messaging/media/types";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { chaveDoTranscritor, configDeIaDoAmbiente } from "@/lib/telefonia/chave-do-transcritor";
 import { BUCKET_DAS_GRAVACOES, MIME_DA_GRAVACAO } from "@/lib/telefonia/gravacao";
 import { blocosDeTrechos, lerRespostaDoResumo, montarPedidoDoResumo } from "@/lib/telefonia/resumo-da-ligacao";
 import { textoCorrido, type QuemFalou, type TrechoDaTranscricao } from "@/lib/telefonia/transcricao";
@@ -423,31 +423,6 @@ export class TranscricoesDaTelefonia {
 }
 
 // ─── as portas de verdade (o worker) ─────────────────────────────────────────
-
-function configDeIaDoAmbiente(): LlmEdgeConfig {
-  return {
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY,
-    cacheTtl: "1h",
-  };
-}
-
-/**
- * A chave da OpenAI desta organização para TRANSCREVER: a cadastrada no painel
- * de provedores ou, sem ela, a da instalação — a mesma resolução do áudio do
- * WhatsApp (`workers/media-derive-worker.ts`). `null` = não há chave; qualquer
- * outra falha (o banco fora) sobe, e vira nova tentativa em vez de "sem chave".
- */
-export async function chaveDoTranscritor(pool: pg.Pool, organizationId: string): Promise<string | null> {
-  try {
-    const cfg = await resolveOrgLlmConfig(pool, configDeIaDoAmbiente(), organizationId, { provider: "openai" });
-    return cfg.apiKey ? cfg.apiKey : null;
-  } catch (e) {
-    if (e instanceof LlmNotConfiguredError) return null;
-    throw e;
-  }
-}
 
 /** As transcrições do worker: o pool do worker, o Storage da instalação, o transcritor e o modelo de conversa da organização. */
 export function transcricoesDoWorker(pool: pg.Pool, log: Registro): TranscricoesDaTelefonia {

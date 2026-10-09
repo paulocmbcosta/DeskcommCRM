@@ -21,7 +21,9 @@
  *     transcrição pelos dois caminhos (o botão da ficha e a cascata);
  *  7. perdida: `failed`, projeção "falhou" e UM aviso na Central para duas falhas;
  *  8. a poda da gravação vencida apaga a transcrição junto;
- *  9. a mensagem da ligação que sai leva a transcrição.
+ *  9. a mensagem da ligação que sai leva a transcrição;
+ * 10. a política: ligar marca o instante (a régua do "só daqui para frente"),
+ *     salvar de novo não o move, e ligar sem chave não grava nada.
  */
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -29,6 +31,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as repo from "@/lib/channels/telefonia/repositorio";
 import * as gravacoes from "@/lib/channels/telefonia/repositorio-das-gravacoes";
 import * as transcricoes from "@/lib/channels/telefonia/repositorio-das-transcricoes";
+import { lerPoliticaDaOrg, salvarPoliticaDaOrg } from "@/lib/telefonia/gravacao-da-org";
 import * as poda from "@/lib/telefonia/poda-das-gravacoes";
 import { trechosDaTranscricao } from "@/lib/telefonia/transcricao";
 
@@ -654,5 +657,80 @@ describe("o uso do transcritor em llm_calls", () => {
         { provider: "openai", model: "whisper-1", cost_cents: null, latency_ms: 100, status: "erro", error_code: "credencial_recusada", http_status: 401 },
       ]),
     );
+  });
+});
+
+describe("a política da transcrição (salvarPoliticaDaOrg)", () => {
+  const TERCEIRA = "c0de0298-9000-4000-8000-00000000000c";
+  const instante = async () =>
+    (
+      await pool.query<{ transcription_enabled: boolean; transcription_enabled_at: Date | null }>(
+        "select transcription_enabled, transcription_enabled_at from phone_settings where organization_id = $1",
+        [TERCEIRA],
+      )
+    ).rows[0];
+
+  beforeAll(async () => {
+    await pool.query(
+      `insert into public.organizations (id, slug, legal_name, display_name)
+       values ($1, 'transcricao-c', 'Transcrição C', 'Provedor Gama') on conflict (id) do nothing`,
+      [TERCEIRA],
+    );
+  });
+
+  it("organização sem linha: desligada, e a leitura não cria nada", async () => {
+    expect(await lerPoliticaDaOrg(pool, TERCEIRA)).toMatchObject({ ativa: false, transcrever: false });
+    expect(await instante()).toBeUndefined();
+  });
+
+  it("ligar marca o instante de AGORA; salvar de novo com ela ligada não move o instante", async () => {
+    const r = await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 90, transcrever: true });
+    expect(r).toMatchObject({ ok: true, mudou: true, antes: { transcrever: false }, depois: { transcrever: true } });
+    const ligada = await instante();
+    expect(ligada?.transcription_enabled).toBe(true);
+    expect(Math.abs(Date.now() - (ligada?.transcription_enabled_at?.getTime() ?? 0))).toBeLessThan(60_000);
+
+    await pool.query("update phone_settings set transcription_enabled_at = now() - interval '5 days' where organization_id = $1", [TERCEIRA]);
+    const antiga = (await instante())?.transcription_enabled_at?.getTime();
+    // Corpo antigo (sem o campo) e corpo novo com `true`: nos dois, o instante fica.
+    expect(await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 180 })).toMatchObject({ ok: true, depois: { transcrever: true } });
+    expect(await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 180, transcrever: true })).toMatchObject({ ok: true, mudou: false });
+    expect((await instante())?.transcription_enabled_at?.getTime()).toBe(antiga);
+    expect(await lerPoliticaDaOrg(pool, TERCEIRA)).toMatchObject({ transcrever: true, retencaoDias: 180 });
+  });
+
+  it("desligar e ligar de novo recomeça a contagem: o intervalo desligado não é transcrito", async () => {
+    await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 180, transcrever: false });
+    const desligada = await instante();
+    expect(desligada?.transcription_enabled).toBe(false);
+    await pool.query("update phone_settings set transcription_enabled_at = now() - interval '5 days' where organization_id = $1", [TERCEIRA]);
+    await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 180, transcrever: true });
+    expect(Math.abs(Date.now() - ((await instante())?.transcription_enabled_at?.getTime() ?? 0))).toBeLessThan(60_000);
+  });
+
+  it("ligar sem chave: recusado, nada gravado — e a chave só é perguntada ao LIGAR", async () => {
+    await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 180, transcrever: false });
+    let perguntas = 0;
+    const semChave = async () => {
+      perguntas += 1;
+      return false;
+    };
+    expect(await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 30, transcrever: true }, semChave)).toEqual({
+      ok: false,
+      motivo: "sem_chave_de_transcricao",
+    });
+    expect(perguntas).toBe(1);
+    expect(await lerPoliticaDaOrg(pool, TERCEIRA)).toMatchObject({ transcrever: false, retencaoDias: 180 });
+    // Desligada → desligada, e ligada → ligada: a chave não é perguntada.
+    await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: false, retencaoDias: 30, transcrever: false }, semChave);
+    expect(perguntas).toBe(1);
+  });
+
+  it("ligar a GRAVAÇÃO sem o aviso pronto segue recusado, e a transcrição pedida junto não entra", async () => {
+    expect(await salvarPoliticaDaOrg(pool, TERCEIRA, { ativa: true, retencaoDias: 90, transcrever: true })).toEqual({
+      ok: false,
+      motivo: "sem_aviso",
+    });
+    expect((await instante())?.transcription_enabled).toBe(false);
   });
 });
