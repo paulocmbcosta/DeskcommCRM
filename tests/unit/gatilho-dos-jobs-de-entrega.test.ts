@@ -40,6 +40,21 @@
  * o `skipped`-lido-como-sucesso vale para QUALQUER check obrigatório, não só
  * para os dois do `release.yml`.
  *
+ * ## Desde 2026-10-09, PULAR é a regra em PR comum — de propósito
+ *
+ * A propriedade que este arquivo trata como perigo ("`skipped` conta como
+ * verde") passou a ser USADA, por decisão do dono: os jobs completos (`verify`,
+ * `invariants`, `build-and-size`, a construção das imagens) rodam uma vez por
+ * versão, no PR de release, e ficam pulados em PR comum. A medição que levou a
+ * isso está no cabeçalho de `.github/workflows/ci.yml` (24.407 minutos em 25
+ * dias, três rodadas completas por mudança).
+ *
+ * Isso não afrouxa este gate — é o que o torna necessário. A diferença entre
+ * "pulado porque é PR comum" e "pulado porque alguém colou `&& false`" é só o
+ * texto da condição, e é o texto que fica preso aqui, por inteiro, em
+ * `COMPLETA` e `RAPIDA`. Os casos no fim do arquivo provam que as duas são
+ * complementares: num PR, ou roda a verificação rápida, ou rodam as completas.
+ *
  * ## Não há parser YAML nas dependências
  *
  * `yaml`/`js-yaml` não estão em `dependencies` nem em `devDependencies`
@@ -54,6 +69,25 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const DIR = join(process.cwd(), ".github/workflows");
+
+/**
+ * A condição dos jobs COMPLETOS: rodam em tudo que não é PR (tag, `Run
+ * workflow`) e no PR de release, que nasce do workflow `release` numa branch
+ * `release/X.Y.Z`. Em PR comum ficam pulados.
+ *
+ * `github.head_ref` só existe em evento de `pull_request`; fora dele é vazio, e
+ * é por isso que a primeira metade vem antes.
+ */
+const COMPLETA = "github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/')";
+
+/** O complemento exato de `COMPLETA` dentro de um PR: só o PR comum. */
+const RAPIDA = "github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/')";
+
+const PULADO_EM_PR_COMUM =
+  " Em PR comum este job fica PULADO de propósito (uma verificação completa por versão, " +
+  "no PR de release) — e `skipped` satisfaz o check obrigatório. A condição é exatamente a " +
+  "de `COMPLETA`: qualquer coisa colada nela desliga o job também no PR de release e na tag, " +
+  "e continua saindo verde.";
 
 /**
  * O gatilho de cada job, e o que se perde quando ele não roda.
@@ -87,17 +121,19 @@ const GATILHO_ESPERADO: Record<string, { condicao: string | null; efeito: string
       "e o `imagens-ok` leria `skipped` como reprovação.",
   },
   "publish-image.yml::build-and-push": {
-    condicao: null,
+    condicao: COMPLETA,
     efeito:
-      "Este job PUBLICA as três imagens no GHCR — é o artefato que o self-hoster instala. " +
-      "Desligá-lo faz a tag existir sem imagem por trás dela.",
+      "Este job PUBLICA as imagens no GHCR — é o artefato que o self-hoster instala. " +
+      "Desligá-lo faz a tag existir sem imagem por trás dela." +
+      PULADO_EM_PR_COMUM,
   },
   "publish-image.yml::imagem-do-app-sobe": {
-    condicao: null,
+    condicao: COMPLETA,
     efeito:
       "Este job prova que a imagem do app BOOTA, não só que ela constrói. Desligá-lo " +
       "devolve o defeito que derrubou a produção: imagem publicada que morre no " +
-      "`docker compose up` da VPS.",
+      "`docker compose up` da VPS." +
+      PULADO_EM_PR_COMUM,
   },
   // A promoção do canal `stable`, que o PR #498 tirou de dentro da matriz: lá,
   // cada uma das três imagens movia o canal sozinha ao terminar, e um `stable`
@@ -116,26 +152,39 @@ const GATILHO_ESPERADO: Record<string, { condicao: string | null; efeito: string
   },
 
   "publish-image.yml::imagens-ok": {
-    condicao: "always()",
+    condicao: `always() && (${COMPLETA})`,
     efeito:
       "Este é o check obrigatório `imagens-ok`, a fachada que a branch protection exige. " +
       "Ele precisa de `always()` para poder LER `skipped` dos `needs` e reprovar — e " +
       "desligá-lo (`always() && false`) o torna `skipped` ele mesmo, que a branch " +
-      "protection lê como satisfeito.",
+      "protection lê como satisfeito. A segunda metade é a condição dos jobs que ele lê: " +
+      "em PR comum eles ficam pulados de propósito, e a fachada rodando leria `skipped` " +
+      "e reprovaria todo PR comum.",
   },
 
   // --- os outros checks obrigatórios ------------------------------------------
   // Mesmo mecanismo, mesmo desfecho: `skipped` conta como check satisfeito.
   // Desligar qualquer um destes faz o PR entrar sem ter sido testado.
+  "ci.yml::rapido": {
+    condicao: RAPIDA,
+    efeito:
+      "Este é o único sinal automático de um PR comum: tipos, lint e as duas auditorias. " +
+      "A condição é o complemento exato da dos jobs completos — desligá-lo deixa o PR comum " +
+      "sem verificação NENHUMA, e trocá-la por algo mais largo o faria rodar junto com o " +
+      "`verify` no PR de release, pagando duas vezes o mesmo typecheck.",
+  },
   "ci.yml::verify": {
-    condicao: null,
-    efeito: "Este é o check obrigatório `verify` (typecheck + lint + test:unit).",
+    condicao: COMPLETA,
+    efeito:
+      "Este é o check obrigatório `verify` (typecheck + lint + test:unit + kit)." +
+      PULADO_EM_PR_COMUM,
   },
   "ci.yml::invariants": {
-    condicao: null,
+    condicao: COMPLETA,
     efeito:
       "Este é o check obrigatório `invariants` (`pnpm test:db`) — o único que exercita o " +
-      "`baseline.sql` que o self-hoster aplica, e o isolamento RLS entre organizações.",
+      "`baseline.sql` que o self-hoster aplica, e o isolamento RLS entre organizações." +
+      PULADO_EM_PR_COMUM,
   },
   "e2e.yml::e2e-parte": {
     condicao: null,
@@ -148,8 +197,10 @@ const GATILHO_ESPERADO: Record<string, { condicao: string | null; efeito: string
       "ler o resultado das partes e reprovar `skipped`.",
   },
   "perf.yml::build-and-size": {
-    condicao: null,
-    efeito: "Este é o check obrigatório `build-and-size` (`pnpm build` em Node 22).",
+    condicao: COMPLETA,
+    efeito:
+      "Este é o check obrigatório `build-and-size` (`pnpm build` em Node 22)." +
+      PULADO_EM_PR_COMUM,
   },
 
   // --- e o que legitimamente tem interruptor -----------------------------------
@@ -294,4 +345,154 @@ describe("nenhum job pode ser desligado por uma condição — `skipped` conta c
       ).toBe(esperado.condicao);
     },
   );
+});
+
+/**
+ * UMA VERIFICAÇÃO COMPLETA POR VERSÃO.
+ *
+ * O mapa acima prende o TEXTO de cada condição. Estes casos prendem o que o
+ * conjunto significa — porque dá para trocar as duas constantes juntas, manter o
+ * mapa verde e acabar com um PR de release que não roda nada.
+ *
+ * Não há avaliador de expressão do GitHub nas dependências, então a prova é por
+ * tabela: as duas condições só usam `github.event_name` e `github.head_ref`, e
+ * as quatro situações que existem cabem numa lista. O avaliador abaixo entende
+ * EXATAMENTE as duas formas presas em `COMPLETA` e `RAPIDA`; qualquer outra
+ * forma faz o caso reprovar por não saber avaliar, que é o comportamento certo.
+ */
+describe("uma verificação completa por versão — rápida no PR comum, completa no de release", () => {
+  type Situacao = { nome: string; evento: string; headRef: string };
+
+  const SITUACOES: Situacao[] = [
+    { nome: "PR comum", evento: "pull_request", headRef: "claude/qualquer-coisa" },
+    { nome: "PR de release", evento: "pull_request", headRef: "release/1.60.0" },
+    { nome: "push de tag", evento: "push", headRef: "" },
+    { nome: "Run workflow", evento: "workflow_dispatch", headRef: "" },
+  ];
+
+  function avaliar(condicao: string, s: Situacao): boolean {
+    const eRelease = s.headRef.startsWith("release/");
+    if (condicao === COMPLETA) return s.evento !== "pull_request" || eRelease;
+    if (condicao === RAPIDA) return s.evento === "pull_request" && !eRelease;
+    throw new Error(`condição que este teste não sabe avaliar: ${condicao}`);
+  }
+
+  const lida = (nome: string) => jobs.find((j) => chave(j) === nome)?.condicao ?? "";
+
+  it.each(SITUACOES)("$nome: ou roda a rápida, ou rodam as completas — nunca as duas, nunca nenhuma", (s) => {
+    const rapida = avaliar(lida("ci.yml::rapido"), s);
+    const completa = avaliar(lida("ci.yml::verify"), s);
+
+    if (s.evento === "pull_request") {
+      expect(rapida, `${s.nome}: rápida e completa deram o mesmo resultado`).toBe(!completa);
+    } else {
+      // Fora de PR não existe verificação rápida: tag e disparo manual são completos.
+      expect(rapida).toBe(false);
+      expect(completa).toBe(true);
+    }
+  });
+
+  it("o PR de release roda TODOS os jobs completos, e o PR comum não roda nenhum", () => {
+    const completos = [
+      "ci.yml::verify",
+      "ci.yml::invariants",
+      "perf.yml::build-and-size",
+      "publish-image.yml::build-and-push",
+      "publish-image.yml::imagem-do-app-sobe",
+    ];
+    const comum = SITUACOES[0]!;
+    const release = SITUACOES[1]!;
+    for (const nome of completos) {
+      expect(avaliar(lida(nome), release), `${nome} não roda no PR de release`).toBe(true);
+      expect(avaliar(lida(nome), comum), `${nome} roda em PR comum — a rodada tripla voltou`).toBe(false);
+    }
+  });
+
+  it("a tag publica: os jobs de imagem rodam num push de tag", () => {
+    // A condição nova não pode custar a entrega. Num push de tag não há
+    // `head_ref`, e é a primeira metade da expressão que segura.
+    const tag = SITUACOES[2]!;
+    for (const nome of ["publish-image.yml::build-and-push", "publish-image.yml::imagem-do-app-sobe"]) {
+      expect(avaliar(lida(nome), tag), `${nome} ficaria pulado numa tag — nenhuma imagem sairia`).toBe(true);
+    }
+  });
+
+  /** O bloco `on:` de um workflow, sem comentários. */
+  function gatilhos(arquivo: string): string {
+    const linhas = readFileSync(join(DIR, arquivo), "utf8").split("\n");
+    const i = linhas.findIndex((l) => /^on:\s*$/.test(l));
+    if (i === -1) return "";
+    const fim = linhas.findIndex((l, n) => n > i && /^\S/.test(l) && !l.startsWith("#"));
+    return linhas
+      .slice(i, fim === -1 ? undefined : fim)
+      .filter((l) => !l.trimStart().startsWith("#"))
+      .join("\n");
+  }
+
+  /**
+   * As linhas FILHAS de um evento dentro de `on:` — o que vem recuado abaixo de
+   * `  push:` até o próximo evento. Evento ausente devolve `null`, que é
+   * diferente de evento presente e sem filho (`workflow_dispatch: {}`).
+   */
+  function filhosDe(arquivo: string, evento: string): string[] | null {
+    const linhas = gatilhos(arquivo).split("\n");
+    const i = linhas.findIndex((l) => new RegExp(`^ {2}${evento}:`).test(l));
+    if (i === -1) return null;
+    const filhos: string[] = [];
+    for (let j = i + 1; j < linhas.length && /^ {4,}\S/.test(linhas[j]!); j++) filhos.push(linhas[j]!.trim());
+    return filhos;
+  }
+
+  it("o instrumento está vivo: lê o bloco `on:` de cada workflow", () => {
+    for (const arquivo of ["ci.yml", "perf.yml", "publish-image.yml", "e2e.yml", "release.yml"]) {
+      expect(gatilhos(arquivo), `não achei o bloco on: de ${arquivo}`).toMatch(/^on:/);
+    }
+    // Controle positivo do caso seguinte: o `release.yml` TEM push em branch, e
+    // o recorte precisa enxergá-lo — senão "nenhum outro tem" passa por vacuidade.
+    expect(filhosDe("release.yml", "push")).toEqual(["branches: [main]"]);
+    // E o controle do outro lado: `branches` sob `pull_request` é filtro de
+    // BASE e não pode ser confundido com push de branch.
+    expect(filhosDe("perf.yml", "pull_request")).toEqual(["branches: [main]"]);
+    expect(filhosDe("perf.yml", "push")).toBeNull();
+  });
+
+  it("nada além do corte da tag reage a push na main — a rodada repetida não volta", () => {
+    // `ci`, `perf`, as imagens e o teste de tela rodavam de novo a cada merge:
+    // cerca de 11.200 dos 24.407 minutos medidos de 15/09 a 09/10/2026. O único
+    // fluxo que precisa do push na `main` é o `release`, que decide se nasce
+    // uma tag.
+    for (const arquivo of ["ci.yml", "perf.yml", "e2e.yml"]) {
+      expect(
+        filhosDe(arquivo, "push"),
+        `${arquivo} voltou a reagir a push — cada merge paga a verificação outra vez`,
+      ).toBeNull();
+    }
+    // As imagens reagem a push, mas só de TAG: é a publicação da versão.
+    expect(
+      filhosDe("publish-image.yml", "push"),
+      "publish-image.yml tem de reagir a push de tag `v*`, e a mais nada — push de branch " +
+        "reconstrói e publica as quatro imagens a cada merge",
+    ).toEqual(['tags: ["v*"]']);
+  });
+
+  it("a verificação completa pode ser pedida à mão em qualquer branch", () => {
+    // Sem isto, a mudança arriscada (schema, RLS, kit) só seria provada no PR de
+    // release — tarde demais para quem quer saber antes de mesclar.
+    for (const arquivo of ["ci.yml", "perf.yml", "publish-image.yml", "e2e.yml"]) {
+      expect(gatilhos(arquivo), `${arquivo} perdeu o disparo manual`).toMatch(/^\s+workflow_dispatch:/m);
+    }
+  });
+
+  it("os fluxos com check obrigatório continuam reagindo a TODO pull_request", () => {
+    // Check obrigatório que não REPORTA trava o PR para sempre. Por isso a
+    // economia é por condição de job (que reporta `skipped`), e nunca por
+    // filtro no gatilho. `paths-ignore` aqui devolveria o PR travado.
+    for (const arquivo of ["ci.yml", "perf.yml", "publish-image.yml"]) {
+      const g = gatilhos(arquivo);
+      expect(g, `${arquivo} deixou de reagir a pull_request`).toMatch(/^\s+pull_request:/m);
+      expect(g, `${arquivo} ganhou filtro de caminho — check obrigatório ausente trava o PR`).not.toMatch(
+        /paths(-ignore)?:/,
+      );
+    }
+  });
 });

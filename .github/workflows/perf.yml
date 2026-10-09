@@ -1,12 +1,19 @@
 name: perf
 
-# Sem `paths-ignore`, pela mesma razão do ci.yml: `build-and-size` é check
-# obrigatório da `main`, e check obrigatório que não roda trava o PR.
+# O build de produção roda UMA VEZ POR VERSÃO, no PR de release — e por
+# `Run workflow`, em qualquer branch (`gh workflow run perf.yml --ref <branch>`).
+# Em PR comum o job fica PULADO, e no `push` da `main` este arquivo não dispara
+# mais. A medição, a razão e o que se perde estão no cabeçalho do ci.yml.
+#
+# Condição de job, e não filtro no gatilho: `build-and-size` é check obrigatório
+# da `main`, e check obrigatório que NÃO REPORTA trava o PR para sempre. Job
+# pulado por `if:` reporta `skipped`, que a proteção lê como satisfeito. A
+# condição está presa, por inteiro, em
+# `tests/unit/gatilho-dos-jobs-de-entrega.test.ts`.
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+  workflow_dispatch: {}
 
 # O GITHUB_TOKEN deste job serve a `actions/checkout` (clone) e a
 # `actions/setup-node` (manifest de `actions/node-versions`, repo público).
@@ -19,12 +26,11 @@ on:
 # de Times gerou 8 rodadas de `ci` e 8 de `e2e`, sete de cada obsoletas, e a cota
 # de 2.000 minutos do plano Free acabou em 1.751.
 #
-# `cancel-in-progress` só para PULL REQUEST, nunca para `push` na main: cancelar
-# uma rodada da main interromperia a publicação de imagem de uma versão real,
-# deixando o cliente com uma tag que aponta para nada.
+# `cancel-in-progress` só para PULL REQUEST: uma rodada manual (`Run workflow`)
+# foi pedida por alguém e corre até o fim.
 #
-# Isto NÃO reduz cobertura: o ciclo completo continua rodando no commit que
-# importa, que é o último.
+# Isto NÃO reduz cobertura: o ciclo continua rodando no commit que importa, que
+# é o último.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -34,6 +40,7 @@ permissions:
 
 jobs:
   build-and-size:
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

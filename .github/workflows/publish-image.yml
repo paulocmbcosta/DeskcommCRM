@@ -12,9 +12,18 @@ name: Publicar imagem Docker (GHCR)
 # do dia da instalação. Doutrina: docs/doctrine/packaging.md, invariante 1.
 
 on:
+  # Só TAG. O `push` na `main` saiu daqui em 2026-10-09: ele reconstruía e
+  # publicava as quatro imagens a cada merge (139 execuções em 25 dias, perto
+  # de 2.200 minutos) para mover `latest` e `main` — canais que nenhuma
+  # instalação de cliente usa, porque cliente aponta para número de versão. A
+  # medição inteira está no cabeçalho do ci.yml.
+  #
+  # Consequência, para não virar falha em verde: `latest` e `main` NÃO andam
+  # mais sozinhos a cada merge. Só se movem por `Run workflow` disparado na
+  # `main`. Quem quer a última release usa `stable`, que continua andando a
+  # cada tag.
   push:
     tags: ["v*"]
-    branches: ["main"]
   # NÃO acrescente `release: types: [published]` aqui. Ele já esteve, e o efeito
   # foi medido na v1.3.0: `gh release create` empurra a tag E publica a release,
   # então o MESMO commit foi construído DUAS vezes, com 5 minutos de diferença.
@@ -36,7 +45,12 @@ on:
   #
   # O gatilho de push da tag já cobre o fluxo real: a tag é sempre empurrada,
   # com ou sem release. Vigiado por tests/unit/packaging-artefato-do-cliente.test.ts.
-  # Em PR a imagem é CONSTRUÍDA e não publicada. Sem isto, nada no PR consegue
+  # Em PR DE RELEASE (branch `release/…`) a imagem é CONSTRUÍDA e não publicada;
+  # em PR comum os jobs de construção ficam PULADOS (condição de job, presa em
+  # `tests/unit/gatilho-dos-jobs-de-entrega.test.ts`). É a mesma regra do ci.yml:
+  # uma verificação completa por versão.
+  #
+  # O gate continua existindo porque, sem ele, nada antes da tag consegue
   # revelar que a mudança quebra a imagem — foi assim que um bump de `next`
   # passou por `verify`, `build-and-size`, `invariants` e `e2e` (os quatro
   # obrigatórios) e derrubou o build do Dockerfile na `main`: o `next build`
@@ -48,9 +62,9 @@ on:
 
 # Rodada obsoleta não se paga — ver o bloco igual em ci.yml, que traz a medição.
 # `cancel-in-progress` só para PULL REQUEST: em PR a imagem é construída e NÃO
-# publicada, então cancelar não perde artefato. Num `push` na main ou em tag,
-# cancelar interromperia a publicação de uma versão real e deixaria o cliente
-# com uma tag apontando para nada.
+# publicada, então cancelar não perde artefato. Num `push` de tag, cancelar
+# interromperia a publicação de uma versão real e deixaria o cliente com uma
+# tag apontando para nada.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -85,7 +99,13 @@ jobs:
           set -euo pipefail
           # Sem `if:` no job, de propósito: job pulado deixa `build-and-push`
           # pulado também, e `imagens-ok` (que roda com `always()`) lê `skipped`
-          # como reprovação. Em PR e em push de branch este job RODA e sai zero.
+          # como reprovação. Em PR e em `Run workflow` este job RODA e sai zero.
+          #
+          # Custo conhecido: em PR comum ele é o ÚNICO job deste arquivo que
+          # roda (3 segundos, faturados como 1 minuto), porque os de construção
+          # ficam pulados. Tirá-lo daqui exigiria dar a ele a mesma condição dos
+          # outros, e a regra "a trava não tem `if:`" está presa em
+          # `tests/unit/tag-so-nasce-da-main.test.ts`.
           if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
             echo "não é push de tag (${GITHUB_REF_TYPE}) — nada a conferir"
             exit 0
@@ -105,6 +125,7 @@ jobs:
 
   build-and-push:
     needs: [a-tag-veio-da-main]
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -234,6 +255,7 @@ jobs:
   # reprova é o processo não chegar a servir.
   imagem-do-app-sobe:
     needs: [a-tag-veio-da-main]
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -380,7 +402,11 @@ jobs:
   # gerado, e acrescentar uma quarta imagem um dia quebraria o gate em silêncio —
   # o merge voltaria a passar sem que ninguém tivesse decidido isso.
   imagens-ok:
-    if: always()
+    # `always()` para poder LER `skipped`/`failure` dos `needs` e reprovar; a
+    # segunda metade é a mesma condição dos jobs que ele lê. Em PR comum eles
+    # ficam pulados DE PROPÓSITO, e esta fachada tem de ficar pulada junto —
+    # rodando, ela leria `skipped` e reprovaria todo PR comum.
+    if: always() && (github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/'))
     runs-on: ubuntu-latest
     # Nenhuma permissão: este job só lê o resultado de `needs` e sai. Sem o bloco,
     # o GITHUB_TOKEN herdaria o default do REPOSITÓRIO — configuração que vive fora

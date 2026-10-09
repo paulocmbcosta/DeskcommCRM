@@ -127,8 +127,13 @@ quando o repositório era privado). Check obrigatório que não roda num PR só 
 tem Actions sem cota nos runners padrão, então o filtro saiu (PR #7). Se ele voltar, a proteção
 tem de sair junto.
 
-`e2e` fica de fora: desde o PR #9 ele não roda em PR (só no push na `main` e por `Run workflow`),
-e check exigido que não roda trava o PR.
+`e2e` fica de fora: desde o PR #9 ele não roda em PR, e desde 2026-10-09 nem no push na `main`
+(só por `Run workflow`) — e check exigido que não roda trava o PR.
+
+Desde 2026-10-09 os quatro checks exigidos rodam por inteiro **só no PR de release**; em PR comum
+eles reportam `skipped` (condição de job), que a proteção lê como satisfeito, e quem roda é o job
+`rapido`. A lista de contextos acima não muda. O racional e a medição estão no cabeçalho de
+`.github/workflows/ci.yml`.
 
 ```bash
 gh api -X PUT repos/paulocmbcosta/DeskcommCRM/branches/main/protection --input - <<'JSON'
@@ -249,10 +254,14 @@ Para voltar ao remoto antigo, `git remote set-url origin` de volta.
 
 ## O que este runbook não resolve
 
-- **As falhas herdadas do `e2e`.** Ele não roda mais em PR (PR #9); roda no push na `main` e por
-  `Run workflow`. Até ficar verde de forma estável e voltar a `synchronize`, não entra na proteção.
-- **A cota de Actions.** Público = runners padrão sem cota. Se o repositório voltar a ser privado,
-  o `paths-ignore` e a concorrência do PR #5 voltam a importar, e o passo 4 precisa ser revisto.
+- **As falhas herdadas do `e2e`.** Ele não roda mais em PR (PR #9) nem no push na `main`
+  (2026-10-09); roda só por `Run workflow`. Até ficar verde de forma estável e voltar a
+  `synchronize`, não entra na proteção.
+- **A cota de Actions.** Público = runners padrão sem cota. O que foi feito para o repositório
+  poder voltar a ser privado está no cabeçalho de `.github/workflows/ci.yml` (uma verificação
+  completa por versão, por condição de job — **não** por `paths-ignore`, que travaria o PR). Em
+  repositório privado de conta gratuita não existe proteção de branch: o passo 4 deixa de valer
+  e os checks passam a ser exigidos só por combinado.
 - **Os sete minutos de produto da origem.** Entre o primeiro `update.sh` e a correção, o app, o
   worker e o scheduler da origem (1.29.0 de lá) rodaram sobre este banco. O schema é o nosso
   (aplicado pelo nosso `baseline.sql`), mas o que aquele worker processou naquela janela foi com a

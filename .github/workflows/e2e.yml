@@ -28,41 +28,35 @@ name: e2e
 # job inteiro e reportou VERDE com o `supabase start` quebrado e zero teste
 # executado. Verde que não distingue "passou" de "nem rodou" é pior que vermelho.
 on:
-  # `workflow_dispatch` primeiro porque é o caminho de quem QUER o e2e agora:
-  # Actions → e2e → Run workflow. Antes de mesclar algo arriscado, é o botão.
-  workflow_dispatch: {}
-  # SEM `pull_request`, por decisão do dono em 2026-09-18, durante o
-  # desenvolvimento: as três partes levam ~25 min, oscilam entre execuções do
-  # mesmo commit (medido no PR #6: `agenda-google-sync` vermelho e verde no
-  # mesmo SHA) e não são check obrigatório — um PR podia ser mesclado com elas
-  # ainda rodando. Sinal que ninguém espera e que às vezes mente não vale 25
-  # minutos de painel por PR. O e2e continua rodando no push na `main` (abaixo,
-  # assíncrono: não segura tag nem publicação) e por `Run workflow`, que é o
-  # botão para antes de mesclar algo arriscado.
+  # SÓ MANUAL, desde 2026-10-09: Actions → e2e → Run workflow, ou
+  # `gh workflow run e2e.yml --ref <branch>`. É o botão para antes de mesclar ou
+  # de lançar algo arriscado.
   #
-  # Para voltar aos PRs, restaure este bloco. `paths-ignore` só é aceitável
-  # enquanto o check NÃO for obrigatório, e `synchronize` fica de fora até as
-  # falhas herdadas ficarem verdes (8 pushes = 8 × 75 min faturados):
+  # O `push` na `main` saiu. Medido de 15/09 a 09/10: 76 execuções, 5.651
+  # minutos — 23% de tudo o que o CI consumiu no período, para um sinal que não
+  # segura merge, tag nem publicação. E que ninguém estava lendo: 48 das 76
+  # falharam, as 12 mais recentes todas, e nenhum merge nem release parou por
+  # isso. Em repositório privado cada execução custa perto de 150 minutos
+  # faturados (três partes, runner com metade dos núcleos), contra uma franquia
+  # de 2.000 por mês.
   #
-  #   pull_request:
+  # Ele já não rodava em PR, por decisão do dono em 2026-09-18: as três partes
+  # levam ~25 min, oscilam entre execuções do mesmo commit (medido no PR #6:
+  # `agenda-google-sync` vermelho e verde no mesmo SHA) e não são check
+  # obrigatório.
+  #
+  # ⚠️ O QUE ISTO SIGNIFICA: nenhuma versão é provada pela tela automaticamente.
+  # Mudança de UI ou de fluxo de usuário pede o disparo manual antes do release
+  # — a Definition of Done do CLAUDE.md (item 12) já exigia a prova pela tela.
+  #
+  # Para voltar a rodar sozinho, o bloco é este. `paths-ignore` só é aceitável
+  # enquanto o check NÃO for obrigatório (check obrigatório que não reporta
+  # trava o PR):
+  #
+  #   push:
   #     branches: [main]
-  #     types: [opened, reopened, ready_for_review]
   #     paths-ignore: ["docs/**", "**/*.md", ".changes/**"]
-  push:
-    branches: [main]
-    paths-ignore:
-      # Mudança só de prosa não pode quebrar código, e o ciclo completo custa
-      # ~150 minutos faturados. Medido na branch de Times: 13 dos 46 commits
-      # tocaram SÓ documentação — 28% do trabalho, pago integralmente.
-      #
-      # ⚠️ ARMADILHA CONHECIDA: `paths-ignore` num check OBRIGATÓRIO de branch
-      # protection faz o PR nunca receber aquele check e ficar travado para
-      # sempre. Hoje este repositório não tem branch protection (plano Free não
-      # oferece em repo privado). Se um dia tiver, este bloco tem de sair ou
-      # virar um job que reporta sucesso de propósito.
-      - "docs/**"
-      - "**/*.md"
-      - ".changes/**"
+  workflow_dispatch: {}
 
 # O GITHUB_TOKEN deste job serve a `actions/checkout` (clone) e a
 # `actions/setup-node` (manifest de `actions/node-versions`, repo público).
@@ -86,12 +80,10 @@ on:
 # de Times gerou 8 rodadas de `ci` e 8 de `e2e`, sete de cada obsoletas, e a cota
 # de 2.000 minutos do plano Free acabou em 1.751.
 #
-# `cancel-in-progress` só para PULL REQUEST, nunca para `push` na main: cancelar
-# uma rodada da main interromperia a publicação de imagem de uma versão real,
-# deixando o cliente com uma tag que aponta para nada.
-#
-# Isto NÃO reduz cobertura: o ciclo completo continua rodando no commit que
-# importa, que é o último.
+# `cancel-in-progress` só para PULL REQUEST: uma rodada manual (`Run workflow`)
+# foi pedida por alguém e corre até o fim. Hoje este arquivo só dispara à mão,
+# então a expressão é sempre falsa — ela fica para o dia em que o bloco de
+# `pull_request` voltar.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
