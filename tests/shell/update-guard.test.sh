@@ -286,8 +286,21 @@ STUB
 # --tags comum, que continua funcionando contra a origin de verdade. Fora
 # desse gate (a maioria das chamadas do arquivo inteiro, casos 1-7 incluídos)
 # o dublê é 100% transparente.
+#
+# E, a partir do caso 17, EXCETO `fetch --tags` quando DUBLE_FETCH_TAGS_FALHA
+# trouxer uma mensagem: o dublê a escreve no stderr e sai 128, que é como o git
+# de verdade responde quando o GitHub recusa a chave ou a rede não existe. É o
+# único jeito de exercitar "o servidor perdeu o acesso ao repositório" sem
+# depender de rede nem de um repositório privado de verdade.
 cat > "$WORK/bin/git" <<STUB
 #!/usr/bin/env bash
+if [ -n "\${DUBLE_FETCH_TAGS_FALHA:-}" ]; then
+  case " \$* " in
+    *" fetch "*"--tags "*)
+      printf '%s\\n' "\$DUBLE_FETCH_TAGS_FALHA" >&2
+      exit 128 ;;
+  esac
+fi
 if [ "\${FORCE_UNSHALLOW_FAIL:-0}" = "1" ]; then
   for a in "\$@"; do
     if [ "\$a" = "--unshallow" ]; then
@@ -695,6 +708,13 @@ cd "$PINADA" || exit 1
 git init --quiet; git config user.email t@t.t; git config user.name t
 git add -A; git commit --quiet -m "v1.1.0"; git tag v1.1.0
 echo nova > nova.txt; git add -A; git commit --quiet -m "v1.2.0"; git tag v1.2.0
+# A origem EXISTE e responde: é o estado normal de uma VPS, que alcança o GitHub.
+# Sem ela, todo `git fetch --tags origin` deste bloco falhava ("'origin' does not
+# appear to be a git repository") e os controles de "Nada a atualizar" mediam,
+# sem saber, o caminho em que o servidor NÃO conseguiu consultar — que desde o
+# caso 17 tem resposta própria, em amarelo.
+git clone --quiet --bare "$PINADA" "$WORK/pinada-origem.git"
+git remote add origin "$WORK/pinada-origem.git"
 # O que o operador fez à mão ANTES de rodar o update.sh.
 git -c advice.detachedHead=false checkout --quiet v1.2.0
 
@@ -1285,6 +1305,69 @@ check "fixture: a atualização rodou" concluiu
 check "não há o bloco da telefonia na saída" bash -c "! grep -q 'Conferindo a telefonia' '$OUTFILE'"
 check "nenhuma leitura da tabela de conexões" bash -c "! grep -q -- '--entrypoint conntrack' '$DOCKER_LOG'"
 check "nenhuma pergunta ao Asterisk" bash -c "! grep -q 'asterisk -rx' '$DOCKER_LOG'"
+
+echo
+echo "── 17. Repositório fechado: sem conseguir consultar o GitHub, o update.sh NÃO diz 'em dia' em verde"
+# Com o repositório privado e a VPS sem a chave de leitura (ou com ela revogada),
+# o `git fetch` falha e o script seguia com as tags que já tinha — respondendo
+# "✓ Você já está na versão mais recente. Nada a atualizar." a uma instalação que
+# pode estar várias versões atrás. Verde que afirma o que não conferiu.
+#
+# A instalação deste bloco está EM DIA entre as versões que conhece: `.env`, digest
+# e contêineres no alvo. O que muda de um subcaso para o outro é só o `fetch`.
+V17="$(git describe --tags --exact-match HEAD 2>/dev/null)"; V17="${V17#v}"
+check "fixture: o código está numa tag" test -n "$V17"
+env_das_tres "${NS}/deskcommcrm:${V17}" "${NS}/deskcomm-worker:${V17}" "${NS}/deskcomm-scheduler:${V17}"
+em_execucao "${NS}/deskcommcrm:${V17}" "${NS}/deskcomm-worker:${V17}" "${NS}/deskcomm-scheduler:${V17}"
+disse_em_dia_em_verde() { grep -q "✓ Você já está na versão mais recente" "$OUTFILE"; }
+disse_que_nao_conferiu() { grep -q "QUE ESTE SERVIDOR CONHECE" "$OUTFILE"; }
+disse_que_foi_recusado() { grep -q "RECUSOU o acesso deste servidor" "$OUTFILE"; }
+apontou_o_runbook() { grep -q "docs/runbooks/repositorio-fechado.md" "$OUTFILE"; }
+
+echo "   17a. CONTROLE: com o GitHub respondendo, a resposta é a de sempre, em verde"
+# Sem este controle os subcasos seguintes não provam nada: bastaria a fixture
+# não estar em dia para o script nunca chegar à frase medida.
+unset DUBLE_FETCH_TAGS_FALHA
+run_update
+check "responde 'Nada a atualizar'" nada_a_atualizar
+check "em verde, afirmando que é a mais recente" disse_em_dia_em_verde
+check "sem falar em acesso recusado" bash -c "! grep -q 'RECUSOU' '$OUTFILE'"
+check "sai com 0" test "$RC" -eq 0
+
+echo "   17b. o GitHub RECUSA a chave (repositório fechado, servidor sem acesso)"
+export DUBLE_FETCH_TAGS_FALHA="git@github.com: Permission denied (publickey).
+fatal: Could not read from remote repository."
+run_update
+check "NÃO afirma em verde que é a mais recente" bash -c "! grep -q '✓ Você já está na versão mais recente' '$OUTFILE'"
+check "diz que é a mais recente QUE ESTE SERVIDOR CONHECE" disse_que_nao_conferiu
+check "diz que o acesso foi RECUSADO, e não 'sem internet'" disse_que_foi_recusado
+check "aponta o passo a passo" apontou_o_runbook
+check "não mexeu em nada: nem backup" test ! -f "$BACKUP_MARK"
+check "sai com 0 (não é falha de atualização: não havia o que aplicar)" test "$RC" -eq 0
+
+echo "   17c. o mesmo por HTTPS: o git pediria usuário e senha, e não pode ficar esperando"
+export DUBLE_FETCH_TAGS_FALHA="fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+run_update
+check "também é lido como acesso recusado" disse_que_foi_recusado
+check "e não afirma 'em dia' em verde" bash -c "! grep -q '✓ Você já está na versão mais recente' '$OUTFILE'"
+
+echo "   17d. falha de REDE não é acusada de falta de chave"
+# O remédio é outro (esperar a rede voltar), e mandar o dono atrás de uma chave
+# que está no lugar seria trocar um silêncio por uma pista falsa.
+export DUBLE_FETCH_TAGS_FALHA="fatal: unable to access 'https://github.com/x/y.git/': Could not resolve host: github.com"
+run_update
+check "diz que não conseguiu falar com o GitHub" grep -q "não consegui falar com o GitHub" "$OUTFILE"
+check "NÃO diz que o acesso foi recusado" bash -c "! grep -q 'RECUSOU' '$OUTFILE'"
+check "e mesmo assim não afirma 'em dia' em verde" disse_que_nao_conferiu
+
+echo "   17e. o script pede ao git que NÃO pergunte senha no terminal"
+# Lido no próprio update.sh e no agent.sh: sem isto, rodado à mão por SSH num
+# servidor sem credencial, o git pára numa pergunta de usuário e senha.
+check "update.sh busca as tags com GIT_TERMINAL_PROMPT=0" \
+  grep -qE '^[^#]*GIT_TERMINAL_PROMPT=0 git fetch --tags' hostgator-setup-kit/update.sh
+check "agent.sh também" \
+  grep -qE '^[^#]*GIT_TERMINAL_PROMPT=0 git fetch --tags' hostgator-setup-kit/agent.sh
+unset DUBLE_FETCH_TAGS_FALHA
 
 unset DUBLE_DIGESTS
 

@@ -476,26 +476,81 @@ ultima_versao_publicada() {
   # existe de verdade neste repo). O `--sort=-v:refname` do git põe o prerelease
   # ACIMA do release final quando `versionsort.suffix` não está configurado, e
   # uma instalação nova nasceria num release candidate sem ninguém pedir.
-  ref="$(git ls-remote --tags --refs --sort=-v:refname "$url" 'v*' 2>/dev/null \
+  # `GIT_TERMINAL_PROMPT=0`: num repositório FECHADO, o git por HTTPS pergunta
+  # usuário e senha no terminal de quem roda o instalador — e ele ficaria parado
+  # ali. Sem prompt, falha na hora e quem chama trata o vazio.
+  ref="$(GIT_TERMINAL_PROMPT=0 git ls-remote --tags --refs --sort=-v:refname "$url" 'v*' 2>/dev/null \
         | awk '{print $2}' | grep -v -- '-' | head -1)" || return 0
   [ -n "$ref" ] || return 0
   printf '%s' "${ref#refs/tags/v}"
 }
 
-# Código HTTP do manifest de uma referência nossa no GHCR, anonimamente.
-#   200 = existe e é pública | 404 = não existe | 403 = pacote PRIVADO | 000 = sem rede
+# Credencial que o Docker DESTA máquina guarda para um registro (`docker login`).
+# Ecoa o valor de `auths[<registro>].auth` (já em base64), ou nada.
+#
+# Existe para o repositório FECHADO: com os pacotes privados no GHCR, a sonda
+# anônima abaixo responde 401/403 para imagens que existem, e o instalador lia
+# isso como "a versão não está publicada" — caía no `stable`, depois em
+# "construir aqui", e o `docker compose pull` do app (que não tem `build:`)
+# morria no fim. O `pull` usa a credencial do `docker login`; a sonda tem de
+# usar a MESMA, senão ela mede um caminho e o cliente usa outro.
+#
+# Sem `jq` no kit: achata o JSON e recorta. A chave pode ser `ghcr.io` ou
+# `https://ghcr.io`, com ou sem barra no fim. Quando o Docker usa um cofre
+# (`credsStore`), o `auth` não está no arquivo e isto ecoa vazio — a sonda cai
+# no caminho anônimo, que é o comportamento de antes.
+credencial_do_registro() {
+  local registro="$1" cfg ponto
+  cfg="${DOCKER_CONFIG:-${HOME:-/root}/.docker}/config.json"
+  [ -r "$cfg" ] || return 0
+  ponto="$(printf '%s' "$registro" | sed 's/\./\\./g')"
+  { tr -d ' \n\r\t' < "$cfg" 2>/dev/null || true; } \
+    | sed -n "s#.*\"\\(https://\\)\\{0,1\\}${ponto}/\\{0,1\\}\":{[^}]*\"auth\":\"\\([^\"]*\\)\".*#\\2#p" \
+    | head -1
+}
+
+# Token de leitura do registro para uma imagem nossa. Com `docker login` feito
+# nesta máquina, pede COM a credencial (enxerga pacote privado e público); sem
+# ela, ou se ela for recusada, pede anônimo (só pacote público).
+#
+# A credencial vai ao `curl` por stdin (`-K -`), nunca na linha de comando: um
+# `-H 'Authorization: Basic …'` ficaria visível em `ps` para qualquer usuário
+# da máquina enquanto a requisição durasse.
+ghcr_token() {
+  local img="$1" registry owner url cred tok=""
+  registry="${IMG_NS%%/*}"
+  owner="${IMG_NS#*/}"
+  url="https://${registry}/token?scope=repository:${owner}/${img}:pull&service=${registry}"
+  cred="$(credencial_do_registro "$registry")" || cred=""
+  if [ -n "$cred" ]; then
+    tok="$(printf 'header = "Authorization: Basic %s"\n' "$cred" \
+            | curl -fsS --max-time 6 -K - "$url" 2>/dev/null \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || tok=""
+  fi
+  if [ -z "$tok" ]; then
+    tok="$(curl -fsS --max-time 6 "$url" 2>/dev/null \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || tok=""
+  fi
+  printf '%s' "$tok"
+}
+
+# Código HTTP do manifest de uma referência nossa no GHCR — com a credencial do
+# `docker login` desta máquina quando há uma, anonimamente quando não há.
+#   200 = existe e ESTA MÁQUINA consegue puxar | 404 = não existe
+#   401/403 = existe, mas é PRIVADO e esta máquina não tem login | 000 = sem rede
 #
 # 403 é o caso que mais engana: pacote recém-criado no GHCR nasce privado, e
 # repositório público não muda isso. Enquanto ninguém trocar a visibilidade na
-# mão, o `docker compose pull` de toda VPS é negado — e como `pull` de serviço
-# com `image:` falha a operação inteira, a instalação morre no passo de subir.
+# mão — ou fizer `docker login ghcr.io` nesta máquina —, o `docker compose pull`
+# é negado, e como `pull` de serviço com `image:` falha a operação inteira, a
+# instalação morre no passo de subir.
 #
 # ⚠️ O DONO E O REGISTRO SAEM DO `IMG_NS`, NUNCA DE UM LITERAL. Achado por
-# @galeonel no PR #605: as duas URLs abaixo tinham `melgarafael` cravado. Num
-# fork que troca o `IMG_NS`, isso faz o pré-voo conferir os pacotes do UPSTREAM
-# enquanto `gravar_imagens` escreve no `.env` do cliente as referências do FORK
-# — a sonda mede um caminho e o usuário usa outro, que é a falha-em-verde do
-# passe 5 da triagem.
+# @galeonel no PR #605: as duas URLs tinham `melgarafael` cravado. Num fork que
+# troca o `IMG_NS`, isso faz o pré-voo conferir os pacotes do UPSTREAM enquanto
+# `gravar_imagens` escreve no `.env` do cliente as referências do FORK — a sonda
+# mede um caminho e o usuário usa outro, que é a falha-em-verde do passe 5 da
+# triagem.
 #
 # E o literal escapava da catraca por acidente: `namespace-das-imagens.test.ts`
 # procura a string contígua `ghcr.io/melgarafael`, e a URL do token a parte em
@@ -504,9 +559,7 @@ ghcr_status() {
   local img="$1" tag="$2" tok registry owner
   registry="${IMG_NS%%/*}"
   owner="${IMG_NS#*/}"
-  tok="$(curl -fsS --max-time 6 \
-          "https://${registry}/token?scope=repository:${owner}/${img}:pull&service=${registry}" 2>/dev/null \
-        | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || true
+  tok="$(ghcr_token "$img")" || true
   if [ -z "$tok" ]; then printf '000'; return 0; fi
   curl -s -o /dev/null --max-time 6 -w '%{http_code}' \
     -H "Authorization: Bearer $tok" \
@@ -514,7 +567,19 @@ ghcr_status() {
     "https://${registry}/v2/${owner}/${img}/manifests/${tag}" 2>/dev/null || printf '000'
 }
 
-# As TRÊS imagens existem e são públicas nesta referência?
+# As imagens existem, mas esta máquina NÃO tem permissão de lê-las?
+#
+# É a pergunta que separa "a versão ainda está publicando" de "o pacote é
+# privado e falta o `docker login`" — duas causas com a mesma cara no
+# `trio_publicado` (nenhuma devolve 200) e remédios opostos: esperar não
+# conserta a segunda nunca.
+registro_recusa_esta_maquina() {
+  local c
+  c="$(ghcr_status deskcommcrm stable)"
+  [ "$c" = "401" ] || [ "$c" = "403" ]
+}
+
+# As TRÊS imagens existem nesta referência, e esta máquina consegue puxá-las?
 #
 # Perguntar pelas três juntas, e não só pela do app, é o ponto: `deskcomm-worker`
 # e `deskcomm-scheduler` nasceram depois das releases que já existem, então
