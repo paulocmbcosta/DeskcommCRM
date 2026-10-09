@@ -103,7 +103,7 @@ export async function pedirAsQueFaltam(db: Queryable, limite: number): Promise<n
 export interface TranscricaoPendente {
   vcId: string;
   organizationId: string;
-  /** Quantas vezes já falhou. */
+  /** Qual tentativa é ESTA (1 = a primeira). Contada na reserva — ver `reservarPendentes`. */
   tentativas: number;
   pedidaEm: Date;
 }
@@ -127,11 +127,18 @@ const pendente = (r: LinhaPendente): TranscricaoPendente => ({
  * `next_attempt_at` para a frente, de modo que outra passada (ou outro worker)
  * não pegue a mesma enquanto esta trabalha. Se este worker cair no meio, a
  * reserva vence e a ligação volta para a fila sozinha.
+ *
+ * A TENTATIVA É CONTADA AQUI, na reserva, e não quando a falha é registrada. Um
+ * worker que morre no meio (falta de memória, contêiner reiniciado) não chega a
+ * registrar falha nenhuma: se a conta fosse só na falha, a ligação que derruba o
+ * worker voltaria para a fila para sempre, com zero tentativas — foi assim que
+ * um PDF derrubou o worker em laço em 28/09/2026. Contando na reserva, cada vez
+ * que alguém PEGA a ligação gasta uma tentativa, termine como terminar.
  */
 export async function reservarPendentes(db: Queryable, limite: number, reservaS: number): Promise<TranscricaoPendente[]> {
   const { rows } = await db.query<LinhaPendente>(
     `update voice_call_transcripts t
-        set next_attempt_at = now() + make_interval(secs => $2)
+        set next_attempt_at = now() + make_interval(secs => $2), attempts = t.attempts + 1
       where t.voice_call_id in (
               select voice_call_id from voice_call_transcripts
                where status = 'pending' and next_attempt_at <= now()
@@ -153,7 +160,7 @@ export async function reservarUma(
 ): Promise<TranscricaoPendente | null> {
   const { rows } = await db.query<LinhaPendente>(
     `update voice_call_transcripts
-        set next_attempt_at = now() + make_interval(secs => $3)
+        set next_attempt_at = now() + make_interval(secs => $3), attempts = attempts + 1
       where voice_call_id = $2 and organization_id = $1 and status = 'pending' and next_attempt_at <= now()
       returning voice_call_id, organization_id, attempts, created_at`,
     [organizationId, vcId, reservaS],
@@ -329,7 +336,7 @@ export async function concluirTranscricao(
   }
 }
 
-/** A tentativa falhou e ainda há outra: conta a tentativa e marca a próxima. */
+/** A tentativa falhou e ainda há outra: marca a próxima (a tentativa já foi contada na reserva). */
 export async function reagendarTranscricao(
   db: Queryable,
   organizationId: string,
@@ -339,7 +346,7 @@ export async function reagendarTranscricao(
 ): Promise<void> {
   await db.query(
     `update voice_call_transcripts
-        set attempts = attempts + 1, next_attempt_at = now() + make_interval(secs => $3), last_error = $4
+        set next_attempt_at = now() + make_interval(secs => $3), last_error = $4
       where voice_call_id = $2 and organization_id = $1 and status = 'pending'`,
     [organizationId, vcId, esperaS, erro.slice(0, 200)],
   );
@@ -350,18 +357,25 @@ export async function reagendarTranscricao(
  * (dedup `kind_e_titulo`: enquanto o anterior estiver aberto, outra falha não
  * abre outro — com o provedor fora do ar, seriam dezenas). Só quem estava
  * `pending` transita; devolve se transitou.
+ *
+ * `aviso` nulo = falha que quem opera não tem como consertar (o arquivo da
+ * gravação não confere): o cartão diz que não saiu, o log do worker diz por quê,
+ * e a Central não ganha um aviso que mandaria a pessoa mexer na chave à toa.
+ *
+ * A linha FICA, `failed` — é o que impede a passada de pedir a mesma ligação de
+ * novo a cada minuto.
  */
 export async function falharTranscricao(
   db: Pick<pg.Pool, "query">,
   organizationId: string,
   vcId: string,
   erro: string,
-  aviso: { titulo: string; corpo: string },
+  aviso: { titulo: string; corpo: string } | null,
 ): Promise<boolean> {
   const { rows } = await db.query<{ transitou: boolean }>(
     `with t as (
        update voice_call_transcripts
-          set status = 'failed', attempts = attempts + 1, last_error = $3, completed_at = now()
+          set status = 'failed', last_error = $3, completed_at = now()
         where voice_call_id = $2 and organization_id = $1 and status = 'pending'
         returning voice_call_id
      ), m as (
@@ -374,7 +388,7 @@ export async function falharTranscricao(
     [organizationId, vcId, erro.slice(0, 200), projecao("falhou")],
   );
   const transitou = rows[0]?.transitou === true;
-  if (transitou) await avisarNaCentral(db, organizationId, aviso);
+  if (transitou && aviso) await avisarNaCentral(db, organizationId, aviso);
   return transitou;
 }
 

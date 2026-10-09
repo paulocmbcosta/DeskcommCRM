@@ -27,10 +27,12 @@
  *
  * ## O que acontece quando falha
  *
- * Erro de rede, do provedor ou do Storage: a tentativa é contada e a ligação
- * volta para a fila com espera crescente (`ESPERAS_S`). Depois de
- * `MAX_TENTATIVAS`, ou de `PRAZO_TOTAL_MS` desde o pedido, a transcrição é dada
- * como perdida: o cartão diz, e a Central avisa (`phone_transcription_failed`).
+ * Erro de rede, do provedor ou do Storage: a ligação volta para a fila com
+ * espera crescente (`ESPERAS_S`). Depois de `MAX_TENTATIVAS`, ou de
+ * `PRAZO_TOTAL_MS` desde o pedido, a transcrição é dada como perdida: o cartão
+ * diz, e a Central avisa (`phone_transcription_failed`). A tentativa é contada
+ * quando a ligação é RESERVADA, e não quando falha: o worker que cai no meio
+ * também gasta uma, e uma ligação que o derrube não volta para sempre.
  * Sem chave do transcritor, a Central é avisada na PRIMEIRA vez — quem cadastra a
  * chave em seguida ainda pega a ligação na tentativa seguinte.
  *
@@ -60,7 +62,11 @@ import { comPrazo } from "./gravacoes";
 import * as repo from "./repositorio-das-transcricoes";
 import type { ContextoDaTranscricao, TranscricaoPendente } from "./repositorio-das-transcricoes";
 
-/** Quantas vezes se tenta antes de dar a transcrição como perdida. */
+/**
+ * Quantas vezes se tenta antes de dar a transcrição como perdida. A tentativa é
+ * contada quando a ligação é RESERVADA (`reservarPendentes`), não quando falha:
+ * o worker que cai no meio também gasta uma.
+ */
 export const MAX_TENTATIVAS = 5;
 /** Quanto se espera depois da 1ª, 2ª, 3ª e 4ª falha (segundos). */
 export const ESPERAS_S = [60, 300, 900, 3_600] as const;
@@ -102,7 +108,7 @@ export interface BancoDaTranscricao {
   contexto(org: string, vcId: string): Promise<ContextoDaTranscricao | null>;
   concluir(p: Parameters<typeof repo.concluirTranscricao>[1]): Promise<"gravada" | "descartada">;
   reagendar(org: string, vcId: string, esperaS: number, erro: string): Promise<void>;
-  falhar(org: string, vcId: string, erro: string, aviso: { titulo: string; corpo: string }): Promise<boolean>;
+  falhar(org: string, vcId: string, erro: string, aviso: { titulo: string; corpo: string } | null): Promise<boolean>;
   avisar(org: string, aviso: { titulo: string; corpo: string }): Promise<void>;
   descartar(org: string, vcId: string): Promise<void>;
   registrarUso(p: Parameters<typeof repo.registrarUsoDoTranscritor>[1]): Promise<void>;
@@ -139,6 +145,8 @@ export interface PortasDaTranscricao {
 export type DesfechoDaTranscricao = "pronta" | "sem_fala" | "descartada" | "adiada" | "falhou" | "em_curso";
 
 const SEM_CHAVE = "sem_chave";
+const ARQUIVO_INVALIDO = "arquivo_invalido";
+const TENTATIVAS_ESGOTADAS = "tentativas_esgotadas";
 
 /** O código da língua que o transcritor espera (ISO 639-1). */
 const LINGUA: Record<Idioma, string> = { "pt-BR": "pt", es: "es" };
@@ -242,13 +250,33 @@ export class TranscricoesDaTelefonia {
   private async processarAgora(t: TranscricaoPendente): Promise<DesfechoDaTranscricao> {
     const { organizationId: org, vcId } = t;
     const ctx = await this.p.banco.contexto(org, vcId);
-    const caminho = ctx ? this.arquivoDaLigacao(org, ctx) : null;
-    if (!ctx || !ctx.ligada || ctx.anonimizado || ctx.gravacao !== "stored" || !caminho) {
-      // A organização desligou, o contato foi anonimizado, a gravação venceu ou
-      // o arquivo não é o da gravação: nada vai ao provedor, e o pedido sai.
+    if (!ctx || !ctx.ligada || ctx.anonimizado || ctx.gravacao !== "stored") {
+      // A organização desligou, o contato foi anonimizado ou a gravação venceu:
+      // nada vai ao provedor, e o pedido sai. Nenhum desses volta sozinho — a
+      // passada que repõe pedidos usa as MESMAS condições.
       await this.p.banco.descartar(org, vcId);
       this.p.log.info("telefonia: transcrição descartada — o pedido deixou de valer", { voice_call: vcId });
       return "descartada";
+    }
+    const caminho = this.arquivoDaLigacao(org, ctx);
+    if (!caminho) {
+      // A gravação está guardada, mas o arquivo que a mensagem aponta não é o
+      // dela (ou a mensagem sumiu). Não é passageiro, e DESCARTAR seria pior: a
+      // passada pediria a mesma ligação de novo a cada minuto. Falha terminal,
+      // sem aviso na Central — não há nada que quem opera possa consertar.
+      await this.p.banco.falhar(org, vcId, ARQUIVO_INVALIDO, null);
+      this.p.log.warn("telefonia: transcrição não feita — o arquivo da gravação não confere", { voice_call: vcId });
+      return "falhou";
+    }
+    // Já passou da conta SEM ter chegado a registrar falha: o worker caiu no
+    // meio das tentativas anteriores (a reserva conta cada uma). Não tenta mais.
+    if (t.tentativas > MAX_TENTATIVAS || this.agora().getTime() - t.pedidaEm.getTime() >= PRAZO_TOTAL_MS) {
+      await this.p.banco.falhar(org, vcId, TENTATIVAS_ESGOTADAS, avisoDeFalha(ctx.idioma));
+      this.p.log.warn("telefonia: transcrição perdida — as tentativas se esgotaram sem resposta", {
+        voice_call: vcId,
+        tentativas: t.tentativas,
+      });
+      return "falhou";
     }
 
     const chave = await this.p.transcritor.chave(org);
@@ -380,21 +408,22 @@ export class TranscricoesDaTelefonia {
 
   private async adiarOuFalhar(t: TranscricaoPendente, erro: string, ctx: ContextoDaTranscricao): Promise<DesfechoDaTranscricao> {
     const idade = this.agora().getTime() - t.pedidaEm.getTime();
-    const esgotou = t.tentativas + 1 >= MAX_TENTATIVAS || idade >= PRAZO_TOTAL_MS;
+    // `tentativas` é a tentativa em curso (1 = a primeira), contada na reserva.
+    const esgotou = t.tentativas >= MAX_TENTATIVAS || idade >= PRAZO_TOTAL_MS;
     if (!esgotou) {
-      const espera = ESPERAS_S[Math.min(t.tentativas, ESPERAS_S.length - 1)] ?? 3_600;
+      const espera = ESPERAS_S[Math.min(Math.max(t.tentativas, 1) - 1, ESPERAS_S.length - 1)] ?? 3_600;
       await this.p.banco.reagendar(t.organizationId, t.vcId, espera, erro);
       this.p.log.warn("telefonia: transcrição não saiu — tenta de novo", {
         voice_call: t.vcId,
         erro,
-        tentativa: t.tentativas + 1,
+        tentativa: t.tentativas,
         espera_s: espera,
       });
       return "adiada";
     }
     const aviso = erro === SEM_CHAVE ? avisoSemChave(ctx.idioma) : avisoDeFalha(ctx.idioma);
     if (await this.p.banco.falhar(t.organizationId, t.vcId, erro, aviso)) {
-      this.p.log.warn("telefonia: transcrição perdida", { voice_call: t.vcId, erro, tentativas: t.tentativas + 1 });
+      this.p.log.warn("telefonia: transcrição perdida", { voice_call: t.vcId, erro, tentativas: t.tentativas });
     }
     return "falhou";
   }

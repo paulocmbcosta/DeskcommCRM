@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { TranscricaoComTrechos } from "@/lib/messaging/media/transcription";
 import { TRECHOS_POR_BLOCO } from "@/lib/telefonia/resumo-da-ligacao";
 
 import type { ContextoDaTranscricao, TranscricaoPendente } from "./repositorio-das-transcricoes";
@@ -36,10 +37,11 @@ const contexto = (p: Partial<ContextoDaTranscricao> = {}): ContextoDaTranscricao
   ...p,
 });
 
+/** `tentativas` é a tentativa em curso: 1 = a primeira (a reserva já a contou). */
 const pendente = (p: Partial<TranscricaoPendente> = {}): TranscricaoPendente => ({
   vcId: VC,
   organizationId: ORG,
-  tentativas: 0,
+  tentativas: 1,
   pedidaEm: new Date(AGORA.getTime() - 5_000),
   ...p,
 });
@@ -64,7 +66,7 @@ function dubles(p: { ctx?: ContextoDaTranscricao | null; chave?: string | null }
   const arquivo = { baixar: vi.fn(async () => Buffer.from([1, 2, 3])) };
   const transcritor = {
     chave: vi.fn(async () => (p.chave === undefined ? "sk-org" : p.chave)),
-    transcrever: vi.fn(async () => ({
+    transcrever: vi.fn(async (): Promise<TranscricaoComTrechos> => ({
       text: `Totus, boa tarde. ${FALA_SECRETA}`,
       language: "portuguese",
       durationSeconds: 120,
@@ -168,8 +170,6 @@ describe("TranscricoesDaTelefonia — quando o pedido deixou de valer", () => {
     ["o contato foi anonimizado", contexto({ anonimizado: true })],
     ["a gravação venceu", contexto({ gravacao: "expired" })],
     ["a ligação sumiu", null],
-    ["o arquivo não é o da gravação", contexto({ caminho: `${ORG}/${CONVERSA}/outra-mensagem.mp3` })],
-    ["a mensagem da ligação não existe", contexto({ mensagemId: null, caminho: null })],
   ])("%s: descarta, e NADA vai ao provedor", async (_nome, ctx) => {
     const d = dubles({ ctx });
     expect(await d.servico.processar(pendente())).toBe("descartada");
@@ -179,6 +179,20 @@ describe("TranscricoesDaTelefonia — quando o pedido deixou de valer", () => {
     expect(d.transcritor.transcrever).not.toHaveBeenCalled();
     expect(d.resumidor.perguntar).not.toHaveBeenCalled();
     expect(d.banco.concluir).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["o arquivo não é o da gravação", contexto({ caminho: `${ORG}/${CONVERSA}/outra-mensagem.mp3` })],
+    ["o arquivo é de outra organização", contexto({ caminho: `0be7a70c-0000-4000-8000-0000000000ff/${CONVERSA}/${MENSAGEM}.mp3` })],
+    ["a mensagem da ligação não existe", contexto({ mensagemId: null, caminho: null })],
+  ])("%s: falha TERMINAL (a linha fica, senão a passada pediria de novo a cada minuto), sem ir ao provedor e sem aviso na Central", async (_nome, ctx) => {
+    const d = dubles({ ctx });
+    expect(await d.servico.processar(pendente())).toBe("falhou");
+    expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "arquivo_invalido", null);
+    expect(d.banco.descartar).not.toHaveBeenCalled();
+    expect(d.banco.reagendar).not.toHaveBeenCalled();
+    expect(d.arquivo.baixar).not.toHaveBeenCalled();
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
   });
 
   it("anonimizada no meio do caminho: a gravação do texto é recusada pelo banco e o desfecho é `descartada`", async () => {
@@ -200,16 +214,16 @@ describe("TranscricoesDaTelefonia — quando falha", () => {
 
   it("sem chave até a última tentativa: dada como perdida, com o aviso da chave", async () => {
     const d = dubles({ chave: null });
-    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS - 1 }))).toBe("falhou");
+    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS }))).toBe("falhou");
     expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "sem_chave", avisoSemChave("pt-BR"));
     expect(d.banco.reagendar).not.toHaveBeenCalled();
   });
 
   it("o provedor recusa: conta a tentativa, registra o erro e espera cada vez mais", async () => {
     for (const [tentativas, espera] of [
-      [0, ESPERAS_S[0]],
-      [1, ESPERAS_S[1]],
-      [3, ESPERAS_S[3]],
+      [1, ESPERAS_S[0]],
+      [2, ESPERAS_S[1]],
+      [4, ESPERAS_S[3]],
     ] as const) {
       const d = dubles();
       d.transcritor.transcrever.mockRejectedValueOnce(new Error("transcription_429"));
@@ -223,15 +237,50 @@ describe("TranscricoesDaTelefonia — quando falha", () => {
   it("na última tentativa a transcrição é dada como perdida e a Central avisa", async () => {
     const d = dubles();
     d.transcritor.transcrever.mockRejectedValueOnce(new Error("transcription_401"));
-    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS - 1 }))).toBe("falhou");
+    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS }))).toBe("falhou");
     expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "transcription_401", avisoDeFalha("pt-BR"));
   });
 
-  it("passou do prazo total desde o pedido: perdida, mesmo com tentativas sobrando", async () => {
+  it("o worker caiu no meio das tentativas anteriores (reservada além do limite sem nunca registrar falha): não tenta de novo, e NADA vai ao provedor", async () => {
+    // A reserva conta a tentativa. Uma ligação que derruba o worker chega aqui
+    // como a 6ª reserva sem ter passado por `reagendar` nem `falhar`.
     const d = dubles();
-    d.transcritor.transcrever.mockRejectedValueOnce(new Error("transcription_503"));
-    const velha = pendente({ tentativas: 1, pedidaEm: new Date(AGORA.getTime() - PRAZO_TOTAL_MS - 1) });
+    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS + 1 }))).toBe("falhou");
+    expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "tentativas_esgotadas", avisoDeFalha("pt-BR"));
+    expect(d.arquivo.baixar).not.toHaveBeenCalled();
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
+  });
+
+  it("a última tentativa permitida ainda é feita: o limite não corta uma a menos", async () => {
+    const d = dubles();
+    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS }))).toBe("pronta");
+  });
+
+  it("pedida há mais que o prazo total e reservada de novo: perdida sem nova ida ao provedor", async () => {
+    const d = dubles();
+    const velha = pendente({ tentativas: 2, pedidaEm: new Date(AGORA.getTime() - PRAZO_TOTAL_MS - 1) });
     expect(await d.servico.processar(velha)).toBe("falhou");
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
+  });
+
+  it("o prazo total vence DURANTE a tentativa (a transcrição demorou): a falha dela já é a definitiva", async () => {
+    let agora = AGORA.getTime();
+    const d = dubles();
+    const servico = new TranscricoesDaTelefonia({
+      banco: d.banco,
+      arquivo: d.arquivo,
+      transcritor: d.transcritor,
+      resumidor: d.resumidor,
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      agora: () => new Date(agora),
+    });
+    d.transcritor.transcrever.mockImplementationOnce(async () => {
+      agora += 2 * 60_000;
+      throw new Error("transcription_503");
+    });
+    const quase = pendente({ tentativas: 2, pedidaEm: new Date(AGORA.getTime() - PRAZO_TOTAL_MS + 60_000) });
+    expect(await servico.processar(quase)).toBe("falhou");
+    expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "transcription_503", avisoDeFalha("pt-BR"));
   });
 
   it("o Storage não entrega o arquivo: nova tentativa, sem chamar o provedor", async () => {

@@ -337,7 +337,9 @@ describe("a reserva", () => {
 
     const primeira = await transcricoes.reservarPendentes(pool, 10, 600);
     expect(primeira.map((p) => p.vcId).sort()).toEqual([a.vcId, b.vcId].sort());
-    expect(primeira[0]).toMatchObject({ organizationId: ORG, tentativas: 0 });
+    // A reserva CONTA a tentativa: esta é a 1ª, e o banco já sabe.
+    expect(primeira[0]).toMatchObject({ organizationId: ORG, tentativas: 1 });
+    expect((await linhaDa(a.vcId))?.attempts).toBe(1);
     expect(primeira[0]?.pedidaEm).toBeInstanceOf(Date);
     expect(await transcricoes.reservarPendentes(pool, 10, 600)).toEqual([]);
     expect(await transcricoes.reservarUma(pool, ORG, a.vcId, 600)).toBeNull();
@@ -351,14 +353,27 @@ describe("a reserva", () => {
     expect(await transcricoes.reservarUma(pool, ORG, vcId, 600)).toBeNull();
   });
 
-  it("reagendar conta a tentativa, guarda a classe do erro e devolve a ligação à fila só depois da espera", async () => {
+  it("a tentativa é contada na RESERVA: reagendar guarda a classe do erro e a espera, sem contar de novo", async () => {
     const { vcId } = await gravada(ORG, NUMERO);
     await transcricoes.pedirTranscricao(pool, ORG, vcId);
+    expect((await transcricoes.reservarUma(pool, ORG, vcId, 600))?.tentativas).toBe(1);
     await transcricoes.reagendarTranscricao(pool, ORG, vcId, 300, "transcription_429");
     expect(await linhaDa(vcId)).toMatchObject({ status: "pending", attempts: 1, last_error: "transcription_429" });
+    // Ainda na espera: ninguém a pega.
     expect(await transcricoes.reservarUma(pool, ORG, vcId, 600)).toBeNull();
     await pool.query("update voice_call_transcripts set next_attempt_at = now() - interval '1 second' where voice_call_id = $1", [vcId]);
-    expect((await transcricoes.reservarUma(pool, ORG, vcId, 600))?.tentativas).toBe(1);
+    expect((await transcricoes.reservarUma(pool, ORG, vcId, 600))?.tentativas).toBe(2);
+  });
+
+  it("o worker que cai no meio também gasta tentativa: a reserva que vence volta contada, sem ninguém ter registrado falha", async () => {
+    const { vcId } = await gravada(ORG, NUMERO);
+    await transcricoes.pedirTranscricao(pool, ORG, vcId);
+    for (const esperada of [1, 2, 3]) {
+      expect((await transcricoes.reservarUma(pool, ORG, vcId, 600))?.tentativas).toBe(esperada);
+      // O worker "caiu": nada mais é escrito, e a reserva vence sozinha.
+      await pool.query("update voice_call_transcripts set next_attempt_at = now() - interval '1 second' where voice_call_id = $1", [vcId]);
+    }
+    expect(await linhaDa(vcId)).toMatchObject({ status: "pending", attempts: 3, last_error: null });
   });
 });
 
@@ -547,7 +562,8 @@ describe("perdida", () => {
     expect(await transcricoes.falharTranscricao(pool, ORG, c.vcId, "transcription_401", aviso)).toBe(false);
     expect(await transcricoes.falharTranscricao(pool, OUTRA, c.vcId, "transcription_401", aviso)).toBe(true);
 
-    expect(await linhaDa(a.vcId)).toMatchObject({ status: "failed", attempts: 1, last_error: "transcription_401" });
+    // `falhar` não conta tentativa: quem conta é a reserva (aqui não houve nenhuma).
+    expect(await linhaDa(a.vcId)).toMatchObject({ status: "failed", attempts: 0, last_error: "transcription_401" });
     expect(await projecaoDa(ORG, a.vcId)).toEqual({ situacao: "falhou" });
     expect((await linhaDa(c.vcId))?.status).toBe("failed");
     const { rows } = await pool.query<{ organization_id: string; n: number }>(
@@ -558,6 +574,22 @@ describe("perdida", () => {
       { organization_id: ORG, n: 1 },
       { organization_id: OUTRA, n: 1 },
     ]);
+  });
+
+  it("falha sem aviso (o arquivo não confere): a linha fica `failed`, o cartão diz, e a Central NÃO ganha aviso — nem a passada a pede de novo", async () => {
+    await pool.query("delete from agent_inbox_items where kind = 'phone_transcription_failed'");
+    await transcricoes.pedirAsQueFaltam(pool, 500);
+    const g = await gravada(ORG, NUMERO);
+    await transcricoes.pedirTranscricao(pool, ORG, g.vcId);
+    expect(await transcricoes.falharTranscricao(pool, ORG, g.vcId, "arquivo_invalido", null)).toBe(true);
+    expect(await linhaDa(g.vcId)).toMatchObject({ status: "failed", last_error: "arquivo_invalido" });
+    expect(await projecaoDa(ORG, g.vcId)).toEqual({ situacao: "falhou" });
+    const { rows } = await pool.query("select 1 from agent_inbox_items where kind = 'phone_transcription_failed'");
+    expect(rows).toEqual([]);
+    // A gravação segue guardada e a organização segue com a transcrição ligada —
+    // e mesmo assim a passada não recria o pedido: a linha `failed` está lá.
+    expect(await transcricoes.pedirAsQueFaltam(pool, 500)).toBe(0);
+    expect(await transcricoes.reservarUma(pool, ORG, g.vcId, 600)).toBeNull();
   });
 
   it("descartar tira o pedido pendente e a projeção — mas não desfaz a transcrição pronta", async () => {

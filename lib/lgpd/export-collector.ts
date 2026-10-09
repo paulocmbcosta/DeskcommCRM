@@ -221,7 +221,19 @@ export interface AppointmentNoticeRow {
  * (`stored` = há gravação guardada, `expired` = apagada pela retenção). O áudio
  * não vai no relatório; quem controla os dados o entrega ao titular pelo cartão
  * da ligação, e a anonimização o apaga junto com a mídia da conversa.
+ *
+ * Desde a F4 (migration 0298) a gravação pode ter sido TRANSCRITA. A transcrição
+ * é texto — dado pessoal que o CRM guarda sobre o titular, como as mensagens — e
+ * por isso VAI no relatório (`transcricao`): o resumo e o texto corrido. `null` =
+ * a ligação não tem transcrição (não foi pedida, ou já foi apagada).
  */
+export interface TranscricaoDaLigacaoNoRelatorio {
+  /** `ready` (há texto), `empty` (a gravação não tinha fala), `pending` ou `failed`. */
+  status: string;
+  resumo: string | null;
+  texto: string | null;
+}
+
 export interface VoiceCallRow {
   id: string;
   direction: string;
@@ -233,6 +245,7 @@ export interface VoiceCallRow {
   ended_at: string | null;
   duration_ms: number | null;
   recording_status: string | null;
+  transcricao?: TranscricaoDaLigacaoNoRelatorio | null;
 }
 
 export interface ExportPayload {
@@ -696,6 +709,35 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
       });
     } else if (data) {
       voice_calls = data as VoiceCallRow[];
+    }
+  }
+
+  // A transcrição das ligações gravadas (F4, 0298). A tabela é server-side only
+  // — só o cliente de serviço a lê —, e por isso o filtro de organização é à
+  // mão, e as ligações consultadas são só as DESTE titular, lidas logo acima.
+  // Falhou a leitura: o relatório sai sem ela, e o log diz (como o resto daqui).
+  if (voice_calls.length > 0) {
+    const { data, error } = await admin
+      .from("voice_call_transcripts")
+      .select("voice_call_id, status, summary, text")
+      .eq("organization_id", organizationId)
+      .in(
+        "voice_call_id",
+        voice_calls.map((v) => v.id),
+      );
+    if (error) {
+      logger.warn("[lgpd-export-worker] voice call transcripts load failed", {
+        request_id: requestId,
+        error: error.message,
+      });
+    } else if (data) {
+      const porLigacao = new Map(
+        (data as Array<{ voice_call_id: string; status: string; summary: string | null; text: string | null }>).map((t) => [
+          t.voice_call_id,
+          { status: t.status, resumo: t.summary, texto: t.text },
+        ]),
+      );
+      voice_calls = voice_calls.map((v) => ({ ...v, transcricao: porLigacao.get(v.id) ?? null }));
     }
   }
 
