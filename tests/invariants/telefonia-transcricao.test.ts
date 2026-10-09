@@ -191,7 +191,7 @@ describe("a tabela é server-side only", () => {
     ]);
   });
 
-  it("a RLS está ligada e NÃO há policy: mesmo com um grant concedido por engano, o membro não lê linha nenhuma", async () => {
+  it("a RLS está ligada e NÃO há policy: com os grants do default ACL do Supabase concedidos, um membro da PRÓPRIA organização não lê, não insere, não altera e não apaga", async () => {
     const { rows: rls } = await pool.query<{ relrowsecurity: boolean }>(
       "select relrowsecurity from pg_class where oid = 'public.voice_call_transcripts'::regclass",
     );
@@ -199,22 +199,43 @@ describe("a tabela é server-side only", () => {
     const { rows: policies } = await pool.query("select 1 from pg_policies where schemaname = 'public' and tablename = 'voice_call_transcripts'");
     expect(policies).toEqual([]);
 
+    // Ana é ATENDENTE da organização dona da transcrição: nem ela lê pela REST.
+    await pool.query(
+      `insert into public.user_organizations (organization_id, user_id, role, accepted_at) values ($1, $2, 'agent', now())
+       on conflict do nothing`,
+      [ORG, ANA],
+    );
     const { vcId } = await gravada(ORG, NUMERO);
+    const outra = await gravada(ORG, NUMERO);
     await transcricoes.pedirTranscricao(pool, ORG, vcId);
     await concluir(ORG, vcId);
     const c = await pool.connect();
     try {
       await c.query("begin");
-      // O default ACL de TABELAS de todo projeto Supabase concede isto a tabela nova.
-      await c.query("grant select on public.voice_call_transcripts to authenticated");
+      // O default ACL de TABELAS de todo projeto Supabase concede TUDO a tabela
+      // nova — é o que o `revoke` da 0298 desfaz. Aqui ele é devolvido de
+      // propósito: a segunda camada (RLS sem policy) tem de segurar sozinha.
+      await c.query("grant all on public.voice_call_transcripts to anon, authenticated");
       await c.query("set local role authenticated");
       await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: ANA, role: "authenticated" })]);
-      const { rows } = await c.query("select voice_call_id from public.voice_call_transcripts");
-      expect(rows).toEqual([]);
+      // Controle: com este mesmo JWT a Ana ENXERGA a organização dela.
+      const { rows: orgs } = await c.query("select organization_id from public.fn_user_org_ids() as organization_id");
+      expect(orgs.map((o) => o.organization_id)).toContain(ORG);
+
+      expect((await c.query("select voice_call_id from public.voice_call_transcripts")).rows).toEqual([]);
+      expect((await c.query("update public.voice_call_transcripts set summary = 'adulterado'")).rowCount).toBe(0);
+      expect((await c.query("delete from public.voice_call_transcripts")).rowCount).toBe(0);
+      await c.query("savepoint antes_do_insert");
+      await expect(
+        c.query("insert into public.voice_call_transcripts (voice_call_id, organization_id, status) values ($1, $2, 'ready')", [outra.vcId, ORG]),
+      ).rejects.toMatchObject({ code: "42501" });
+      await c.query("rollback to savepoint antes_do_insert");
     } finally {
       await c.query("rollback");
       c.release();
     }
+    // E nada mudou de verdade.
+    expect(await linhaDa(vcId)).toMatchObject({ status: "ready", summary: RESUMO });
   });
 
   it("sem o grant (o estado real), a leitura do membro é recusada", async () => {
@@ -513,10 +534,16 @@ describe("LGPD — anonimizar o contato apaga a transcrição", () => {
     await transcricoes.pedirTranscricao(pool, ORG, vcId);
     await concluir(ORG, vcId);
     await pool.query(
-      `insert into public.user_organizations (organization_id, user_id, role) values ($1, $2, 'agent')
+      `insert into public.user_organizations (organization_id, user_id, role, accepted_at) values ($1, $2, 'agent', now())
        on conflict do nothing`,
       [ORG, ANA],
     );
+    // A função do trigger NÃO é executável por `authenticated` (a varredura de
+    // definers cobra isso) — e o trigger dispara mesmo assim.
+    const { rows: grants } = await pool.query(
+      "select has_function_privilege('authenticated', 'public.fn_transcricoes_do_contato_anonimizado()', 'execute') as pode",
+    );
+    expect(grants[0]?.pode).toBe(false);
     const c = await pool.connect();
     try {
       await c.query("begin");

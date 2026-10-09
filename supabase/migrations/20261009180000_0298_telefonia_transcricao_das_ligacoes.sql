@@ -135,8 +135,12 @@ begin
      and m.metadata #> '{voice_call,transcricao}' is not null;
   return new;
 end $$;
-revoke execute on function public.fn_transcricoes_do_contato_anonimizado() from public, anon;
-grant execute on function public.fn_transcricoes_do_contato_anonimizado() to authenticated, service_role;
+-- Definer que ESCREVE: ninguém a executa por conta própria. Trigger não confere
+-- EXECUTE de quem dispara o comando, então o membro que anonimiza pela REST
+-- segue acionando a limpeza sem ter o privilégio (provado em
+-- tests/invariants/telefonia-transcricao.test.ts).
+revoke execute on function public.fn_transcricoes_do_contato_anonimizado() from public, anon, authenticated;
+grant execute on function public.fn_transcricoes_do_contato_anonimizado() to service_role;
 
 do $trg_anon$
 begin
