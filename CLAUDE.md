@@ -248,7 +248,7 @@ Quando a versão mexe no `worker` ou no Asterisk (a URA do telefone montou o vol
 telefonia ligada) com os mesmos dois `-f`.
 
 O caminho normal **não constrói nada na VPS**: commit → push → PR → merge na
-`main` → o CI publica no GHCR → a VPS puxa. Imagem construída na VPS é exceção
+`main` → PR de release → tag → o CI publica no GHCR → a VPS puxa. Imagem construída na VPS é exceção
 de emergência e é dívida: existe só naquele disco e qualquer `up -d` sem
 `APP_PULL_POLICY=never` a substitui em silêncio.
 
@@ -392,12 +392,47 @@ No CI não há `UPSTASH` nenhum, então lá o caminho é o contador em memória 
 
 **Os invariantes não estão no `test:unit`.** `vitest.config.ts` exclui `tests/invariants/**` de propósito: essa suíte precisa de um Postgres real e roda via `vitest.db.config.ts`, orquestrada por `scripts/test-db.sh`. Rodar só `pnpm test:unit` e concluir "está tudo verde" é um falso verde — o isolamento RLS não foi exercitado.
 
-Checks **obrigatórios** na branch protection da `main` (verificado na configuração, não só no papel):
+**Uma verificação completa por versão — e uma rápida por PR (desde 2026-10-09).** Até essa data
+cada mudança era verificada por inteiro três vezes (no PR, no push da `main` e no PR de release):
+24.407 minutos de Actions em 25 dias. Hoje:
 
-- **`verify`** (`ci.yml`) — typecheck + lint + test:unit.
+| Momento | O que roda sozinho |
+|---|---|
+| PR comum | só `rapido` (tipos, lint e as duas auditorias). `verify`, `invariants`, `build-and-size` e a construção das imagens aparecem **pulados** |
+| PR de release (branch `release/…`) | `verify`, `invariants`, `build-and-size` e as imagens, por inteiro |
+| push na `main` | só o `release`, que decide se nasce uma tag |
+| tag `vX.Y.Z` | publicação das imagens e do canal `stable` |
+| teste de tela (`e2e`) | **nunca** sozinho — só por `Run workflow` |
+
+**⚠️ Verde num PR comum não quer dizer "os testes passaram".** Quer dizer que compila e segue o
+padrão. A suíte, o banco e o build só rodam no PR de release — ou quando alguém pede:
+
+```bash
+gh workflow run ci.yml   --ref <branch>   # verify + invariants
+gh workflow run perf.yml --ref <branch>   # build de produção
+gh workflow run e2e.yml  --ref <branch>   # teste de tela
+```
+
+Mudança de schema, RLS, RBAC ou do kit de instalação pede esse disparo **antes** do merge, além do
+`pnpm test:db` local que este arquivo já exigia: sem ele, o defeito só aparece no PR de release.
+Quem diz o que roda em cada caso é a condição de cada job, presa por inteiro em
+`tests/unit/gatilho-dos-jobs-de-entrega.test.ts` — leia lá em vez de confiar nesta tabela.
+
+**A outra metade da mesma decisão: a release sai em LOTE.** Cada trabalho entra na `main` no dia
+em que fica pronto (com a autorização do dono para aquele PR); a release junta o que acumulou, no
+máximo uma por dia útil, quando o dono manda — e **terminar um PR não é motivo para propor
+release**. Só a urgência sai na hora: atendimento parado, cliente sem conseguir falar ou pagar,
+risco de perder dado. Por isso a `main` tem de estar **sempre lançável**: uma release urgente leva
+junto tudo o que estiver nela. Lei e medição em
+[`docs/doctrine/versionamento.md`](docs/doctrine/versionamento.md), §"A cadência".
+
+Checks **obrigatórios** na branch protection da `main` (verificado na configuração, não só no papel).
+Em PR comum os quatro reportam `skipped`, que a proteção lê como satisfeito:
+
+- **`verify`** (`ci.yml`) — typecheck + lint + test:unit + kit de instalação.
 - **`invariants`** (`ci.yml`) — `pnpm test:db`: sobe `pgvector/pgvector:pg15` — o PISO que dizemos suportar, não a versão mais rica que temos à mão —, aplica `supabase/baseline.sql` em modo install (`ON_ERROR_STOP=1`) e update (idempotência), e roda os testes de invariante, incluindo o de isolamento RLS entre 2 organizações.
 - **`build-and-size`** (`perf.yml`) — `pnpm build` em Node 22.
-- **`e2e`** (`e2e.yml`) — **não roda em PR nem é obrigatório neste repositório** (o porquê logo abaixo); roda no push na `main` e por `Run workflow`; sobe Supabase local, aplica o `baseline.sql` e roda **todas as specs Playwright menos as que `FORA_DO_CI` declara**. O número saiu daqui de propósito: ele apodreceu **cinco** vezes (a quinta em 2026-08-24, quando `inbox-quem-manda.spec.ts` entrou), e a condição que o PR #242 pôs para parar de recontar já tinha vencido na quarta. Quem precisa do número roda o comando abaixo — comando não envelhece. Quais ficam de fora, e por quê, é o que a própria variável diz — **não confie nesta linha, leia-a**:
+- **`e2e`** (`e2e.yml`) — **não roda sozinho nem é obrigatório neste repositório** (o porquê logo abaixo); roda só por `Run workflow`; sobe Supabase local, aplica o `baseline.sql` e roda **todas as specs Playwright menos as que `FORA_DO_CI` declara**. O número saiu daqui de propósito: ele apodreceu **cinco** vezes (a quinta em 2026-08-24, quando `inbox-quem-manda.spec.ts` entrou), e a condição que o PR #242 pôs para parar de recontar já tinha vencido na quarta. Quem precisa do número roda o comando abaixo — comando não envelhece. Quais ficam de fora, e por quê, é o que a própria variável diz — **não confie nesta linha, leia-a**:
 
   ```bash
   git show origin/main:.github/workflows/e2e.yml | \
@@ -429,11 +464,15 @@ verify, build-and-size, invariants, imagens-ok
 ```
 
 `e2e` **não roda em PR** desde 2026-09-18, decisão do dono durante o desenvolvimento: as três
-partes levam 25 minutos, oscilam entre execuções do mesmo commit e não gateavam nada. Ele roda no
-push na `main` (assíncrono: não segura tag nem publicação) e por `Run workflow`, antes de mesclar
-algo arriscado. Para voltar aos PRs, é o bloco `pull_request` comentado em `e2e.yml`; para exigi-lo,
-o `gh api -X PATCH` de `docs/runbooks/repositorio-proprio.md`, só depois de rodar em todo push. Por isso `ci.yml` e `perf.yml` não têm
-`paths-ignore`: check obrigatório que não roda num PR só de prosa trava esse PR para sempre.
+partes levam 25 minutos, oscilam entre execuções do mesmo commit e não gateavam nada. Desde
+2026-10-09 ele também **não roda no push na `main`**: eram 5.651 dos 24.407 minutos medidos, para
+um sinal que não segura merge, tag nem publicação. Roda só por `Run workflow`, antes de mesclar ou
+de lançar algo arriscado — então **nenhuma versão é provada pela tela automaticamente**, e o item 12
+da Definition of Done pesa mais, não menos. Para voltar a rodar sozinho, é o bloco comentado em
+`e2e.yml`; para exigi-lo, o `gh api -X PATCH` de `docs/runbooks/repositorio-proprio.md`, só depois de
+rodar em todo push. `ci.yml`, `perf.yml` e `publish-image.yml` continuam **sem** `paths-ignore` e
+reagindo a todo PR: check obrigatório que não REPORTA trava o PR para sempre, e é por isso que a
+economia é feita por condição de job (que reporta `skipped`) e nunca por filtro no gatilho.
 
 Duas correções que este bloco já pagou: o `e2e` entrou para a lista depois de o arquivo ser escrito, e
 a versão anterior dizia que ele "ainda não é obrigatório"; depois o `imagens-ok` entrou e o arquivo

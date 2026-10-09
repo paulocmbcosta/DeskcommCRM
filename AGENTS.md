@@ -144,6 +144,18 @@ Se a mudança toca schema/RLS/tabela tenant-aware, rode `pnpm test:db`. Se toca 
 usuário, rode `pnpm test:e2e` com evidência visual. Se toca `Dockerfile*`, `docker-compose*` ou
 `hostgator-setup-kit/`, rode `pnpm test:shell` — é o único gate que exercita o kit.
 
+**Quando o CI roda (desde 2026-10-09).** Uma verificação completa por versão: em PR comum só
+roda `rapido` (tipos e lint) e os jobs completos aparecem pulados; `verify`, `invariants`,
+`build-and-size` e as imagens rodam por inteiro no PR de release (branch `release/…`) e por
+`gh workflow run <ci|perf>.yml --ref <branch>`. **Verde num PR comum não quer dizer que os testes
+passaram.** A condição de cada job está presa em `tests/unit/gatilho-dos-jobs-de-entrega.test.ts`.
+
+**Release em lote (decisão do dono, 2026-10-09).** O trabalho entra na `main` no dia em que fica
+pronto; a release junta o que acumulou, no máximo uma por dia útil, quando o dono manda. Não
+proponha release ao terminar um PR. Só urgência (atendimento parado, cliente sem falar ou pagar,
+risco de perder dado) sai na hora — e por isso a `main` fica sempre lançável. Ver
+`docs/doctrine/versionamento.md`, §"A cadência".
+
 **O que o CI cobre.** `.github/workflows/ci.yml`: `verify` = os passos do job, na ordem —
 typecheck, lint, `lint:channels`, `test:unit` e `test:shell` hoje, e `pnpm lint` sozinho **não**
 cobre os dois últimos (liste em vez de acreditar nesta linha:
@@ -151,14 +163,14 @@ cobre os dois últimos (liste em vez de acreditar nesta linha:
 `invariants` = `pnpm test:db` (isolamento RLS + invariantes de governança contra Postgres
 efêmero pg15). `.github/workflows/perf.yml`: `build-and-size` = `pnpm build`.
 `.github/workflows/e2e.yml` roda as specs Playwright contra um Supabase local de verdade com
-o `baseline.sql` aplicado — o mesmo banco que o self-hoster tem. **É check obrigatório** — a
-data de ativação não é auditável pelo repositório, e a lista viva está logo abaixo, com o
-comando ao lado. **Não há número aqui de propósito**: esta linha já afirmou uma contagem exata
+o `baseline.sql` aplicado — o mesmo banco que o self-hoster tem. **Não é check obrigatório neste
+repositório** — a lista viva está logo abaixo, com o comando ao lado. **Não há número aqui de
+propósito**: esta linha já afirmou uma contagem exata
 de specs e "a única de fora", e as duas envelheceram — a suíte cresce toda semana e a lista de
 exceções muda com ela. Quem fica de fora é o que a própria variável declara; leia, não confie:
 O CI tem quatro checks obrigatórios na `main`: `verify`, `build-and-size`, `invariants` e
-`imagens-ok`. O `e2e` não roda em PR (decisão de 2026-09-18, durante o desenvolvimento) nem é exigido:
-roda no push na `main` e por `Run workflow` (ver `e2e.yml`). Não confie nesta lista — reconte antes de citar:
+`imagens-ok`. O `e2e` não roda em PR (decisão de 2026-09-18) nem no push na `main` (2026-10-09), e não
+é exigido: roda só por `Run workflow` (ver `e2e.yml`). Não confie nesta lista — reconte antes de citar:
 
 ```bash
 gh api repos/paulocmbcosta/DeskcommCRM/branches/main/protection \

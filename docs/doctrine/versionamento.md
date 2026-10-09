@@ -177,6 +177,58 @@ por PR acumulativo —, não o gerador de texto.
 
 ---
 
+## A cadência: o trabalho entra na `main` no dia, a release sai em lote
+
+Decisão do dono em 2026-10-09. Entrar na `main` e ir para produção são dois atos separados, e
+é essa separação que permite agrupar:
+
+- **Cada trabalho entra na `main` no dia em que fica pronto e testado** — com a autorização
+  do dono para aquele PR, como sempre. Branch não espera o dia da release: a funcionalidade
+  de terça nasce em cima da de segunda, e quatro branches paradas uma semana são quatro
+  trabalhos que nunca se viram.
+- **A release sai em lote**, no máximo uma por dia útil, quando o dono manda. Ela junta tudo
+  o que os fragmentos de `.changes/` acumularam numa versão só. **Terminar um PR não é motivo
+  para propor release.**
+- **Urgência não espera o lote.** Atendimento parado, cliente sem conseguir falar ou pagar,
+  risco de perder dado: release na hora, sozinha. É a mesma régua de prioridade `urgent` e
+  de severidade Crítica do quadro de tarefas. Bug com contorno e ajuste cosmético esperam.
+
+Duas consequências, e a primeira é a que sustenta o resto:
+
+1. **A `main` está sempre lançável.** A release sai da `main` inteira (a tag tem de estar
+   contida nela), então uma correção urgente leva junto tudo o que estiver lá. Só entra o que
+   poderia ir para produção hoje; funcionalidade pela metade fica na branch dela.
+2. **A prova em uso real chega depois.** O que entrou na segunda só é usado pelo cliente
+   depois da release. É o preço do lote, e é por isso que a cadência é diária ou de duas a
+   três vezes por semana — não semanal, e nunca na sexta, quando o conserto de uma release
+   ruim cai no fim de semana.
+
+**Por que mudou.** Medido nas tags de 16/09 a 08/10/2026 (as de 15/09 vieram junto com o
+repositório e não contam): 59 releases em 18 dias com release, até 8 no mesmo dia; das 27 que
+eram só correção, **17 saíram no mesmo dia da versão que corrigiam**. A maior parte das
+"correções urgentes" era ajuste de algo lançado horas antes — em lote, elas entram na mesma
+versão em vez de virar outra. E cada release custa uma
+verificação completa (ver o cabeçalho de `.github/workflows/ci.yml`): perto de 120 minutos de
+Actions em repositório privado.
+
+Para contar de novo em vez de acreditar nesses números:
+
+```bash
+# releases por dia
+git for-each-ref --sort=creatordate --format='%(creatordate:short) %(refname:short)' 'refs/tags/v*' \
+  | awk '$1 >= "2026-09-16" && $2 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/' | cut -d' ' -f1 | sort | uniq -c | sort -rn | head
+
+# correções que saíram no mesmo dia da versão que corrigiam
+git for-each-ref --sort=creatordate --format='%(creatordate:short) %(refname:short)' 'refs/tags/v*' \
+  | awk '$1 >= "2026-09-16" && $2 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/' \
+  | awk '{split(substr($2,2),v,"."); k=v[1]"."v[2]; if (v[3]=="0") d[k]=$1; else {p++; if (d[k]==$1) n++}} END{print n+0 " de " p}'
+```
+
+Isto não mudou código nenhum: a release já era um botão (`Run workflow` em `release`) e os
+fragmentos já se acumulavam até ele ser apertado. O que mudou foi quando se aperta.
+
+---
+
 ## A versão em vigor
 
 Não está escrita aqui, e isso é deliberado: afirmação de versão envelhece a cada release, e

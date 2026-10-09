@@ -48,6 +48,14 @@ const ACTION = join(process.cwd(), ".github/actions/preparar-node/action.yml");
  * quem o sobe tem de dizer por que o trabalho real (não o preâmbulo) cresceu.
  */
 const TETOS: Record<string, { minutos: number; razao: string }> = {
+  "ci.yml::rapido": {
+    minutos: 15,
+    razao:
+      "é o `verify` sem a suíte: checkout 7s + preparo 23s + Typecheck 58s + Lint 55s + " +
+      "as duas auditorias 2s = 2min25s, medido no run 37819431581 em runner público de 4 " +
+      "núcleos. Em runner privado conte o dobro, ~5 min. 15 deixa folga para um dia de cache " +
+      "frio sem esconder um typecheck que triplicou.",
+  },
   "ci.yml::verify": {
     minutos: 45,
     razao:
@@ -151,7 +159,7 @@ describe("o preâmbulo do CI não come o orçamento dos testes", () => {
       if (teto) achados[`ci.yml::${m[1]!}`] = Number(teto[1]);
     }
 
-    // Controle positivo: o regex tem de achar os dois jobs de ci.yml.
+    // Controle positivo: o regex tem de achar os três jobs de ci.yml.
     expect(Object.keys(achados).sort(), "jobs de ci.yml com teto declarado").toEqual(
       Object.keys(TETOS).sort(),
     );

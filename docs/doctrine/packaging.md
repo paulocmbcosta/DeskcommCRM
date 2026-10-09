@@ -168,6 +168,12 @@ direto (`grep -n 'gravar_imagens\|trio_publicado' hostgator-setup-kit/update.sh`
   A regra `enable={{is_default_branch}}` do `metadata-action`, sozinha, **não** entrega isso:
   ela é verdadeira também num push de tag, então toda release movia `latest` junto e o canal
   oscilava entre os dois significados. O workflow prende `latest` a `ref_type == 'branch'`.
+
+  **Desde 2026-10-09 `latest` e `main` não andam mais sozinhos.** O `push` na `main` saiu do
+  gatilho de `publish-image.yml` (reconstruía as quatro imagens a cada merge: 139 execuções em 25
+  dias). Os dois canais só se movem por `Run workflow` disparado na `main`, e por isso podem estar
+  **atrás** dela. Para saber onde estão, leia o rótulo em vez de supor:
+  `docker buildx imagetools inspect ghcr.io/paulocmbcosta/deskcommcrm:latest --format '{{json .Image.Config.Labels}}'`.
 - **Verificação:** duas, porque são dois caminhos distintos e o primeiro passou verde por
   meses sem nenhum. `hostgator-setup-kit/test-validators.sh` roda o `install.sh` de verdade
   contra um remoto local com tags conhecidas e cobra o `.env` pinado na maior delas (a ordem
@@ -338,7 +344,7 @@ mesma VPS **recusa** mexer, e diz por quê.
 | `1.2.1` | **toda instalação de cliente** | **não** | `missing` | uma release, para sempre |
 | `1.2` | ninguém instala | sim | — | conveniência de teste de patch |
 | `stable` | implementador validando antes de atualizar clientes | sim | `always` | a **última release** publicada |
-| `latest` | vitrine, avaliação, quem acompanha o projeto | sim | `always` | **topo da `main`** — código não lançado |
+| `latest` | vitrine, avaliação, quem acompanha o projeto | sim | `always` | a `main` **do último disparo manual** — código não lançado, e pode estar atrás do topo |
 | `main` | mantenedor e CI | sim | `always` | idêntico a `latest`, nome explícito |
 
 **A regra de ouro:** *instalação que alguém pagou aponta para número de versão. Ponto.*
