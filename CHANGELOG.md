@@ -8,6 +8,47 @@ Se você roda o DeskcommCRM numa VPS, **leia a seção da versão para a qual es
 
 ## [Não lançado]
 
+## [1.60.0] — 2026-10-09
+
+### Adicionado
+
+- **O instalador e o atualizador funcionam com o repositório e as imagens privados** Quem mantém o próprio repositório fechado passa a conseguir instalar e
+  atualizar normalmente, desde que o servidor tenha as duas credenciais de
+  leitura: a chave de acesso ao código e o login no registro de imagens.
+
+  - **Na instalação**, o instalador usa o login do Docker do servidor para
+    conferir as imagens. Sem o login, ele diz que as imagens existem mas o
+    servidor não tem permissão — em vez de dizer que "ainda não foram
+    publicadas" e mandar esperar por algo que esperar não resolve.
+  - **Na atualização**, quando o servidor não consegue consultar o repositório,
+    a resposta deixa de ser "você já está na versão mais recente": passa a
+    dizer que é a mais recente *que este servidor conhece*, e separa "o acesso
+    foi recusado" de "sem internet".
+  - O atualizador não fica mais parado numa pergunta de usuário e senha quando
+    falta a credencial.
+
+  Para quem usa o repositório público, nada muda. O passo a passo de fechar,
+  com a ordem que não derruba a atualização de ninguém, está em
+  `docs/runbooks/repositorio-fechado.md`.
+
+### Alterado
+
+- **As verificações automáticas do projeto rodam uma vez por versão, e não três por mudança** Nada muda para quem usa o sistema nem para quem opera uma VPS: a versão que
+  chega continua passando por todos os testes, pelo banco, pelo build e pela
+  construção das imagens antes de ser publicada.
+
+  O que mudou é o caminho até lá. Cada mudança era verificada por inteiro três
+  vezes — no PR, de novo ao entrar na `main` e de novo no PR de release. Agora a
+  verificação completa roda uma vez, no PR de release, e um PR comum recebe só
+  uma verificação rápida (tipos e padrão de código). O teste de tela automático
+  deixa de rodar a cada merge e passa a ser disparado à mão.
+
+  Um detalhe para quem aponta uma instalação para o canal `latest` em vez de um
+  número de versão: esse canal deixa de andar sozinho a cada merge e pode ficar
+  atrás da `main`. Instalação de cliente usa número de versão e não é afetada;
+  quem quer a última versão lançada usa `stable`, que continua andando a cada
+  release.
+
 ## [1.59.0] — 2026-10-08
 
 ### Adicionado
@@ -6196,7 +6237,8 @@ Primeira versão marcada do DeskcommCRM. O projeto vinha sendo desenvolvido publ
 
 - **Node 22 é obrigatório para desenvolvimento.** A suíte de invariantes instancia o cliente do Supabase, que exige o `WebSocket` global — nativo apenas a partir do Node 22. Isso não afeta quem apenas hospeda: a VPS roda a imagem pronta.
 
-[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.59.0...HEAD
+[Não lançado]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.60.0...HEAD
+[1.60.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.59.0...v1.60.0
 [1.59.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.58.0...v1.59.0
 [1.58.0]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.2...v1.58.0
 [1.57.2]: https://github.com/paulocmbcosta/DeskcommCRM/compare/v1.57.1...v1.57.2
