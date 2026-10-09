@@ -1016,11 +1016,11 @@
       "dot": "amber",
       "title": "O laço de retorno da TRANSCRIÇÃO (invariante 7): o que muda quando ela erra",
       "items": [
-        "Falha do provedor ou do Storage: a tentativa é contada e a ligação volta para a fila com espera crescente (1, 5, 15 e 60 min). Na 5ª falha, ou 24 h depois do pedido, vira `failed`: o cartão diz \"Não foi possível transcrever esta ligação\" e a Central abre `phone_transcription_failed`, com o link da aba Gravação",
+        "Falha do provedor ou do Storage: a ligação volta para a fila com espera crescente (1, 5, 15 e 60 min). Na 5ª tentativa, ou 24 h depois do pedido, vira `failed`: o cartão diz \"Não foi possível transcrever esta ligação\" e a Central abre `phone_transcription_failed`, com o link da aba Gravação. A tentativa é contada na RESERVA: o worker que cai no meio também gasta uma, e a ligação que o derruba não volta para sempre",
         "Sem chave da OpenAI: a Central avisa já na PRIMEIRA ligação, e a tela recusa LIGAR a transcrição sem chave (409). Quem cadastra a chave em seguida ainda pega a ligação na tentativa seguinte",
         "O resumo que falha (orçamento, modelo fora, resposta torta) NÃO derruba a transcrição: o texto do transcritor é guardado sem resumo e sem quem falou — e o log do worker diz",
         "Pedido perdido (o worker caiu entre guardar a gravação e pedir): a passada o repõe em até 48 h, com a mesma régua do \"só daqui para frente\"",
-        "Custo: cada chamada ao transcritor e ao modelo de conversa vira uma linha em `llm_calls` (IA › Execuções)",
+        "Custo: cada chamada ao transcritor e ao modelo de conversa vira uma linha em `llm_calls` (IA › Execuções), e o TETO DE GASTO de IA vale para a transcrição — com ele estourado nada é baixado nem enviado, e no limite o aviso da Central diz que foi o teto",
         "LAÇO ABERTO, declarado: quem falou é ESTIMATIVA pelo conteúdo, e o texto erra nomes, números e endereços (áudio de telefone). A tela diz as duas coisas — na aba Gravação e na janela, que manda ouvir a gravação na dúvida —, mas o leitor NÃO tem como corrigir uma fala, e o erro não volta ao sistema. O conserto de \"quem falou\" é gravar os dois lados em canais separados (fora desta entrega)"
       ]
     }

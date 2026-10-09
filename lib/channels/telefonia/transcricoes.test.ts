@@ -11,6 +11,7 @@ import {
   PRAZO_TOTAL_MS,
   TranscricoesDaTelefonia,
   avisoDeFalha,
+  avisoDeTeto,
   avisoSemChave,
   classeDoErro,
   type PortasDaTranscricao,
@@ -81,13 +82,24 @@ function dubles(p: { ctx?: ContextoDaTranscricao | null; chave?: string | null }
       JSON.stringify({ resumo: "O cliente informou os dados para o cadastro.", falas: [[1, "A"], [2, "C"]] }),
     ),
   };
+  const orcamento = { conferir: vi.fn(async (_org: string, _contato: string | null): Promise<"segue" | "teto"> => "segue") };
   const log = {
     info: (msg: string, campos?: Record<string, unknown>) => registros.push({ nivel: "info", msg, campos }),
     warn: (msg: string, campos?: Record<string, unknown>) => registros.push({ nivel: "warn", msg, campos }),
     error: (msg: string, campos?: Record<string, unknown>) => registros.push({ nivel: "error", msg, campos }),
   };
-  const servico = new TranscricoesDaTelefonia({ banco, arquivo, transcritor, resumidor, log, agora: () => AGORA });
-  return { servico, banco, arquivo, transcritor, resumidor, registros };
+  const servico = new TranscricoesDaTelefonia({
+    banco,
+    arquivo,
+    transcritor,
+    resumidor,
+    orcamento,
+    log,
+    agora: () => AGORA,
+    // Sem esperar de verdade entre as tentativas de gravar.
+    prazos: { esperasParaGravarMs: [0, 0] },
+  });
+  return { servico, banco, arquivo, transcritor, resumidor, orcamento, registros };
 }
 
 describe("TranscricoesDaTelefonia — o caminho de uma ligação", () => {
@@ -219,6 +231,34 @@ describe("TranscricoesDaTelefonia — quando falha", () => {
     expect(d.banco.reagendar).not.toHaveBeenCalled();
   });
 
+  it("teto de gasto de IA atingido: NADA é baixado nem enviado, e a ligação espera como numa falha", async () => {
+    const d = dubles();
+    d.orcamento.conferir.mockResolvedValueOnce("teto");
+    expect(await d.servico.processar(pendente())).toBe("adiada");
+    expect(d.orcamento.conferir).toHaveBeenCalledWith(ORG, contexto().contactId);
+    expect(d.banco.reagendar).toHaveBeenCalledWith(ORG, VC, ESPERAS_S[0], "teto_de_gasto");
+    expect(d.arquivo.baixar).not.toHaveBeenCalled();
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
+    expect(d.banco.registrarUso).not.toHaveBeenCalled();
+  });
+
+  it("teto de gasto até a última tentativa: perdida, com o aviso que diz que foi o teto (e não a chave)", async () => {
+    const d = dubles();
+    d.orcamento.conferir.mockResolvedValueOnce("teto");
+    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS }))).toBe("falhou");
+    expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "teto_de_gasto", avisoDeTeto("pt-BR"));
+    expect(avisoDeTeto("pt-BR").titulo).not.toBe(avisoDeFalha("pt-BR").titulo);
+  });
+
+  it("o teto só é conferido DEPOIS de saber que há o que transcrever e que há chave", async () => {
+    const semChave = dubles({ chave: null });
+    await semChave.servico.processar(pendente());
+    expect(semChave.orcamento.conferir).not.toHaveBeenCalled();
+    const desligada = dubles({ ctx: contexto({ ligada: false }) });
+    await desligada.servico.processar(pendente());
+    expect(desligada.orcamento.conferir).not.toHaveBeenCalled();
+  });
+
   it("o provedor recusa: conta a tentativa, registra o erro e espera cada vez mais", async () => {
     for (const [tentativas, espera] of [
       [1, ESPERAS_S[0]],
@@ -271,6 +311,7 @@ describe("TranscricoesDaTelefonia — quando falha", () => {
       arquivo: d.arquivo,
       transcritor: d.transcritor,
       resumidor: d.resumidor,
+      orcamento: d.orcamento,
       log: { info: () => undefined, warn: () => undefined, error: () => undefined },
       agora: () => new Date(agora),
     });
@@ -298,6 +339,60 @@ describe("TranscricoesDaTelefonia — quando falha", () => {
     expect(await d.servico.processar(pendente())).toBe("adiada");
     // A mensagem crua do erro não vai ao log — só a classe.
     expect(JSON.stringify(d.registros)).not.toContain("connection terminated");
+  });
+
+  it("o banco tropeça ao GRAVAR o resultado: insiste, e o que já foi pago ao provedor não é refeito", async () => {
+    const d = dubles();
+    d.banco.concluir.mockRejectedValueOnce(new Error("Connection terminated unexpectedly")).mockRejectedValueOnce(new Error("pool is ending"));
+    expect(await d.servico.processar(pendente())).toBe("pronta");
+    expect(d.banco.concluir).toHaveBeenCalledTimes(3);
+    expect(d.transcritor.transcrever).toHaveBeenCalledTimes(1);
+    expect(d.resumidor.perguntar).toHaveBeenCalledTimes(1);
+    expect(d.banco.reagendar).not.toHaveBeenCalled();
+  });
+
+  it("o banco não grava em nenhuma tentativa: a falha fica registrada na linha (com espera), em vez de sumir até a reserva vencer", async () => {
+    const d = dubles();
+    d.banco.concluir.mockRejectedValue(new Error("invalid input syntax for type json"));
+    expect(await d.servico.processar(pendente())).toBe("adiada");
+    expect(d.banco.concluir).toHaveBeenCalledTimes(3);
+    expect(d.banco.reagendar).toHaveBeenCalledWith(ORG, VC, ESPERAS_S[0], "gravar_falhou");
+    expect(JSON.stringify(d.registros)).not.toContain("invalid input syntax");
+  });
+
+  it("gravar que não responde (o banco esperando uma trava) tem prazo: não segura a fila das outras ligações", async () => {
+    const d = dubles();
+    const servico = new TranscricoesDaTelefonia({
+      banco: d.banco,
+      arquivo: d.arquivo,
+      transcritor: d.transcritor,
+      resumidor: d.resumidor,
+      orcamento: d.orcamento,
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      agora: () => AGORA,
+      prazos: { gravarMs: 20, esperasParaGravarMs: [0] },
+    });
+    d.banco.concluir.mockImplementation(() => new Promise(() => undefined));
+    expect(await servico.processar(pendente())).toBe("adiada");
+    expect(d.banco.concluir).toHaveBeenCalledTimes(2);
+    expect(d.banco.reagendar).toHaveBeenCalledWith(ORG, VC, ESPERAS_S[0], "gravar_falhou");
+  });
+
+  it("caractere nulo no texto do transcritor ou no resumo não chega ao banco (o Postgres o recusa, e a recusa custaria tudo de novo)", async () => {
+    const d = dubles();
+    d.transcritor.transcrever.mockResolvedValueOnce({
+      text: "x",
+      language: "portuguese",
+      durationSeconds: 5,
+      segments: [{ start: 0, end: 2, text: "Alô\u0000, bom dia." }],
+    });
+    d.resumidor.perguntar.mockResolvedValueOnce(JSON.stringify({ resumo: "Cumprimento\u0000 inicial.", falas: [[1, "C"]] }));
+    await d.servico.processar(pendente());
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(JSON.stringify(gravado)).not.toContain("\\u0000");
+    expect(gravado.trechos[0]!.texto).toBe("Alô, bom dia.");
+    expect(gravado.texto).toBe("Alô, bom dia.");
+    expect(gravado.resumo).toBe("Cumprimento inicial.");
   });
 
   it("a telemetria que falha não derruba a transcrição", async () => {

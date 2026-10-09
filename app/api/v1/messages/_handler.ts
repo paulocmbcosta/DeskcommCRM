@@ -310,13 +310,20 @@ export async function listMessagesHandler(
   const liberados = await contatosNaoAnonimizados(supabase, ctx.organization_id, pagina);
   // A transcrição da LIGAÇÃO (F4) não mora em `messages`: a linha traz só a
   // situação. O resumo vem da tabela própria, e só para quem pode ouvir a
-  // gravação — usuário com papel atendente ou acima. Sem papel conhecido (o
-  // chamador não disse), token de integração e agente de IA: não recebem.
+  // gravação — usuário com papel atendente ou acima, com o segundo fator provado
+  // na sessão se tem um (a rota da escuta exige o mesmo). Sem papel conhecido (o
+  // chamador não disse), sem resposta sobre o segundo fator, token de integração
+  // e agente de IA: não recebem. A pergunta do segundo fator só é feita quando a
+  // página tem ligação transcrita.
   const page = await comTranscricaoDasLigacoes(
     pagina.map((m) => soATranscricaoDoAudio(m, liberados.has(m.contact_id))),
     {
       organizationId: ctx.organization_id,
-      podeLer: ctx.actor.type === "user" && roleAtLeast(ctx.actor.role, "agent"),
+      podeLer: async () =>
+        ctx.actor.type === "user" &&
+        roleAtLeast(ctx.actor.role, "agent") &&
+        ctx.sessaoSemDividaDeMfa !== undefined &&
+        (await ctx.sessaoSemDividaDeMfa()),
     },
   );
 

@@ -21,9 +21,12 @@ O que vale saber antes de ligar:
 
 - **Só daí para frente.** As ligações gravadas antes de ligar não são
   transcritas.
-- **Custa.** O áudio de cada ligação gravada é enviado à OpenAI, que cobra por
-  minuto de áudio na conta da chave cadastrada. O gasto aparece em
-  **Agente de IA › Execuções**.
+- **Custa, e o conteúdo sai da instalação.** O áudio de cada ligação gravada é
+  enviado à OpenAI, que cobra por minuto de áudio na conta da chave usada. O
+  texto que volta vai ao modelo de IA escolhido em **Agente de IA › Provedores**,
+  que escreve o resumo — pode ser de outro provedor. Os dois gastos aparecem em
+  **Agente de IA › Execuções** e contam no teto de gasto de IA: com o teto
+  atingido, as ligações deixam de ser transcritas até ele subir.
 - **É texto de máquina, de áudio de telefone.** Dá para entender a ligação e o
   resumo costuma ser fiel, mas nomes, números e endereços saem errados com
   frequência. **A indicação de quem falou é uma estimativa**: a gravação mistura
@@ -34,7 +37,8 @@ O que vale saber antes de ligar:
   leitura não vê. Cada vez que alguém abre uma transcrição, fica registrado na
   auditoria.
 - **É apagada junto com a gravação**, no fim do prazo de guarda, e quando o
-  contato é anonimizado. A exportação de dados do titular passa a incluí-la.
+  contato é anonimizado. A exportação de dados do titular passa a dizer quais
+  ligações têm transcrição; o texto, como o áudio, não vai no relatório.
 
 Se a transcrição não sair (chave removida, serviço fora do ar), o cartão diz
 "Não foi possível transcrever esta ligação" e a Central avisa, com o caminho

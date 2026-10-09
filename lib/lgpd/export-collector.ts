@@ -222,16 +222,22 @@ export interface AppointmentNoticeRow {
  * não vai no relatório; quem controla os dados o entrega ao titular pelo cartão
  * da ligação, e a anonimização o apaga junto com a mídia da conversa.
  *
- * Desde a F4 (migration 0298) a gravação pode ter sido TRANSCRITA. A transcrição
- * é texto — dado pessoal que o CRM guarda sobre o titular, como as mensagens — e
- * por isso VAI no relatório (`transcricao`): o resumo e o texto corrido. `null` =
- * a ligação não tem transcrição (não foi pedida, ou já foi apagada).
+ * Desde a F4 (migration 0298) a gravação pode ter sido TRANSCRITA. O relatório
+ * diz SE há transcrição (`transcricao.status`) — e NÃO leva o texto nem o resumo,
+ * pela mesma regra do áudio: quem controla os dados entrega o conteúdo ao
+ * titular pelo cartão da ligação.
+ *
+ * ⚠️ Não é zelo: é o bucket. O `data.json` deste relatório vai para
+ * `lgpd-exports`, cuja policy (`tenant_read_lgpd_exports`) deixa QUALQUER membro
+ * da organização ler, sem papel e sem a visibilidade por time, e nada apaga os
+ * arquivos de lá. Pôr o texto da ligação ali criaria uma cópia fora de todas as
+ * regras da transcrição (atendente para cima, quem enxerga a conversa, leitura
+ * auditada, apagada com a gravação) — achado da revisão de segurança da 0298.
+ * Quem vigia que o texto não volte: tests/unit/lgpd-exporta-o-que-redige.test.ts.
  */
 export interface TranscricaoDaLigacaoNoRelatorio {
   /** `ready` (há texto), `empty` (a gravação não tinha fala), `pending` ou `failed`. */
   status: string;
-  resumo: string | null;
-  texto: string | null;
 }
 
 export interface VoiceCallRow {
@@ -712,33 +718,34 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
     }
   }
 
-  // A transcrição das ligações gravadas (F4, 0298). A tabela é server-side only
-  // — só o cliente de serviço a lê —, e por isso o filtro de organização é à
-  // mão, e as ligações consultadas são só as DESTE titular, lidas logo acima.
-  // Falhou a leitura: o relatório sai sem ela, e o log diz (como o resto daqui).
+  // A transcrição das ligações gravadas (F4, 0298): o relatório diz SE cada
+  // ligação tem transcrição — só a situação, nunca o texto (o porquê está em
+  // `TranscricaoDaLigacaoNoRelatorio`). A tabela é server-side only — só o
+  // cliente de serviço a lê —, e por isso o filtro de organização é à mão, e as
+  // ligações consultadas são só as DESTE titular, lidas logo acima. Em lotes: 500
+  // ids numa URL só passam do que um proxy aceita. Falhou a leitura: o relatório
+  // sai sem ela, e o log diz (como o resto daqui).
   if (voice_calls.length > 0) {
-    const { data, error } = await admin
-      .from("voice_call_transcripts")
-      .select("voice_call_id, status, summary, text")
-      .eq("organization_id", organizationId)
-      .in(
-        "voice_call_id",
-        voice_calls.map((v) => v.id),
-      );
-    if (error) {
-      logger.warn("[lgpd-export-worker] voice call transcripts load failed", {
-        request_id: requestId,
-        error: error.message,
-      });
-    } else if (data) {
-      const porLigacao = new Map(
-        (data as Array<{ voice_call_id: string; status: string; summary: string | null; text: string | null }>).map((t) => [
-          t.voice_call_id,
-          { status: t.status, resumo: t.summary, texto: t.text },
-        ]),
-      );
-      voice_calls = voice_calls.map((v) => ({ ...v, transcricao: porLigacao.get(v.id) ?? null }));
+    const porLigacao = new Map<string, TranscricaoDaLigacaoNoRelatorio>();
+    const ids = voice_calls.map((v) => v.id);
+    for (let i = 0; i < ids.length; i += 100) {
+      const { data, error } = await admin
+        .from("voice_call_transcripts")
+        .select("voice_call_id, status")
+        .eq("organization_id", organizationId)
+        .in("voice_call_id", ids.slice(i, i + 100));
+      if (error) {
+        logger.warn("[lgpd-export-worker] voice call transcripts load failed", {
+          request_id: requestId,
+          error: error.message,
+        });
+        break;
+      }
+      for (const t of (data ?? []) as Array<{ voice_call_id: string; status: string }>) {
+        porLigacao.set(t.voice_call_id, { status: t.status });
+      }
     }
+    voice_calls = voice_calls.map((v) => ({ ...v, transcricao: porLigacao.get(v.id) ?? null }));
   }
 
   // Captação por webhook — a MESMA classe do bloco acima, achada pelo gate.

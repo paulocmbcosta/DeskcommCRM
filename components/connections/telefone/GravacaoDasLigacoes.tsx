@@ -16,8 +16,10 @@
  * A TRANSCRIÇÃO (F4): um segundo interruptor, desligado por padrão. Só liga com
  * a gravação ligada (não há o que transcrever sem ela) e com uma chave da OpenAI
  * cadastrada — a rota recusa do mesmo jeito (409). Desligar nunca depende de
- * nada. A tela diz o que quem liga precisa saber antes: para onde o áudio vai,
- * que custa, que vale só daqui para frente e que "quem falou" é estimativa.
+ * nada. A tela diz o que quem liga precisa saber antes: para onde vão o áudio
+ * (a OpenAI) e o texto (o modelo de conversa da organização — que pode ser de
+ * outro provedor), que custa e conta no teto de gasto, que vale só daqui para
+ * frente e que "quem falou" é estimativa.
  */
 import Link from "next/link";
 import { useState } from "react";
@@ -229,7 +231,7 @@ export function GravacaoDasLigacoes() {
           ) : null}
           <p className="text-xs text-muted-foreground">
             {t(
-              "O áudio da ligação é enviado à OpenAI para ser transcrito, e o custo é por minuto de áudio, cobrado na conta da OpenAI cuja chave está cadastrada. O texto é feito por máquina a partir de áudio de telefone: pode errar nomes, números e endereços, e a indicação de quem falou é uma estimativa.",
+              "O áudio da ligação é enviado à OpenAI para ser transcrito, e o texto que volta vai ao modelo de IA escolhido em Agente de IA › Provedores, que escreve o resumo e indica quem falou. A OpenAI cobra por minuto de áudio, na conta da chave usada, e os dois gastos contam no teto de gasto de IA. O texto é feito por máquina a partir de áudio de telefone: pode errar nomes, números e endereços, e a indicação de quem falou é uma estimativa.",
             )}
           </p>
         </div>

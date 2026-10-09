@@ -77,6 +77,36 @@ describe("comTranscricaoDasLigacoes", () => {
     expect((m!.metadata as { voice_call: Record<string, unknown> }).voice_call.gravacao).toBeDefined();
   });
 
+  it("`podeLer` como pergunta: só é feita quando a página tem ligação transcrita — e vale a resposta", async () => {
+    const pergunta = vi.fn(async () => true);
+    const ler = leitor({ [VC]: { estado: "ready", resumo: "Resumo." } });
+    await comTranscricaoDasLigacoes([texto, ligacao(OUTRA_VC)], { organizationId: ORG, podeLer: pergunta }, ler);
+    expect(pergunta).not.toHaveBeenCalled();
+    const [m] = await comTranscricaoDasLigacoes([ligacao(VC, { situacao: "pronta" })], { organizationId: ORG, podeLer: pergunta }, ler);
+    expect(pergunta).toHaveBeenCalledTimes(1);
+    expect(transcricaoDe(m!)).toEqual({ situacao: "pronta", resumo: "Resumo." });
+
+    const nao = vi.fn(async () => false);
+    const [n] = await comTranscricaoDasLigacoes([ligacao(VC, { situacao: "pronta" })], { organizationId: ORG, podeLer: nao }, ler);
+    expect(transcricaoDe(n!)).toBeUndefined();
+  });
+
+  it("a pergunta que LANÇA (não deu para conferir o segundo fator) conta como 'não pode': nada é entregue", async () => {
+    const ler = leitor({ [VC]: { estado: "ready", resumo: "Segredo da ligação." } });
+    const [m] = await comTranscricaoDasLigacoes(
+      [ligacao(VC, { situacao: "pronta" })],
+      {
+        organizationId: ORG,
+        podeLer: async () => {
+          throw new Error("auth fora");
+        },
+      },
+      ler,
+    );
+    expect(transcricaoDe(m!)).toBeUndefined();
+    expect(ler).not.toHaveBeenCalled();
+  });
+
   it("projeção sem linha na tabela (apagada pela retenção ou pela anonimização): o cartão cala", async () => {
     const ler = leitor({});
     const [m] = await comTranscricaoDasLigacoes([ligacao(VC, { situacao: "pronta" })], { organizationId: ORG, podeLer: true }, ler);

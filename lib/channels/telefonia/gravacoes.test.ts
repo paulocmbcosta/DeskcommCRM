@@ -187,13 +187,18 @@ describe("processar — avisa a transcrição (F4) depois de guardar", () => {
     new GravacoesDaTelefonia({ ari, banco, storage, conversor, log, agora: () => agora, aoGuardar });
 
   it("gravação guardada: avisa uma vez, com a organização e a ligação — e só DEPOIS de anexar", async () => {
+    // O que já tinha acontecido no banco NO INSTANTE do aviso. Anotado e conferido
+    // do lado de fora: um `expect` dentro do gancho seria engolido pelo `catch`
+    // que protege a gravação, e o teste passaria com a ordem trocada.
+    let anexadasNoAviso = -1;
     const aoGuardar = vi.fn(() => {
-      // No instante do aviso a gravação já está anexada no banco.
-      expect(banco.tem("anexar")).toHaveLength(1);
+      anexadasNoAviso = banco.tem("anexar").length;
     });
     expect(await comGancho(aoGuardar).processar(pendente)).toBe("anexada");
     expect(aoGuardar).toHaveBeenCalledTimes(1);
     expect(aoGuardar).toHaveBeenCalledWith(ORG, VC);
+    expect(anexadasNoAviso).toBe(1);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("o gancho que LANÇA não muda o desfecho da gravação: segue anexada, e o WAV é apagado", async () => {

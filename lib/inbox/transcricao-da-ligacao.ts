@@ -9,9 +9,10 @@
  * É aqui que o cartão recebe o que pode mostrar. Para cada mensagem de ligação
  * da página que tenha a projeção:
  *
- *  - quem PODE ouvir a gravação (usuário com papel atendente ou acima) recebe a
- *    situação VERDADEIRA — relida da tabela, que é a fonte — e, na transcrição
- *    pronta, o resumo;
+ *  - quem PODE ouvir a gravação (usuário com papel atendente ou acima, e com o
+ *    segundo fator provado na sessão, se tem um cadastrado — a mesma exigência
+ *    da rota da escuta) recebe a situação VERDADEIRA — relida da tabela, que é a
+ *    fonte — e, na transcrição pronta, o resumo;
  *  - quem não pode (papel só de leitura, token de integração, agente de IA) não
  *    recebe nada: a projeção sai da resposta, e o cartão cala;
  *  - projeção sem linha na tabela (a transcrição foi apagada pela retenção, pela
@@ -82,7 +83,13 @@ function comTranscricao<T extends MensagemComMetadado>(m: T, transcricao: Transc
 
 export async function comTranscricaoDasLigacoes<T extends MensagemComMetadado>(
   mensagens: T[],
-  p: { organizationId: string; podeLer: boolean },
+  /**
+   * `podeLer` pode ser uma PERGUNTA em vez de uma resposta: quem chama só paga
+   * por ela (conferir o segundo fator da sessão custa idas ao serviço de
+   * autenticação) quando a página tem ligação transcrita. Pergunta que lança
+   * conta como "não pode".
+   */
+  p: { organizationId: string; podeLer: boolean | (() => Promise<boolean>) },
   ler: LeitorDeTranscricoes = lerTranscricoesDasLigacoes,
 ): Promise<T[]> {
   const ligacoes = new Map<number, string>();
@@ -93,8 +100,17 @@ export async function comTranscricaoDasLigacoes<T extends MensagemComMetadado>(
   // Conversa sem ligação transcrita: nenhuma ida a mais ao banco.
   if (ligacoes.size === 0) return mensagens;
 
+  let podeLer = false;
+  try {
+    podeLer = typeof p.podeLer === "function" ? await p.podeLer() : p.podeLer;
+  } catch (e) {
+    logger.warn("[messages.list] não consegui saber se quem pede pode ler a transcrição; o cartão segue sem ela", {
+      organization_id: p.organizationId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
   let lidas: Awaited<ReturnType<LeitorDeTranscricoes>> = new Map();
-  if (p.podeLer) {
+  if (podeLer) {
     try {
       lidas = await ler(p.organizationId, [...new Set(ligacoes.values())]);
     } catch (e) {

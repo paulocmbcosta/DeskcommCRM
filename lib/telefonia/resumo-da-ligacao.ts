@@ -113,18 +113,44 @@ function objetoDoTexto(texto: string): unknown {
 }
 
 /**
+ * A resposta CORTADA. O teto de saída do modelo é da organização inteira
+ * (`organizations.settings.llm.params.maxOutputTokens`) e pode ser menor do que
+ * uma ligação longa pede: a resposta chega sem o fim, o JSON não fecha, e sem
+ * isto a ligação ficaria sem resumo E sem nenhuma indicação de quem falou — em
+ * silêncio. Aqui se salva o que chegou inteiro: o resumo (se a string dele
+ * fechou) e cada par `[número,"letra"]` completo. O par cortado no meio não
+ * casa, e fica de fora.
+ */
+function pedacosDaRespostaCortada(texto: string): { resumo: unknown; falas: unknown[] } {
+  const r = /"resumo"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(texto);
+  let resumo: unknown = null;
+  if (r?.[1]) {
+    try {
+      resumo = JSON.parse(r[1]);
+    } catch {
+      resumo = null;
+    }
+  }
+  const falas: unknown[] = [];
+  for (const m of texto.matchAll(/\[\s*(\d+)\s*,\s*"([^"\\]{1,3})"\s*\]/g)) falas.push([Number(m[1]), m[2]]);
+  return { resumo, falas };
+}
+
+/**
  * Lê a resposta do modelo e NUNCA lança. Resposta torta não derruba a
  * transcrição: o texto do transcritor já existe, e o que falta aqui vira `null`
  * (resumo ausente, "quem falou" em branco).
  *
  * O número de cada par é conferido contra o bloco pedido: par fora do intervalo,
  * repetido ou com letra desconhecida é ignorado — nunca deslocado para "caber".
+ * A resposta cortada no meio (teto de saída) entrega o que chegou inteiro.
  */
 export function lerRespostaDoResumo(texto: string, p: { primeiro: number; quantos: number }): LeituraDoResumo {
   const quem: Array<QuemFalou | null> = Array.from({ length: p.quantos }, () => null);
   const obj = objetoDoTexto(texto);
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { resumo: null, quem, marcados: 0 };
-  const r = obj as Record<string, unknown>;
+  const inteiro = obj !== null && typeof obj === "object" && !Array.isArray(obj);
+  // Sem um objeto que feche, tenta o que chegou inteiro da resposta cortada.
+  const r = (inteiro ? obj : pedacosDaRespostaCortada(texto)) as Record<string, unknown>;
 
   const bruto = typeof r.resumo === "string" ? r.resumo.replace(/\s+/g, " ").trim() : "";
   const resumo = bruto ? cortar(bruto, TAMANHO_DO_RESUMO) : null;

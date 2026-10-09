@@ -93,6 +93,28 @@ describe("lerRespostaDoResumo", () => {
     expect(lerRespostaDoResumo('{"resumo": 5, "falas": "A"}', { primeiro: 1, quantos: 1 })).toEqual({ resumo: null, quem: [null], marcados: 0 });
   });
 
+  it("resposta CORTADA pelo teto de saída do modelo: salva o resumo e cada par que chegou inteiro; o par cortado no meio fica de fora", () => {
+    const cortada = '{"resumo":"A cliente pediu a segunda via e disse \\"obrigada\\".","falas":[[1,"A"],[2,"C"],[3,"A"],[4,"';
+    const r = lerRespostaDoResumo(cortada, { primeiro: 1, quantos: 6 });
+    expect(r.resumo).toBe('A cliente pediu a segunda via e disse "obrigada".');
+    expect(r.quem).toEqual(["atendente", "cliente", "atendente", null, null, null]);
+    expect(r.marcados).toBe(3);
+  });
+
+  it("resposta cortada ANTES de o resumo fechar: sem resumo (meia frase não é resumo), e os pares que houver valem", () => {
+    const r = lerRespostaDoResumo('{"resumo":"A cliente pediu a segun', { primeiro: 1, quantos: 2 });
+    expect(r).toEqual({ resumo: null, quem: [null, null], marcados: 0 });
+    // O modelo que devolve as falas antes do resumo e é cortado no resumo:
+    const invertida = lerRespostaDoResumo('{"falas":[[1,"C"],[2,"A"]],"resumo":"O cliente', { primeiro: 1, quantos: 2 });
+    expect(invertida).toEqual({ resumo: null, quem: ["cliente", "atendente"], marcados: 2 });
+  });
+
+  it("na resposta cortada valem as mesmas travas: par fora do bloco ou com letra desconhecida não entra", () => {
+    const r = lerRespostaDoResumo('{"resumo":"x","falas":[[9,"A"],[1,"Z"],[2,"S"],[2,"A"],[3,"', { primeiro: 1, quantos: 3 });
+    expect(r.quem).toEqual([null, "sistema", null]);
+    expect(r.marcados).toBe(1);
+  });
+
   it("resumo longo demais é cortado; vazio vira nulo", () => {
     const longo = lerRespostaDoResumo(JSON.stringify({ resumo: "a".repeat(5000), falas: [] }), { primeiro: 1, quantos: 0 });
     expect(longo.resumo?.length).toBe(600);

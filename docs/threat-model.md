@@ -214,8 +214,9 @@ Não avaliado por falta de execução/instância:
   o arquivo foi.
 - Transcrição das ligações (F4, migration 0298), DECLARADA: com o interruptor ligado (desligado
   por padrão), o áudio de cada ligação gravada SAI da instalação para o serviço de transcrição da
-  OpenAI, e os trechos de texto vão em seguida ao modelo de conversa da organização — dois
-  operadores a mais para o conteúdo da ligação, que a tela avisa a quem liga. O texto mora em
+  OpenAI, e os trechos de texto vão em seguida ao modelo de conversa da organização, que pode ser
+  de OUTRO provedor — até dois operadores a mais para o conteúdo da ligação. A aba Gravação diz
+  os dois destinos a quem liga. O texto mora em
   `voice_call_transcripts`, sem grant para `anon`/`authenticated` e sem policy: o PostgREST não a
   serve, e a linha de `messages` (que a REST e o Realtime levam inteira a qualquer membro que
   veja a conversa) carrega só a situação. O resumo sai pela listagem, e o texto pela rota
@@ -223,7 +224,10 @@ Não avaliado por falta de execução/instância:
   enxerga a conversa; a rota registra `phone.transcript_read` por leitura. O texto da ligação
   entra num prompt: ele é tratado como dado, e o que volta do modelo só vira uma letra por trecho
   e um resumo curto mostrado como texto — quem fala ao telefone pode, no máximo, sujar o próprio
-  resumo. Não avaliado: o que a OpenAI retém do áudio e do texto (depende do contrato da conta de
+  resumo. A exportação de dados do titular diz quais ligações têm transcrição e NÃO leva o texto:
+  o `data.json` dela mora em `lgpd-exports`, que qualquer membro lê (dívida anterior, com tarefa
+  própria). Só a anonimização de verdade apaga a transcrição — o membro que escreve
+  `is_anonymized` pela REST não apaga. Não avaliado: o que a OpenAI retém do áudio e do texto (depende do contrato da conta de
   quem instala); e quem copia o texto da janela leva o conteúdo — a trilha diz quem abriu, não
   para onde foi.
 - Storage, e este é MEDIDO e DECLARADO em vez de "não avaliado": `brand-logos` (migration

@@ -17,16 +17,27 @@
  */
 import type pg from "pg";
 
-import { LlmNotConfiguredError, resolveOrgLlmConfig, type LlmEdgeConfig } from "@/lib/agent-engine/edge/llm/credentials";
+import {
+  LlmNotConfiguredError,
+  llmEdgeConfigFromEnv,
+  resolveOrgLlmConfig,
+  type LlmEdgeConfig,
+} from "@/lib/agent-engine/edge/llm/credentials";
 
-/** As chaves de IA da instalação — o piso de quem não cadastrou a sua no painel. */
+/**
+ * A configuração de IA da instalação — as chaves que servem de piso a quem não
+ * cadastrou a sua no painel, E a chave geral do teto de gasto
+ * (`AI_BUDGET_ENFORCEMENT`). Pelo MESMO leitor do resto do worker: montada à
+ * mão, a transcrição ignoraria a instalação que desligou (ou só avisa) o teto.
+ */
 export function configDeIaDoAmbiente(): LlmEdgeConfig {
-  return {
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY,
-    cacheTtl: "1h",
-  };
+  return llmEdgeConfigFromEnv({
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    LLM_CACHE_TTL: process.env.LLM_CACHE_TTL,
+    AI_BUDGET_ENFORCEMENT: process.env.AI_BUDGET_ENFORCEMENT,
+  });
 }
 
 /**

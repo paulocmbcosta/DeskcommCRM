@@ -39,6 +39,13 @@
  * O RESUMO que falha não derruba a transcrição: o texto do transcritor é
  * guardado sem resumo e sem indicação de quem falou.
  *
+ * O TETO DE GASTO de IA da organização vale para a transcrição: com ele
+ * estourado (em modo de bloqueio), nada é baixado nem enviado, e a ligação
+ * espera como numa falha — o custo da transcrição entra na soma do mês.
+ *
+ * GRAVAR o resultado tem insistência própria: o que já foi pago ao provedor não
+ * se perde por um tropeço do banco.
+ *
  * Nenhuma linha de log leva o texto da ligação.
  *
  * Banco, Storage, transcritor e modelo de conversa entram como PORTAS: o teste
@@ -46,7 +53,7 @@
  */
 import type pg from "pg";
 
-import { runModelCall } from "@/lib/agent-engine/edge/llm/run-model-call";
+import { LlmBudgetExceededError, conferirOrcamento, runModelCall } from "@/lib/agent-engine/edge/llm/run-model-call";
 import { traduzir } from "@/lib/i18n/dicionario";
 import type { Idioma } from "@/lib/i18n/idiomas";
 import { apiTranscriptionWithSegments, type TranscricaoComTrechos } from "@/lib/messaging/media/transcription";
@@ -79,10 +86,30 @@ export const PRAZO_TOTAL_MS = 24 * 3_600_000;
  */
 export const RESERVA_S = 45 * 60;
 export const PRAZO_DO_DOWNLOAD_MS = 2 * 60_000;
-/** A ligação de 2 h (o teto da gravação) transcreve em poucos minutos; isto é folga. */
-export const PRAZO_DO_TRANSCRITOR_MS = 20 * 60_000;
+/**
+ * Quanto se espera o transcritor responder. NÃO é folga à vontade: o `fetch` do
+ * Node corta sozinho aos 300 s sem cabeçalho de resposta (o `headersTimeout`
+ * padrão do undici), e o transcritor só responde quando termina. Um prazo maior
+ * que esse seria um número que nunca vale. Fica logo abaixo, para a falha ter
+ * nome (`transcricao_sem_resposta`) em vez de virar um `TypeError` do fetch.
+ *
+ * O LIMITE QUE ISSO IMPÕE: medido em 2026-10-09, o transcritor levou 76 s para
+ * 28 min 49 s de áudio — nesse ritmo, 280 s dão para cerca de 1 h 45 de
+ * ligação. Acima disso (o teto da gravação é 2 h), ou num dia em que o provedor
+ * esteja lento, a transcrição falha nas tentativas todas e o cartão diz que não
+ * saiu. Fatiar a ligação longa em partes é o conserto, e tem tarefa própria.
+ */
+export const PRAZO_DO_TRANSCRITOR_MS = 280_000;
 /** Por bloco de trechos (a ligação comum tem um bloco só). */
 export const PRAZO_DO_RESUMO_MS = 2 * 60_000;
+/** Quanto se espera o banco gravar o resultado, por tentativa. */
+export const PRAZO_DE_GRAVAR_MS = 60_000;
+/**
+ * Quanto se espera entre as tentativas de GRAVAR um resultado já pago. Um
+ * tropeço do banco (pool encerrando no deploy, conexão que caiu) não pode custar
+ * a transcrição inteira de novo — download, transcritor e resumo.
+ */
+export const ESPERAS_PARA_GRAVAR_MS = [2_000, 10_000] as const;
 
 /** Quantas pendentes uma passada faz, em série. */
 const LOTE_DA_PASSADA = 3;
@@ -125,6 +152,15 @@ export interface TranscritorDaLigacao {
   transcrever(chave: string, audio: Buffer, lingua: string): Promise<TranscricaoComTrechos>;
 }
 
+export interface OrcamentoDaTranscricao {
+  /**
+   * O teto de gasto de IA da organização deixa transcrever agora? `"teto"` = o
+   * gate bloqueou (e já avisou a Central e gravou a recusa). Nunca lança: teto
+   * que não pôde ser lido não bloqueia — a mesma regra do gate.
+   */
+  conferir(org: string, contactId: string | null): Promise<"segue" | "teto">;
+}
+
 export interface ResumidorDaLigacao {
   /** Uma ida ao modelo de conversa (ponto `resumo_de_ligacao`). Lança se não conseguir. */
   perguntar(org: string, pedido: { system: string; user: string }): Promise<string>;
@@ -135,16 +171,18 @@ export interface PortasDaTranscricao {
   arquivo: ArquivoDaGravacao;
   transcritor: TranscritorDaLigacao;
   resumidor: ResumidorDaLigacao;
+  orcamento: OrcamentoDaTranscricao;
   log: Registro;
   agora?: () => Date;
-  /** Para o teste encurtar: os prazos de cada passo lento. */
-  prazos?: { downloadMs?: number; transcritorMs?: number; resumoMs?: number };
+  /** Para o teste encurtar: os prazos de cada passo lento e as esperas para gravar. */
+  prazos?: { downloadMs?: number; transcritorMs?: number; resumoMs?: number; gravarMs?: number; esperasParaGravarMs?: readonly number[] };
 }
 
 /** O que aconteceu ao processar uma transcrição — para o log e para os testes. */
 export type DesfechoDaTranscricao = "pronta" | "sem_fala" | "descartada" | "adiada" | "falhou" | "em_curso";
 
 const SEM_CHAVE = "sem_chave";
+const TETO_DE_GASTO = "teto_de_gasto";
 const ARQUIVO_INVALIDO = "arquivo_invalido";
 const TENTATIVAS_ESGOTADAS = "tentativas_esgotadas";
 
@@ -187,7 +225,26 @@ export function avisoDeFalha(idioma: Idioma): { titulo: string; corpo: string } 
   };
 }
 
+export function avisoDeTeto(idioma: Idioma): { titulo: string; corpo: string } {
+  return {
+    titulo: traduzir("A transcrição das ligações parou no teto de gasto de IA", idioma),
+    corpo: traduzir(
+      "As ligações gravadas não estão sendo transcritas porque o teto de gasto de IA do mês foi atingido. Aumente o teto em Agente de IA → Provedores, ou desligue a transcrição em Conexões → Telefone → Gravação. As gravações continuam sendo guardadas normalmente.",
+      idioma,
+    ),
+  };
+}
+
 const ms = (segundos: number) => Math.max(0, Math.round(segundos * 1000));
+
+/**
+ * O Postgres recusa o caractere nulo em `text` e em `jsonb` — e uma recusa aqui
+ * custaria a transcrição inteira de novo, cinco vezes, sem nunca gravar. O
+ * transcritor não devolve isso em fala; se devolver, some.
+ */
+const semNulo = (texto: string) => texto.replace(/\u0000/g, "");
+
+const esperar = (quanto: number) => new Promise<void>((ok) => setTimeout(ok, quanto));
 
 export class TranscricoesDaTelefonia {
   private readonly emCurso = new Set<string>();
@@ -284,6 +341,12 @@ export class TranscricoesDaTelefonia {
       await this.p.banco.avisar(org, avisoSemChave(ctx.idioma));
       return await this.adiarOuFalhar(t, SEM_CHAVE, ctx);
     }
+    // O teto de gasto de IA vale aqui também — ANTES de baixar o áudio e de
+    // pagar o transcritor. O custo da transcrição entra na soma do mês: sem
+    // este portão ela seguiria gastando com o teto estourado.
+    if ((await this.p.orcamento.conferir(org, ctx.contactId)) === "teto") {
+      return await this.adiarOuFalhar(t, TETO_DE_GASTO, ctx);
+    }
 
     let audio: Buffer;
     try {
@@ -316,19 +379,22 @@ export class TranscricoesDaTelefonia {
     });
 
     const trechos: TrechoDaTranscricao[] = transcrito.segments
-      .map((s) => ({ inicio_ms: ms(s.start), fim_ms: ms(s.end), quem: null as QuemFalou | null, texto: s.text.trim() }))
+      .map((s) => ({ inicio_ms: ms(s.start), fim_ms: ms(s.end), quem: null as QuemFalou | null, texto: semNulo(s.text).trim() }))
       .filter((s) => s.texto !== "");
     const duracaoMs = transcrito.durationSeconds !== null ? ms(transcrito.durationSeconds) : null;
     const comum = { organizationId: org, vcId, idioma: transcrito.language, modelo: MODELO_DO_TRANSCRITOR, duracaoMs };
 
     if (trechos.length === 0) {
-      const r = await this.p.banco.concluir({ ...comum, estado: "empty", texto: null, trechos: [], resumo: null });
+      const r = await this.gravar(t, ctx, { ...comum, estado: "empty", texto: null, trechos: [], resumo: null });
+      if (r === "nao_gravou") return "adiada";
       this.p.log.info("telefonia: ligação transcrita — sem fala", { voice_call: vcId, desfecho: r });
       return r === "gravada" ? "sem_fala" : "descartada";
     }
 
-    const { resumo, marcados } = await this.resumir(org, vcId, ctx, trechos);
-    const r = await this.p.banco.concluir({ ...comum, estado: "ready", texto: textoCorrido(trechos), trechos, resumo });
+    const { resumo: resumoBruto, marcados } = await this.resumir(org, vcId, ctx, trechos);
+    const resumo = resumoBruto === null ? null : semNulo(resumoBruto);
+    const r = await this.gravar(t, ctx, { ...comum, estado: "ready", texto: textoCorrido(trechos), trechos, resumo });
+    if (r === "nao_gravou") return "adiada";
     this.p.log.info("telefonia: ligação transcrita", {
       voice_call: vcId,
       desfecho: r,
@@ -337,6 +403,37 @@ export class TranscricoesDaTelefonia {
       com_resumo: resumo !== null,
     });
     return r === "gravada" ? "pronta" : "descartada";
+  }
+
+  /**
+   * Grava o resultado, COM INSISTÊNCIA: a esta altura o transcritor e o resumo já
+   * foram pagos, e um tropeço do banco não pode custar tudo de novo. Cada
+   * tentativa tem prazo (uma consulta presa — o banco esperando uma trava — não
+   * segura a fila das outras ligações). Esgotadas, a falha fica registrada na
+   * linha, se o banco deixar; se nem isso, a reserva vence e a passada retoma.
+   */
+  private async gravar(
+    t: TranscricaoPendente,
+    ctx: ContextoDaTranscricao,
+    p: Parameters<BancoDaTranscricao["concluir"]>[0],
+  ): Promise<"gravada" | "descartada" | "nao_gravou"> {
+    const esperas = this.p.prazos?.esperasParaGravarMs ?? ESPERAS_PARA_GRAVAR_MS;
+    let ultimo: unknown;
+    for (let i = 0; i <= esperas.length; i += 1) {
+      try {
+        return await comPrazo(() => this.p.banco.concluir(p), this.p.prazos?.gravarMs ?? PRAZO_DE_GRAVAR_MS, "banco_sem_resposta");
+      } catch (e) {
+        ultimo = e;
+        const espera = esperas[i];
+        if (espera !== undefined) await esperar(espera);
+      }
+    }
+    this.p.log.warn("telefonia: a transcrição ficou pronta, mas o banco não a gravou", {
+      voice_call: t.vcId,
+      erro: classeDoErro(ultimo),
+    });
+    await this.adiarOuFalhar(t, "gravar_falhou", ctx).catch(() => undefined);
+    return "nao_gravou";
   }
 
   /**
@@ -421,7 +518,8 @@ export class TranscricoesDaTelefonia {
       });
       return "adiada";
     }
-    const aviso = erro === SEM_CHAVE ? avisoSemChave(ctx.idioma) : avisoDeFalha(ctx.idioma);
+    const aviso =
+      erro === SEM_CHAVE ? avisoSemChave(ctx.idioma) : erro === TETO_DE_GASTO ? avisoDeTeto(ctx.idioma) : avisoDeFalha(ctx.idioma);
     if (await this.p.banco.falhar(t.organizationId, t.vcId, erro, aviso)) {
       this.p.log.warn("telefonia: transcrição perdida", { voice_call: t.vcId, erro, tentativas: t.tentativas });
     }
@@ -482,6 +580,27 @@ export function transcricoesDoWorker(pool: pg.Pool, log: Registro): Transcricoes
       // O ponto de IA `transcricao_de_ligacao`: transcreverGravacao( — o áudio da
       // ligação vai ao serviço de transcrição, e volta em trechos com tempo.
       transcrever: (chave, audio, lingua) => transcreverGravacao(chave, audio, lingua),
+    },
+    orcamento: {
+      async conferir(org, contactId) {
+        try {
+          await conferirOrcamento(
+            pool,
+            configDeIaDoAmbiente(),
+            { tenantId: org, contactId, purpose: PONTO_DO_TRANSCRITOR, provider: "openai", model: MODELO_DO_TRANSCRITOR },
+            { log },
+          );
+          return "segue";
+        } catch (e) {
+          if (e instanceof LlmBudgetExceededError) return "teto";
+          // Não deu para ler o teto: não bloqueia (a regra do próprio gate), e o log diz.
+          log.warn("telefonia: o teto de gasto não pôde ser conferido — a transcrição segue", {
+            organization_id: org,
+            erro: classeDoErro(e),
+          });
+          return "segue";
+        }
+      },
     },
     resumidor: {
       async perguntar(org, pedido) {

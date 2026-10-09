@@ -220,12 +220,15 @@ describe("aba Gravação", () => {
     await waitFor(() => expect(puts()).toEqual([{ ativa: true, retencao_dias: 90, transcrever: false }]));
   });
 
-  it("transcrição: a tela avisa para onde o áudio vai, que custa e que 'quem falou' é estimativa", async () => {
+  it("transcrição: a tela avisa para onde vão o áudio E o texto (dois operadores), que custa, que conta no teto e que 'quem falou' é estimativa", async () => {
     pintar();
     await screen.findByText("Gravação das ligações");
     const texto = document.body.textContent ?? "";
     expect(texto).toContain("enviado à OpenAI");
-    expect(texto).toContain("o custo é por minuto de áudio");
+    // O resumo é feito pelo modelo de conversa da organização — que pode ser de outro provedor.
+    expect(texto).toContain("o texto que volta vai ao modelo de IA escolhido em Agente de IA › Provedores");
+    expect(texto).toContain("cobra por minuto de áudio");
+    expect(texto).toContain("contam no teto de gasto de IA");
     expect(texto).toContain("a indicação de quem falou é uma estimativa");
     expect(texto).toContain("as antigas não são transcritas");
   });

@@ -4029,7 +4029,12 @@ com as MESMAS funções de banco que o worker chama — nada vai ao provedor de 
 | J48.14 O resumo que falha não derruba a transcrição: o texto fica, sem resumo e sem quem falou | `[P1]` | unidade |
 | J48.15 Ligação longa (mais de 400 trechos): vai em blocos; resumo parcial nunca é mostrado como o da ligação | `[P1]` | unidade |
 | J48.16 Transcrever nunca custa a gravação: o gancho que lança não muda o desfecho dela | `[P0]` | unidade (`gravacoes.test.ts`) |
-| J48.17 Anonimizar o contato apaga a transcrição, pelo botão da ficha e pela cascata; a exportação de dados do titular a inclui | `[P0]` | Postgres real (a exportação: só a leitura do código — sem teste próprio) |
+| J48.17 Anonimizar o contato apaga a transcrição, pelo botão da ficha e pela cascata; o membro que escreve o campo direto pela REST não apaga nada | `[P0]` | Postgres real |
+| J48.20 Excluir pela tela o contato (ou a conversa) de quem tem cartão de ligação segue funcionando, e leva a transcrição junto — o defeito que a revisão achou na primeira versão | `[P0]` | Postgres real, com o JWT de um membro |
+| J48.21 A exportação de dados do titular diz quais ligações têm transcrição e não leva o texto (o bucket dela é lido por qualquer membro) | `[P0]` | unidade (`lgpd-exporta-o-que-redige.test.ts`, lendo o coletor e a policy do bucket) |
+| J48.22 Teto de gasto de IA atingido: nada é baixado nem enviado, a ligação espera, e no limite o aviso diz que foi o teto | `[P1]` | unidade (`transcricoes.test.ts`); o gate em si é o do resto do produto |
+| J48.23 O banco tropeça ao gravar o resultado: insiste, e o que já foi pago ao provedor não é refeito | `[P1]` | unidade |
+| J48.24 O worker cai no meio: a reserva conta a tentativa, e a ligação que o derruba não volta para sempre | `[P1]` | Postgres real (a contagem) e unidade (o limite) — a queda de verdade não foi provocada |
 | J48.18 Passado o prazo de guarda, a transcrição é apagada junto com a gravação | `[P1]` | Postgres real |
 | J48.19 Organização que desliga a transcrição: o pedido pendente é descartado e nada vai ao provedor | `[P0]` | unidade; Postgres real |
 
@@ -4046,6 +4051,12 @@ com as MESMAS funções de banco que o worker chama — nada vai ao provedor de 
   transcritor; a fatura da OpenAI não foi conferida contra ele.
 - **Espanhol.** O idioma da organização vai ao transcritor e ao pedido do resumo; nenhuma ligação em
   espanhol foi transcrita.
-- **Ligação com transferência** (três vozes) e **ligação de 2 h** (o teto da gravação).
+- **Ligação com transferência** (três vozes).
+- **Ligação muito longa.** O transcritor tem de responder em menos de 300 s (o corte do `fetch` do
+  Node). No ritmo medido isso dá para cerca de 1 h 45 de ligação; acima disso, até o teto de 2 h da
+  gravação, a transcrição deve falhar e o cartão dizer que não saiu. Não foi medido — nenhuma
+  gravação tem esse tamanho. O conserto (fatiar a ligação) tem tarefa própria.
+- **O teto de gasto de verdade.** O portão é o mesmo do resto do produto e está ligado por código;
+  nenhuma organização com o teto estourado teve uma ligação gravada.
 - **O worker caindo no meio de uma transcrição.** A reserva de 45 min e a retomada são lidas no
   código e provadas por partes (a reserva, no Postgres); a queda de verdade não foi provocada.
