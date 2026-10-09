@@ -91,6 +91,14 @@ export const POLITICAS_DE_AVISO = {
     orientacao: "Confira se o serviço de telefonia está de pé. As próximas ligações seguem sendo gravadas; esta gravação se perdeu.",
     geral: { papel: "admin", href: "/app/connections?aba=telefone&sub=gravacao", rotulo: "Abrir a gravação do telefone" },
   },
+  // Sem referência: o que se conserta é a chave do provedor ou a política — e as
+  // duas se alcançam pela aba da gravação, onde mora a chave liga/desliga da
+  // transcrição e o caminho para os provedores de IA.
+  phone_transcription_failed: {
+    refs: [],
+    orientacao: "Confira a chave da OpenAI em Agente de IA › Provedores, ou desligue a transcrição. As gravações seguem sendo guardadas.",
+    geral: { papel: "admin", href: "/app/connections?aba=telefone&sub=gravacao", rotulo: "Abrir a gravação do telefone" },
+  },
   phone_emergency_expired: {
     refs: [],
     orientacao: "Se a instabilidade continua, ligue o aviso de novo no time.",

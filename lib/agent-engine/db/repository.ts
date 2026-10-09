@@ -80,6 +80,9 @@ export type InboxKind =
   | 'phone_menu_team_archived'
   // (migration 0289) A gravação de uma ligação não pôde ser guardada em 30 min.
   | 'phone_recording_failed'
+  // (migration 0298) A transcrição de uma ligação gravada não saiu: falta a
+  // chave do provedor, ou ele recusou todas as tentativas.
+  | 'phone_transcription_failed'
   | 'other';
 
 export interface InboxItemRow {

@@ -100,6 +100,13 @@ export interface PortasDaGravacao {
   conversor: ConversorDaGravacao;
   log: Registro;
   agora?: () => Date;
+  /**
+   * A gravação foi GUARDADA (arquivo no Storage, ligação `stored`). É por aqui
+   * que a transcrição (F4, `transcricoes.ts`) fica sabendo — depois, nunca
+   * antes: nada do que ela faça pode custar a gravação. Quem implementa não
+   * lança; se lançar, o erro morre aqui.
+   */
+  aoGuardar?: (org: string, vcId: string) => void;
 }
 
 /** O que aconteceu ao processar uma gravação — para o log e para os testes. */
@@ -259,6 +266,7 @@ export class GravacoesDaTelefonia implements PortaGravacao {
       await this.p.ari.apagarGravacao(nome).catch(() => undefined);
       this.jaAvisadas.delete(g.vcId);
       this.p.log.info("telefonia: gravação guardada", { voice_call: g.vcId, desfecho: r, bytes });
+      if (r === "anexada") this.avisarQueGuardou(g);
       return r;
     } catch (e) {
       if (idade() >= PRAZO_TOTAL_DA_GRAVACAO_MS) return await this.perder(g, mensagemDe(e));
@@ -273,6 +281,18 @@ export class GravacoesDaTelefonia implements PortaGravacao {
     } finally {
       this.emCurso.delete(g.vcId);
       if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /** O gancho da transcrição. Isolado: o que ele lançar não muda o desfecho da gravação. */
+  private avisarQueGuardou(g: GravacaoPendente): void {
+    try {
+      this.p.aoGuardar?.(g.organizationId, g.vcId);
+    } catch (e) {
+      this.p.log.warn("telefonia: o aviso de gravação guardada falhou — a passada da transcrição a pega", {
+        voice_call: g.vcId,
+        erro: mensagemDe(e),
+      });
     }
   }
 
@@ -384,8 +404,14 @@ function storageDaInstalacao(): StorageDaGravacao {
 }
 
 /** As gravações do worker: a ARI da telefonia, o pool do worker, o Storage da instalação e o ffmpeg da imagem. */
-export function gravacoesDoWorker(pool: pg.Pool, ari: ClienteAri, log: Registro): GravacoesDaTelefonia {
+export function gravacoesDoWorker(
+  pool: pg.Pool,
+  ari: ClienteAri,
+  log: Registro,
+  aoGuardar?: (org: string, vcId: string) => void,
+): GravacoesDaTelefonia {
   return new GravacoesDaTelefonia({
+    ...(aoGuardar ? { aoGuardar } : {}),
     ari: {
       gravarPonte: (p, n, t) => ari.gravarPonte(p, n, t),
       pararGravacao: (n) => ari.pararGravacao(n),

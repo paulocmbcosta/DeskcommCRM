@@ -13,7 +13,8 @@
  * ficou "em andamento" depois de ela acabar (fila visível, entrega 1) — que não
  * dependem da ARI — e as GRAVAÇÕES das ligações que ficaram por guardar (F3,
  * `gravacoes.ts`), que dependem: com o Asterisk fora, só essa etapa falha, e
- * tenta no minuto seguinte.
+ * tenta no minuto seguinte. E as TRANSCRIÇÕES das ligações gravadas (F4,
+ * `transcricoes.ts`), que não dependem da ARI: leem o arquivo do Storage.
  *
  * Sem `TELEFONIA_ARI_URL`/`TELEFONIA_ARI_PASSWORD` o laço não sobe — a
  * telefonia é um profile opcional do compose (spec 20 §4.3). Nem a passada: o
@@ -26,6 +27,7 @@ import { ClienteAri, ErroAri, configAriDoAmbiente, type CanalAri } from "./ari";
 import { ControladorDeChamadas, type EventoAri, type PortaAri, type PortaBanco, type Registro } from "./controle";
 import { falasDoWorker, type FalasNoDisco } from "./falas-no-disco";
 import { gravacoesDoWorker, type GravacoesDaTelefonia } from "./gravacoes";
+import { transcricoesDoWorker, type TranscricoesDaTelefonia } from "./transcricoes";
 import { idDoRamal } from "./pjsip";
 import * as repo from "./repositorio";
 import { SincronizadorDeTroncos } from "./sincronizacao";
@@ -129,6 +131,11 @@ export interface DependenciasDaPassada {
    * Asterisk. Ausente = a instalação não tem como guardar (sem Storage): nada a fazer.
    */
   gravacoes?: Pick<GravacoesDaTelefonia, "passada"> | null;
+  /**
+   * As transcrições das ligações (F4): repor o pedido perdido e fazer as
+   * pendentes. Não depende da ARI. Ausente = a instalação não tem Storage: nada a fazer.
+   */
+  transcricoes?: Pick<TranscricoesDaTelefonia, "passada"> | null;
   /** `repo.desligarAvisosVencidos` com o pool do worker: desliga, audita e avisa na Central. */
   desligarAvisosVencidos: (agora: Date) => Promise<repo.AvisoDesligado[]>;
   /**
@@ -233,6 +240,16 @@ export function passadaDoTelefone(d: DependenciasDaPassada): () => Promise<void>
       await g.passada();
     });
   });
+  // Guarda própria, e separada da das gravações: transcrever uma ligação longa
+  // leva minutos (medido: 76 s para 29 min de áudio), e nesse tempo as gravações
+  // das outras ligações têm de seguir sendo guardadas.
+  const transcricoes = semReentrancia(async () => {
+    const t = d.transcricoes;
+    if (!t) return;
+    await etapa("transcrições das ligações", async () => {
+      await t.passada();
+    });
+  });
   // O cartão "em andamento" de ligação que já acabou: o fim fechou a ligação no
   // banco e não conseguiu completar o cartão. Sem isto ele diria "em andamento" para sempre.
   const cartoes = semReentrancia(() =>
@@ -246,7 +263,7 @@ export function passadaDoTelefone(d: DependenciasDaPassada): () => Promise<void>
 
   return async () => {
     if (desligando()) return;
-    await Promise.all([avisos(), storage(), gravacoes(), cartoes()]);
+    await Promise.all([avisos(), storage(), gravacoes(), transcricoes(), cartoes()]);
   };
 }
 
@@ -293,9 +310,18 @@ export async function runTelefoniaLoop(opts: {
   const falas = falasDoWorker(opts.pool, registroQueCalaAoDesligar(opts.log, opts.signal));
   // Sem cliente do Storage não há onde guardar: melhor não gravar do que gravar
   // arquivos que ninguém vai ouvir (e que o Asterisk acumularia).
+  // A transcrição (F4) nasce antes das gravações, que a avisam quando guardam
+  // uma. Sem ela, as ligações seguem sendo gravadas como sempre.
+  let transcricoes: TranscricoesDaTelefonia | null = null;
+  try {
+    transcricoes = transcricoesDoWorker(opts.pool, registroQueCalaAoDesligar(opts.log, opts.signal));
+  } catch (e) {
+    opts.log.error("telefonia: sem cliente do Storage — as ligações não serão transcritas", { erro: String(e).slice(0, 200) });
+  }
+  const avisarATranscricao = transcricoes ? (org: string, vcId: string) => transcricoes?.aoGuardar(org, vcId) : undefined;
   let gravacoes: GravacoesDaTelefonia | null = null;
   try {
-    gravacoes = gravacoesDoWorker(opts.pool, ari, opts.log);
+    gravacoes = gravacoesDoWorker(opts.pool, ari, opts.log, avisarATranscricao);
   } catch (e) {
     opts.log.error("telefonia: sem cliente do Storage — as ligações não serão gravadas", { erro: String(e).slice(0, 200) });
   }
@@ -325,6 +351,7 @@ export async function runTelefoniaLoop(opts: {
   const passada = passadaDoTelefone({
     falas,
     gravacoes,
+    transcricoes,
     desligarAvisosVencidos: (agora) => repo.desligarAvisosVencidos(opts.pool, agora),
     consertarCartoes: () => repo.consertarCartoesOrfaos(opts.pool),
     log: opts.log,

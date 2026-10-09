@@ -153,6 +153,10 @@ vi.mock("./falas-no-disco", async (importOriginal) => ({
 }));
 // As gravações (F3) têm teste próprio (gravacoes.test.ts); aqui, só a passada que as chama.
 vi.mock("./gravacoes", () => ({ gravacoesDoWorker: vi.fn(() => ({ passada: vi.fn(async () => undefined) })) }));
+// As transcrições (F4) também (transcricoes.test.ts).
+vi.mock("./transcricoes", () => ({
+  transcricoesDoWorker: vi.fn(() => ({ passada: vi.fn(async () => undefined), aoGuardar: vi.fn() })),
+}));
 vi.mock("./repositorio", async (importOriginal) => ({
   ...(await importOriginal<typeof ModuloRepositorio>()),
   desligarAvisosVencidos: vi.fn(),
@@ -301,6 +305,41 @@ describe("passadaDoTelefone — as etapas de 60 s", () => {
     expect(log.warn).toHaveBeenCalledTimes(1);
     expect(log.warn).toHaveBeenCalledWith("telefonia: a passada de gravações das ligações falhou — tenta de novo a cada minuto", {
       erro: "Error: ari 503",
+    });
+  });
+
+  it("as transcrições das ligações (F4): rodam em cada passada, com guarda PRÓPRIA — uma transcrição longa não segura as gravações", async () => {
+    const falas = falasFalsas();
+    const gravacoes = { passada: vi.fn(async () => undefined) };
+    let soltar: () => void = () => undefined;
+    const transcricoes = {
+      passada: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            soltar = resolve;
+          }),
+      ),
+    };
+    const log = registro();
+    const passada = passadaDoTelefone({ falas, gravacoes, transcricoes, desligarAvisosVencidos: async () => [], log });
+
+    // A 1ª passada fica presa na transcrição; a 2ª, um minuto depois, não a
+    // reentra — mas guarda as gravações do mesmo jeito.
+    const primeira = passada();
+    await new Promise((r) => setTimeout(r, 0));
+    await passada();
+    expect(transcricoes.passada).toHaveBeenCalledTimes(1);
+    expect(gravacoes.passada).toHaveBeenCalledTimes(2);
+    soltar();
+    await primeira;
+
+    transcricoes.passada.mockRejectedValue(new Error("banco fora"));
+    await passada();
+    await passada();
+    expect(gravacoes.passada).toHaveBeenCalledTimes(4);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith("telefonia: a passada de transcrições das ligações falhou — tenta de novo a cada minuto", {
+      erro: "Error: banco fora",
     });
   });
 

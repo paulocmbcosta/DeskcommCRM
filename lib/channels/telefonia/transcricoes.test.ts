@@ -1,0 +1,407 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { TRECHOS_POR_BLOCO } from "@/lib/telefonia/resumo-da-ligacao";
+
+import type { ContextoDaTranscricao, TranscricaoPendente } from "./repositorio-das-transcricoes";
+import {
+  CENTAVOS_POR_MINUTO_DO_TRANSCRITOR,
+  ESPERAS_S,
+  MAX_TENTATIVAS,
+  PRAZO_TOTAL_MS,
+  TranscricoesDaTelefonia,
+  avisoDeFalha,
+  avisoSemChave,
+  classeDoErro,
+  type PortasDaTranscricao,
+} from "./transcricoes";
+
+const ORG = "0be7a70c-0000-4000-8000-000000000001";
+const VC = "0be7a70c-0000-4000-8000-0000000000aa";
+const CONVERSA = "0be7a70c-0000-4000-8000-0000000000bb";
+const MENSAGEM = "0be7a70c-0000-4000-8000-0000000000cc";
+const CAMINHO = `${ORG}/${CONVERSA}/${MENSAGEM}.mp3`;
+const AGORA = new Date("2026-10-09T15:00:00Z");
+
+const contexto = (p: Partial<ContextoDaTranscricao> = {}): ContextoDaTranscricao => ({
+  sentido: "recebida",
+  empresa: "Totus Telecom",
+  idioma: "pt-BR",
+  ligada: true,
+  gravacao: "stored",
+  anonimizado: false,
+  contactId: "0be7a70c-0000-4000-8000-0000000000dd",
+  conversationId: CONVERSA,
+  mensagemId: MENSAGEM,
+  caminho: CAMINHO,
+  ...p,
+});
+
+const pendente = (p: Partial<TranscricaoPendente> = {}): TranscricaoPendente => ({
+  vcId: VC,
+  organizationId: ORG,
+  tentativas: 0,
+  pedidaEm: new Date(AGORA.getTime() - 5_000),
+  ...p,
+});
+
+const FALA_SECRETA = "meu CPF é 123 e moro na Rua das Flores";
+
+function dubles(p: { ctx?: ContextoDaTranscricao | null; chave?: string | null } = {}) {
+  const registros: Array<{ nivel: string; msg: string; campos?: Record<string, unknown> }> = [];
+  const banco = {
+    pedir: vi.fn(async () => true),
+    pedirAsQueFaltam: vi.fn(async () => 0),
+    reservar: vi.fn(async (): Promise<TranscricaoPendente[]> => []),
+    reservarUma: vi.fn(async (): Promise<TranscricaoPendente | null> => pendente()),
+    contexto: vi.fn(async () => (p.ctx === undefined ? contexto() : p.ctx)),
+    concluir: vi.fn(async (_p: Parameters<PortasDaTranscricao["banco"]["concluir"]>[0]) => "gravada" as const),
+    reagendar: vi.fn(async () => undefined),
+    falhar: vi.fn(async () => true),
+    avisar: vi.fn(async () => undefined),
+    descartar: vi.fn(async () => undefined),
+    registrarUso: vi.fn(async (_p: Parameters<PortasDaTranscricao["banco"]["registrarUso"]>[0]) => undefined),
+  };
+  const arquivo = { baixar: vi.fn(async () => Buffer.from([1, 2, 3])) };
+  const transcritor = {
+    chave: vi.fn(async () => (p.chave === undefined ? "sk-org" : p.chave)),
+    transcrever: vi.fn(async () => ({
+      text: `Totus, boa tarde. ${FALA_SECRETA}`,
+      language: "portuguese",
+      durationSeconds: 120,
+      segments: [
+        { start: 0, end: 1.9, text: "Totus, boa tarde." },
+        { start: 2.4, end: 6, text: FALA_SECRETA },
+      ],
+    })),
+  };
+  const resumidor = {
+    perguntar: vi.fn(async (_org: string, _pedido: { system: string; user: string }) =>
+      JSON.stringify({ resumo: "O cliente informou os dados para o cadastro.", falas: [[1, "A"], [2, "C"]] }),
+    ),
+  };
+  const log = {
+    info: (msg: string, campos?: Record<string, unknown>) => registros.push({ nivel: "info", msg, campos }),
+    warn: (msg: string, campos?: Record<string, unknown>) => registros.push({ nivel: "warn", msg, campos }),
+    error: (msg: string, campos?: Record<string, unknown>) => registros.push({ nivel: "error", msg, campos }),
+  };
+  const servico = new TranscricoesDaTelefonia({ banco, arquivo, transcritor, resumidor, log, agora: () => AGORA });
+  return { servico, banco, arquivo, transcritor, resumidor, registros };
+}
+
+describe("TranscricoesDaTelefonia — o caminho de uma ligação", () => {
+  it("baixa a gravação, transcreve, resume e grava: texto, trechos com quem falou e resumo", async () => {
+    const d = dubles();
+    expect(await d.servico.processar(pendente())).toBe("pronta");
+
+    expect(d.arquivo.baixar).toHaveBeenCalledWith(CAMINHO);
+    expect(d.transcritor.transcrever).toHaveBeenCalledWith("sk-org", expect.any(Buffer), "pt");
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(gravado).toMatchObject({
+      organizationId: ORG,
+      vcId: VC,
+      estado: "ready",
+      texto: `Totus, boa tarde. ${FALA_SECRETA}`,
+      resumo: "O cliente informou os dados para o cadastro.",
+      modelo: "whisper-1",
+      duracaoMs: 120_000,
+    });
+    expect(gravado.trechos).toEqual([
+      { inicio_ms: 0, fim_ms: 1900, quem: "atendente", texto: "Totus, boa tarde." },
+      { inicio_ms: 2400, fim_ms: 6000, quem: "cliente", texto: FALA_SECRETA },
+    ]);
+  });
+
+  it("o pedido ao modelo leva a empresa, o sentido e os trechos numerados", async () => {
+    const d = dubles({ ctx: contexto({ sentido: "feita", idioma: "es" }) });
+    await d.servico.processar(pendente());
+    const pedido = d.resumidor.perguntar.mock.calls[0]![1];
+    expect(pedido.system).toContain("Totus Telecom");
+    expect(pedido.system).toContain("em espanhol");
+    expect(pedido.user).toContain("feita (a empresa ligou para o cliente)");
+    expect(pedido.user).toContain("1. Totus, boa tarde.");
+    expect(d.transcritor.transcrever).toHaveBeenCalledWith("sk-org", expect.any(Buffer), "es");
+  });
+
+  it("registra o uso do transcritor com o custo pelo tempo de áudio", async () => {
+    const d = dubles();
+    await d.servico.processar(pendente());
+    expect(d.banco.registrarUso).toHaveBeenCalledTimes(1);
+    expect(d.banco.registrarUso.mock.calls[0]![0]).toMatchObject({
+      organizationId: ORG,
+      proposito: "transcricao_de_ligacao",
+      modelo: "whisper-1",
+      custoCents: 2 * CENTAVOS_POR_MINUTO_DO_TRANSCRITOR,
+      erro: null,
+    });
+  });
+
+  it("NENHUMA linha de log leva o texto da ligação nem a chave", async () => {
+    const d = dubles();
+    await d.servico.processar(pendente());
+    const tudo = JSON.stringify(d.registros);
+    expect(d.registros.length).toBeGreaterThan(0);
+    expect(tudo).not.toContain("CPF");
+    expect(tudo).not.toContain("boa tarde");
+    expect(tudo).not.toContain("sk-org");
+    expect(tudo).not.toContain("cadastro");
+  });
+
+  it("gravação sem fala: fica `empty`, e o modelo de conversa nem é chamado", async () => {
+    const d = dubles();
+    d.transcritor.transcrever.mockResolvedValueOnce({ text: "", language: null, durationSeconds: 3, segments: [] });
+    expect(await d.servico.processar(pendente())).toBe("sem_fala");
+    expect(d.banco.concluir.mock.calls[0]![0]).toMatchObject({ estado: "empty", texto: null, trechos: [], resumo: null });
+    expect(d.resumidor.perguntar).not.toHaveBeenCalled();
+  });
+
+  it("a mesma ligação pedida duas vezes ao mesmo tempo só é feita uma", async () => {
+    const d = dubles();
+    const [a, b] = await Promise.all([d.servico.processar(pendente()), d.servico.processar(pendente())]);
+    expect([a, b].sort()).toEqual(["em_curso", "pronta"]);
+    expect(d.transcritor.transcrever).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TranscricoesDaTelefonia — quando o pedido deixou de valer", () => {
+  it.each([
+    ["a organização desligou a transcrição", contexto({ ligada: false })],
+    ["o contato foi anonimizado", contexto({ anonimizado: true })],
+    ["a gravação venceu", contexto({ gravacao: "expired" })],
+    ["a ligação sumiu", null],
+    ["o arquivo não é o da gravação", contexto({ caminho: `${ORG}/${CONVERSA}/outra-mensagem.mp3` })],
+    ["a mensagem da ligação não existe", contexto({ mensagemId: null, caminho: null })],
+  ])("%s: descarta, e NADA vai ao provedor", async (_nome, ctx) => {
+    const d = dubles({ ctx });
+    expect(await d.servico.processar(pendente())).toBe("descartada");
+    expect(d.banco.descartar).toHaveBeenCalledWith(ORG, VC);
+    expect(d.transcritor.chave).not.toHaveBeenCalled();
+    expect(d.arquivo.baixar).not.toHaveBeenCalled();
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
+    expect(d.resumidor.perguntar).not.toHaveBeenCalled();
+    expect(d.banco.concluir).not.toHaveBeenCalled();
+  });
+
+  it("anonimizada no meio do caminho: a gravação do texto é recusada pelo banco e o desfecho é `descartada`", async () => {
+    const d = dubles();
+    d.banco.concluir.mockResolvedValueOnce("descartada" as never);
+    expect(await d.servico.processar(pendente())).toBe("descartada");
+  });
+});
+
+describe("TranscricoesDaTelefonia — quando falha", () => {
+  it("sem chave: a Central é avisada já na primeira vez, e a ligação volta para a fila", async () => {
+    const d = dubles({ chave: null });
+    expect(await d.servico.processar(pendente())).toBe("adiada");
+    expect(d.banco.avisar).toHaveBeenCalledWith(ORG, avisoSemChave("pt-BR"));
+    expect(d.banco.reagendar).toHaveBeenCalledWith(ORG, VC, ESPERAS_S[0], "sem_chave");
+    expect(d.arquivo.baixar).not.toHaveBeenCalled();
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
+  });
+
+  it("sem chave até a última tentativa: dada como perdida, com o aviso da chave", async () => {
+    const d = dubles({ chave: null });
+    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS - 1 }))).toBe("falhou");
+    expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "sem_chave", avisoSemChave("pt-BR"));
+    expect(d.banco.reagendar).not.toHaveBeenCalled();
+  });
+
+  it("o provedor recusa: conta a tentativa, registra o erro e espera cada vez mais", async () => {
+    for (const [tentativas, espera] of [
+      [0, ESPERAS_S[0]],
+      [1, ESPERAS_S[1]],
+      [3, ESPERAS_S[3]],
+    ] as const) {
+      const d = dubles();
+      d.transcritor.transcrever.mockRejectedValueOnce(new Error("transcription_429"));
+      expect(await d.servico.processar(pendente({ tentativas }))).toBe("adiada");
+      expect(d.banco.reagendar).toHaveBeenCalledWith(ORG, VC, espera, "transcription_429");
+      expect(d.banco.registrarUso.mock.calls[0]![0]).toMatchObject({ erro: "transcription_429", custoCents: null });
+      expect(d.banco.concluir).not.toHaveBeenCalled();
+    }
+  });
+
+  it("na última tentativa a transcrição é dada como perdida e a Central avisa", async () => {
+    const d = dubles();
+    d.transcritor.transcrever.mockRejectedValueOnce(new Error("transcription_401"));
+    expect(await d.servico.processar(pendente({ tentativas: MAX_TENTATIVAS - 1 }))).toBe("falhou");
+    expect(d.banco.falhar).toHaveBeenCalledWith(ORG, VC, "transcription_401", avisoDeFalha("pt-BR"));
+  });
+
+  it("passou do prazo total desde o pedido: perdida, mesmo com tentativas sobrando", async () => {
+    const d = dubles();
+    d.transcritor.transcrever.mockRejectedValueOnce(new Error("transcription_503"));
+    const velha = pendente({ tentativas: 1, pedidaEm: new Date(AGORA.getTime() - PRAZO_TOTAL_MS - 1) });
+    expect(await d.servico.processar(velha)).toBe("falhou");
+  });
+
+  it("o Storage não entrega o arquivo: nova tentativa, sem chamar o provedor", async () => {
+    const d = dubles();
+    d.arquivo.baixar.mockRejectedValueOnce(new Error("storage_download"));
+    expect(await d.servico.processar(pendente())).toBe("adiada");
+    expect(d.banco.reagendar).toHaveBeenCalledWith(ORG, VC, ESPERAS_S[0], "storage_download");
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
+    expect(d.banco.registrarUso).not.toHaveBeenCalled();
+  });
+
+  it("o banco fora no meio: não lança, e a ligação volta quando a reserva vencer", async () => {
+    const d = dubles();
+    d.banco.contexto.mockRejectedValueOnce(new Error("connection terminated unexpectedly"));
+    expect(await d.servico.processar(pendente())).toBe("adiada");
+    // A mensagem crua do erro não vai ao log — só a classe.
+    expect(JSON.stringify(d.registros)).not.toContain("connection terminated");
+  });
+
+  it("a telemetria que falha não derruba a transcrição", async () => {
+    const d = dubles();
+    d.banco.registrarUso.mockRejectedValueOnce(new Error("llm_calls fora"));
+    expect(await d.servico.processar(pendente())).toBe("pronta");
+  });
+});
+
+describe("TranscricoesDaTelefonia — o resumo nunca derruba a transcrição", () => {
+  it("o modelo de conversa falha: o texto é guardado sem resumo e sem quem falou", async () => {
+    const d = dubles();
+    d.resumidor.perguntar.mockRejectedValueOnce(new Error("budget_exceeded"));
+    expect(await d.servico.processar(pendente())).toBe("pronta");
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(gravado.estado).toBe("ready");
+    expect(gravado.resumo).toBeNull();
+    expect(gravado.trechos.map((t) => t.quem)).toEqual([null, null]);
+    expect(gravado.texto).toContain("Totus, boa tarde.");
+  });
+
+  it("resposta que não é o formato pedido: mesma coisa — e o texto do transcritor não muda", async () => {
+    const d = dubles();
+    d.resumidor.perguntar.mockResolvedValueOnce("Desculpe, não posso ajudar com isso.");
+    expect(await d.servico.processar(pendente())).toBe("pronta");
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(gravado.resumo).toBeNull();
+    expect(gravado.trechos.map((t) => t.texto)).toEqual(["Totus, boa tarde.", FALA_SECRETA]);
+  });
+
+  it("o modelo NÃO reescreve a ligação: o que ele devolver além das letras é ignorado", async () => {
+    const d = dubles();
+    d.resumidor.perguntar.mockResolvedValueOnce(
+      JSON.stringify({ resumo: "Ok.", falas: [[1, "C"], [2, "A"]], trechos: ["texto inventado", "outro"] }),
+    );
+    await d.servico.processar(pendente());
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(gravado.trechos.map((t) => t.texto)).toEqual(["Totus, boa tarde.", FALA_SECRETA]);
+    expect(gravado.trechos.map((t) => t.quem)).toEqual(["cliente", "atendente"]);
+  });
+});
+
+describe("TranscricoesDaTelefonia — a ligação longa vai em blocos", () => {
+  const longa = (n: number) => ({
+    text: "x",
+    language: "portuguese",
+    durationSeconds: n * 3,
+    segments: Array.from({ length: n }, (_, i) => ({ start: i * 3, end: i * 3 + 2, text: `trecho ${i + 1}` })),
+  });
+  const respostaDoBloco = (pedido: { user: string }, resumo: string | null) => {
+    const numeros = [...pedido.user.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    return JSON.stringify({ ...(resumo ? { resumo } : {}), falas: numeros.map((n) => [n, n % 2 ? "A" : "C"]) });
+  };
+
+  it("cada bloco leva o resumo até ali, e o resumo final é o do último", async () => {
+    const d = dubles();
+    const n = 2 * TRECHOS_POR_BLOCO + 50;
+    d.transcritor.transcrever.mockResolvedValueOnce(longa(n));
+    let bloco = 0;
+    d.resumidor.perguntar.mockImplementation(async (_org, pedido) => respostaDoBloco(pedido, `resumo ${(bloco += 1)}`));
+
+    expect(await d.servico.processar(pendente())).toBe("pronta");
+    expect(d.resumidor.perguntar).toHaveBeenCalledTimes(3);
+    const pedidos = d.resumidor.perguntar.mock.calls.map((c) => c[1]);
+    expect(pedidos[0]!.user).not.toContain("Resumo até aqui");
+    expect(pedidos[1]!.user).toContain("Resumo até aqui: resumo 1");
+    expect(pedidos[2]!.user).toContain("Resumo até aqui: resumo 2");
+    expect(pedidos[1]!.user).toContain(`${TRECHOS_POR_BLOCO + 1}. trecho ${TRECHOS_POR_BLOCO + 1}`);
+
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(gravado.resumo).toBe("resumo 3");
+    expect(gravado.trechos).toHaveLength(n);
+    expect(gravado.trechos.every((t) => t.quem !== null)).toBe(true);
+    expect(gravado.trechos[TRECHOS_POR_BLOCO]!.quem).toBe("atendente");
+  });
+
+  it("um bloco sem resumo: a ligação fica SEM resumo (um resumo parcial mentiria), mas quem falou vale", async () => {
+    const d = dubles();
+    d.transcritor.transcrever.mockResolvedValueOnce(longa(TRECHOS_POR_BLOCO + 10));
+    let bloco = 0;
+    d.resumidor.perguntar.mockImplementation(async (_org, pedido) =>
+      respostaDoBloco(pedido, (bloco += 1) === 1 ? null : "só o fim"),
+    );
+    await d.servico.processar(pendente());
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(gravado.resumo).toBeNull();
+    expect(gravado.trechos.every((t) => t.quem !== null)).toBe(true);
+    // O bloco seguinte não recebe como "até aqui" um resumo que não existe.
+    expect(d.resumidor.perguntar.mock.calls[1]![1].user).not.toContain("Resumo até aqui");
+  });
+
+  it("o modelo para de responder no meio: sem resumo, e o que já foi marcado fica", async () => {
+    const d = dubles();
+    d.transcritor.transcrever.mockResolvedValueOnce(longa(TRECHOS_POR_BLOCO + 10));
+    d.resumidor.perguntar
+      .mockImplementationOnce(async (_org, pedido) => respostaDoBloco(pedido, "começo"))
+      .mockRejectedValueOnce(new Error("resumo_sem_resposta"));
+    expect(await d.servico.processar(pendente())).toBe("pronta");
+    const gravado = d.banco.concluir.mock.calls[0]![0];
+    expect(gravado.resumo).toBeNull();
+    expect(gravado.trechos[0]!.quem).toBe("atendente");
+    expect(gravado.trechos[TRECHOS_POR_BLOCO]!.quem).toBeNull();
+  });
+});
+
+describe("TranscricoesDaTelefonia — o pedido", () => {
+  const assentar = () => new Promise((r) => setTimeout(r, 0));
+
+  it("aoGuardar: pede, reserva e transcreve logo", async () => {
+    const d = dubles();
+    d.servico.aoGuardar(ORG, VC);
+    await assentar();
+    await assentar();
+    expect(d.banco.pedir).toHaveBeenCalledWith(ORG, VC);
+    expect(d.banco.reservarUma).toHaveBeenCalledWith(ORG, VC, expect.any(Number));
+    expect(d.banco.concluir).toHaveBeenCalledTimes(1);
+  });
+
+  it("aoGuardar: organização que não ligou a transcrição não gera pedido nem ida ao provedor", async () => {
+    const d = dubles();
+    d.banco.pedir.mockResolvedValueOnce(false);
+    d.servico.aoGuardar(ORG, VC);
+    await assentar();
+    expect(d.banco.reservarUma).not.toHaveBeenCalled();
+    expect(d.transcritor.transcrever).not.toHaveBeenCalled();
+  });
+
+  it("aoGuardar NUNCA lança — quem chama é o processamento da gravação", async () => {
+    const d = dubles();
+    d.banco.pedir.mockRejectedValueOnce(new Error("relation voice_call_transcripts does not exist"));
+    expect(() => d.servico.aoGuardar(ORG, VC)).not.toThrow();
+    await assentar();
+    expect(d.registros.some((r) => r.nivel === "warn")).toBe(true);
+  });
+
+  it("a passada repõe o pedido perdido e faz as pendentes em série, na ordem", async () => {
+    const d = dubles();
+    const outra = "0be7a70c-0000-4000-8000-0000000000ee";
+    d.banco.pedirAsQueFaltam.mockResolvedValueOnce(2);
+    d.banco.reservar.mockResolvedValueOnce([pendente(), pendente({ vcId: outra })]);
+    await d.servico.passada();
+    expect(d.banco.pedirAsQueFaltam).toHaveBeenCalledTimes(1);
+    expect(d.banco.concluir.mock.calls.map((c) => c[0].vcId)).toEqual([VC, outra]);
+  });
+});
+
+describe("classeDoErro", () => {
+  it("deixa passar só os códigos deste módulo; o resto vira o nome do erro", () => {
+    expect(classeDoErro(new Error("transcription_429"))).toBe("transcription_429");
+    expect(classeDoErro(new Error("download_sem_resposta"))).toBe("download_sem_resposta");
+    expect(classeDoErro("sem_chave")).toBe("sem_chave");
+    expect(classeDoErro(new TypeError("fetch failed: o cliente disse que mora na Rua X"))).toBe("TypeError");
+    expect(classeDoErro({ qualquer: "coisa" })).toBe("erro");
+    expect(classeDoErro("Texto com espaço")).toBe("erro");
+  });
+});
