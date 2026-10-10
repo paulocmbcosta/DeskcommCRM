@@ -12,6 +12,14 @@
  * falas), o interruptor não liga — e a rota recusa do mesmo jeito (409), porque
  * a regra é do servidor e a tela só a espelha. Desligar e mudar a retenção nunca
  * dependem do aviso.
+ *
+ * A TRANSCRIÇÃO (F4): um segundo interruptor, desligado por padrão. Só liga com
+ * a gravação ligada (não há o que transcrever sem ela) e com uma chave da OpenAI
+ * cadastrada — a rota recusa do mesmo jeito (409). Desligar nunca depende de
+ * nada. A tela diz o que quem liga precisa saber antes: para onde vão o áudio
+ * (a OpenAI) e o texto (o modelo de conversa da organização — que pode ser de
+ * outro provedor), que custa e conta no teto de gasto, que vale só daqui para
+ * frente e que "quem falou" é estimativa.
  */
 import Link from "next/link";
 import { useState } from "react";
@@ -35,6 +43,8 @@ import { TelefoniaDesligada } from "./TelefoniaDesligada";
 
 /** Onde se gera o aviso: a aba Voz e falas. */
 const ABA_DAS_FALAS = "/app/connections?aba=telefone&sub=falas";
+/** Onde se cadastra a chave que transcreve. */
+const PROVEDORES_DE_IA = "/app/ai/providers";
 
 /** Como a tela diz cada retenção. Os valores vêm da rota; um que falte aqui sai em dias. */
 const NOME_DA_RETENCAO: Record<number, string> = {
@@ -55,18 +65,25 @@ export function GravacaoDasLigacoes() {
   // `null` = a pessoa não mexeu: vale o que está salvo.
   const [ativa, setAtiva] = useState<boolean | null>(null);
   const [retencao, setRetencao] = useState<number | null>(null);
+  const [transcrever, setTranscrever] = useState<boolean | null>(null);
 
   const salvar = useMutation({
-    mutationFn: (p: { ativa: boolean; retencao_dias: number }) => apiClient.put("/api/v1/telefonia/gravacao", p),
+    mutationFn: (p: { ativa: boolean; retencao_dias: number; transcrever: boolean; soATranscricaoMudou: boolean }) =>
+      apiClient.put("/api/v1/telefonia/gravacao", { ativa: p.ativa, retencao_dias: p.retencao_dias, transcrever: p.transcrever }),
     onSuccess: async (_r, p) => {
       toast.success(
-        p.ativa
-          ? t("Gravação ligada. As próximas ligações serão gravadas, com o aviso no começo.")
-          : t("Gravação desligada. As próximas ligações não serão gravadas."),
+        p.soATranscricaoMudou
+          ? p.transcrever
+            ? t("Transcrição ligada. As próximas ligações gravadas serão transcritas.")
+            : t("Transcrição desligada. As próximas ligações não serão transcritas.")
+          : p.ativa
+            ? t("Gravação ligada. As próximas ligações serão gravadas, com o aviso no começo.")
+            : t("Gravação desligada. As próximas ligações não serão gravadas."),
       );
       await qc.invalidateQueries({ queryKey: CHAVE_DA_GRAVACAO });
       setAtiva(null);
       setRetencao(null);
+      setTranscrever(null);
     },
     onError: (e) => showApiError(e),
   });
@@ -84,9 +101,16 @@ export function GravacaoDasLigacoes() {
   const avisoPronto = dados.aviso?.status === "ready";
   const ativaNaTela = ativa ?? dados.ativa;
   const retencaoNaTela = retencao ?? dados.retencao_dias;
-  const mudou = ativaNaTela !== dados.ativa || retencaoNaTela !== dados.retencao_dias;
+  const transcreverNaTela = transcrever ?? dados.transcrever;
+  const gravacaoMudou = ativaNaTela !== dados.ativa || retencaoNaTela !== dados.retencao_dias;
+  const transcricaoMudou = transcreverNaTela !== dados.transcrever;
+  const mudou = gravacaoMudou || transcricaoMudou;
   // Ligar pede o aviso pronto; desligar, nunca.
   const podeLigar = avisoPronto || dados.ativa;
+  // Ligar a transcrição pede a gravação ligada (na tela) e uma chave; `null` é
+  // "não sei" — a tela não afirma que falta, e a rota decide. Desligar, nunca.
+  const semChave = dados.transcricao_com_chave === false;
+  const podeTranscrever = ativaNaTela && !semChave;
   const nomeDaRetencao = (dias: number) => {
     const nome = NOME_DA_RETENCAO[dias];
     const rotulo = nome ? t(nome) : trocarMarcador(t("{dias} dias"), "{dias}", String(dias));
@@ -173,9 +197,48 @@ export function GravacaoDasLigacoes() {
           </p>
         </div>
 
+        <div
+          className="space-y-2 border-t pt-4"
+          data-transcricao-do-telefone={dados.transcrever ? "ligada" : "desligada"}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="tel-transcrever">{t("Transcrever as ligações gravadas")}</Label>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "Depois de cada ligação gravada, o sistema escreve o que foi dito e um resumo curto. Os dois aparecem no cartão da ligação, dentro da conversa. Vale para as ligações gravadas daqui para frente: as antigas não são transcritas.",
+                )}
+              </p>
+            </div>
+            <Switch
+              id="tel-transcrever"
+              checked={transcreverNaTela}
+              disabled={salvar.isPending || (!transcreverNaTela && !podeTranscrever)}
+              onCheckedChange={(v) => setTranscrever(v)}
+            />
+          </div>
+          {semChave ? (
+            <p className="text-xs text-muted-foreground" data-transcricao-sem-chave>
+              {t("Para transcrever, cadastre antes uma chave da OpenAI.")}{" "}
+              <Link href={PROVEDORES_DE_IA} className="underline underline-offset-2">
+                {t("Abrir os provedores de IA")}
+              </Link>
+            </p>
+          ) : !ativaNaTela ? (
+            <p className="text-xs text-muted-foreground" data-transcricao-sem-gravacao>
+              {t("A transcrição depende da gravação: ligue a gravação das ligações para poder transcrever.")}
+            </p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "O áudio da ligação é enviado à OpenAI para ser transcrito, e o texto que volta vai ao modelo de IA escolhido em Agente de IA › Provedores, que escreve o resumo e indica quem falou. A OpenAI cobra por minuto de áudio, na conta da chave usada, e os dois gastos contam no teto de gasto de IA. O texto é feito por máquina a partir de áudio de telefone: pode errar nomes, números e endereços, e a indicação de quem falou é uma estimativa.",
+            )}
+          </p>
+        </div>
+
         <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
           {t(
-            "Quem ouve: atendentes, gestores e administradores que enxergam a conversa. Cada vez que alguém ouve uma gravação, fica registrado na auditoria. Anonimizar um contato apaga as gravações das ligações dele.",
+            "Quem ouve e quem lê a transcrição: atendentes, gestores e administradores que enxergam a conversa. Cada vez que alguém ouve uma gravação ou abre uma transcrição, fica registrado na auditoria. A transcrição é apagada junto com a gravação, no fim do prazo de guarda. Anonimizar um contato apaga as gravações e as transcrições das ligações dele.",
           )}
         </div>
 
@@ -183,7 +246,16 @@ export function GravacaoDasLigacoes() {
           <Button
             type="button"
             disabled={!mudou || salvar.isPending}
-            onClick={() => salvar.mutate({ ativa: ativaNaTela, retencao_dias: retencaoNaTela })}
+            onClick={() =>
+              salvar.mutate({
+                ativa: ativaNaTela,
+                retencao_dias: retencaoNaTela,
+                // Desligar a gravação com a transcrição ligada: a transcrição fica
+                // como estava (sem gravação ela não faz nada, e volta junto).
+                transcrever: transcreverNaTela,
+                soATranscricaoMudou: transcricaoMudou && !gravacaoMudou,
+              })
+            }
           >
             {salvar.isPending ? t("Salvando…") : t("Salvar")}
           </Button>

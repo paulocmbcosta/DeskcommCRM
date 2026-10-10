@@ -38,7 +38,15 @@ const AVISO: FalaPublica = {
   atualizada_em: "2026-09-29T22:00:00.000Z",
 };
 
-let servidor: { oferecida: boolean; ativa: boolean; retencao_dias: number; retencoes: number[]; aviso: FalaPublica | null };
+let servidor: {
+  oferecida: boolean;
+  ativa: boolean;
+  retencao_dias: number;
+  retencoes: number[];
+  aviso: FalaPublica | null;
+  transcrever: boolean;
+  transcricao_com_chave: boolean | null;
+};
 let respostaDoPut: (corpo: Record<string, unknown>) => Response;
 
 const json = (status: number, corpo: unknown) =>
@@ -64,10 +72,18 @@ beforeEach(() => {
   fetchFalso.mockClear();
   vi.mocked(showApiError).mockClear();
   vi.stubGlobal("fetch", fetchFalso);
-  servidor = { oferecida: true, ativa: false, retencao_dias: 90, retencoes: [30, 60, 90, 180, 365, 730, 1825], aviso: null };
+  servidor = {
+    oferecida: true,
+    ativa: false,
+    retencao_dias: 90,
+    retencoes: [30, 60, 90, 180, 365, 730, 1825],
+    aviso: null,
+    transcrever: false,
+    transcricao_com_chave: true,
+  };
   respostaDoPut = (c) => {
-    servidor = { ...servidor, ativa: Boolean(c.ativa), retencao_dias: Number(c.retencao_dias) };
-    return json(200, { data: { ativa: c.ativa, retencao_dias: c.retencao_dias } });
+    servidor = { ...servidor, ativa: Boolean(c.ativa), retencao_dias: Number(c.retencao_dias), transcrever: Boolean(c.transcrever) };
+    return json(200, { data: { ativa: c.ativa, retencao_dias: c.retencao_dias, transcrever: c.transcrever } });
   };
 });
 
@@ -81,6 +97,7 @@ function pintar() {
 }
 
 const interruptor = () => screen.getByRole("switch", { name: "Gravar as ligações" });
+const transcricao = () => screen.getByRole("switch", { name: "Transcrever as ligações gravadas" });
 const salvar = () => screen.getByRole("button", { name: "Salvar" });
 const puts = () =>
   fetchFalso.mock.calls.filter(([, i]) => i?.method === "PUT").map(([, i]) => JSON.parse(String(i!.body)));
@@ -114,7 +131,7 @@ describe("aba Gravação", () => {
     await u.click(screen.getByRole("combobox", { name: "Guardar as gravações por" }));
     await u.click(await screen.findByRole("option", { name: "1 ano" }));
     await u.click(salvar());
-    await waitFor(() => expect(puts()).toEqual([{ ativa: true, retencao_dias: 365 }]));
+    await waitFor(() => expect(puts()).toEqual([{ ativa: true, retencao_dias: 365, transcrever: false }]));
     await waitFor(() => expect(document.querySelector('[data-gravacao-do-telefone="ligada"]')).not.toBeNull());
   }, 30_000);
 
@@ -127,7 +144,93 @@ describe("aba Gravação", () => {
     const u = userEvent.setup({ delay: null });
     await u.click(interruptor());
     await u.click(salvar());
-    await waitFor(() => expect(puts()).toEqual([{ ativa: false, retencao_dias: 90 }]));
+    await waitFor(() => expect(puts()).toEqual([{ ativa: false, retencao_dias: 90, transcrever: false }]));
+  });
+
+  it("transcrição: com a gravação desligada o interruptor não liga, e a tela diz por quê", async () => {
+    pintar();
+    await screen.findByText("Gravação das ligações");
+    expect(transcricao()).not.toBeChecked();
+    expect(transcricao()).toBeDisabled();
+    expect(document.querySelector("[data-transcricao-sem-gravacao]")).not.toBeNull();
+    expect(document.querySelector("[data-transcricao-sem-chave]")).toBeNull();
+  });
+
+  it("transcrição: sem chave da OpenAI não liga, e aponta onde cadastrar", async () => {
+    servidor.ativa = true;
+    servidor.aviso = AVISO;
+    servidor.transcricao_com_chave = false;
+    pintar();
+    await screen.findByText("Gravação das ligações");
+    expect(transcricao()).toBeDisabled();
+    expect(document.querySelector("[data-transcricao-sem-chave]")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Abrir os provedores de IA" })).toHaveAttribute("href", "/app/ai/providers");
+  });
+
+  it("transcrição: a rota não soube dizer se há chave — a tela não afirma que falta, e deixa tentar", async () => {
+    servidor.ativa = true;
+    servidor.aviso = AVISO;
+    servidor.transcricao_com_chave = null;
+    pintar();
+    await screen.findByText("Gravação das ligações");
+    expect(transcricao()).toBeEnabled();
+    expect(document.querySelector("[data-transcricao-sem-chave]")).toBeNull();
+  });
+
+  it("transcrição: com a gravação ligada e a chave cadastrada, liga e salva os três campos", async () => {
+    servidor.ativa = true;
+    servidor.aviso = AVISO;
+    pintar();
+    await screen.findByText("Gravação das ligações");
+    expect(salvar()).toBeDisabled();
+    const u = userEvent.setup({ delay: null });
+    await u.click(transcricao());
+    await u.click(salvar());
+    await waitFor(() => expect(puts()).toEqual([{ ativa: true, retencao_dias: 90, transcrever: true }]));
+    await waitFor(() => expect(document.querySelector('[data-transcricao-do-telefone="ligada"]')).not.toBeNull());
+    const { toast } = await import("sonner");
+    expect(toast.success).toHaveBeenCalledWith("Transcrição ligada. As próximas ligações gravadas serão transcritas.");
+  });
+
+  it("transcrição: ligar a gravação e a transcrição juntas, num salvar só", async () => {
+    servidor.aviso = AVISO;
+    pintar();
+    await screen.findByText("Gravação das ligações");
+    const u = userEvent.setup({ delay: null });
+    expect(transcricao()).toBeDisabled();
+    await u.click(interruptor());
+    expect(transcricao()).toBeEnabled();
+    await u.click(transcricao());
+    await u.click(salvar());
+    await waitFor(() => expect(puts()).toEqual([{ ativa: true, retencao_dias: 90, transcrever: true }]));
+  });
+
+  it("transcrição: ligada e a chave sumiu — desligar continua possível", async () => {
+    servidor.ativa = true;
+    servidor.aviso = AVISO;
+    servidor.transcrever = true;
+    servidor.transcricao_com_chave = false;
+    pintar();
+    await screen.findByText("Gravação das ligações");
+    expect(transcricao()).toBeChecked();
+    expect(transcricao()).toBeEnabled();
+    const u = userEvent.setup({ delay: null });
+    await u.click(transcricao());
+    await u.click(salvar());
+    await waitFor(() => expect(puts()).toEqual([{ ativa: true, retencao_dias: 90, transcrever: false }]));
+  });
+
+  it("transcrição: a tela avisa para onde vão o áudio E o texto (dois operadores), que custa, que conta no teto e que 'quem falou' é estimativa", async () => {
+    pintar();
+    await screen.findByText("Gravação das ligações");
+    const texto = document.body.textContent ?? "";
+    expect(texto).toContain("enviado à OpenAI");
+    // O resumo é feito pelo modelo de conversa da organização — que pode ser de outro provedor.
+    expect(texto).toContain("o texto que volta vai ao modelo de IA escolhido em Agente de IA › Provedores");
+    expect(texto).toContain("cobra por minuto de áudio");
+    expect(texto).toContain("contam no teto de gasto de IA");
+    expect(texto).toContain("a indicação de quem falou é uma estimativa");
+    expect(texto).toContain("as antigas não são transcritas");
   });
 
   it("a recusa da rota (409 sem aviso) chega à pessoa", async () => {

@@ -109,6 +109,13 @@ const FORA_DO_SEAM: Record<string, { arquivo: string; marcador: string }> = {
     arquivo: "lib/messaging/media/transcription.ts",
     marcador: "/v1/audio/transcriptions",
   },
+  // A gravação da ligação vai ao MESMO serviço de transcrição, por outra porta
+  // (trechos com tempo). O marcador é a chamada que só este ponto faz: apagar a
+  // transcrição das ligações reprova aqui, mesmo com o áudio do WhatsApp de pé.
+  transcricao_de_ligacao: {
+    arquivo: "lib/channels/telefonia/transcricoes.ts",
+    marcador: "transcreverGravacao(",
+  },
   contagem_de_tokens: {
     arquivo: "lib/agent-engine/edge/llm/count-tokens.ts",
     marcador: "count_tokens",

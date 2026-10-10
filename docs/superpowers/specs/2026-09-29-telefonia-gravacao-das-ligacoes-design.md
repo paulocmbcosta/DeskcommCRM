@@ -156,7 +156,7 @@ mensagem numa conversa invisível, que nada expõe.
 
 ## 5. Fora da v1 (e onde encaixa)
 
-- Transcrição (F4): `media.derive_requested` para a mensagem da ligação.
+- Transcrição (F4): `media.derive_requested` para a mensagem da ligação. **(Emenda de 2026-10-09: não foi por aí. Medido ao fazer a F4, esse caminho recusa a mensagem da ligação, corta em 8.000 caracteres e exporia o texto a quem não pode ouvir — ver `2026-10-09-telefonia-transcricao-das-ligacoes-design.md`, §2.1. A D7, acima, fica como registro do que se achava.)**
 - Gravação por número/time; canais separados (atendente × cliente) para
   diarização — exigiria gravar cada canal por *snoop*, não a ponte.
 - Arquivo da gravação na exportação LGPD (hoje: a lista de ligações gravadas).

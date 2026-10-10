@@ -309,6 +309,44 @@ async function aplicarOrcamento(d: {
   throw erro;
 }
 
+/**
+ * O TETO DE GASTO PARA QUEM FALA COM UM PROVEDOR DE IA FORA DESTE SEAM.
+ *
+ * Nem toda chamada paga passa por `runModelCall`: o transcritor das ligações
+ * gravadas (`lib/channels/telefonia/transcricoes.ts`) fala com o serviço de
+ * transcrição por HTTP, porque não é um modelo de conversa. Só que o custo dele
+ * entra em `llm_calls` — e portanto na soma do mês que este gate lê. Sem passar
+ * por aqui, a transcrição seguiria gastando com o teto estourado e, pior,
+ * gastaria o orçamento que mantém o agente respondendo o cliente sem nunca ser
+ * parada por ele.
+ *
+ * É o MESMO gate, sem cópia da regra: mesma leitura, mesmo veredito, mesmo aviso
+ * na Central, e a recusa gravada em `llm_calls` com o propósito de quem chamou.
+ * Lança `LlmBudgetExceededError` quando o veredito é bloquear; em qualquer outro
+ * caso (teto desligado, só aviso, leitura que falhou) volta sem lançar.
+ */
+export async function conferirOrcamento(
+  db: pg.Pool,
+  cfg: LlmEdgeConfig,
+  p: { tenantId: string; contactId?: string | null; purpose: string; provider: string; model: string },
+  deps: Pick<RunModelCallDeps, 'log'> = {},
+): Promise<void> {
+  const config = await resolveOrgLlmConfig(db, cfg, p.tenantId, { provider: p.provider });
+  await aplicarOrcamento({
+    db,
+    organizationId: p.tenantId,
+    orcamentoDaConfig: config.orcamento,
+    orcamentoIndisponivelPorque: config.orcamentoIndisponivelPorque,
+    chave: cfg.budgetEnforcement ?? 'on',
+    purpose: p.purpose,
+    provider: p.provider,
+    model: p.model,
+    origem: 'fixo_do_produto',
+    input: { tenantId: p.tenantId, leadId: p.contactId ?? null, purpose: p.purpose, messages: [] },
+    ...(deps.log ? { log: deps.log } : {}),
+  });
+}
+
 export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunModelCallInput, deps: RunModelCallDeps = {}) {
   const registry = deps.registry ?? createDefaultRegistry();
   const purpose = input.purpose ?? 'agent_turn';

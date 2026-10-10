@@ -19,6 +19,9 @@
  * abrir a conversa não conta como escuta. Quem não alcança o piso de papel
  * (`voice.recording.listen`) vê que a ligação foi gravada, sem o botão.
  *
+ * Transcrição (F4): embaixo da gravação, o resumo da ligação e o "Ver
+ * transcrição" (`TranscricaoDaLigacao.tsx`) — para quem pode ouvir a gravação.
+ *
  * A feita que ninguém atendeu (0294): o selo diz QUEM ligou, e a linha de baixo
  * diz por quanto tempo o telefone do cliente chamou e quem encerrou — quem ligou
  * ou a rede. Sem isso, deixar chamar até o fim e dar um toque e desligar eram a
@@ -45,7 +48,9 @@ import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
 import { comoAcabouASaidaSemResposta, tempoDeToque, type FimDaSaidaSemResposta } from "@/lib/telefonia/fim-da-saida";
 import { gravacaoDaLigacao, type GravacaoDaLigacao } from "@/lib/telefonia/gravacao";
+import { transcricaoDaLigacao, type TranscricaoNoCartao } from "@/lib/telefonia/transcricao";
 import { fraseDoElo } from "@/lib/telefonia/texto-da-transferencia";
+import { LinhaDaTranscricao } from "@/components/telefonia/TranscricaoDaLigacao";
 import {
   MOTIVO_FORA_DO_HORARIO,
   acoesNaFilaDaLigacao,
@@ -76,6 +81,12 @@ export interface MetadadoDaLigacao {
   ouviu_aviso?: boolean;
   /** A gravação (F3), lida por `gravacaoDaLigacao`; ausente = não gravada. */
   gravacao?: GravacaoDaLigacao | null;
+  /**
+   * A transcrição (F4), lida por `transcricaoDaLigacao`: a situação e, para quem
+   * pode ouvir a gravação, o resumo — como a LISTAGEM os entrega. Ausente = não
+   * transcrita, ou quem lê não pode ver.
+   */
+  transcricao?: TranscricaoNoCartao | null;
   /** A corrente de transferências (v2), lida por `transferenciasDaLigacao`; vazia = não houve. */
   transferencias?: TransferenciaDaLigacao[];
   /** O que se fez com a ligação na fila (entrega 3), lido por `acoesNaFilaDaLigacao`; vazia = nada. */
@@ -96,6 +107,7 @@ export function ligacaoDaMensagem(metadata: unknown): MetadadoDaLigacao | null {
     menu: menuDaLigacao(v.menu),
     ouviu_aviso: v.ouviu_aviso === true,
     gravacao: gravacaoDaLigacao(v.gravacao),
+    transcricao: transcricaoDaLigacao(v.transcricao),
     transferencias: transferenciasDaLigacao(v.transferencias),
     fila: acoesNaFilaDaLigacao(v.fila),
   };
@@ -430,6 +442,10 @@ export function CartaoDaLigacao({
       ) : null}
       {ligacao.gravacao ? (
         <LinhaDaGravacao vcId={ligacao.id} gravacao={ligacao.gravacao} podeOuvir={podeOuvirGravacao} />
+      ) : null}
+      {/* A transcrição é a gravação por escrito: vale o piso de papel de quem ouve. */}
+      {ligacao.transcricao ? (
+        <LinhaDaTranscricao vcId={ligacao.id} transcricao={ligacao.transcricao} podeLer={podeOuvirGravacao} />
       ) : null}
     </div>
   );

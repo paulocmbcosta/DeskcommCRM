@@ -320,6 +320,18 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     registraEm: "llm_calls",
   },
   {
+    id: "resumo_de_ligacao",
+    rotulo: "Resumir a ligação e indicar quem falou",
+    oQueFaz:
+      "Lê a transcrição de uma ligação gravada, escreve um resumo curto e indica, trecho a trecho, se quem falou foi o atendente ou o cliente. A indicação é uma estimativa pelo conteúdo, porque a gravação mistura as duas vozes. O texto da transcrição não é reescrito.",
+    papel: "entender",
+    exige: {},
+    emissor: "lib/channels/telefonia/transcricoes.ts",
+    sintomaDeFalha:
+      "A ligação é transcrita, mas o cartão fica sem o resumo e a transcrição não diz quem falou cada trecho.",
+    registraEm: "llm_calls",
+  },
+  {
     id: "followup_classify",
     rotulo: "Ler a resposta ao follow-up",
     oQueFaz:
@@ -472,6 +484,27 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     sintomaDeFalha:
       "O cliente manda áudio e o agente responde como se não tivesse recebido nada.",
     registraEm: "nenhum",
+  },
+  {
+    id: "transcricao_de_ligacao",
+    rotulo: "Transcrever as ligações gravadas",
+    oQueFaz:
+      "Transforma a gravação de uma ligação do telefone em texto, com o momento de cada trecho. O texto aparece no cartão da ligação, para quem pode ouvir a gravação. Só roda com a transcrição ligada em Conexões › Telefone › Gravação.",
+    papel: "perceber",
+    exige: { audio: true },
+    emissor: "lib/channels/telefonia/transcricoes.ts",
+    fixo: {
+      razao:
+        "Usa o serviço de transcrição da OpenAI, o mesmo do áudio do WhatsApp, com a chave da OpenAI cadastrada aqui ou a da instalação. Um modelo de conversa não transcreve áudio, por isso este ponto não entra na troca de modelos deste painel.",
+      // O mesmo modelo do áudio do WhatsApp, e por medição: em 2026-10-09, com
+      // gravações reais de telefone, foi o único transcritor da OpenAI que não
+      // perdeu fala e aceitou a ligação de 28 min (cabeçalho de
+      // lib/telefonia/resumo-da-ligacao.ts).
+      usa: { provider: "openai", modelId: "whisper-1" },
+    },
+    sintomaDeFalha:
+      "A ligação é gravada normalmente, mas o cartão dela diz que não foi possível transcrever, e a Central avisa.",
+    registraEm: "llm_calls",
   },
   {
     id: "visao_de_imagem",

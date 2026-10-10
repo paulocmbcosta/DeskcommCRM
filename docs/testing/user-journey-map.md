@@ -3989,3 +3989,79 @@ não). Migration 0297 (um índice em `atendimentos`). Desenho:
 - **O limite de visibilidade.** Em instalação onde o atendente só vê as próprias conversas, um
   atendimento que ele encerrou some das Fechadas dele quando o cliente volta e outro atende — a regra é
   da policy de `atendimentos`, que esta entrega não tocou. Tem tarefa própria.
+
+## J48 — Ler a ligação em vez de ouvir: transcrição e resumo no cartão `[P0]` (2026-10-09)
+
+Pedido do dono: a ligação gravada só podia ser ouvida, e ouvir custa o tempo da ligação inteira
+(medido na Totus, 30/09 a 09/10: 180 gravações, 98 escutas por 13 pessoas). O cartão da ligação
+passa a mostrar um **resumo** e o botão **"Ver transcrição"**, que abre a conversa com a indicação
+de quem falou. Desligado por padrão; liga em Conexões › Telefone › Gravação, e vale só para as
+ligações gravadas daí para frente.
+
+Migration 0298 (`voice_call_transcripts`, a política em `phone_settings`). Desenho, com a sonda
+de qualidade feita em gravações reais e as decisões tomadas na ausência do dono:
+`docs/superpowers/specs/2026-10-09-telefonia-transcricao-das-ligacoes-design.md`. Mapa:
+`docs/architecture/telefonia.architecture.json` (peças `transcricoes`, `t_transcricoes`,
+`rota_transcricao`, `listagem_transcricao`, `cartao_transcricao`).
+
+**Como é provado.** O serviço do worker (pedir, baixar, transcrever, resumir, cada falha, a
+ligação longa em blocos) com dublês em `lib/channels/telefonia/transcricoes.test.ts`; o SQL no
+Postgres real em `tests/invariants/telefonia-transcricao.test.ts` (com duas organizações); as
+rotas, a listagem, o cartão e a aba em unidade; e a tela em
+`tests/e2e/telefonia-transcricao.spec.ts`, que semeia a ligação gravada e escreve a transcrição
+com as MESMAS funções de banco que o worker chama — nada vai ao provedor de IA no teste.
+
+| Caso | Prioridade | Resultado |
+|---|---|---|
+| J48.1 Instalação sem chave da OpenAI (primeiro deploy): o interruptor "Transcrever as ligações gravadas" não liga, a tela aponta onde cadastrar, e a rota recusa com 409 do mesmo jeito | `[P0]` | e2e; unidade (`GravacaoDasLigacoes.test.tsx`, `gravacao/route.test.ts`) |
+| J48.2 Com a chave: o admin liga e salva; o banco guarda a política com o instante de agora; a auditoria registra o antes e o depois | `[P0]` | e2e; Postgres real |
+| J48.3 Só daqui para frente: a ligação gravada antes de ligar não vira pedido — nem pela passada que repõe pedido perdido | `[P0]` | e2e; Postgres real |
+| J48.4 Ligação gravada com a transcrição ligada: o cartão diz "Transcrevendo a ligação…" | `[P0]` | e2e |
+| J48.5 A transcrição fica pronta: o MESMO cartão mostra o resumo ("feito por IA") e "Ver transcrição", sem recarregar a página | `[P0]` | e2e |
+| J48.6 "Ver transcrição": a janela lista quem falou, quando e o quê; avisa que é texto de máquina e que quem falou é estimativa; cabe na tela e rola por dentro (medido) | `[P0]` | e2e (1440 px e 390 px); `CartaoDaLigacao.test.tsx` |
+| J48.7 Cada abertura da janela é uma linha `phone.transcript_read`; abrir a conversa, nenhuma; a auditoria não guarda o texto | `[P0]` | e2e; unidade da rota |
+| J48.8 Leitor (viewer) do mesmo time: vê a ligação e nada da transcrição — nem na tela, nem na listagem, nem pela rota (403) | `[P0]` | e2e; unidade (`transcricao-da-ligacao.test.ts`) |
+| J48.9 A tabela não sai pela REST do Supabase: nem para o leitor, nem para o atendente, nem sem login | `[P0]` | e2e (Supabase de verdade, com o default ACL dele); Postgres real |
+| J48.10 O texto nunca entra na linha de `messages` (que o Realtime leva inteira ao navegador): só a situação | `[P0]` | e2e; Postgres real |
+| J48.11 Gravação sem fala: "A gravação não tem fala para transcrever." | `[P1]` | e2e; unidade |
+| J48.12 A transcrição falha em todas as tentativas: o cartão diz, e a Central abre o aviso com "Abrir a gravação do telefone" | `[P1]` | e2e; unidade |
+| J48.13 Sem chave no meio do caminho: a Central avisa já na primeira ligação, e as tentativas seguem com espera crescente | `[P1]` | unidade (`transcricoes.test.ts`) |
+| J48.14 O resumo que falha não derruba a transcrição: o texto fica, sem resumo e sem quem falou | `[P1]` | unidade |
+| J48.15 Ligação longa (mais de 400 trechos): vai em blocos; resumo parcial nunca é mostrado como o da ligação | `[P1]` | unidade |
+| J48.16 Transcrever nunca custa a gravação: o gancho que lança não muda o desfecho dela | `[P0]` | unidade (`gravacoes.test.ts`) |
+| J48.17 Anonimizar o contato apaga a transcrição, pelo botão da ficha e pela cascata; o membro que escreve o campo direto pela REST não apaga nada | `[P0]` | Postgres real |
+| J48.20 Excluir pela tela o contato (ou a conversa) de quem tem cartão de ligação segue funcionando, e leva a transcrição junto — o defeito que a revisão achou na primeira versão | `[P0]` | Postgres real, com o JWT de um membro |
+| J48.21 A exportação de dados do titular diz quais ligações têm transcrição e não leva o texto (o bucket dela é lido por qualquer membro) | `[P0]` | unidade (`lgpd-exporta-o-que-redige.test.ts`, lendo o coletor e a policy do bucket) |
+| J48.22 Teto de gasto de IA atingido: nada é baixado nem enviado, a ligação espera, e no limite o aviso diz que foi o teto e aponta a tela onde ele se ajusta (Agente de IA › Uso e orçamento). A ligação que esgotou as tentativas NÃO é refeita quando o teto sobe | `[P1]` | unidade (`transcricoes.test.ts`); o gate em si é o do resto do produto |
+| J48.23 O banco tropeça ao gravar o resultado: insiste, e o que já foi pago ao provedor não é refeito | `[P1]` | unidade |
+| J48.25 Contato marcado como anonimizado com a transcrição ainda na tabela (um membro escreveu o campo pela REST): a leitura recusa — o cartão cala, a listagem não entrega nem a situação, a rota responde 404 e nada é auditado | `[P0]` | tela (`telefonia-transcricao.spec.ts`, com a escrita feita pela REST do Supabase com o login do atendente) e unidade (rota e leitor) |
+| J48.26 A gravação do resultado espera a trava da anonimização com prazo DENTRO do banco: vencido, a transação desfaz e nada é escrito depois; tentativa abandonada não grava | `[P1]` | Postgres real (a trava presa por outra sessão) e unidade (a marca de abandonada) |
+| J48.27 Atualizar a instalação não devolve a função que leva a transcrição junto com a mensagem apagada ao estado antigo, nem por um instante — e o trigger dela não é derrubado e recriado | `[P1]` | unidade (`baseline-funcao-redefinida-sem-janela.test.ts`: as duas cópias no baseline são idênticas; o trigger é criado só se faltar) — a atualização com o banco em uso não foi medida |
+| J48.29 Na primeira atualização de uma instalação anterior a esta versão, excluir uma conversa com cartão de ligação segue funcionando no meio da atualização (a tabela das transcrições ainda não existe) | `[P0]` | Postgres real (a tabela renomeada dentro de uma transação; sem a conferência, 42P01) |
+| J48.28 A exportação de dados do titular não afirma "sem transcrição" quando não conseguiu ler: o campo fica ausente | `[P2]` | unidade (`lgpd-export-transcricao-da-ligacao.test.ts`) |
+| J48.24 O worker cai no meio: a reserva conta a tentativa, e a ligação que o derruba não volta para sempre | `[P1]` | Postgres real (a contagem) e unidade (o limite) — a queda de verdade não foi provocada |
+| J48.18 Passado o prazo de guarda, a transcrição é apagada junto com a gravação | `[P1]` | Postgres real |
+| J48.19 Organização que desliga a transcrição: o pedido pendente é descartado e nada vai ao provedor | `[P0]` | unidade; Postgres real |
+
+**O que NÃO foi provado.**
+
+- **Uma ligação de verdade, do fim da chamada ao texto no cartão.** O caminho inteiro — o Asterisk
+  grava, o worker guarda, baixa do Storage, manda à OpenAI, resume e grava — só roda numa instalação
+  com telefonia, chave e a transcrição ligada. Depende de release e de o dono ligar o interruptor.
+  As duas metades foram medidas em separado: a OpenAI com gravações reais (a sonda do desenho, §2.3),
+  e o resto com dublês e no Postgres.
+- **A qualidade no dia a dia.** A sonda leu 10 gravações. Não há taxa de erro por palavra (ninguém
+  comparou com a escuta), nem medida de quantas vezes "quem falou" erra.
+- **O custo cobrado.** O valor por minuto que vai para a tela de Execuções é o preço público do
+  transcritor; a fatura da OpenAI não foi conferida contra ele.
+- **Espanhol.** O idioma da organização vai ao transcritor e ao pedido do resumo; nenhuma ligação em
+  espanhol foi transcrita.
+- **Ligação com transferência** (três vozes).
+- **Ligação muito longa.** O transcritor tem de responder em menos de 300 s (o corte do `fetch` do
+  Node). No ritmo medido isso dá para cerca de 1 h 45 de ligação; acima disso, até o teto de 2 h da
+  gravação, a transcrição deve falhar e o cartão dizer que não saiu. Não foi medido — nenhuma
+  gravação tem esse tamanho. O conserto (fatiar a ligação) tem tarefa própria.
+- **O teto de gasto de verdade.** O portão é o mesmo do resto do produto e está ligado por código;
+  nenhuma organização com o teto estourado teve uma ligação gravada.
+- **O worker caindo no meio de uma transcrição.** A reserva de 45 min e a retomada são lidas no
+  código e provadas por partes (a reserva, no Postgres); a queda de verdade não foi provocada.

@@ -7,7 +7,7 @@ import { type NextRequest } from "next/server";
 
 import { ApiError } from "@/lib/api/types";
 import { fail, ok } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { listMessagesQuerySchema } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -58,7 +58,10 @@ export async function GET(req: NextRequest, ctx: RouteCtx): Promise<Response> {
       supabase,
       {
         organization_id: activeOrg.orgId,
-        actor: { type: "user", id: user.id },
+        // O papel vai junto: é por ele que a listagem decide entregar o resumo
+        // da ligação transcrita (atendente ou acima, como a escuta da gravação).
+        actor: { type: "user", id: user.id, role: activeOrg.role },
+        sessaoSemDividaDeMfa: async () => !(await mfaEmDivida()),
         requestId,
         idioma: authUser?.idioma,
       },

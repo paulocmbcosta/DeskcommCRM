@@ -105,3 +105,37 @@ describe("LGPD: o export alcança tudo que a redação alcança", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * O TEXTO DA LIGAÇÃO NÃO VAI PARA O RELATÓRIO — só a situação da transcrição.
+ *
+ * O `data.json` do relatório é gravado em `lgpd-exports`, e a policy desse
+ * bucket (`tenant_read_lgpd_exports`) deixa qualquer membro da organização ler,
+ * sem papel. A transcrição de uma ligação só pode ser lida por atendente para
+ * cima que enxerga a conversa, com a leitura auditada, e é apagada junto com a
+ * gravação. Pôr `text` ou `summary` no relatório criaria uma cópia fora de todas
+ * essas regras, que nada apaga (achado da revisão de segurança da 0298).
+ *
+ * As duas pontas são lidas da fonte: enquanto a policy do bucket for de
+ * qualquer membro, o coletor não pode selecionar o conteúdo.
+ */
+describe("LGPD: o relatório não leva o texto das ligações enquanto o bucket for de qualquer membro", () => {
+  const selects = [...COLETOR.matchAll(/\.from\("voice_call_transcripts"\)\s*\.select\(\s*"([^"]+)"/g)].map((m) => m[1] ?? "");
+  const policyDoBucket = /create policy "tenant_read_lgpd_exports"[\s\S]*?;/i.exec(BASELINE)?.[0] ?? "";
+
+  it("CONTROLE: o coletor lê a tabela das transcrições, e a policy do bucket foi achada", () => {
+    expect(selects.length).toBeGreaterThan(0);
+    expect(policyDoBucket).toContain("lgpd-exports");
+  });
+
+  it("o coletor seleciona só a ligação e a situação", () => {
+    for (const colunas of selects) {
+      const lista = colunas.split(",").map((c) => c.trim()).sort();
+      expect(lista).toEqual(["status", "voice_call_id"]);
+    }
+  });
+
+  it("a razão ainda vale: a policy do bucket não confere papel (se um dia conferir, esta trava pode ser revista — com a revisão do bucket junto)", () => {
+    expect(policyDoBucket).not.toMatch(/fn_role_at_least|role\s*(=|in)\s*/i);
+  });
+});

@@ -294,6 +294,41 @@ describe("mapas de arquitetura — coerência interna", () => {
     ).toBe(true);
   });
 
+  it("a TRANSCRIÇÃO das ligações (F4) está no mapa da telefonia, e nenhuma peça nova é ilha", () => {
+    // DoD 13 para a F4 (desenho docs/superpowers/specs/2026-10-09-telefonia-transcricao-das-ligacoes-design.md):
+    // a gravação guardada é transcrita no worker, o texto mora em tabela que o
+    // navegador não lê, chega ao cartão pela listagem (resumo) e pela leitura
+    // auditada (texto), e é apagado pela retenção e pela anonimização.
+    const m = JSON.parse(
+      fs.readFileSync(path.join(DIR, "telefonia.architecture.json"), "utf8"),
+    ) as Mapa & { cards?: Array<{ title: string; items: string[] }> };
+    const grau = (id: string) =>
+      (m.edges ?? []).filter((e) => e.from === id || e.to === id).length;
+    for (const peca of ["transcricoes", "t_transcricoes", "ia_transcricao", "rota_transcricao", "listagem_transcricao", "cartao_transcricao"]) {
+      expect(grau(peca), `${peca} com menos de 2 arestas — é ilha pelo invariante 1`).toBeGreaterThanOrEqual(2);
+    }
+    const arestas = (m.edges ?? []).map((e) => `${e.from}→${e.to}`);
+    expect(arestas).toEqual(
+      expect.arrayContaining([
+        "gravacoes→transcricoes",
+        "laco→transcricoes",
+        "transcricoes→ia_transcricao",
+        "transcricoes→t_transcricoes",
+        "transcricoes→t_inbox",
+        "cartao_transcricao→rota_transcricao",
+        "rota_transcricao→t_audit",
+        "listagem_transcricao→cartao_transcricao",
+        "poda_gravacoes→t_transcricoes",
+        "t_contacts→t_transcricoes",
+      ]),
+    );
+    const laco = (m.cards ?? []).find((c) => /TRANSCRIÇÃO/.test(c.title) && /invariante 7/.test(c.title));
+    expect(laco?.items.length ?? 0, "falta o cartão do laço de retorno da transcrição").toBeGreaterThan(0);
+    // O laço que NÃO fecha tem de estar escrito: quem falou é estimativa, e o
+    // erro dela não volta ao sistema. Um mapa que omitisse isso mentiria.
+    expect(laco?.items.some((i) => /LAÇO ABERTO/.test(i) && /ESTIMATIVA/.test(i))).toBe(true);
+  });
+
   it("a TRANSFERÊNCIA e os RAMAIS (fase 2, v2 e v3) estão no mapa da telefonia, e nenhuma peça nova é ilha", () => {
     // DoD 13 para a emenda §12 do desenho: a ordem sai da tela, passa pela API e
     // pela ARI, o worker age e grava o desfecho; o ramal nasce no banco e é

@@ -10142,6 +10142,10 @@ alter table public.agent_inbox_items
     -- (serviço de telefonia, Storage ou conversor fora): sem isto a falha ficaria
     -- só no log do worker. Entra NESTA lista, no fim, pela mesma razão das de cima.
     'phone_recording_failed',
+    -- (migration 0298) A transcrição de uma ligação gravada não saiu: falta a chave
+    -- do provedor, ou ele recusou todas as tentativas. Sem isto a falha ficaria só
+    -- no log do worker. Entra NESTA lista, no fim, pela mesma razão das de cima.
+    'phone_transcription_failed',
     'other'
   ));
 
@@ -30013,23 +30017,65 @@ create trigger trg_mensagem_de_ligacao_e_do_sistema
 -- que a anonimização usa e que o cron `storage-redaction` drena. Sem isto, o
 -- arquivo ficaria no bucket para sempre: a poda o procura pela mensagem, e a
 -- anonimização, pela conversa do contato.
+--
+-- ⚠️ ESTE BLOCO CARREGA A DEFINIÇÃO DA 0298, E NÃO A DA 0289 — de propósito. O
+-- `update.sh` reaplica este arquivo inteiro, comando a comando, fora de uma
+-- transação única. Com a definição antiga aqui (invoker, sem a transcrição, com
+-- EXECUTE para `authenticated`), toda atualização DEVOLVIA a função ao estado
+-- antigo até o bloco da 0298, mais de mil linhas abaixo, consertá-la — e nesse
+-- intervalo (que dura o que os comandos do meio esperarem por trava, com o banco
+-- em uso) a mensagem de ligação apagada deixava a transcrição órfã, com o texto.
+-- As duas cópias têm de ser IDÊNTICAS: vigiado por
+-- tests/unit/baseline-funcao-redefinida-sem-janela.test.ts. A tabela
+-- `voice_call_transcripts` só é criada no bloco da 0298 — em banco novo e, o que
+-- importa mais, na PRIMEIRA atualização de um banco anterior a ela, com o sistema
+-- no ar. O plpgsql só resolve a tabela quando a função roda, e o corpo confere
+-- com `to_regclass` se ela já existe antes de tocar nela.
 create or replace function public.fn_gravacao_da_mensagem_apagada()
-returns trigger language plpgsql set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_ligacao text;
 begin
   if old.external_id like 'ligacao:%' and old.media_storage_path is not null then
     insert into public.storage_redaction_queue (organization_id, request_id, bucket, object_path)
     values (old.organization_id, null, 'whatsapp-media', old.media_storage_path)
     on conflict (bucket, object_path) do nothing;
   end if;
+  if old.external_id like 'ligacao:%' then
+    v_ligacao := substring(old.external_id from 9);
+    -- `to_regclass`: na PRIMEIRA atualização de um banco anterior à 0298, esta
+    -- função é recriada (bloco da 0289 do baseline) antes de a tabela existir, com
+    -- o sistema no ar. Sem a conferência, apagar uma conversa com cartão de ligação
+    -- nesse intervalo falhava com 42P01. Sem tabela não há transcrição a levar.
+    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       and to_regclass('public.voice_call_transcripts') is not null then
+      delete from public.voice_call_transcripts
+       where voice_call_id = v_ligacao::uuid and organization_id = old.organization_id;
+    end if;
+  end if;
   return old;
 end $$;
-revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon;
-grant execute on function public.fn_gravacao_da_mensagem_apagada() to authenticated, service_role;
+revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon, authenticated;
+grant execute on function public.fn_gravacao_da_mensagem_apagada() to service_role;
 
-drop trigger if exists trg_gravacao_da_mensagem_apagada on public.messages;
-create trigger trg_gravacao_da_mensagem_apagada
-  after delete on public.messages
-  for each row execute function public.fn_gravacao_da_mensagem_apagada();
+-- Criado só se FALTAR, e não derrubado e recriado: entre o `drop trigger` e o
+-- `create trigger` (dois comandos, cada um com o seu commit, a cada `update.sh`)
+-- a tabela ficava SEM o trigger, e a mensagem de ligação apagada nesse instante
+-- deixava o arquivo fora da fila de remoção e a transcrição órfã (achado da
+-- revisão, reproduzido com a exclusão chegando enquanto o `drop` esperava a
+-- trava). A definição do trigger nunca mudou; o que muda é a função, e essa é
+-- `create or replace`.
+do $trg_gravacao$
+begin
+  if not exists (select 1 from pg_trigger
+                  where tgrelid = 'public.messages'::regclass
+                    and tgname = 'trg_gravacao_da_mensagem_apagada'
+                    and not tgisinternal) then
+    create trigger trg_gravacao_da_mensagem_apagada
+      after delete on public.messages
+      for each row execute function public.fn_gravacao_da_mensagem_apagada();
+  end if;
+end $trg_gravacao$;
 
 comment on column public.phone_settings.recording_enabled is
   'Grava as ligações do telefone desta organização (as duas direções, só a conversa: a ponte atendente↔cliente). Só liga com o aviso de gravação pronto (a rota recusa). Lido pelo worker a cada ligação.';
@@ -31008,6 +31054,180 @@ notify pgrst, 'reload schema';
 create index if not exists atendimentos_org_dono_fechamento
   on public.atendimentos (organization_id, assigned_to_user_id, closed_at desc)
   where closed_at is not null;
+
+-- ---- telefonia: transcrição e resumo das ligações gravadas (migration 0298) ----
+-- Racional completo no cabeçalho de supabase/migrations/20261009180000_0298_telefonia_transcricao_das_ligacoes.sql
+-- e no desenho docs/superpowers/specs/2026-10-09-telefonia-transcricao-das-ligacoes-design.md.
+-- agent_inbox_items_kind_check (+ phone_transcription_failed): bloco único dela, acima — não aqui.
+--
+-- Reaplicável: colunas e tabela só quando faltam, funções por `create or replace`,
+-- e o trigger de `contacts` só é criado se não existir — recriá-lo a cada
+-- `update.sh` pediria uma trava numa tabela quente por nada.
+-- 1. phone_settings -----------------------------------------------------------
+alter table public.phone_settings
+  add column if not exists transcription_enabled boolean not null default false,
+  add column if not exists transcription_enabled_at timestamptz;
+
+comment on column public.phone_settings.transcription_enabled is
+  'Transcreve e resume as ligações gravadas desta organização. Desligada por padrão. Só vale para a ligação gravada (recording_enabled) que terminou depois de transcription_enabled_at. Lido pelo worker do telefone.';
+comment on column public.phone_settings.transcription_enabled_at is
+  'Quando a transcrição foi ligada pela última vez. Régua do "só daqui para frente": ligação que terminou antes disto não é transcrita.';
+
+-- 2. voice_call_transcripts ----------------------------------------------------
+create table if not exists public.voice_call_transcripts (
+  voice_call_id     uuid primary key references public.voice_calls(id) on delete cascade,
+  organization_id   uuid not null references public.organizations(id) on delete cascade,
+  status            text not null default 'pending',
+  attempts          integer not null default 0,
+  next_attempt_at   timestamptz not null default now(),
+  text              text,
+  segments          jsonb not null default '[]'::jsonb,
+  summary           text,
+  language          text,
+  model             text,
+  audio_duration_ms integer,
+  last_error        text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  completed_at      timestamptz,
+  constraint voice_call_transcripts_status_check
+    check (status in ('pending', 'ready', 'empty', 'failed')),
+  constraint voice_call_transcripts_segments_check
+    check (jsonb_typeof(segments) = 'array')
+);
+
+create index if not exists voice_call_transcripts_pendentes
+  on public.voice_call_transcripts (next_attempt_at) where status = 'pending';
+create index if not exists voice_call_transcripts_org
+  on public.voice_call_transcripts (organization_id);
+
+comment on table public.voice_call_transcripts is
+  'A transcrição de uma ligação gravada (1:1 com voice_calls). SERVER-SIDE ONLY: RLS ligada sem policies e grants revogados de anon/authenticated — o PostgREST não a serve. Escrita pelo worker do telefone; lida pela rota da leitura auditada (atendente para cima que enxerga a conversa). Apagada junto com a gravação (retenção), na anonimização do contato e quando a mensagem da ligação sai.';
+comment on column public.voice_call_transcripts.status is
+  'Ciclo da transcrição (fonte da verdade): pending (pedida, esperando ou em curso), ready (texto pronto), empty (a gravação não tem fala), failed (não saiu). A projeção para a tela fica em messages.metadata.voice_call.transcricao — só a situação.';
+comment on column public.voice_call_transcripts.segments is
+  'Os trechos, na ordem: [{inicio_ms, fim_ms, quem, texto}]. `quem` é atendente | cliente | sistema | null — ESTIMADO por IA a partir do conteúdo (a gravação mistura as duas vozes num canal). Lido só por trechosDaTranscricao (lib/telefonia/transcricao.ts).';
+comment on column public.voice_call_transcripts.summary is
+  'O resumo curto da ligação, escrito por IA a partir da transcrição. NULL = não houve (o passo falhou ou não havia o que resumir).';
+comment on column public.voice_call_transcripts.next_attempt_at is
+  'Quando a passada pode pegar esta linha. Serve de reserva: quem começa a transcrever empurra o instante para a frente, e uma falha o reagenda.';
+comment on column public.voice_call_transcripts.last_error is
+  'A classe da última falha (sem texto da ligação nem chave) — diagnóstico, nunca mostrado ao cliente.';
+
+alter table public.voice_call_transcripts enable row level security;
+
+-- O `revoke` é obrigatório: o `alter default privileges` do topo do baseline (e o
+-- default ACL de todo projeto Supabase) concede tabela nova a `anon` e
+-- `authenticated`. Sem policy nenhuma, a RLS já negaria as linhas; o revoke tira
+-- também a tabela do alcance do PostgREST. O `service_role` entra no revoke para
+-- ficar só com o que usa: o default ACL lhe daria também TRUNCATE.
+revoke all on public.voice_call_transcripts from public, anon, authenticated, service_role;
+grant select, insert, update, delete on public.voice_call_transcripts to service_role;
+
+drop trigger if exists trg_voice_call_transcripts_updated_at on public.voice_call_transcripts;
+create trigger trg_voice_call_transcripts_updated_at
+  before update on public.voice_call_transcripts
+  for each row execute function public.fn_set_updated_at();
+
+-- 3. anonimização do contato apaga as transcrições -----------------------------
+-- SÓ para a anonimização DE VERDADE. Os dois caminhos do produto mudam
+-- `is_anonymized` de dentro de uma função definer (a cascata do worker de LGPD,
+-- o botão da ficha) ou com a service key: nos dois, `current_user` é o dono ou
+-- `service_role`. Um membro que escreve `is_anonymized = true` direto pela REST
+-- (a RLS de `contacts` hoje deixa) NÃO é anonimização — e, se apagasse as
+-- transcrições, qualquer membro destruiria as de conversas que nem enxerga e,
+-- voltando o campo, faria o worker transcrever tudo de novo, pagando outra vez
+-- (achado da revisão de segurança). Para ele a função não faz nada.
+--
+-- Por isso é INVOKER, como `fn_mensagem_de_ligacao_e_do_sistema` (0289): é o
+-- `current_user` de quem escreve que decide. O dono e o `service_role` têm o que
+-- precisam para apagar; o membro, que não tem, nem chega ao DELETE.
+create or replace function public.fn_transcricoes_do_contato_anonimizado()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if current_user in ('authenticated', 'anon') then
+    return new;
+  end if;
+  delete from public.voice_call_transcripts t
+   using public.voice_calls v
+   where v.id = t.voice_call_id
+     and v.organization_id = new.organization_id
+     and v.contact_id = new.id;
+  -- A projeção sai junto: o cartão não pode prometer um texto que não existe.
+  -- (A cascata já zera o metadado; o botão da ficha não toca em `messages`.)
+  update public.messages m
+     set metadata = m.metadata #- '{voice_call,transcricao}'
+    from public.voice_calls v
+   where v.organization_id = new.organization_id
+     and v.contact_id = new.id
+     and m.organization_id = v.organization_id
+     and m.external_id = 'ligacao:' || v.id::text
+     and m.metadata #> '{voice_call,transcricao}' is not null;
+  return new;
+end $$;
+-- Função de trigger não é chamada por RPC (o PostgREST não expõe `returns
+-- trigger`), mas a regra 9 vale para toda função nova em `public`.
+revoke execute on function public.fn_transcricoes_do_contato_anonimizado() from public, anon;
+grant execute on function public.fn_transcricoes_do_contato_anonimizado() to authenticated, service_role;
+
+do $trg_anon$
+begin
+  if not exists (select 1 from pg_trigger
+                  where tgrelid = 'public.contacts'::regclass
+                    and tgname = 'trg_transcricoes_do_contato_anonimizado'
+                    and not tgisinternal) then
+    create trigger trg_transcricoes_do_contato_anonimizado
+      after update of is_anonymized on public.contacts
+      for each row
+      when (new.is_anonymized is true and old.is_anonymized is distinct from true)
+      execute function public.fn_transcricoes_do_contato_anonimizado();
+  end if;
+end $trg_anon$;
+
+-- 4. a mensagem da ligação que sai leva a transcrição ---------------------------
+-- Mesmo corpo da 0289 (o arquivo vai para a fila de remoção do Storage), mais a
+-- transcrição. O id da ligação sai do `external_id` (`ligacao:<uuid>`), que só o
+-- sistema escreve; o que não for uuid não vira consulta.
+--
+-- ⚠️ PASSA A SER SECURITY DEFINER, e não é detalhe. Excluir um contato pela tela
+-- apaga a conversa com o JWT do membro; a mensagem da ligação sai pela cascata, e
+-- o trigger AFTER de uma linha apagada por cascata roda no papel da SESSÃO — o
+-- BEFORE é que roda como dono. O membro não tem (nem pode ter) privilégio em
+-- `voice_call_transcripts`: como invoker, a exclusão inteira falhava com 42501
+-- em toda conversa com cartão de ligação, com a transcrição ligada ou não
+-- (achado da revisão; reproduzido em tests/invariants/telefonia-transcricao.test.ts).
+-- Não há seletor: ela só alcança o arquivo e a transcrição da PRÓPRIA linha que
+-- está saindo, e a linha de ligação um membro não apaga direto (0289).
+create or replace function public.fn_gravacao_da_mensagem_apagada()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_ligacao text;
+begin
+  if old.external_id like 'ligacao:%' and old.media_storage_path is not null then
+    insert into public.storage_redaction_queue (organization_id, request_id, bucket, object_path)
+    values (old.organization_id, null, 'whatsapp-media', old.media_storage_path)
+    on conflict (bucket, object_path) do nothing;
+  end if;
+  if old.external_id like 'ligacao:%' then
+    v_ligacao := substring(old.external_id from 9);
+    -- `to_regclass`: na PRIMEIRA atualização de um banco anterior à 0298, esta
+    -- função é recriada (bloco da 0289 do baseline) antes de a tabela existir, com
+    -- o sistema no ar. Sem a conferência, apagar uma conversa com cartão de ligação
+    -- nesse intervalo falhava com 42P01. Sem tabela não há transcrição a levar.
+    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       and to_regclass('public.voice_call_transcripts') is not null then
+      delete from public.voice_call_transcripts
+       where voice_call_id = v_ligacao::uuid and organization_id = old.organization_id;
+    end if;
+  end if;
+  return old;
+end $$;
+-- Definer que escreve: ninguém a executa por conta própria (trigger não confere
+-- EXECUTE de quem dispara o comando).
+revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon, authenticated;
+grant execute on function public.fn_gravacao_da_mensagem_apagada() to service_role;
+
+notify pgrst, 'reload schema';
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

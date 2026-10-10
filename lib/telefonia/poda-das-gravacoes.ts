@@ -88,17 +88,25 @@ export async function gravacoesVencidas(db: Queryable, agora: Date, limite: numb
  * A gravação expirou: a mensagem perde a mídia (só se ainda apontava ESTE
  * arquivo), a projeção vira "expirada" (mesclada — a duração fica), e a ligação
  * vira `expired`. Um comando.
+ *
+ * A TRANSCRIÇÃO sai junto (F4, migration 0298): é o mesmo conteúdo por escrito,
+ * e guardá-lo além do prazo que a organização escolheu para a gravação seria
+ * reter por outro caminho o que a retenção mandou apagar. A linha de
+ * `voice_call_transcripts` é apagada e o cartão para de oferecer o texto.
  */
 export async function marcarExpirada(db: Queryable, g: GravacaoVencida): Promise<void> {
   await db.query(
     `with m as (
        update messages
           set media_storage_path = null, media_mime = null, media_size_bytes = null,
-              metadata = case when metadata #> '{voice_call,gravacao}' is not null
-                              then jsonb_set(metadata, '{voice_call,gravacao,situacao}', '"expirada"'::jsonb)
-                              else metadata end
+              metadata = (case when metadata #> '{voice_call,gravacao}' is not null
+                               then jsonb_set(metadata, '{voice_call,gravacao,situacao}', '"expirada"'::jsonb)
+                               else metadata end) #- '{voice_call,transcricao}'
         where id = $3::uuid and organization_id = $2 and media_storage_path is not distinct from $4
         returning id
+     ), t as (
+       delete from voice_call_transcripts where voice_call_id = $1 and organization_id = $2
+       returning voice_call_id
      )
      update voice_calls set recording_status = 'expired', updated_at = now()
       where id = $1 and organization_id = $2 and recording_status = 'stored'`,

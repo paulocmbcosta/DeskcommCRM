@@ -82,6 +82,7 @@ export const KIND_LABEL = {
   // manda gente para um time que ninguém atende.
   phone_menu_team_archived: "Menu do telefone manda para time arquivado",
   phone_recording_failed: "A gravação de uma ligação não foi salva",
+  phone_transcription_failed: "A transcrição das ligações não está saindo",
   other: "Aviso do assistente",
 } as const satisfies Record<InboxKind, string>;
 

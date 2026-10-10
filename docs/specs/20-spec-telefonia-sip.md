@@ -833,7 +833,7 @@ e revalida contra o estado dele antes de mexer na ligação.
 | F2 v2 | Transferência direta e consultada para pessoa, direta para time, volta a quem transferiu e fila do time (emenda §12 do mesmo desenho, que prevalece sobre §5.3); plano: `docs/superpowers/plans/2026-09-30-telefonia-v2-v3-transferencia-e-ramais.md`; migration 0290 | implementada; prova na VPS pendente (J38 do mapa de jornadas; roteiro `docs/runbooks/telefonia-transferencia-e-ramais.md`) — publicada? `grep -n 'Transferir uma ligação' CHANGELOG.md` |
 | F2 v3 | Ramais automáticos a partir de 201, ligação interna, URA que aceita ramal, aba Ramais (emenda §12, sobre §5.4); mesmo plano; migration 0291 | implementada; prova na VPS pendente (J38) — publicada? `grep -n 'Ramais — cada atendente' CHANGELOG.md` |
 | F3 | Gravação com aviso, retenção, cascade LGPD e escuta auditada. Desenho (com as decisões D1–D8, tomadas na ausência do dono): `docs/superpowers/specs/2026-09-29-telefonia-gravacao-das-ligacoes-design.md`; plano: `docs/superpowers/plans/2026-09-29-telefonia-gravacao-das-ligacoes.md`; migration 0289; DYD-53 | implementada — publicada? `grep -n 'Gravação das ligações do telefone' CHANGELOG.md`; prova com ligação real depende de o dono ligar a gravação (J37 do mapa de jornadas) |
-| F4 | Transcrição em português dentro da conversa | a fazer |
+| F4 | Transcrição e resumo das ligações gravadas, no cartão da ligação: interruptor próprio (desligado por padrão, só vale para as ligações daqui para frente), texto em tabela que o navegador não lê, resumo para quem pode ouvir e leitura do texto inteiro auditada; "quem falou" é estimativa. Desenho (com a sonda de qualidade e as decisões T1–T13): `docs/superpowers/specs/2026-10-09-telefonia-transcricao-das-ligacoes-design.md`; migration 0298 | implementada, sem prova com ligação real (J48 do mapa de jornadas) — publicada? `grep -n 'Transcrição das ligações gravadas' CHANGELOG.md` |
 | F5 | Relatórios por time | a fazer |
 | Fila visível, entrega 1 | Conversa viva ao atender: o cartão "Ligação em andamento" entra na conversa quando a recebida é atendida e é completado no fim; a passada de 60 s fecha o órfão. As entregas 2 e 3 do mesmo desenho são as linhas seguintes. Desenho: `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md`; plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-1.md`; sem migration | implementada, sem prova com ligação real (J43 do mapa de jornadas) — publicada? `grep -n 'a conversa aparece enquanto a ligação acontece' CHANGELOG.md` |
 | Fila visível, entrega 2 | Aba Telefone no Inbox (a fila ao vivo por ordem de chegada, o menu, as ligações em curso e as perdidas dos últimos 30 minutos, com filtro por time e por número), a fila do worker passa a atender por ordem de chegada e a espera máxima na fila é de cada time (Configurações › Times; padrão 2 min). Desenho: `docs/superpowers/specs/2026-10-06-telefonia-fila-visivel-design.md`; plano: `docs/superpowers/plans/2026-10-06-telefonia-fila-visivel-entrega-2.md`; migration 0295 | implementada, sem prova com ligação real (J44 do mapa de jornadas) — publicada? `grep -n 'a fila de ligações aparece no Inbox' CHANGELOG.md` |
@@ -1065,8 +1065,12 @@ existe ainda**, é dívida declarada — não ausência de defeito.
   (`lib/telefonia/numero.ts`).
 
 **Qual a continuidade IA↔humano?**
-- A IA não participa da ligação: não há agente de voz (transcrição é a F4 — e a gravação da F3
-  já é a mídia da mensagem da ligação, então a F4 só emite `media.derive_requested` para ela). O registro da
+- A IA não participa da ligação: não há agente de voz. Depois dela, a F4 transcreve e resume a
+  gravação (`lib/channels/telefonia/transcricoes.ts`) — pelo serviço do telefone, e NÃO por
+  `media.derive_requested`, como este parágrafo previa: a mensagem da ligação é `system`, e aquele
+  caminho a recusa, corta em 8.000 caracteres e exporia o texto a quem não pode ouvir (o porquê
+  inteiro está no desenho da F4, §2.1). O texto fica em `voice_call_transcripts`, que o agente de
+  IA NÃO lê: a transcrição ainda não entra no contexto de turno nenhum. O registro da
   ligação é `outbound`/`system` de propósito, para não acordar turno nem termômetro.
 - IA → humano: não se aplica.
 - Humano → IA: **não existe ainda.** O contexto do agente

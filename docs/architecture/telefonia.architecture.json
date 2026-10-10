@@ -638,6 +638,48 @@
       "col": 18,
       "type": "database",
       "label": "`voice_call_queue_orders` (0296) — uma linha por ORDEM sobre uma ligação que espera: `pull` (atender) ou `move` (mover), quem pediu, para quem/para que time e de que time; `open`→`ended` com `outcome` (`done`, `refused`, `no_answer`, `cancelled`) e `reason` (vocabulário aberto); uma aberta por ligação (índice único parcial); FKs compostas com a organização; RLS só de leitura e `revoke all` — nem a service key escreve pela REST"
+    },
+    {
+      "id": "ia_transcricao",
+      "lane": "fora",
+      "col": 3,
+      "type": "external",
+      "label": "OpenAI — a TRANSCRIÇÃO das ligações (F4): o serviço de transcrição (`whisper-1`, `/v1/audio/transcriptions`, trechos com tempo, SEM vocabulário) e o modelo de conversa da organização, que escreve o resumo e indica quem falou. Chave da organização (painel de provedores) ou a da instalação. Só recebe áudio de organização que LIGOU a transcrição"
+    },
+    {
+      "id": "transcricoes",
+      "lane": "worker",
+      "col": 11,
+      "type": "backend",
+      "label": "`transcricoes.ts` (`TranscricoesDaTelefonia`) — a TRANSCRIÇÃO (F4, 0298): pede (só organização com a transcrição ligada, e só a ligação que terminou depois disso), baixa o MP3, transcreve em trechos com tempo, resume e indica quem falou (estimativa pelo conteúdo — a gravação mistura as duas vozes), grava. UMA por vez, fora da fila serial de eventos; falha → nova tentativa com espera crescente (1, 5, 15, 60 min) e, na 5ª ou 24 h depois, `failed` + Central. O resumo que falha não derruba o texto. Nenhuma linha de log leva o texto da ligação"
+    },
+    {
+      "id": "t_transcricoes",
+      "lane": "banco",
+      "col": 19,
+      "type": "database",
+      "label": "`voice_call_transcripts` (0298) — 1:1 com a ligação: `status` (pending → ready | empty | failed, fonte da verdade), o texto, os trechos com tempo e quem falou, o resumo, tentativas e reserva. SERVER-SIDE ONLY: RLS ligada SEM policies e `revoke all` de anon/authenticated — o navegador não a lê. Apagada com a gravação (retenção), na anonimização do contato (trigger em `contacts`) e quando a mensagem da ligação sai. `phone_settings.transcription_enabled(+_at)` é a política: desligada por padrão, e só vale daqui para frente"
+    },
+    {
+      "id": "rota_transcricao",
+      "lane": "api",
+      "col": 27,
+      "type": "backend",
+      "label": "`GET /api/v1/telefonia/chamadas/[id]/transcricao` (agent+) — a LEITURA AUDITADA: a regra da escuta (lê a mensagem `ligacao:<id>` pelo cliente de SESSÃO — a RLS decide quem enxerga a conversa), e só então lê a transcrição pelo cliente de serviço, presa à organização. Devolve as falas (quem, quando, o quê) e o resumo; cada leitura da transcrição pronta = `phone.transcript_read`. As outras situações respondem sem texto e sem auditar"
+    },
+    {
+      "id": "listagem_transcricao",
+      "lane": "api",
+      "col": 28,
+      "type": "backend",
+      "label": "A listagem de mensagens (`GET /conversations/[id]/messages` + `lib/inbox/transcricao-da-ligacao.ts`) — a linha de `messages` traz só a SITUAÇÃO da transcrição; aqui ela é relida da tabela e ganha o RESUMO, só para usuário com papel atendente ou acima. Papel de leitura, token e agente de IA não recebem nada; projeção sem linha na tabela sai da resposta; consulta que falha → nada é entregue"
+    },
+    {
+      "id": "cartao_transcricao",
+      "lane": "tela",
+      "col": 20,
+      "type": "frontend",
+      "label": "A transcrição no cartão da ligação (`TranscricaoDaLigacao.tsx`) — embaixo da gravação: \"Transcrevendo a ligação…\", o RESUMO (dito como feito por IA) e \"Ver transcrição\", que abre a conversa por quem falou, com o instante de cada fala e o aviso de que o texto é de máquina e quem falou é estimativa. Sem fala e falha têm frase própria. Quem não pode ouvir a gravação não vê nada"
     }
   ],
   "edges": [
@@ -865,7 +907,30 @@
     { "from": "controle", "to": "ramal_nav", "label": "o toque de quem puxou: só o ramal dele, 10 s, com `X-Fila-Atender: <ordem>` — o navegador que pediu atende sozinho" },
     { "from": "controle", "to": "t_voice_calls", "label": "mover: o time novo da ligação (e da conversa), o prazo da fila limpo; a ordem de chegada (`queued_at`) não muda" },
     { "from": "t_ordens_da_fila", "to": "t_messages", "label": "no fim da ligação, as ordens `done` entram no registro (`metadata.voice_call.fila`), com os nomes daquela hora" },
-    { "from": "t_ordens_da_fila", "to": "inbox", "label": "o cartão da ligação: \"Puxada da fila por…\" e \"Movida de… para… por…\", lidas por `acoesNaFilaDaLigacao` (o nome pela régua `fn_nome_do_usuario`, sem o e-mail)" }
+    { "from": "t_ordens_da_fila", "to": "inbox", "label": "o cartão da ligação: \"Puxada da fila por…\" e \"Movida de… para… por…\", lidas por `acoesNaFilaDaLigacao` (o nome pela régua `fn_nome_do_usuario`, sem o e-mail)" },
+    { "from": "gravacoes", "to": "transcricoes", "label": "`aoGuardar` — só DEPOIS de a gravação estar guardada; o gancho que lança não muda o desfecho da gravação" },
+    { "from": "laco", "to": "transcricoes", "label": "passada de 60 s (guarda PRÓPRIA, separada da das gravações): repõe o pedido perdido e faz as pendentes" },
+    { "from": "transcricoes", "to": "t_transcricoes", "label": "pedido `pending` → `ready` | `empty` | `failed`; reserva por `next_attempt_at` (`for update skip locked`); conclui sob a trava da anonimização" },
+    { "from": "transcricoes", "to": "bucket_midia", "label": "baixa o MP3 — só o caminho canônico `<org>/<conversa>/<mensagem>.mp3`" },
+    { "from": "transcricoes", "to": "ia_transcricao", "label": "ponto de IA `transcricao_de_ligacao`: o MP3 da gravação → trechos com tempo (`whisper-1`, sem vocabulário). Custo por minuto em `llm_calls`" },
+    { "from": "transcricoes", "to": "ia_transcricao", "label": "ponto de IA `resumo_de_ligacao` (pelo seam `runModelCall`, modelo de conversa da organização): trechos numerados → resumo + uma letra por trecho. O modelo NÃO reescreve o texto; ligação longa vai em blocos de 400 trechos" },
+    { "from": "transcricoes", "to": "t_credenciais", "label": "a chave da OpenAI da organização (`ai_provider_credentials`) ou, sem ela, a da instalação — a mesma resolução do áudio do WhatsApp (`lib/telefonia/chave-do-transcritor.ts`)" },
+    { "from": "rota_gravacao", "to": "t_credenciais", "label": "ao LIGAR a transcrição confere se há chave; o GET diz à tela se há (`transcricao_com_chave`)" },
+    { "from": "transcricoes", "to": "t_messages", "label": "projeção `voice_call.transcricao` — só a SITUAÇÃO, por `jsonb_set`; o texto nunca entra em `messages`. É este UPDATE que faz o Realtime recarregar o cartão" },
+    { "from": "transcricoes", "to": "t_inbox", "label": "`phone_transcription_failed` (sem chave: na 1ª ligação; provedor: na última tentativa), dedup por título" },
+    { "from": "transcricoes", "to": "t_contacts", "label": "confere `is_anonymized` antes de pedir e, de novo, sob a trava, antes de gravar" },
+    { "from": "t_contacts", "to": "t_transcricoes", "label": "trigger da 0298: `is_anonymized` virou verdadeiro → apaga as transcrições das ligações do contato (os dois caminhos de anonimização)" },
+    { "from": "poda_gravacoes", "to": "t_transcricoes", "label": "a gravação vencida leva a transcrição junto, no mesmo comando" },
+    { "from": "rota_gravacao", "to": "t_transcricoes", "label": "a política da transcrição mora na mesma linha de `phone_settings`: LIGAR exige chave da OpenAI (409 `chave_de_transcricao_ausente`) e marca o instante do \"daqui para frente\"" },
+    { "from": "cartao_transcricao", "to": "rota_transcricao", "label": "\"Ver transcrição\": pede o texto no CLIQUE — abrir a conversa não é ler" },
+    { "from": "rota_transcricao", "to": "t_messages", "label": "lê `ligacao:<id>` pela SESSÃO (RLS, visibilidade por time)" },
+    { "from": "rota_transcricao", "to": "t_transcricoes", "label": "lê pelo cliente de serviço, presa à organização da sessão" },
+    { "from": "rota_transcricao", "to": "t_audit", "label": "`phone.transcript_read` por leitura — sem o texto" },
+    { "from": "inbox", "to": "listagem_transcricao", "label": "a conversa lista as mensagens; a mudança na mensagem da ligação (Realtime) manda recarregar" },
+    { "from": "listagem_transcricao", "to": "t_transcricoes", "label": "situação e resumo das ligações da página, numa consulta, presa à organização" },
+    { "from": "listagem_transcricao", "to": "cartao_transcricao", "label": "entrega a situação e o resumo só a quem pode ouvir a gravação (agent+)" },
+    { "from": "central", "to": "aba_gravacao", "label": "`phone_transcription_failed` → \"Abrir a gravação do telefone\" (onde está o interruptor da transcrição e o caminho para os provedores)" },
+    { "from": "aba_gravacao", "to": "cartao_transcricao", "label": "o interruptor \"Transcrever as ligações gravadas\" é o que faz a transcrição aparecer no cartão das próximas ligações" }
   ],
   "cards": [
     {
@@ -945,6 +1010,18 @@
         "Nada do que a ordem faz derruba ou pendura a ligação: a conferência que não pode ser feita não deixa a ordem seguir (`falha_ao_conferir`; a ordem que nem pôde ser lida não faz nada, e o fim da ligação a fecha), mover grava o banco ANTES de mexer na fila (`falha_ao_mover` deixa tudo como estava), e a escrita de desfecho que falha vira aviso no log",
         "O que aconteceu fica na conversa: o cartão da ligação diz quem a puxou e quem a moveu, de que time para que time; e na auditoria fica o PEDIDO (`phone.queue_call_pulled`, `phone.queue_call_moved`)",
         "Não existe ainda: nada conta quantas ligações são puxadas ou movidas por time (um menu que manda gente ao time errado aparece como muitos \"mover\", e só o cartão de cada ligação mostra — relatório é a F5); nenhuma passada fecha a ordem que ficou aberta (ela só deixa de valer aos 30 s); e quem atende no mesmo instante em que alguém puxa ou move perde a ligação"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "O laço de retorno da TRANSCRIÇÃO (invariante 7): o que muda quando ela erra",
+      "items": [
+        "Falha do provedor ou do Storage: a ligação volta para a fila com espera crescente (1, 5, 15 e 60 min). Na 5ª tentativa, ou 24 h depois do pedido, vira `failed`: o cartão diz \"Não foi possível transcrever esta ligação\" e a Central abre `phone_transcription_failed`, com o link da aba Gravação. A tentativa é contada na RESERVA: o worker que cai no meio também gasta uma, e a ligação que o derruba não volta para sempre",
+        "Sem chave da OpenAI: a Central avisa já na PRIMEIRA ligação, e a tela recusa LIGAR a transcrição sem chave (409). Quem cadastra a chave em seguida ainda pega a ligação na tentativa seguinte",
+        "O resumo que falha (orçamento, modelo fora, resposta torta) NÃO derruba a transcrição: o texto do transcritor é guardado sem resumo e sem quem falou — e o log do worker diz",
+        "Pedido perdido (o worker caiu entre guardar a gravação e pedir): a passada o repõe em até 48 h, com a mesma régua do \"só daqui para frente\"",
+        "Custo: cada chamada ao transcritor e ao modelo de conversa vira uma linha em `llm_calls` (IA › Execuções), e o TETO DE GASTO de IA vale para a transcrição — com ele estourado nada é baixado nem enviado, e no limite o aviso da Central diz que foi o teto",
+        "LAÇO ABERTO, declarado: quem falou é ESTIMATIVA pelo conteúdo, e o texto erra nomes, números e endereços (áudio de telefone). A tela diz as duas coisas — na aba Gravação e na janela, que manda ouvir a gravação na dúvida —, mas o leitor NÃO tem como corrigir uma fala, e o erro não volta ao sistema. O conserto de \"quem falou\" é gravar os dois lados em canais separados (fora desta entrega)"
       ]
     }
   ]

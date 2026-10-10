@@ -12,8 +12,16 @@ import { NextRequest } from "next/server";
 const ORG = "22222222-2222-4222-8222-222222222222";
 const estado = vi.hoisted(() => ({
   consultas: [] as Array<{ sql: string; params: unknown[] }>,
-  linha: { recording_enabled: false, recording_retention_days: 90, recording_notice_prompt_id: null as string | null },
+  linha: {
+    recording_enabled: false,
+    recording_retention_days: 90,
+    recording_notice_prompt_id: null as string | null,
+    transcription_enabled: false,
+  },
   avisoPronto: true,
+  /** A chave do transcritor: o valor, `null` (não há) ou um erro (não deu para saber). */
+  chave: "sk-da-org" as string | null | Error,
+  perguntasPelaChave: 0,
 }));
 
 vi.mock("@/lib/auth/require-role", () => ({
@@ -32,19 +40,26 @@ vi.mock("@/lib/agent-engine/db/request-pool", () => ({
       if (/^\s*select recording_enabled, recording_retention_days, recording_notice_prompt_id/.test(sql)) {
         return { rows: [estado.linha], rowCount: 1 };
       }
-      if (/^\s*select recording_enabled, recording_retention_days from/.test(sql)) {
+      if (/^\s*select recording_enabled, recording_retention_days, transcription_enabled from/.test(sql)) {
         return { rows: [estado.linha], rowCount: 1 };
       }
       if (/^\s*update phone_settings s/.test(sql)) {
-        const [, ativa, dias] = params as [string, boolean, number];
+        const [, ativa, dias, transcrever] = params as [string, boolean, number, boolean];
         // Como o `where ($2 = false or exists (aviso pronto))` do Postgres.
         if (ativa && !estado.avisoPronto) return { rows: [], rowCount: 0 };
-        estado.linha = { ...estado.linha, recording_enabled: ativa, recording_retention_days: dias };
+        estado.linha = { ...estado.linha, recording_enabled: ativa, recording_retention_days: dias, transcription_enabled: transcrever };
         return { rows: [], rowCount: 1 };
       }
       return { rows: [], rowCount: 1 };
     },
   })),
+}));
+vi.mock("@/lib/telefonia/chave-do-transcritor", () => ({
+  chaveDoTranscritor: vi.fn(async () => {
+    estado.perguntasPelaChave += 1;
+    if (estado.chave instanceof Error) throw estado.chave;
+    return estado.chave;
+  }),
 }));
 
 import { audit } from "@/lib/audit";
@@ -57,8 +72,10 @@ const salvar = (corpo: unknown) =>
 
 beforeEach(() => {
   estado.consultas = [];
-  estado.linha = { recording_enabled: false, recording_retention_days: 90, recording_notice_prompt_id: null };
+  estado.linha = { recording_enabled: false, recording_retention_days: 90, recording_notice_prompt_id: null, transcription_enabled: false };
   estado.avisoPronto = true;
+  estado.chave = "sk-da-org";
+  estado.perguntasPelaChave = 0;
   vi.mocked(audit).mockClear();
   vi.mocked(requireRole).mockClear();
 });
@@ -72,6 +89,24 @@ describe("GET /api/v1/telefonia/gravacao", () => {
     });
     expect(estado.consultas[0]!.params).toEqual([ORG]);
   });
+
+  it("diz se a transcrição está ligada e se há chave para transcrever", async () => {
+    estado.linha.transcription_enabled = true;
+    expect(await (await GET()).json()).toMatchObject({ data: { transcrever: true, transcricao_com_chave: true } });
+    estado.chave = null;
+    expect(await (await GET()).json()).toMatchObject({ data: { transcrever: true, transcricao_com_chave: false } });
+  });
+
+  it("não conseguiu conferir a chave: responde `null` — a aba não cai nem afirma que falta", async () => {
+    estado.chave = new Error("banco fora");
+    const r = await GET();
+    expect(r.status).toBe(200);
+    expect((await r.json()).data.transcricao_com_chave).toBeNull();
+  });
+
+  it("a chave nunca aparece na resposta", async () => {
+    expect(JSON.stringify(await (await GET()).json())).not.toContain("sk-da-org");
+  });
 });
 
 describe("PUT /api/v1/telefonia/gravacao", () => {
@@ -81,7 +116,7 @@ describe("PUT /api/v1/telefonia/gravacao", () => {
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ data: { ativa: true, retencao_dias: 180 } });
     const update = estado.consultas.find((c) => /update phone_settings s/.test(c.sql))!;
-    expect(update.params).toEqual([ORG, true, 180]);
+    expect(update.params).toEqual([ORG, true, 180, false]);
     expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({
       action: "phone.recording_settings_changed",
       organizationId: ORG,
@@ -111,7 +146,63 @@ describe("PUT /api/v1/telefonia/gravacao", () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it("liga a transcrição com chave: grava, devolve e audita o antes e o depois", async () => {
+    const r = await salvar({ ativa: true, retencao_dias: 90, transcrever: true });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ data: { ativa: true, retencao_dias: 90, transcrever: true } });
+    expect(estado.consultas.find((c) => /update phone_settings s/.test(c.sql))!.params).toEqual([ORG, true, 90, true]);
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({
+      metadata: { antes: { transcrever: false }, depois: { transcrever: true } },
+    });
+  });
+
+  it("ligar a transcrição SEM chave: 409 chave_de_transcricao_ausente, nada é gravado nem auditado", async () => {
+    estado.chave = null;
+    const r = await salvar({ ativa: false, retencao_dias: 90, transcrever: true });
+    expect(r.status).toBe(409);
+    expect(await r.json()).toMatchObject({ error: { code: "chave_de_transcricao_ausente" } });
+    expect(estado.consultas.filter((c) => /update/.test(c.sql))).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("ligar a transcrição sem conseguir conferir a chave: 500, nada é gravado", async () => {
+    estado.chave = new Error("banco fora");
+    const r = await salvar({ ativa: false, retencao_dias: 90, transcrever: true });
+    expect(r.status).toBe(500);
+    expect(estado.consultas.filter((c) => /update/.test(c.sql))).toEqual([]);
+  });
+
+  it("corpo sem `transcrever` (integração antiga): a transcrição fica como está, e a chave nem é perguntada", async () => {
+    estado.linha.transcription_enabled = true;
+    estado.chave = null;
+    const r = await salvar({ ativa: false, retencao_dias: 180 });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ data: { transcrever: true } });
+    expect(estado.consultas.find((c) => /update phone_settings s/.test(c.sql))!.params).toEqual([ORG, false, 180, true]);
+    expect(estado.perguntasPelaChave).toBe(0);
+  });
+
+  it("com a transcrição já ligada, salvar outra coisa não depende da chave — quem a perdeu ainda muda a retenção", async () => {
+    estado.linha.transcription_enabled = true;
+    estado.chave = null;
+    const r = await salvar({ ativa: false, retencao_dias: 365, transcrever: true });
+    expect(r.status).toBe(200);
+    expect(estado.perguntasPelaChave).toBe(0);
+  });
+
+  it("desligar a transcrição nunca depende da chave, e audita", async () => {
+    estado.linha.transcription_enabled = true;
+    estado.chave = null;
+    const r = await salvar({ ativa: false, retencao_dias: 90, transcrever: false });
+    expect(r.status).toBe(200);
+    expect(estado.perguntasPelaChave).toBe(0);
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({
+      metadata: { antes: { transcrever: true }, depois: { transcrever: false } },
+    });
+  });
+
   it.each([
+    ["transcrever que não é booleano", { ativa: true, retencao_dias: 90, transcrever: "sim" }],
     ["retenção fora da lista", { ativa: true, retencao_dias: 45 }],
     ["retenção fracionada", { ativa: true, retencao_dias: 90.5 }],
     ["campo a mais (organização no corpo)", { ativa: true, retencao_dias: 90, organization_id: "x" }],

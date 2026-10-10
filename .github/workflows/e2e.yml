@@ -693,6 +693,7 @@ jobs:
         telefonia-ura-e-falas.spec.ts
         telefonia-gravacao.spec.ts
         telefonia-fila.spec.ts
+        telefonia-transcricao.spec.ts
       # `telefonia-ura-e-falas` (fase 2 da telefonia, 2026-09-29) cria a PRÓPRIA
       # organização, com admin e atendente sem MFA, e não toca a organização
       # compartilhada — a vizinhança desta parte não muda por ela. Sobe a
@@ -708,6 +709,11 @@ jobs:
       # MFA, e as ligações da fila SEMEADAS em `voice_calls`. Sem
       # `E2E_TELEFONIA=1` a rota da fila responde `ativa: false` e a aba
       # Telefone do Inbox nem aparece.
+      # `telefonia-transcricao` (F4, migration 0298) idem: organização própria
+      # (admin, atendente e um leitor), ligações gravadas SEMEADAS, e a
+      # transcrição escrita com as funções de banco que o worker chama — nada vai
+      # ao provedor de IA. Mede também o que o `test:db` não tem: o default ACL
+      # de TABELAS do Supabase de verdade (a REST não serve a tabela a ninguém).
 
       FORA_DO_CI: >-
         vps-fresh-onboarding.spec.ts
@@ -1025,6 +1031,17 @@ jobs:
         with:
           name: evidencia-telefonia-fila
           path: .superpowers/evidence/telefonia-fila/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # A transcrição das ligações (F4): a aba com o interruptor, o cartão com o
+      # resumo, a janela (computador e celular), o leitor sem nada e a Central —
+      # e o `medidas.json`. Sobe SEMPRE, pelo mesmo motivo da de cima.
+      - uses: actions/upload-artifact@v7
+        if: always() && matrix.parte == 3
+        with:
+          name: evidencia-telefonia-transcricao
+          path: .superpowers/evidence/telefonia-transcricao/
           if-no-files-found: ignore
           retention-days: 7
 

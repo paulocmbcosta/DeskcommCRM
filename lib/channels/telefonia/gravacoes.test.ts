@@ -182,6 +182,52 @@ describe("processar — o caminho feliz", () => {
   });
 });
 
+describe("processar — avisa a transcrição (F4) depois de guardar", () => {
+  const comGancho = (aoGuardar: (org: string, vcId: string) => void) =>
+    new GravacoesDaTelefonia({ ari, banco, storage, conversor, log, agora: () => agora, aoGuardar });
+
+  it("gravação guardada: avisa uma vez, com a organização e a ligação — e só DEPOIS de anexar", async () => {
+    // O que já tinha acontecido no banco NO INSTANTE do aviso. Anotado e conferido
+    // do lado de fora: um `expect` dentro do gancho seria engolido pelo `catch`
+    // que protege a gravação, e o teste passaria com a ordem trocada.
+    let anexadasNoAviso = -1;
+    const aoGuardar = vi.fn(() => {
+      anexadasNoAviso = banco.tem("anexar").length;
+    });
+    expect(await comGancho(aoGuardar).processar(pendente)).toBe("anexada");
+    expect(aoGuardar).toHaveBeenCalledTimes(1);
+    expect(aoGuardar).toHaveBeenCalledWith(ORG, VC);
+    expect(anexadasNoAviso).toBe(1);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("o gancho que LANÇA não muda o desfecho da gravação: segue anexada, e o WAV é apagado", async () => {
+    const aoGuardar = vi.fn(() => {
+      throw new Error("transcrição quebrada");
+    });
+    expect(await comGancho(aoGuardar).processar(pendente)).toBe("anexada");
+    expect(ari.nomes()).toContain("apagarGravacao");
+    expect(banco.tem("falhar")).toHaveLength(0);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("não avisa quando a gravação não ficou guardada (anonimizada, esperando, perdida)", async () => {
+    const aoGuardar = vi.fn();
+    banco.resultadoDoAnexar = "anonimizada";
+    expect(await comGancho(aoGuardar).processar(pendente)).toBe("anonimizada");
+    ari.wav = null;
+    banco.resultadoDoAnexar = "anexada";
+    expect(await comGancho(aoGuardar).processar(pendente)).toBe("esperando");
+    agora = new Date(FIM.getTime() + 3 * 60_000);
+    expect(await comGancho(aoGuardar).processar(pendente)).toBe("perdida");
+    expect(aoGuardar).not.toHaveBeenCalled();
+  });
+
+  it("sem gancho (instalação sem transcrição): guarda como sempre", async () => {
+    expect(await g.processar(pendente)).toBe("anexada");
+  });
+});
+
 describe("processar — o que ainda não deu", () => {
   it("o Asterisk ainda não tem o arquivo, logo depois do fim: espera, sem falhar", async () => {
     ari.wav = null;

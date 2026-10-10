@@ -72,6 +72,13 @@ export interface HandlerCtx {
   actor: Actor;
   requestId: string;
   /**
+   * A sessão provou o segundo fator (ou não tem um cadastrado)? Só a rota REST
+   * sabe responder — é ela que tem os cookies. Perguntado só quando a resposta
+   * decide algo (hoje: entregar o resumo de uma ligação transcrita, que segue a
+   * regra da escuta da gravação). Ausente = ninguém respondeu, e conta como NÃO.
+   */
+  sessaoSemDividaDeMfa?: () => Promise<boolean>;
+  /**
    * Idioma de quem chamou, só quando é um usuário humano de verdade — as
    * rotas REST passam `authz.user.idioma`. MCP e webhook não têm preferência
    * de idioma humana, então ficam `undefined` de propósito: mensagem de erro

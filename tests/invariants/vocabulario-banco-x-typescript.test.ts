@@ -322,6 +322,13 @@ const PARES: Array<{
     simbolo: "ESTADOS_DA_GRAVACAO",
   },
   {
+    tabela: "voice_call_transcripts",
+    coluna: "status",
+    // migration 0298 — o ciclo da transcrição da ligação. Nasce com o par no mesmo commit.
+    arquivo: "lib/telefonia/transcricao.ts",
+    simbolo: "ESTADOS_DA_TRANSCRICAO",
+  },
+  {
     tabela: "voice_call_transfers",
     coluna: "kind",
     // migration 0290 — a transferência de ligação. Nasce com o par no mesmo commit.
