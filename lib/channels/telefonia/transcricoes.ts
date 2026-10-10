@@ -105,16 +105,22 @@ export const PRAZO_DO_RESUMO_MS = 2 * 60_000;
 /**
  * Quanto se espera o banco gravar o resultado, por tentativa. É a rede de FORA:
  * a espera por trava e por comando já tem fim dentro da própria transação
- * (`PRAZO_DA_TRAVA_MS` / `PRAZO_DO_COMANDO_MS`, no repositório), bem antes
- * disto. Este prazo só vence quando nem conexão há — e aí a tentativa é dada
- * como abandonada, para não escrever depois.
+ * (`PRAZO_DA_TRAVA_MS` / `PRAZO_DO_COMANDO_MS`, no repositório). Este prazo
+ * vence quando nem conexão há, ou quando os comandos da transação, somados,
+ * passam dele — e aí a tentativa é dada como abandonada, para não escrever
+ * depois. Se ela já tinha passado da última conferência, ainda grava: a
+ * tentativa seguinte encontra a linha concluída, não a refaz, e o log dela diz
+ * "descartada" de uma transcrição que está pronta (o estado fica certo; só o
+ * log é impreciso).
  */
 export const PRAZO_DE_GRAVAR_MS = 60_000;
 /**
  * Quanto se espera entre as tentativas de GRAVAR um resultado já pago. Um
  * tropeço do banco (conexão que caiu, uma trava que demorou) não pode custar a
  * transcrição inteira de novo — download, transcritor e resumo —, e esperar é de
- * graça: a fila da transcrição é só dela. São ~1 min 40 de insistência; passou
+ * graça: a fila da transcrição é só dela. São ~1 min 40 de espera ENTRE as
+ * cinco tentativas; com cada uma estourando o prazo de fora, o pior caso é
+ * ~6 min 40 (cabe na reserva, mesmo com as três ligações da passada). Passou
  * disso (o banco fora, ou o pool encerrado, que neste processo não volta), a
  * ligação é reagendada e transcrita de novo, paga de novo.
  */

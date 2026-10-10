@@ -85,11 +85,27 @@ describe("função redefinida no baseline não volta ao estado antigo a cada upd
       expect(d).toMatch(/set search_path = public/i);
       // É ela quem leva a transcrição junto com a mensagem da ligação.
       expect(d).toContain("delete from public.voice_call_transcripts");
+      // …e só toca na tabela se ela existe: o bloco da 0289 recria a função ANTES
+      // de a 0298 criar a tabela, na primeira atualização de um banco antigo.
+      expect(d).toContain("to_regclass('public.voice_call_transcripts') is not null");
     }
     for (const l of privilegios("fn_gravacao_da_mensagem_apagada")) {
       // Só o que vem depois de `to` / `from` são papéis (o nome da função também tem `public.`).
       if (l.startsWith("grant")) expect(l.split(" to ")[1]).toBe("service_role;");
       if (l.startsWith("revoke")) expect(l.split(" from ")[1]).toBe("public, anon, authenticated;");
     }
+  });
+
+  it("o trigger que leva a transcrição não é DERRUBADO e recriado a cada update — é criado só se faltar", () => {
+    // Entre um `drop trigger` e o `create trigger` seguinte (dois comandos, dois
+    // commits) a tabela fica sem o trigger: a mensagem de ligação apagada nesse
+    // instante deixa a transcrição órfã e o arquivo fora da fila de remoção.
+    expect(BASELINE).not.toMatch(/drop trigger if exists trg_gravacao_da_mensagem_apagada\b/i);
+    const criacoes = BASELINE.match(/create trigger trg_gravacao_da_mensagem_apagada\b/gi) ?? [];
+    expect(criacoes).toHaveLength(1);
+    // A criação está dentro de um bloco que confere `pg_trigger` antes.
+    const bloco = /do \$trg_gravacao\$[\s\S]*?end \$trg_gravacao\$;/i.exec(BASELINE)?.[0] ?? "";
+    expect(bloco).toContain("create trigger trg_gravacao_da_mensagem_apagada");
+    expect(bloco).toMatch(/if not exists \(select 1 from pg_trigger[\s\S]*tgname = 'trg_gravacao_da_mensagem_apagada'/i);
   });
 });

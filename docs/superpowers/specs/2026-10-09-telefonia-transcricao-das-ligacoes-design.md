@@ -208,8 +208,17 @@ passada pediria a mesma ligação de novo a cada minuto.
     antiga** — o `update.sh` reaplica o baseline inteiro, e cada bloco antigo
     recria a função antes de o bloco novo consertá-la. Para a função que leva a
     transcrição junto com a mensagem apagada isso deixava transcrição órfã, e foi
-    fechado (as duas cópias no baseline são idênticas, com cerca). Para as outras
-    43 o efeito não foi avaliado — tarefa própria.
+    fechado (as duas cópias no baseline são idênticas, com cerca; o corpo confere
+    com `to_regclass` se a tabela já existe, porque na primeira atualização de um
+    banco antigo a função é recriada antes de a tabela nascer; e o trigger dela
+    passou a ser criado só se faltar, em vez de derrubado e recriado). Para as
+    outras 43 funções, e para os demais triggers que o baseline derruba e recria
+    a cada atualização, o efeito não foi avaliado — tarefa própria.
+13. **A gravação em ÁUDIO segue audível no caso do item 10** (contato marcado por
+    um membro antes da anonimização de verdade): a rota da escuta não confere
+    `contacts.is_anonymized`. É anterior a esta entrega e tem a mesma raiz — a
+    RLS de `contacts` —, registrada na tarefa dela. A transcrição, que é o que
+    esta entrega acrescenta, não é entregue.
 
 ## 6. Prova
 
@@ -226,6 +235,12 @@ passada pediria a mesma ligação de novo a cada minuto.
   que voltava ao estado antigo a cada atualização, o aviso de teto apontando a
   tela errada e a exportação que dizia "sem transcrição" quando a leitura
   falhava. Os cinco foram consertados com prova própria.
+- Uma quarta leitura, só sobre esses cinco consertos, não achou defeito grave e
+  achou dois efeitos na atualização de quem já instalou: o conserto da função
+  fazia a exclusão de conversa com ligação falhar por um instante na primeira
+  atualização (a função citava a tabela antes de ela existir), e o trigger era
+  derrubado e recriado a cada atualização. Os dois fechados, o primeiro com
+  prova no Postgres.
 - Duas revisões independentes (correção e segurança), sem as conclusões de quem
   escreveu: acharam a exclusão de contato quebrada, a exportação que copiaria o
   texto para um bucket aberto, o membro apagando transcrição pela REST, o teto

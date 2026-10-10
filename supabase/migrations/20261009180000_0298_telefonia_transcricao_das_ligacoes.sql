@@ -193,7 +193,13 @@ begin
   end if;
   if old.external_id like 'ligacao:%' then
     v_ligacao := substring(old.external_id from 9);
-    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    -- `to_regclass`: aqui a tabela já existe (é criada acima), mas o corpo é o
+    -- MESMO do baseline, que recria esta função no bloco da 0289 — antes de a
+    -- tabela existir na primeira atualização de um banco anterior à 0298, com o
+    -- sistema no ar. Sem a conferência, apagar uma conversa com cartão de ligação
+    -- nesse intervalo falhava com 42P01. Sem tabela não há transcrição a levar.
+    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       and to_regclass('public.voice_call_transcripts') is not null then
       delete from public.voice_call_transcripts
        where voice_call_id = v_ligacao::uuid and organization_id = old.organization_id;
     end if;

@@ -823,6 +823,32 @@ describe("retenção e saída da mensagem", () => {
     await pool.query("delete from voice_calls where id = $1", [g.vcId]);
     expect(await linhaDa(g.vcId)).toBeUndefined();
   });
+
+  // A PRIMEIRA atualização de um banco anterior à 0298, no meio do caminho: o
+  // `update.sh` reaplica o baseline comando a comando, com o sistema no ar, e o
+  // bloco da 0289 recria esta função — que já cita a tabela das transcrições —
+  // mais de mil linhas antes de a 0298 criar a tabela. Sem o `to_regclass` no
+  // corpo, apagar uma conversa com cartão de ligação nesse intervalo falhava com
+  // 42P01 (achado da quarta revisão, reproduzido).
+  it("com a tabela das transcrições AINDA inexistente: apagar a mensagem da ligação passa, e o arquivo segue indo para a fila de remoção", async () => {
+    const g = await gravada(ORG, NUMERO);
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      // DDL é transacional: a tabela some só dentro desta transação, e volta no rollback.
+      await c.query("alter table public.voice_call_transcripts rename to voice_call_transcripts_ainda_nao_existe");
+      expect((await c.query("select to_regclass('public.voice_call_transcripts') is null as falta")).rows[0].falta).toBe(true);
+      const r = await c.query("delete from public.messages where id = $1", [g.mensagemId]);
+      expect(r.rowCount).toBe(1);
+      expect((await c.query("select 1 from storage_redaction_queue where object_path = $1", [g.caminho])).rows).toHaveLength(1);
+    } finally {
+      await c.query("rollback").catch(() => undefined);
+      c.release();
+    }
+    // O rollback devolveu a tabela (e a mensagem): os outros casos seguem medindo o estado real.
+    expect((await pool.query("select to_regclass('public.voice_call_transcripts') is not null as existe")).rows[0].existe).toBe(true);
+    expect((await pool.query("select 1 from messages where id = $1", [g.mensagemId])).rows).toHaveLength(1);
+  });
 });
 
 describe("o uso do transcritor em llm_calls", () => {

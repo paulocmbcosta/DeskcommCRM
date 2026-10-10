@@ -30026,9 +30026,11 @@ create trigger trg_mensagem_de_ligacao_e_do_sistema
 -- intervalo (que dura o que os comandos do meio esperarem por trava, com o banco
 -- em uso) a mensagem de ligação apagada deixava a transcrição órfã, com o texto.
 -- As duas cópias têm de ser IDÊNTICAS: vigiado por
--- tests/unit/baseline-funcao-redefinida-sem-janela.test.ts. Em banco novo a
--- tabela `voice_call_transcripts` ainda não existe neste ponto, e não importa: o
--- plpgsql só resolve a tabela quando a função roda.
+-- tests/unit/baseline-funcao-redefinida-sem-janela.test.ts. A tabela
+-- `voice_call_transcripts` só é criada no bloco da 0298 — em banco novo e, o que
+-- importa mais, na PRIMEIRA atualização de um banco anterior a ela, com o sistema
+-- no ar. O plpgsql só resolve a tabela quando a função roda, e o corpo confere
+-- com `to_regclass` se ela já existe antes de tocar nela.
 create or replace function public.fn_gravacao_da_mensagem_apagada()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
@@ -30041,7 +30043,12 @@ begin
   end if;
   if old.external_id like 'ligacao:%' then
     v_ligacao := substring(old.external_id from 9);
-    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    -- `to_regclass`: na PRIMEIRA atualização de um banco anterior à 0298, esta
+    -- função é recriada (bloco da 0289 do baseline) antes de a tabela existir, com
+    -- o sistema no ar. Sem a conferência, apagar uma conversa com cartão de ligação
+    -- nesse intervalo falhava com 42P01. Sem tabela não há transcrição a levar.
+    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       and to_regclass('public.voice_call_transcripts') is not null then
       delete from public.voice_call_transcripts
        where voice_call_id = v_ligacao::uuid and organization_id = old.organization_id;
     end if;
@@ -30051,10 +30058,24 @@ end $$;
 revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon, authenticated;
 grant execute on function public.fn_gravacao_da_mensagem_apagada() to service_role;
 
-drop trigger if exists trg_gravacao_da_mensagem_apagada on public.messages;
-create trigger trg_gravacao_da_mensagem_apagada
-  after delete on public.messages
-  for each row execute function public.fn_gravacao_da_mensagem_apagada();
+-- Criado só se FALTAR, e não derrubado e recriado: entre o `drop trigger` e o
+-- `create trigger` (dois comandos, cada um com o seu commit, a cada `update.sh`)
+-- a tabela ficava SEM o trigger, e a mensagem de ligação apagada nesse instante
+-- deixava o arquivo fora da fila de remoção e a transcrição órfã (achado da
+-- revisão, reproduzido com a exclusão chegando enquanto o `drop` esperava a
+-- trava). A definição do trigger nunca mudou; o que muda é a função, e essa é
+-- `create or replace`.
+do $trg_gravacao$
+begin
+  if not exists (select 1 from pg_trigger
+                  where tgrelid = 'public.messages'::regclass
+                    and tgname = 'trg_gravacao_da_mensagem_apagada'
+                    and not tgisinternal) then
+    create trigger trg_gravacao_da_mensagem_apagada
+      after delete on public.messages
+      for each row execute function public.fn_gravacao_da_mensagem_apagada();
+  end if;
+end $trg_gravacao$;
 
 comment on column public.phone_settings.recording_enabled is
   'Grava as ligações do telefone desta organização (as duas direções, só a conversa: a ponte atendente↔cliente). Só liga com o aviso de gravação pronto (a rota recusa). Lido pelo worker a cada ligação.';
@@ -31189,7 +31210,12 @@ begin
   end if;
   if old.external_id like 'ligacao:%' then
     v_ligacao := substring(old.external_id from 9);
-    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    -- `to_regclass`: na PRIMEIRA atualização de um banco anterior à 0298, esta
+    -- função é recriada (bloco da 0289 do baseline) antes de a tabela existir, com
+    -- o sistema no ar. Sem a conferência, apagar uma conversa com cartão de ligação
+    -- nesse intervalo falhava com 42P01. Sem tabela não há transcrição a levar.
+    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       and to_regclass('public.voice_call_transcripts') is not null then
       delete from public.voice_call_transcripts
        where voice_call_id = v_ligacao::uuid and organization_id = old.organization_id;
     end if;
