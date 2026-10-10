@@ -227,7 +227,12 @@ Não avaliado por falta de execução/instância:
   resumo. A exportação de dados do titular diz quais ligações têm transcrição e NÃO leva o texto:
   o `data.json` dela mora em `lgpd-exports`, que qualquer membro lê (dívida anterior, com tarefa
   própria). Só a anonimização de verdade apaga a transcrição — o membro que escreve
-  `is_anonymized` pela REST não apaga. Não avaliado: o que a OpenAI retém do áudio e do texto (depende do contrato da conta de
+  `is_anonymized` pela REST não apaga. Mas a LEITURA confere o fato: contato com
+  `is_anonymized` verdadeiro não tem resumo nem texto entregues, exista a linha ou não. O
+  resíduo, DECLARADO: se um membro marcou o contato antes, a anonimização de verdade responde
+  "já estava" e não redige nada (mensagens, gravação, transcrição) — o texto fica na tabela, ao
+  alcance só da service key, até a gravação vencer; a raiz é a RLS de `contacts`, que tem tarefa
+  própria. Não avaliado: o que a OpenAI retém do áudio e do texto (depende do contrato da conta de
   quem instala); e quem copia o texto da janela leva o conteúdo — a trilha diz quem abriu, não
   para onde foi.
 - Storage, e este é MEDIDO e DECLARADO em vez de "não avaliado": `brand-logos` (migration

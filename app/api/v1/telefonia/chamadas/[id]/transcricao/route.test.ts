@@ -12,6 +12,7 @@ const ORG = "22222222-2222-4222-8222-222222222222";
 const VC = "3f1c2b8e-9a4d-4c6e-8f00-1234567890ab";
 const CONVERSA = "6a0f5d1e-2222-4c6e-8f00-000000000002";
 const MSG = "6a0f5d1e-1111-4c6e-8f00-000000000001";
+const CONTATO = "6a0f5d1e-3333-4c6e-8f00-000000000003";
 
 const estado = vi.hoisted(() => ({
   /** O que a RLS devolveria para a sessão: `null` = a conversa não é visível. */
@@ -20,6 +21,11 @@ const estado = vi.hoisted(() => ({
   /** A linha de voice_call_transcripts, como o cliente de serviço a lê. */
   transcricao: null as null | { status: string; segments: unknown; summary: string | null; audio_duration_ms: number | null },
   erroDaTranscricao: null as null | { message: string },
+  /** O contato da ligação, como o cliente de serviço o lê (`null` = ligação sem contato). */
+  contatoDaLigacao: null as null | string,
+  /** `contacts.is_anonymized` do contato da ligação. */
+  anonimizado: false,
+  erroDaAnonimizacao: null as null | { message: string },
   filtros: [] as Array<[string, unknown]>,
   leiturasDeServico: 0,
   papelOk: true,
@@ -50,6 +56,23 @@ const consulta = (dado: () => { data: unknown; error: unknown }, tabela: string)
   };
   return q;
 };
+/** Consulta de LISTA (sem `maybeSingle`): o resultado sai ao aguardar a própria consulta. */
+const lista = (dado: () => { data: unknown; error: unknown }, tabela: string) => {
+  const q = {
+    select: () => q,
+    eq: (coluna: string, valor: unknown) => {
+      estado.filtros.push([`${tabela}.${coluna}`, valor]);
+      return q;
+    },
+    in: (coluna: string, valores: unknown) => {
+      estado.filtros.push([`${tabela}.${coluna}`, valores]);
+      return q;
+    },
+    then: (ok: (v: { data: unknown; error: unknown }) => unknown, falha?: (e: unknown) => unknown) =>
+      Promise.resolve(dado()).then(ok, falha),
+  };
+  return q;
+};
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     from: (tabela: string) => {
@@ -63,6 +86,17 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: vi.fn(() => ({
     from: (tabela: string) => {
+      // A conferência da anonimização (`ligacoesDeContatoLiberado`): a ligação e,
+      // dela, o contato — perguntando pelos NÃO anonimizados.
+      if (tabela === "voice_calls") {
+        return lista(
+          () => ({ data: [{ id: VC, contact_id: estado.contatoDaLigacao }], error: estado.erroDaAnonimizacao }),
+          "servico.voice_calls",
+        );
+      }
+      if (tabela === "contacts") {
+        return lista(() => ({ data: estado.anonimizado ? [] : [{ id: CONTATO }], error: null }), "servico.contacts");
+      }
       if (tabela !== "voice_call_transcripts") throw new Error(`o cliente de serviço só lê a transcrição, não ${tabela}`);
       estado.leiturasDeServico += 1;
       return consulta(() => ({ data: estado.transcricao, error: estado.erroDaTranscricao }), "servico.voice_call_transcripts");
@@ -91,6 +125,9 @@ beforeEach(() => {
   estado.ligacao = { id: VC, conversation_id: CONVERSA };
   estado.transcricao = { status: "ready", segments: TRECHOS, summary: " O cliente está sem internet. ", audio_duration_ms: 61_000 };
   estado.erroDaTranscricao = null;
+  estado.contatoDaLigacao = CONTATO;
+  estado.anonimizado = false;
+  estado.erroDaAnonimizacao = null;
   estado.filtros = [];
   estado.leiturasDeServico = 0;
   estado.papelOk = true;
@@ -138,8 +175,37 @@ describe("GET /api/v1/telefonia/chamadas/[id]/transcricao", () => {
         ["sessao.voice_calls.id", VC],
         ["servico.voice_call_transcripts.organization_id", ORG],
         ["servico.voice_call_transcripts.voice_call_id", VC],
+        ["servico.voice_calls.organization_id", ORG],
+        ["servico.voice_calls.id", [VC]],
+        ["servico.contacts.organization_id", ORG],
+        ["servico.contacts.is_anonymized", false],
+        ["servico.contacts.id", [CONTATO]],
       ]),
     );
+  });
+
+  it("contato ANONIMIZADO: 404 mesmo com a linha da transcrição lá — ela nem é lida, e nada é auditado", async () => {
+    // O caso que o apagamento não cobre: um membro marcou o contato pela REST
+    // antes, e a anonimização de verdade respondeu "já estava" sem redigir nada.
+    estado.anonimizado = true;
+    const r = await ler();
+    expect(r.status).toBe(404);
+    expect(JSON.stringify(await r.json())).not.toContain("internet");
+    expect(estado.leiturasDeServico).toBe(0);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("ligação sem contato: 404 — sem contato não há como dizer que não foi anonimizado", async () => {
+    estado.contatoDaLigacao = null;
+    expect((await ler()).status).toBe(404);
+    expect(estado.leiturasDeServico).toBe(0);
+  });
+
+  it("não deu para conferir a anonimização: 500, e a transcrição não é lida — na dúvida, não entrega", async () => {
+    estado.erroDaAnonimizacao = { message: "timeout" };
+    expect((await ler()).status).toBe(500);
+    expect(estado.leiturasDeServico).toBe(0);
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it("papel abaixo de atendente: recusado antes de qualquer leitura", async () => {

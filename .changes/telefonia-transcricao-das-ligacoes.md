@@ -25,8 +25,10 @@ O que vale saber antes de ligar:
   enviado à OpenAI, que cobra por minuto de áudio na conta da chave usada. O
   texto que volta vai ao modelo de IA escolhido em **Agente de IA › Provedores**,
   que escreve o resumo — pode ser de outro provedor. Os dois gastos aparecem em
-  **Agente de IA › Execuções** e contam no teto de gasto de IA: com o teto
-  atingido, as ligações deixam de ser transcritas até ele subir.
+  **Agente de IA › Execuções** e contam no teto de gasto de IA. Com o teto
+  atingido, as ligações gravadas nesse período ficam sem transcrição — e não são
+  refeitas depois que o teto sobe (ele se ajusta em
+  **Agente de IA › Uso e orçamento**).
 - **É texto de máquina, de áudio de telefone.** Dá para entender a ligação e o
   resumo costuma ser fiel, mas nomes, números e endereços saem errados com
   frequência. **A indicação de quem falou é uma estimativa**: a gravação mistura

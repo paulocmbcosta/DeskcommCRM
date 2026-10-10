@@ -723,11 +723,14 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
   // `TranscricaoDaLigacaoNoRelatorio`). A tabela é server-side only — só o
   // cliente de serviço a lê —, e por isso o filtro de organização é à mão, e as
   // ligações consultadas são só as DESTE titular, lidas logo acima. Em lotes: 500
-  // ids numa URL só passam do que um proxy aceita. Falhou a leitura: o relatório
-  // sai sem ela, e o log diz (como o resto daqui).
+  // ids numa URL só passam do que um proxy aceita. Falhou a leitura (de qualquer
+  // lote): o relatório sai SEM o campo, em todas as ligações, e o log diz. Não
+  // sai `null` — `null` afirma "esta ligação não tem transcrição", e isso o
+  // coletor não sabe quando a consulta falhou.
   if (voice_calls.length > 0) {
     const porLigacao = new Map<string, TranscricaoDaLigacaoNoRelatorio>();
     const ids = voice_calls.map((v) => v.id);
+    let leu = true;
     for (let i = 0; i < ids.length; i += 100) {
       const { data, error } = await admin
         .from("voice_call_transcripts")
@@ -739,13 +742,14 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
           request_id: requestId,
           error: error.message,
         });
+        leu = false;
         break;
       }
       for (const t of (data ?? []) as Array<{ voice_call_id: string; status: string }>) {
         porLigacao.set(t.voice_call_id, { status: t.status });
       }
     }
-    voice_calls = voice_calls.map((v) => ({ ...v, transcricao: porLigacao.get(v.id) ?? null }));
+    if (leu) voice_calls = voice_calls.map((v) => ({ ...v, transcricao: porLigacao.get(v.id) ?? null }));
   }
 
   // Captação por webhook — a MESMA classe do bloco acima, achada pelo gate.

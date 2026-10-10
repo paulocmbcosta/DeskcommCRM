@@ -17,6 +17,13 @@
  *    recebe nada: a projeção sai da resposta, e o cartão cala;
  *  - projeção sem linha na tabela (a transcrição foi apagada pela retenção, pela
  *    anonimização) sai também — o cartão não promete um texto que não existe;
+ *  - ligação de contato ANONIMIZADO sai também, mesmo que a linha exista — pelo
+ *    FATO (`contacts.is_anonymized`), como a transcrição do áudio do WhatsApp
+ *    (`./transcricao-do-audio.ts`). A anonimização apaga a transcrição, mas há um
+ *    caso em que não chega a apagar: o contato já marcado como anonimizado por
+ *    uma escrita direta de um membro (a RLS de `contacts` hoje deixa) faz os dois
+ *    caminhos de anonimização responderem "já estava" e saírem sem redigir nada.
+ *    A leitura não depende de o apagamento ter acontecido;
  *  - se a consulta falha, sai de todas: na dúvida, o resumo não é entregue.
  *
  * ⚠️ Isto decide o que ESTA ROTA responde. A projeção (só a situação) continua na
@@ -49,7 +56,48 @@ export type LeitorDeTranscricoes = (
   ligacoes: string[],
 ) => Promise<Map<string, { estado: EstadoDaTranscricao; resumo: string | null }>>;
 
-/** O leitor de verdade: cliente de serviço, sempre preso à organização. Lança se a consulta falhar. */
+/**
+ * Destas ligações, as de contato que NÃO foi anonimizado — as únicas cuja
+ * transcrição pode ser entregue. Usada pela listagem e pela rota da leitura,
+ * para que não possam discordar.
+ *
+ * Pergunta pelos LIBERADOS, e não pelos anonimizados, para falhar fechado (a
+ * mesma escolha de `contatosNaoAnonimizados`, na listagem): ligação que a
+ * consulta não devolve, ligação sem contato e contato que não volta como "não
+ * anonimizado" ficam de fora. Lança se uma consulta falhar — quem chama não
+ * entrega nada.
+ *
+ * Cliente de serviço, preso à organização de quem pede: quem pode ler a
+ * transcrição é decidido ANTES (papel, e a RLS da conversa); aqui só se confere
+ * um fato do contato, que não depende de quem pergunta.
+ */
+export async function ligacoesDeContatoLiberado(organizationId: string, ligacoes: string[]): Promise<Set<string>> {
+  if (ligacoes.length === 0) return new Set();
+  const admin = createAdminClient();
+  const { data: chamadas, error } = await admin
+    .from("voice_calls")
+    .select("id, contact_id")
+    .eq("organization_id", organizationId)
+    .in("id", ligacoes);
+  if (error) throw new Error(error.message);
+  const linhas = (chamadas ?? []) as Array<{ id: string; contact_id: string | null }>;
+  const contatos = [...new Set(linhas.map((v) => v.contact_id).filter((c): c is string => typeof c === "string"))];
+  if (contatos.length === 0) return new Set();
+  const { data: livres, error: erroDosContatos } = await admin
+    .from("contacts")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("is_anonymized", false)
+    .in("id", contatos);
+  if (erroDosContatos) throw new Error(erroDosContatos.message);
+  const liberados = new Set(((livres ?? []) as Array<{ id: string }>).map((c) => c.id));
+  return new Set(linhas.filter((v) => v.contact_id !== null && liberados.has(v.contact_id)).map((v) => v.id));
+}
+
+/**
+ * O leitor de verdade: cliente de serviço, sempre preso à organização. Só
+ * devolve ligação de contato não anonimizado. Lança se uma consulta falhar.
+ */
 export const lerTranscricoesDasLigacoes: LeitorDeTranscricoes = async (organizationId, ligacoes) => {
   const { data, error } = await createAdminClient()
     .from("voice_call_transcripts")
@@ -62,6 +110,9 @@ export const lerTranscricoesDasLigacoes: LeitorDeTranscricoes = async (organizat
     if (!(ESTADOS_DA_TRANSCRICAO as readonly string[]).includes(r.status)) continue;
     mapa.set(r.voice_call_id, { estado: r.status as EstadoDaTranscricao, resumo: r.summary });
   }
+  if (mapa.size === 0) return mapa;
+  const liberadas = await ligacoesDeContatoLiberado(organizationId, [...mapa.keys()]);
+  for (const id of [...mapa.keys()]) if (!liberadas.has(id)) mapa.delete(id);
   return mapa;
 };
 

@@ -248,7 +248,20 @@ export async function contextoDaTranscricao(
  * `"descartada"` = o contato está anonimizado, a gravação já não está guardada
  * (venceu, falhou) ou o pedido já não está `pending`: a linha é apagada (ou
  * deixada como está, se outro a concluiu) e nada do texto é escrito.
+ *
+ * A ESPERA TEM FIM, E O FIM É DO BANCO. A trava da anonimização pode demorar, e
+ * quem chama não espera para sempre — mas desistir do lado de cá, deixando a
+ * transação seguir sozinha, é pior que esperar: ela continua segurando uma
+ * conexão do pool (que o motor da IA também usa) e, quando a trava solta, GRAVA
+ * um resultado que já foi dado como perdido e refeito. Por isso o limite é
+ * `lock_timeout` / `statement_timeout` LOCAIS à transação: vencido, o Postgres
+ * aborta o comando, a transação desfaz e a conexão volta. E `abandonada` é a
+ * outra metade: se quem chamou já desistiu (o prazo de fora venceu enquanto se
+ * esperava uma conexão), nada é escrito.
  */
+export const PRAZO_DA_TRAVA_MS = 15_000;
+export const PRAZO_DO_COMANDO_MS = 30_000;
+
 export async function concluirTranscricao(
   pool: Pick<pg.Pool, "connect">,
   p: {
@@ -262,11 +275,20 @@ export async function concluirTranscricao(
     modelo: string;
     duracaoMs: number | null;
   },
+  limites: { travaMs?: number; comandoMs?: number; abandonada?: () => boolean } = {},
 ): Promise<"gravada" | "descartada"> {
+  const desistiu = () => {
+    if (limites.abandonada?.()) throw new Error("gravacao_abandonada");
+  };
   const c = await pool.connect();
   let quebrada: Error | undefined;
   try {
+    desistiu();
     await c.query("begin");
+    await c.query("select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)", [
+      `${Math.max(1, Math.round(limites.travaMs ?? PRAZO_DA_TRAVA_MS))}ms`,
+      `${Math.max(1, Math.round(limites.comandoMs ?? PRAZO_DO_COMANDO_MS))}ms`,
+    ]);
     const { rows: ligacoes } = await c.query<{ contact_id: string | null; recording_status: string | null }>(
       `select contact_id, recording_status from voice_calls
         where id = $2 and organization_id = $1 and provider = 'sip_trunk'`,
@@ -298,6 +320,8 @@ export async function concluirTranscricao(
       await c.query("commit");
       return "descartada";
     }
+    // A última conferência antes de escrever: a trava pode ter demorado.
+    desistiu();
     const { rows } = await c.query<{ gravadas: number }>(
       `with t as (
          update voice_call_transcripts

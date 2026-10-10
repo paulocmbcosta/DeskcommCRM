@@ -1,16 +1,50 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * O Supabase de mentira. `null` = o teste não deve tocar no banco (o leitor
+ * entra por parâmetro). Com tabelas, cada uma devolve o que o teste disse — o
+ * dublê não filtra: quem prova o filtro é a lista de `filtros`.
+ */
+const banco = vi.hoisted(() => ({
+  tabelas: null as null | Record<string, { data: unknown; error: { message: string } | null }>,
+  filtros: [] as Array<[string, unknown]>,
+  consultadas: [] as string[],
+}));
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => {
-    throw new Error("o teste não fala com o Supabase: o leitor entra por parâmetro");
+    if (!banco.tabelas) throw new Error("o teste não fala com o Supabase: o leitor entra por parâmetro");
+    return {
+      from: (tabela: string) => {
+        banco.consultadas.push(tabela);
+        const q = {
+          select: () => q,
+          eq: (coluna: string, valor: unknown) => {
+            banco.filtros.push([`${tabela}.${coluna}`, valor]);
+            return q;
+          },
+          in: (coluna: string, valores: unknown) => {
+            banco.filtros.push([`${tabela}.${coluna}`, valores]);
+            return q;
+          },
+          then: (ok: (v: unknown) => unknown, falha?: (e: unknown) => unknown) =>
+            Promise.resolve(banco.tabelas![tabela] ?? { data: [], error: null }).then(ok, falha),
+        };
+        return q;
+      },
+    };
   },
 }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 import { logger } from "@/lib/logger";
 
-import { comTranscricaoDasLigacoes, type LeitorDeTranscricoes } from "./transcricao-da-ligacao";
+import {
+  comTranscricaoDasLigacoes,
+  lerTranscricoesDasLigacoes,
+  ligacoesDeContatoLiberado,
+  type LeitorDeTranscricoes,
+} from "./transcricao-da-ligacao";
 
 const ORG = "0be7a70c-0000-4000-8000-000000000001";
 const VC = "0be7a70c-0000-4000-8000-0000000000aa";
@@ -37,6 +71,101 @@ const leitor = (linhas: Record<string, { estado: "pending" | "ready" | "empty" |
 
 const transcricaoDe = (m: { metadata: unknown }) =>
   ((m.metadata as { voice_call?: Record<string, unknown> }).voice_call ?? {}).transcricao;
+
+const CONTATO = "0be7a70c-0000-4000-8000-0000000000c1";
+const OUTRO_CONTATO = "0be7a70c-0000-4000-8000-0000000000c2";
+
+beforeEach(() => {
+  banco.tabelas = null;
+  banco.filtros = [];
+  banco.consultadas = [];
+});
+
+describe("ligacoesDeContatoLiberado — de quais ligações a transcrição PODE sair", () => {
+  it("só a ligação cujo contato volta como NÃO anonimizado; a pergunta é presa à organização", async () => {
+    banco.tabelas = {
+      voice_calls: { data: [{ id: VC, contact_id: CONTATO }, { id: OUTRA_VC, contact_id: OUTRO_CONTATO }], error: null },
+      // O que o banco devolve para `is_anonymized = false`: só o primeiro.
+      contacts: { data: [{ id: CONTATO }], error: null },
+    };
+    expect([...(await ligacoesDeContatoLiberado(ORG, [VC, OUTRA_VC]))]).toEqual([VC]);
+    expect(banco.filtros).toEqual(
+      expect.arrayContaining([
+        ["voice_calls.organization_id", ORG],
+        ["voice_calls.id", [VC, OUTRA_VC]],
+        ["contacts.organization_id", ORG],
+        ["contacts.is_anonymized", false],
+        ["contacts.id", [CONTATO, OUTRO_CONTATO]],
+      ]),
+    );
+  });
+
+  it("ligação que a consulta não devolve e ligação SEM contato ficam de fora (falha fechado)", async () => {
+    banco.tabelas = { voice_calls: { data: [{ id: VC, contact_id: null }], error: null }, contacts: { data: [{ id: CONTATO }], error: null } };
+    expect((await ligacoesDeContatoLiberado(ORG, [VC, OUTRA_VC])).size).toBe(0);
+    // Sem contato a conferir, a segunda consulta nem acontece.
+    expect(banco.consultadas).toEqual(["voice_calls"]);
+  });
+
+  it("lista vazia: nada a conferir, nenhuma consulta", async () => {
+    banco.tabelas = {};
+    expect((await ligacoesDeContatoLiberado(ORG, [])).size).toBe(0);
+    expect(banco.consultadas).toEqual([]);
+  });
+
+  it.each(["voice_calls", "contacts"])("a consulta a %s falha: LANÇA — quem chama não entrega nada", async (tabela) => {
+    banco.tabelas = {
+      voice_calls: { data: [{ id: VC, contact_id: CONTATO }], error: null },
+      contacts: { data: [{ id: CONTATO }], error: null },
+      [tabela]: { data: null, error: { message: "banco fora" } },
+    };
+    await expect(ligacoesDeContatoLiberado(ORG, [VC])).rejects.toThrow("banco fora");
+  });
+});
+
+describe("lerTranscricoesDasLigacoes — o leitor de verdade", () => {
+  it("a transcrição de contato ANONIMIZADO não sai, mesmo com a linha na tabela", async () => {
+    banco.tabelas = {
+      voice_call_transcripts: {
+        data: [
+          { voice_call_id: VC, status: "ready", summary: "Resumo do contato liberado." },
+          { voice_call_id: OUTRA_VC, status: "ready", summary: "Resumo do contato anonimizado." },
+        ],
+        error: null,
+      },
+      voice_calls: { data: [{ id: VC, contact_id: CONTATO }, { id: OUTRA_VC, contact_id: OUTRO_CONTATO }], error: null },
+      contacts: { data: [{ id: CONTATO }], error: null },
+    };
+    const lidas = await lerTranscricoesDasLigacoes(ORG, [VC, OUTRA_VC]);
+    expect([...lidas.keys()]).toEqual([VC]);
+    expect(JSON.stringify([...lidas.values()])).not.toContain("anonimizado");
+    expect(banco.filtros).toEqual(expect.arrayContaining([["voice_call_transcripts.organization_id", ORG]]));
+  });
+
+  it("sem transcrição nenhuma: não gasta as consultas da anonimização", async () => {
+    banco.tabelas = { voice_call_transcripts: { data: [], error: null } };
+    expect((await lerTranscricoesDasLigacoes(ORG, [VC])).size).toBe(0);
+    expect(banco.consultadas).toEqual(["voice_call_transcripts"]);
+  });
+
+  it("estado que este código não conhece fica de fora", async () => {
+    banco.tabelas = {
+      voice_call_transcripts: { data: [{ voice_call_id: VC, status: "em_revisao", summary: "x" }], error: null },
+    };
+    expect((await lerTranscricoesDasLigacoes(ORG, [VC])).size).toBe(0);
+  });
+
+  it("não deu para conferir a anonimização: lança — e a listagem, que o chama, não entrega nada", async () => {
+    banco.tabelas = {
+      voice_call_transcripts: { data: [{ voice_call_id: VC, status: "ready", summary: "Segredo da ligação." }], error: null },
+      voice_calls: { data: null, error: { message: "banco fora" } },
+    };
+    await expect(lerTranscricoesDasLigacoes(ORG, [VC])).rejects.toThrow("banco fora");
+    const [m] = await comTranscricaoDasLigacoes([ligacao(VC, { situacao: "pronta" })], { organizationId: ORG, podeLer: true });
+    expect(transcricaoDe(m!)).toBeUndefined();
+    expect(JSON.stringify(m)).not.toContain("Segredo");
+  });
+});
 
 describe("comTranscricaoDasLigacoes", () => {
   it("conversa sem ligação transcrita: devolve a MESMA lista, sem ir ao banco", async () => {

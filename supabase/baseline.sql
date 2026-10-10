@@ -30017,18 +30017,39 @@ create trigger trg_mensagem_de_ligacao_e_do_sistema
 -- que a anonimização usa e que o cron `storage-redaction` drena. Sem isto, o
 -- arquivo ficaria no bucket para sempre: a poda o procura pela mensagem, e a
 -- anonimização, pela conversa do contato.
+--
+-- ⚠️ ESTE BLOCO CARREGA A DEFINIÇÃO DA 0298, E NÃO A DA 0289 — de propósito. O
+-- `update.sh` reaplica este arquivo inteiro, comando a comando, fora de uma
+-- transação única. Com a definição antiga aqui (invoker, sem a transcrição, com
+-- EXECUTE para `authenticated`), toda atualização DEVOLVIA a função ao estado
+-- antigo até o bloco da 0298, mais de mil linhas abaixo, consertá-la — e nesse
+-- intervalo (que dura o que os comandos do meio esperarem por trava, com o banco
+-- em uso) a mensagem de ligação apagada deixava a transcrição órfã, com o texto.
+-- As duas cópias têm de ser IDÊNTICAS: vigiado por
+-- tests/unit/baseline-funcao-redefinida-sem-janela.test.ts. Em banco novo a
+-- tabela `voice_call_transcripts` ainda não existe neste ponto, e não importa: o
+-- plpgsql só resolve a tabela quando a função roda.
 create or replace function public.fn_gravacao_da_mensagem_apagada()
-returns trigger language plpgsql set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_ligacao text;
 begin
   if old.external_id like 'ligacao:%' and old.media_storage_path is not null then
     insert into public.storage_redaction_queue (organization_id, request_id, bucket, object_path)
     values (old.organization_id, null, 'whatsapp-media', old.media_storage_path)
     on conflict (bucket, object_path) do nothing;
   end if;
+  if old.external_id like 'ligacao:%' then
+    v_ligacao := substring(old.external_id from 9);
+    if v_ligacao ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+      delete from public.voice_call_transcripts
+       where voice_call_id = v_ligacao::uuid and organization_id = old.organization_id;
+    end if;
+  end if;
   return old;
 end $$;
-revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon;
-grant execute on function public.fn_gravacao_da_mensagem_apagada() to authenticated, service_role;
+revoke execute on function public.fn_gravacao_da_mensagem_apagada() from public, anon, authenticated;
+grant execute on function public.fn_gravacao_da_mensagem_apagada() to service_role;
 
 drop trigger if exists trg_gravacao_da_mensagem_apagada on public.messages;
 create trigger trg_gravacao_da_mensagem_apagada

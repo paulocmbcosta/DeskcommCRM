@@ -41,10 +41,8 @@ if (!process.env.TEST_DB_CONTAINER) {
   throw new Error("TEST_DB_CONTAINER not set — rode via `pnpm test:db` (scripts/test-db.sh)");
 }
 
-const pool = new pg.Pool({
-  connectionString: `postgresql://postgres:postgres@127.0.0.1:${process.env.TEST_DB_PORT ?? 54329}/postgres`,
-  max: 4,
-});
+const URL_DO_BANCO = `postgresql://postgres:postgres@127.0.0.1:${process.env.TEST_DB_PORT ?? 54329}/postgres`;
+const pool = new pg.Pool({ connectionString: URL_DO_BANCO, max: 4 });
 
 const ORG = "c0de0298-9000-4000-8000-00000000000a";
 const OUTRA = "c0de0298-9000-4000-8000-00000000000b";
@@ -58,6 +56,16 @@ const TRECHOS = [
 ];
 const TEXTO = "Totus, boa tarde. Estou sem internet desde ontem.";
 const RESUMO = "O cliente relatou que está sem internet desde ontem.";
+/** O resultado de uma transcrição pronta, sem a ligação — para chamar `concluirTranscricao` direto. */
+const RESULTADO = {
+  estado: "ready" as const,
+  texto: TEXTO,
+  trechos: TRECHOS,
+  resumo: RESUMO,
+  idioma: "portuguese",
+  modelo: "whisper-1",
+  duracaoMs: 61_000,
+};
 
 let seq = 0;
 
@@ -164,18 +172,7 @@ const projecaoDa = async (org: string, vcId: string) =>
   ((await mensagemDa(org, vcId))?.metadata.voice_call as Record<string, unknown> | undefined)?.transcricao;
 
 const concluir = (org: string, vcId: string, p: Partial<Parameters<typeof transcricoes.concluirTranscricao>[1]> = {}) =>
-  transcricoes.concluirTranscricao(pool, {
-    organizationId: org,
-    vcId,
-    estado: "ready",
-    texto: TEXTO,
-    trechos: TRECHOS,
-    resumo: RESUMO,
-    idioma: "portuguese",
-    modelo: "whisper-1",
-    duracaoMs: 61_000,
-    ...p,
-  });
+  transcricoes.concluirTranscricao(pool, { ...RESULTADO, organizationId: org, vcId, ...p });
 
 describe("a tabela é server-side only", () => {
   it("anon e authenticated não têm NENHUM privilégio; o service_role lê e escreve", async () => {
@@ -496,6 +493,87 @@ describe("concluir", () => {
     await pool.query("update voice_calls set recording_status = 'expired' where id = $1", [vcId]);
     expect(await concluir(ORG, vcId)).toBe("descartada");
     expect(await linhaDa(vcId)).toBeUndefined();
+  });
+
+  // A espera pela trava da anonimização não pode ser abandonada do lado de cá: a
+  // transação seguiria sozinha, segurando uma conexão do pool, e gravaria depois
+  // um resultado que o worker já deu como perdido e refez (achado da revisão dos
+  // consertos; reproduzido com a trava presa por outra sessão).
+  it("a espera pela trava da anonimização TEM FIM no banco: vencido o prazo, a transação desfaz e nada é escrito depois — e a tentativa seguinte grava", async () => {
+    const { vcId, contactId } = await gravada(ORG, NUMERO);
+    await transcricoes.pedirTranscricao(pool, ORG, vcId);
+    const dona = await pool.connect();
+    try {
+      await dona.query("begin");
+      await dona.query("select public.fn_service_lock($1, $2)", [ORG, contactId]);
+      const inicio = Date.now();
+      await expect(
+        transcricoes.concluirTranscricao(pool, { ...RESULTADO, organizationId: ORG, vcId }, { travaMs: 300 }),
+      ).rejects.toMatchObject({ code: "55P03" });
+      // Quem decide o fim é o `lock_timeout` da transação, não um relógio de fora.
+      expect(Date.now() - inicio).toBeLessThan(5_000);
+    } finally {
+      await dona.query("rollback").catch(() => undefined);
+      dona.release();
+    }
+    // A trava soltou. Uma transação abandonada gravaria AGORA; a abortada, não.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await linhaDa(vcId)).toMatchObject({ status: "pending", text: null, summary: null });
+    expect(await projecaoDa(ORG, vcId)).toEqual({ situacao: "processando" });
+    // E a conexão voltou ao pool utilizável: a tentativa seguinte grava.
+    expect(await concluir(ORG, vcId)).toBe("gravada");
+    expect(await linhaDa(vcId)).toMatchObject({ status: "ready", text: TEXTO });
+  });
+
+  it("o prazo da trava é LOCAL à transação: a conexão devolvida ao pool não o carrega", async () => {
+    const { vcId } = await gravada(ORG, NUMERO);
+    await transcricoes.pedirTranscricao(pool, ORG, vcId);
+    // Um pool de UMA conexão: a consulta seguinte usa a mesma que o concluir usou.
+    const unica = new pg.Pool({ connectionString: URL_DO_BANCO, max: 1 });
+    try {
+      expect(
+        await transcricoes.concluirTranscricao(unica, { ...RESULTADO, organizationId: ORG, vcId }, { travaMs: 321, comandoMs: 654 }),
+      ).toBe("gravada");
+      const { rows } = await unica.query<{ trava: string; comando: string }>(
+        "select current_setting('lock_timeout') as trava, current_setting('statement_timeout') as comando",
+      );
+      expect(rows[0]?.trava).not.toBe("321ms");
+      expect(rows[0]?.comando).not.toBe("654ms");
+    } finally {
+      await unica.end();
+    }
+  });
+
+  it("tentativa que quem chamou já ABANDONOU não escreve — nem antes de começar, nem depois de esperar a trava", async () => {
+    const { vcId, contactId } = await gravada(ORG, NUMERO);
+    await transcricoes.pedirTranscricao(pool, ORG, vcId);
+    await expect(
+      transcricoes.concluirTranscricao(pool, { ...RESULTADO, organizationId: ORG, vcId }, { abandonada: () => true }),
+    ).rejects.toThrow("gravacao_abandonada");
+    expect(await linhaDa(vcId)).toMatchObject({ status: "pending", text: null });
+
+    // Abandonada ENQUANTO esperava a trava: a trava solta dentro do prazo, e
+    // mesmo assim nada é escrito.
+    let abandonada = false;
+    const dona = await pool.connect();
+    let desfecho: Promise<string>;
+    try {
+      await dona.query("begin");
+      await dona.query("select public.fn_service_lock($1, $2)", [ORG, contactId]);
+      desfecho = transcricoes
+        .concluirTranscricao(pool, { ...RESULTADO, organizationId: ORG, vcId }, { travaMs: 10_000, abandonada: () => abandonada })
+        .then(
+          (r) => `gravou:${r}`,
+          (e: unknown) => (e instanceof Error ? e.message : String(e)),
+        );
+      await new Promise((r) => setTimeout(r, 300));
+      abandonada = true;
+    } finally {
+      await dona.query("rollback").catch(() => undefined);
+      dona.release();
+    }
+    expect(await desfecho).toBe("gravacao_abandonada");
+    expect(await linhaDa(vcId)).toMatchObject({ status: "pending", text: null, summary: null });
   });
 });
 

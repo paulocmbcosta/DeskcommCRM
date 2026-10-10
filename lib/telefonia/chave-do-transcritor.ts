@@ -35,7 +35,10 @@ export function configDeIaDoAmbiente(): LlmEdgeConfig {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
-    LLM_CACHE_TTL: process.env.LLM_CACHE_TTL,
+    // Vazia é "não definida": o leitor só aceita '5m' ou '1h', e uma linha
+    // `LLM_CACHE_TTL=` no `.env` faria a tela da política responder erro por causa
+    // de um ajuste que a transcrição nem usa.
+    LLM_CACHE_TTL: process.env.LLM_CACHE_TTL || undefined,
     AI_BUDGET_ENFORCEMENT: process.env.AI_BUDGET_ENFORCEMENT,
   });
 }

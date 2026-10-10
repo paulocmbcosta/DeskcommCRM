@@ -17,6 +17,10 @@
  * `voice_call_transcripts` não tem grant para o membro — e presa à organização
  * da sessão. O id vem do caminho e só vira consulta se for uuid.
  *
+ * Contato ANONIMIZADO → 404, mesmo que a linha da transcrição ainda exista. A
+ * anonimização a apaga, mas a leitura não depende disso: confere o fato
+ * (`contacts.is_anonymized`), como a listagem (`ligacoesDeContatoLiberado`).
+ *
  * Só a transcrição PRONTA audita: é a única resposta que entrega o conteúdo. As
  * outras situações (transcrevendo, sem fala, falhou) respondem o que o cartão já
  * sabe, sem texto.
@@ -32,6 +36,7 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { ligacoesDeContatoLiberado } from "@/lib/inbox/transcricao-da-ligacao";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -77,6 +82,18 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     .maybeSingle();
   if (erroDaLigacao) return falhou();
   if (!ligacao || ligacao.conversation_id !== msg.conversation_id) return naoHa();
+
+  // O contato foi anonimizado? Então não há transcrição a entregar — nem a
+  // situação. Na dúvida (a consulta falhou), não entrega.
+  try {
+    if (!(await ligacoesDeContatoLiberado(org, [vcId])).has(vcId)) return naoHa();
+  } catch (e) {
+    logger.warn("telefonia: não consegui conferir a anonimização antes de ler a transcrição", {
+      voice_call: vcId,
+      erro: e instanceof Error ? e.message : String(e),
+    });
+    return falhou();
+  }
 
   const { data: linha, error: erroDaTranscricao } = await createAdminClient()
     .from("voice_call_transcripts")

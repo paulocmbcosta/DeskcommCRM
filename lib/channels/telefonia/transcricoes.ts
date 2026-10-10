@@ -102,14 +102,23 @@ export const PRAZO_DO_DOWNLOAD_MS = 2 * 60_000;
 export const PRAZO_DO_TRANSCRITOR_MS = 280_000;
 /** Por bloco de trechos (a ligação comum tem um bloco só). */
 export const PRAZO_DO_RESUMO_MS = 2 * 60_000;
-/** Quanto se espera o banco gravar o resultado, por tentativa. */
+/**
+ * Quanto se espera o banco gravar o resultado, por tentativa. É a rede de FORA:
+ * a espera por trava e por comando já tem fim dentro da própria transação
+ * (`PRAZO_DA_TRAVA_MS` / `PRAZO_DO_COMANDO_MS`, no repositório), bem antes
+ * disto. Este prazo só vence quando nem conexão há — e aí a tentativa é dada
+ * como abandonada, para não escrever depois.
+ */
 export const PRAZO_DE_GRAVAR_MS = 60_000;
 /**
  * Quanto se espera entre as tentativas de GRAVAR um resultado já pago. Um
- * tropeço do banco (pool encerrando no deploy, conexão que caiu) não pode custar
- * a transcrição inteira de novo — download, transcritor e resumo.
+ * tropeço do banco (conexão que caiu, uma trava que demorou) não pode custar a
+ * transcrição inteira de novo — download, transcritor e resumo —, e esperar é de
+ * graça: a fila da transcrição é só dela. São ~1 min 40 de insistência; passou
+ * disso (o banco fora, ou o pool encerrado, que neste processo não volta), a
+ * ligação é reagendada e transcrita de novo, paga de novo.
  */
-export const ESPERAS_PARA_GRAVAR_MS = [2_000, 10_000] as const;
+export const ESPERAS_PARA_GRAVAR_MS = [2_000, 10_000, 30_000, 60_000] as const;
 
 /** Quantas pendentes uma passada faz, em série. */
 const LOTE_DA_PASSADA = 3;
@@ -133,7 +142,11 @@ export interface BancoDaTranscricao {
   reservar(limite: number, reservaS: number): Promise<TranscricaoPendente[]>;
   reservarUma(org: string, vcId: string, reservaS: number): Promise<TranscricaoPendente | null>;
   contexto(org: string, vcId: string): Promise<ContextoDaTranscricao | null>;
-  concluir(p: Parameters<typeof repo.concluirTranscricao>[1]): Promise<"gravada" | "descartada">;
+  /** `abandonada` = quem chamou já desistiu desta tentativa: nada mais é escrito por ela. */
+  concluir(
+    p: Parameters<typeof repo.concluirTranscricao>[1],
+    limites?: { abandonada: () => boolean },
+  ): Promise<"gravada" | "descartada">;
   reagendar(org: string, vcId: string, esperaS: number, erro: string): Promise<void>;
   falhar(org: string, vcId: string, erro: string, aviso: { titulo: string; corpo: string } | null): Promise<boolean>;
   avisar(org: string, aviso: { titulo: string; corpo: string }): Promise<void>;
@@ -229,7 +242,7 @@ export function avisoDeTeto(idioma: Idioma): { titulo: string; corpo: string } {
   return {
     titulo: traduzir("A transcrição das ligações parou no teto de gasto de IA", idioma),
     corpo: traduzir(
-      "As ligações gravadas não estão sendo transcritas porque o teto de gasto de IA do mês foi atingido. Aumente o teto em Agente de IA → Provedores, ou desligue a transcrição em Conexões → Telefone → Gravação. As gravações continuam sendo guardadas normalmente.",
+      "As ligações gravadas não estão sendo transcritas porque o teto de gasto de IA do mês foi atingido. Aumente o teto em Agente de IA → Uso e orçamento, ou desligue a transcrição em Conexões → Telefone → Gravação. As gravações continuam sendo guardadas normalmente.",
       idioma,
     ),
   };
@@ -408,9 +421,11 @@ export class TranscricoesDaTelefonia {
   /**
    * Grava o resultado, COM INSISTÊNCIA: a esta altura o transcritor e o resumo já
    * foram pagos, e um tropeço do banco não pode custar tudo de novo. Cada
-   * tentativa tem prazo (uma consulta presa — o banco esperando uma trava — não
-   * segura a fila das outras ligações). Esgotadas, a falha fica registrada na
-   * linha, se o banco deixar; se nem isso, a reserva vence e a passada retoma.
+   * tentativa tem prazo, e a que estoura é marcada como ABANDONADA: a transação
+   * dela não escreve mais nada — sem isso, ela gravaria sozinha, minutos depois,
+   * um resultado que já foi dado como perdido e refeito. Esgotadas, a falha fica
+   * registrada na linha, se o banco deixar; se nem isso, a reserva vence e a
+   * passada retoma.
    */
   private async gravar(
     t: TranscricaoPendente,
@@ -420,9 +435,15 @@ export class TranscricoesDaTelefonia {
     const esperas = this.p.prazos?.esperasParaGravarMs ?? ESPERAS_PARA_GRAVAR_MS;
     let ultimo: unknown;
     for (let i = 0; i <= esperas.length; i += 1) {
+      let abandonada = false;
       try {
-        return await comPrazo(() => this.p.banco.concluir(p), this.p.prazos?.gravarMs ?? PRAZO_DE_GRAVAR_MS, "banco_sem_resposta");
+        return await comPrazo(
+          () => this.p.banco.concluir(p, { abandonada: () => abandonada }),
+          this.p.prazos?.gravarMs ?? PRAZO_DE_GRAVAR_MS,
+          "banco_sem_resposta",
+        );
       } catch (e) {
+        abandonada = true;
         ultimo = e;
         const espera = esperas[i];
         if (espera !== undefined) await esperar(espera);
@@ -561,7 +582,7 @@ export function transcricoesDoWorker(pool: pg.Pool, log: Registro): Transcricoes
       reservar: (limite, reservaS) => repo.reservarPendentes(pool, limite, reservaS),
       reservarUma: (org, id, reservaS) => repo.reservarUma(pool, org, id, reservaS),
       contexto: (org, id) => repo.contextoDaTranscricao(pool, org, id),
-      concluir: (p) => repo.concluirTranscricao(pool, p),
+      concluir: (p, limites) => repo.concluirTranscricao(pool, p, limites),
       reagendar: (org, id, esperaS, erro) => repo.reagendarTranscricao(pool, org, id, esperaS, erro),
       falhar: (org, id, erro, aviso) => repo.falharTranscricao(pool, org, id, erro, aviso),
       avisar: (org, aviso) => repo.avisarNaCentral(pool, org, aviso),

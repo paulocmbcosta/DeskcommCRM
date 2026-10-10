@@ -581,5 +581,61 @@ test.describe("telefonia — transcrição das ligações pela tela", () => {
       await expect(porta).toBeVisible();
       await expect(porta).toHaveAttribute("href", /aba=telefone&sub=gravacao/);
     });
+
+    // O ÚLTIMO passo, porque muda o contato. É o caso que o apagamento não cobre:
+    // um membro escreve `is_anonymized` direto pela REST do Supabase (a RLS de
+    // `contacts` hoje deixa). Para ele o trigger da 0298 não apaga nada — e a
+    // anonimização de verdade, depois, responderia "já estava" sem redigir. A
+    // transcrição continua na tabela; quem não pode entregá-la é a LEITURA.
+    await test.step("contato marcado como anonimizado com a transcrição ainda na tabela: a leitura recusa — tela, listagem e rota", async () => {
+      const lidasAntes = await contarAuditoria("phone.transcript_read", atendente.id);
+      const cliente = createClient(credenciais.url, credenciais.anonKey, { auth: { persistSession: false } });
+      const login = await cliente.auth.signInWithPassword({ email: atendente.email, password: atendente.senha });
+      expect(login.error, "login do atendente no Supabase").toBeNull();
+      const marcado = await cliente
+        .from("contacts")
+        .update({ is_anonymized: true, anonymized_at: new Date().toISOString() })
+        .eq("id", contatoId)
+        .select("id");
+      expect(marcado.error, "a escrita do membro em contacts").toBeNull();
+      expect(
+        marcado.data ?? [],
+        "se a RLS de contacts passar a barrar esta escrita, este passo deixa de medir a leitura — reescreva-o marcando o contato de outro jeito",
+      ).toHaveLength(1);
+      // A linha segue lá, pronta, com o texto: nada a apagou.
+      expect(
+        await sql<{ status: string; tem_texto: boolean }>(
+          "select status, text is not null as tem_texto from public.voice_call_transcripts where voice_call_id = $1 and organization_id = $2",
+          [nova.id, orgId],
+        ),
+      ).toEqual([{ status: "ready", tem_texto: true }]);
+
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const p = await ctx.newPage();
+      try {
+        await entrar(p, atendente.email, atendente.senha);
+        const listagem = p.waitForResponse((r) => r.url().includes(`/api/v1/conversations/${conversaId}/messages`) && r.status() === 200);
+        await p.goto(`/app/inbox/${conversaId}`);
+        const resposta = await (await listagem).text();
+        // A listagem não entrega o resumo nem a situação — de nenhuma das ligações.
+        expect(resposta).not.toContain(RESUMO);
+        expect(resposta).not.toContain('"transcricao"');
+        // Os cartões das quatro ligações estão na tela (senão o "zero" abaixo não mediria nada).
+        await expect(p.locator('[data-ligacao="atendida"]')).toHaveCount(4, { timeout: 30_000 });
+        await expect(p.locator("[data-ligacao-resumo]")).toHaveCount(0);
+        await expect(p.locator("[data-ver-transcricao]")).toHaveCount(0);
+        await expect(p.locator("[data-ligacao-transcricao]")).toHaveCount(0);
+        await expect(p.locator("body")).not.toContainText("sem internet desde a manhã");
+        await p.screenshot({ path: `${EVIDENCIA}/11-contato-anonimizado-sem-transcricao.png`, fullPage: true });
+
+        // A rota da leitura: 404, o mesmo de "não existe" — e nada é auditado, porque nada foi lido.
+        const rota = await p.request.get(`/api/v1/telefonia/chamadas/${nova.id}/transcricao`);
+        expect(rota.status()).toBe(404);
+        expect(await rota.text()).not.toContain("sem internet");
+        expect(await contarAuditoria("phone.transcript_read", atendente.id)).toBe(lidasAntes);
+      } finally {
+        await ctx.close();
+      }
+    });
   });
 });

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { traduzir } from "@/lib/i18n/dicionario";
 import type { TranscricaoComTrechos } from "@/lib/messaging/media/transcription";
+import { NAV_CATALOG } from "@/lib/navigation/catalogo";
 import { TRECHOS_POR_BLOCO } from "@/lib/telefonia/resumo-da-ligacao";
 
 import type { ContextoDaTranscricao, TranscricaoPendente } from "./repositorio-das-transcricoes";
@@ -57,7 +59,12 @@ function dubles(p: { ctx?: ContextoDaTranscricao | null; chave?: string | null }
     reservar: vi.fn(async (): Promise<TranscricaoPendente[]> => []),
     reservarUma: vi.fn(async (): Promise<TranscricaoPendente | null> => pendente()),
     contexto: vi.fn(async () => (p.ctx === undefined ? contexto() : p.ctx)),
-    concluir: vi.fn(async (_p: Parameters<PortasDaTranscricao["banco"]["concluir"]>[0]) => "gravada" as const),
+    concluir: vi.fn(
+      async (
+        _p: Parameters<PortasDaTranscricao["banco"]["concluir"]>[0],
+        _limites?: Parameters<PortasDaTranscricao["banco"]["concluir"]>[1],
+      ): Promise<"gravada" | "descartada"> => "gravada",
+    ),
     reagendar: vi.fn(async () => undefined),
     falhar: vi.fn(async () => true),
     avisar: vi.fn(async () => undefined),
@@ -250,6 +257,25 @@ describe("TranscricoesDaTelefonia — quando falha", () => {
     expect(avisoDeTeto("pt-BR").titulo).not.toBe(avisoDeFalha("pt-BR").titulo);
   });
 
+  it("os avisos mandam a pessoa à tela que resolve — com o nome que a navegação dá a ela, nos dois idiomas", () => {
+    // O aviso de teto já apontou "Provedores", onde não há teto nenhum. O nome
+    // sai do catálogo de navegação: tela renomeada lá reprova aqui.
+    const tela = (href: string) => {
+      const destino = NAV_CATALOG.find((d) => d.href === href);
+      if (!destino) throw new Error(`a navegação não tem ${href}`);
+      return destino.label;
+    };
+    const teto = tela("/app/ai/usage");
+    const provedores = tela("/app/ai/providers");
+    expect(avisoDeTeto("pt-BR").corpo).toContain(`Agente de IA → ${teto}`);
+    expect(avisoDeTeto("pt-BR").corpo).not.toContain(`Agente de IA → ${provedores}`);
+    expect(avisoDeTeto("es").corpo).toContain(`Agente de IA → ${traduzir(teto, "es")}`);
+    expect(avisoDeTeto("es").corpo).not.toBe(avisoDeTeto("pt-BR").corpo);
+    // A chave, essa sim, mora em Provedores.
+    expect(avisoSemChave("pt-BR").corpo).toContain(`Agente de IA → ${provedores}`);
+    expect(avisoDeFalha("pt-BR").corpo).toContain(`Agente de IA → ${provedores}`);
+  });
+
   it("o teto só é conferido DEPOIS de saber que há o que transcrever e que há chave", async () => {
     const semChave = dubles({ chave: null });
     await semChave.servico.processar(pendente());
@@ -376,6 +402,35 @@ describe("TranscricoesDaTelefonia — quando falha", () => {
     expect(await servico.processar(pendente())).toBe("adiada");
     expect(d.banco.concluir).toHaveBeenCalledTimes(2);
     expect(d.banco.reagendar).toHaveBeenCalledWith(ORG, VC, ESPERAS_S[0], "gravar_falhou");
+  });
+
+  it("a tentativa de gravar que estoura o prazo fica marcada como ABANDONADA — e só ela: a que ainda corre, não", async () => {
+    const d = dubles();
+    const marcas: Array<() => boolean> = [];
+    const noMomento: boolean[] = [];
+    const servico = new TranscricoesDaTelefonia({
+      banco: d.banco,
+      arquivo: d.arquivo,
+      transcritor: d.transcritor,
+      resumidor: d.resumidor,
+      orcamento: d.orcamento,
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      agora: () => AGORA,
+      prazos: { gravarMs: 20, esperasParaGravarMs: [0] },
+    });
+    d.banco.concluir.mockImplementation((_p, limites) => {
+      marcas.push(limites!.abandonada);
+      // Ao COMEÇAR, a tentativa não está abandonada; a anterior, que estourou, está.
+      noMomento.push(limites!.abandonada());
+      if (marcas.length === 1) return new Promise(() => undefined);
+      return Promise.resolve("gravada" as const);
+    });
+    expect(await servico.processar(pendente())).toBe("pronta");
+    expect(noMomento).toEqual([false, false]);
+    expect(marcas[0]!()).toBe(true);
+    expect(marcas[1]!()).toBe(false);
+    // O que já foi pago não é refeito por causa de uma tentativa lenta de gravar.
+    expect(d.transcritor.transcrever).toHaveBeenCalledTimes(1);
   });
 
   it("caractere nulo no texto do transcritor ou no resumo não chega ao banco (o Postgres o recusa, e a recusa custaria tudo de novo)", async () => {

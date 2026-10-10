@@ -88,6 +88,7 @@ transferência (três vozes); e o custo cobrado de fato.
 | T10 | Pode custar a gravação? | **Não.** Começa depois de a gravação estar guardada; `anexarGravacao` não foi tocada; o gancho (`aoGuardar`) nunca muda o desfecho; pedido perdido é reposto pela passada. | A gravação é obrigação (SAC); a transcrição é conveniência. | sessão |
 | T11 | Retenção? | A transcrição é apagada **junto com a gravação**. | É o mesmo conteúdo; guardá-la além do prazo reteria por outro caminho o que a retenção mandou apagar. | sessão |
 | T12 | LGPD? | Anonimizar o contato apaga a transcrição, pelos dois caminhos de anonimização (trigger em `contacts.is_anonymized`) — mas só para quem anonimiza de verdade (função definer ou service key): o membro que escreve o campo direto pela REST não apaga nada. A exportação de dados do titular passa a dizer QUAIS ligações têm transcrição; o texto, como o áudio, não vai no relatório. | Apagar por qualquer escrita do campo daria a qualquer membro o poder de destruir transcrições de conversas que não enxerga e de forçar nova transcrição paga. E o `data.json` do relatório mora num bucket que qualquer membro lê (§5, item 7): pôr o texto ali furaria T6. | sessão, depois da revisão de segurança |
+| T15 | E quem LÊ a transcrição de um contato anonimizado? | Ninguém: a listagem e a rota da leitura conferem o FATO (`contacts.is_anonymized`) e não entregam nada — nem a situação —, exista a linha ou não (`ligacoesDeContatoLiberado`, falha fechado). | T12 deixou um buraco, achado na revisão dos consertos: o contato que um membro marcou pela REST faz os dois caminhos de anonimização responderem "já estava" e saírem sem redigir, e a transcrição ficava na tabela, legível. A leitura não pode depender de o apagamento ter acontecido. O texto que sobra na tabela nesse caso sai com a gravação, no prazo de guarda (§5, item 10). | sessão, depois da terceira revisão |
 | T13 | Custo visível? | Cada chamada ao transcritor e ao modelo vira linha em `llm_calls` (IA › Execuções). | Sem isso a transcrição seria um gasto de IA que a tela não mostra. | sessão |
 | T14 | E o teto de gasto de IA? | Vale para a transcrição: antes de baixar o áudio, o MESMO gate do resto (`conferirOrcamento`). Com o teto estourado em modo de bloqueio, nada é enviado, e a ligação espera como numa falha. | O custo da transcrição entra na soma do mês. Sem o portão ela gastaria com o teto estourado — e gastaria o orçamento que mantém o agente respondendo o cliente sem nunca ser parada por ele. | sessão, depois das duas revisões |
 
@@ -134,8 +135,15 @@ não registra falha nenhuma, e uma ligação que o derrubasse voltaria para a fi
 para sempre — o defeito que um PDF causou em 28/09/2026. A reserva vence em
 45 min; na 6ª, a ligação é dada como perdida sem nova ida ao provedor.
 
-Gravar o resultado tem insistência própria (três tentativas, cada uma com
-prazo): o que já foi pago ao provedor não se perde por um tropeço do banco.
+Gravar o resultado tem insistência própria (cinco tentativas, ~1 min 40 de
+espera entre elas): o que já foi pago ao provedor não se perde por um tropeço do
+banco. A espera pela trava da anonimização tem fim DENTRO da transação
+(`lock_timeout` de 15 s, `statement_timeout` de 30 s, locais): vencido, o
+Postgres aborta, a transação desfaz e a conexão volta ao pool. A primeira versão
+desistia do lado de cá e deixava a transação seguir — ela segurava uma conexão
+do pool que o motor da IA também usa e, quando a trava soltava, gravava um
+resultado já dado como perdido e refeito (achado da terceira revisão). A
+tentativa que estoura o prazo de fora é marcada como abandonada e não escreve.
 Arquivo de gravação que não confere é falha definitiva — a linha fica, senão a
 passada pediria a mesma ligação de novo a cada minuto.
 
@@ -186,6 +194,22 @@ passada pediria a mesma ligação de novo a cada minuto.
    um pedaço da transcrição iria junto. O transcritor grava só a classe do erro.
 9. **Super-admin em sessão de acompanhamento completa** lê resumo e texto como
    admin da organização — e fica na auditoria com o id dele, como na escuta.
+10. **Contato marcado como anonimizado por um membro, pela REST, antes da
+    anonimização de verdade.** A RLS de `contacts` deixa qualquer membro escrever
+    `is_anonymized` (dívida anterior, tarefa própria). Nesse caso a anonimização
+    de verdade responde "já estava" e não redige NADA — mensagens, gravação e
+    transcrição. A transcrição deixa de ser lida pelo produto (T15), mas o texto
+    fica na tabela, ao alcance só da service key, até a gravação vencer.
+11. **Banco sem gravar por mais de ~3 min depois de a transcrição ficar pronta**
+    (fora do ar, ou uma trava presa): a ligação é reagendada e transcrita de
+    novo, paga de novo. A chamada ao transcritor custa centavos; guardar o
+    resultado fora do banco para não pagar duas vezes não valeu a complexidade.
+12. **A cada atualização, 44 funções do banco voltam por um instante à definição
+    antiga** — o `update.sh` reaplica o baseline inteiro, e cada bloco antigo
+    recria a função antes de o bloco novo consertá-la. Para a função que leva a
+    transcrição junto com a mensagem apagada isso deixava transcrição órfã, e foi
+    fechado (as duas cópias no baseline são idênticas, com cerca). Para as outras
+    43 o efeito não foi avaliado — tarefa própria.
 
 ## 6. Prova
 
@@ -196,6 +220,12 @@ passada pediria a mesma ligação de novo a cada minuto.
   "só daqui para frente", reserva (com a tentativa contada nela), concluir,
   anonimização pelos dois caminhos e o membro pela REST, falha, poda, mensagem
   apagada — inclusive por um MEMBRO, pela cascata —, política.
+- Uma terceira revisão, só sobre os consertos das duas primeiras, achou cinco
+  defeitos novos — a transcrição que sobrevivia à anonimização quando um membro
+  marcava o contato antes, a transação abandonada que gravava depois, a função
+  que voltava ao estado antigo a cada atualização, o aviso de teto apontando a
+  tela errada e a exportação que dizia "sem transcrição" quando a leitura
+  falhava. Os cinco foram consertados com prova própria.
 - Duas revisões independentes (correção e segurança), sem as conclusões de quem
   escreveu: acharam a exclusão de contato quebrada, a exportação que copiaria o
   texto para um bucket aberto, o membro apagando transcrição pela REST, o teto
